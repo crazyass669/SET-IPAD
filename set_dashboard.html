@@ -5754,7 +5754,7 @@ async function searchBand() {
   document.getElementById('band-result').style.display  = 'none';
   document.getElementById('band-error').style.display   = 'block';
   document.getElementById('band-error').innerHTML     =
-    `<a href="https://www.set.or.th/th/market/product/stock/quote/${sym.toLowerCase()}/financial-statement/company-highlights" target="_blank" style="color:#58a6ff">${sym} บน SET.or.th</a>`;
+    `<a href="https://www.mrlikestock.com/web/np_chart/np_chart.php?quote=${sym}" target="_blank" style="color:#58a6ff">ดู PE/PB Band ของ ${sym} บน mrlikestock.com</a>`;
 }
 
 function _renderBandResult(data) {
