@@ -800,9 +800,9 @@
     <button class="filter-btn" style="border-color:#f85149;color:#f85149" onclick="setStageFilter(4,this)">Stage 4 — Declining</button>
   </div>
 
-  <div class="card">
+  <div class="card" style="overflow-x:auto">
     <div id="stage-count" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
-    <table class="tbl" id="tbl-stage">
+    <table class="tbl" id="tbl-stage" style="min-width:700px">
       <thead><tr>
         <th>Stage</th>
         <th class="r">RS</th>
@@ -829,8 +829,8 @@
     <button class="filter-btn" onclick="setSectorView('industry',this)">Industry Group (9)</button>
   </div>
 
-  <div class="card">
-    <table class="tbl" id="tbl-sectors">
+  <div class="card" style="overflow-x:auto">
+    <table class="tbl" id="tbl-sectors" style="min-width:700px">
       <thead><tr>
         <th>อันดับ</th><th>ชื่อ</th><th class="r">จำนวน</th>
         <th class="r sortable" onclick="sortSectors('ret_1d')">1D%</th>
@@ -874,8 +874,8 @@
   <div style="font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;margin-top:4px">Sector</div>
   <div class="filter-row" id="sector-filter-btns"></div>
 
-  <div class="card">
-    <table class="tbl" id="tbl-stocks">
+  <div class="card" style="overflow-x:auto">
+    <table class="tbl" id="tbl-stocks" style="min-width:900px">
       <thead><tr>
         <th class="r sortable" id="sh-rs"   onclick="sortStocks('rs_score')">RS ↕</th>
         <th class="sortable" id="sh-sym" onclick="sortStocks('symbol')">Symbol ↕</th><th>ชื่อ</th><th>Industry</th><th>Sector</th>
