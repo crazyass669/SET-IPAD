@@ -35,6 +35,9 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add set_data.json set_dr_data.json set_indices.json || true
+          git pull --rebase origin main
+          [ -f set_data.json ]    && git add set_data.json
+          [ -f set_dr_data.json ] && git add set_dr_data.json
+          [ -f set_indices.json ] && git add set_indices.json
           git diff --staged --quiet || git commit -m "data: auto-update $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push

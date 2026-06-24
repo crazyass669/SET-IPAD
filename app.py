@@ -574,6 +574,89 @@ def get_band(symbol):
         return jsonify({"error": str(e)}), 500
 
 
+def _fetch_dr_full(dr_static):
+    """Standalone DR fetch — return dict โดยตรง (ใช้จาก run_static_update.py ได้)"""
+    import yfinance as yf
+    import pandas as pd
+    from datetime import datetime as _dt
+
+    yf_tickers = list({s["yf"] for s in dr_static})
+    try:
+        raw = yf.download(yf_tickers, period="max", auto_adjust=True,
+                          progress=False, group_by="ticker", threads=True)
+    except Exception as e:
+        return {"stocks": [], "ts": _dt.now().isoformat(), "error": str(e)}
+
+    is_multi = len(yf_tickers) > 1
+
+    def _series(yticker, field):
+        try:
+            return (raw[yticker][field] if is_multi else raw[field]).dropna()
+        except (KeyError, TypeError):
+            return pd.Series(dtype=float)
+
+    def _dr_ret(close, days):
+        if len(close) < days + 1: return None
+        p = float(close.iloc[-(days + 1)])
+        n = float(close.iloc[-1])
+        return round((n - p) / p * 100, 2) if p else None
+
+    results = []
+    for stock in dr_static:
+        yticker = stock["yf"]
+        try:
+            close = _series(yticker, "Close")
+            if len(close) < 2: continue
+            price = float(close.iloc[-1]); prev = float(close.iloc[-2])
+            chg = (price - prev) / prev * 100
+            close_52w = close.iloc[-252:] if len(close) >= 252 else close
+            ath = round(float(close.max()), 4)
+            open_s = _series(yticker, "Open"); high_s = _series(yticker, "High")
+            low_s = _series(yticker, "Low"); vol_s = _series(yticker, "Volume")
+            n = min(30, len(close)); ohlc30 = []
+            for i in range(-n, 0):
+                try:
+                    ohlc30.append([round(float(open_s.iloc[i]),4), round(float(high_s.iloc[i]),4),
+                                   round(float(low_s.iloc[i]),4), round(float(close.iloc[i]),4),
+                                   int(vol_s.iloc[i]) if len(vol_s) >= abs(i) else 0])
+                except Exception: pass
+            try:
+                cur_year = _dt.now().year
+                cy = close[close.index >= pd.Timestamp(f"{cur_year}-01-01")]
+                ret_ytd = round((price - float(cy.iloc[0])) / float(cy.iloc[0]) * 100, 2) if len(cy) > 0 else None
+            except Exception: ret_ytd = None
+            ret_1m = _dr_ret(close, 21); ret_3m = _dr_ret(close, 63)
+            ret_6m = _dr_ret(close, 126); ret_1y = _dr_ret(close, 250)
+            parts = [(ret_1m, 2), (ret_3m, 1), (ret_6m, 1), (ret_1y, 1)]
+            valid = [(v, w) for v, w in parts if v is not None]
+            rs_raw = sum(v*w for v,w in valid)/sum(w for _,w in valid) if valid else None
+            results.append({
+                "sym": stock["sym"], "name": stock["name"], "region": stock["region"],
+                "ind": stock["ind"], "yf": stock["yf"],
+                "price": round(price,2), "chg": round(chg,2),
+                "ret_1w": _dr_ret(close,5), "ret_1m": ret_1m, "ret_3m": ret_3m,
+                "ret_6m": ret_6m, "ret_1y": ret_1y, "ret_3y": _dr_ret(close,756),
+                "ret_5y": _dr_ret(close,1260), "ret_ytd": ret_ytd,
+                "high_52w": round(float(close_52w.max()),4), "low_52w": round(float(close_52w.min()),4),
+                "ath": ath, "ath_pct": round((price-ath)/ath*100,2) if ath else None,
+                "rs_raw": round(rs_raw,4) if rs_raw is not None else None, "rs_score": None,
+                "mkt_cap": None, "drs": stock["drs"],
+                "close100": [round(float(x),4) for x in close.tail(100).tolist()],
+                "ohlc30": ohlc30,
+                "dates": [str(d)[:10] for d in close.index.tolist()],
+                "closes": [round(float(x),6) for x in close.tolist()],
+            })
+        except Exception as e:
+            print(f"[DR] {stock['sym']}: {e}")
+
+    valid_rs = [r for r in results if r.get("rs_raw") is not None]
+    valid_rs.sort(key=lambda x: x["rs_raw"])
+    n_rs = len(valid_rs)
+    for i, r in enumerate(valid_rs):
+        r["rs_score"] = int(round(i / n_rs * 99)) if n_rs > 0 else None
+    return {"stocks": results, "ts": _dt.now().isoformat()}
+
+
 @app.route("/api/dr")
 def get_dr_data():
     """ดึงราคา underlying foreign stocks ของ DR/DRx ทั้งหมด — cache 4 ชั่วโมง"""
