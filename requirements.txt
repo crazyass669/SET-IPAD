@@ -4,3 +4,4 @@ pandas>=2.0
 openpyxl>=3.1
 xlrd>=2.0
 tqdm>=4.66
+lxml>=4.9

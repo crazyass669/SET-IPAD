@@ -44,21 +44,26 @@ def load_set_symbols(base_dir=None):
             "โหลดจาก: https://www.set.or.th/dat/eod/listedcompany/static/listedCompanies_en_US.xls"
         )
 
-    df = pd.read_excel(path, header=None, engine="xlrd")
-
-    # หา header row
-    header_row = None
-    for i, row in df.iterrows():
-        row_str = " ".join(str(v).lower() for v in row.values)
-        if "symbol" in row_str or "market" in row_str:
-            header_row = i
-            break
-    if header_row is None:
-        raise ValueError("หา header row ไม่เจอในไฟล์ Excel")
-
-    df.columns = df.iloc[header_row]
-    df = df.iloc[header_row + 1:].reset_index(drop=True)
-    df.columns = [str(c).strip() for c in df.columns]
+    # ไฟล์จาก SET.or.th เป็น HTML table ที่ตั้งชื่อว่า .xls
+    try:
+        tables = pd.read_html(path, header=0)
+        df = tables[0]
+        df.columns = [str(c).strip() for c in df.columns]
+    except Exception:
+        # fallback: อ่านแบบ Excel จริง
+        df = pd.read_excel(path, header=None, engine="xlrd")
+        # หา header row
+        header_row = None
+        for i, row in df.iterrows():
+            row_str = " ".join(str(v).lower() for v in row.values)
+            if "symbol" in row_str or "market" in row_str:
+                header_row = i
+                break
+        if header_row is None:
+            raise ValueError("หา header row ไม่เจอในไฟล์")
+        df.columns = df.iloc[header_row]
+        df = df.iloc[header_row + 1:].reset_index(drop=True)
+        df.columns = [str(c).strip() for c in df.columns]
 
     col_map = {}
     for col in df.columns:
