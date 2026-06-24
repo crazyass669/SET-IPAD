@@ -266,9 +266,9 @@ def process_stock(info_dict, close, volume):
         vol_20    = int(volume.tail(21).iloc[:-1].mean()) if len(volume) >= 21 else None
         vol_today = int(volume.iloc[-1]) if len(volume) > 0 else None
 
-        # price_history: เก็บ 2500 วันทำการ (~10 ปี) เพื่อให้ EMA200 converge ได้ถูกต้อง
+        # price_history: เก็บ 1750 วันทำการ (~7 ปี) เพื่อให้ EMA200 converge ได้ถูกต้อง
         # (EMA200 ต้องการ warmup ~300 แท่งหลัง seed จึงจะ converge 97%)
-        _hist_bars     = min(len(close), 2500)
+        _hist_bars     = min(len(close), 1750)
         _display_bars  = min(len(close), 260)   # chart แสดง 1 ปี
         price_history  = [
             [d.strftime("%Y-%m-%d"), round(float(p), 2)]
