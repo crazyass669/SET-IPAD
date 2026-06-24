@@ -45,25 +45,21 @@ def load_set_symbols(base_dir=None):
         )
 
     # ไฟล์จาก SET.or.th เป็น HTML table ที่ตั้งชื่อว่า .xls
-    try:
-        tables = pd.read_html(path, header=0)
-        df = tables[0]
-        df.columns = [str(c).strip() for c in df.columns]
-    except Exception:
-        # fallback: อ่านแบบ Excel จริง
-        df = pd.read_excel(path, header=None, engine="xlrd")
-        # หา header row
-        header_row = None
-        for i, row in df.iterrows():
+    tables = pd.read_html(path, header=None)
+    df = None
+    for t in tables:
+        for i, row in t.iterrows():
             row_str = " ".join(str(v).lower() for v in row.values)
-            if "symbol" in row_str or "market" in row_str:
-                header_row = i
+            if "symbol" in row_str and ("market" in row_str or "company" in row_str):
+                t.columns = t.iloc[i]
+                t = t.iloc[i + 1:].reset_index(drop=True)
+                t.columns = [str(c).strip() for c in t.columns]
+                df = t
                 break
-        if header_row is None:
-            raise ValueError("หา header row ไม่เจอในไฟล์")
-        df.columns = df.iloc[header_row]
-        df = df.iloc[header_row + 1:].reset_index(drop=True)
-        df.columns = [str(c).strip() for c in df.columns]
+        if df is not None:
+            break
+    if df is None:
+        raise ValueError("ไม่พบตารางรายชื่อหุ้นในไฟล์ HTML")
 
     col_map = {}
     for col in df.columns:
