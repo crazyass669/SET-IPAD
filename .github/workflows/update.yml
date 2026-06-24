@@ -35,7 +35,12 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          [ -f set_data.json ]    && git add set_data.json
+          [ -f set_dr_data.json ] && git add set_dr_data.json
+          [ -f set_indices.json ] && git add set_indices.json
+          git stash
           git pull --rebase origin main
+          git stash pop || true
           [ -f set_data.json ]    && git add set_data.json
           [ -f set_dr_data.json ] && git add set_dr_data.json
           [ -f set_indices.json ] && git add set_indices.json
