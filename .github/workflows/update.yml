@@ -3,6 +3,7 @@ name: Update SET Data
 on:
   schedule:
     - cron: '30 11 * * 1-5'   # 18:30 ICT (11:30 UTC) วันจันทร์–ศุกร์
+    - cron: '0 23 * * 0-4'    # 06:00 ICT (23:00 UTC คืนก่อน) วันจันทร์–ศุกร์
   workflow_dispatch:            # รันมือได้ผ่าน GitHub UI
 
 jobs:
