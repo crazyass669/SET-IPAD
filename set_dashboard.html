@@ -3581,7 +3581,7 @@ function openStockPopup(sym, evt) {
 
   // static mode: แสดง link แทนกราฟงบการเงิน
   document.getElementById('spop-loading').innerHTML =
-    `<a href="https://www.set.or.th/th/market/product/stock/factsheet/${sym}" target="_blank" rel="noopener"
+    `<a href="https://www.set.or.th/th/market/product/stock/quote/${sym}/factsheet" target="_blank" rel="noopener"
        style="color:#58a6ff;font-size:11px">📄 ดูงบการเงินบน SET.or.th</a>`;
 
   setTimeout(() => document.addEventListener('click', _spopOutside, { once: true }), 80);
@@ -4980,7 +4980,7 @@ function _loadCmFin() {
   const isDR = (_drData || []).some(s => s.sym === sym);
   const url = isDR
     ? `https://www.tradingview.com/symbols/${sym}/financials-income-statement/`
-    : `https://www.set.or.th/th/market/product/stock/factsheet/${sym}`;
+    : `https://www.set.or.th/th/market/product/stock/quote/${sym}/factsheet`;
   document.getElementById('cm-fin-body').innerHTML =
     `<div style="padding:24px;text-align:center;color:var(--text2)">
       <div style="font-size:28px;margin-bottom:12px">📄</div>
@@ -5496,7 +5496,7 @@ async function searchFinancials() {
   const isDR = _finTab === 'dr';
   const url = isDR
     ? `https://www.tradingview.com/symbols/${sym}/financials-income-statement/`
-    : `https://www.set.or.th/th/market/product/stock/factsheet/${sym}`;
+    : `https://www.set.or.th/th/market/product/stock/quote/${sym}/factsheet`;
   document.getElementById('fin-result').innerHTML =
     `<div style="padding:40px;text-align:center;color:var(--text2)">
       <div style="font-size:40px;margin-bottom:16px">📄</div>
@@ -5754,7 +5754,7 @@ async function searchBand() {
   document.getElementById('band-result').style.display  = 'none';
   document.getElementById('band-error').style.display   = 'block';
   document.getElementById('band-error').textContent     =
-    `⚠ P/E & P/B Band ต้องการ server — เปิดใน Jitta หรือ SET Factsheet แทน: https://www.set.or.th/th/market/product/stock/factsheet/${sym}`;
+    `⚠ P/E & P/B Band ต้องการ server — เปิดใน Jitta หรือ SET Factsheet แทน: https://www.set.or.th/th/market/product/stock/quote/${sym}/factsheet`;
 }
 
 function _renderBandResult(data) {
