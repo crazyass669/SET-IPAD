@@ -23,7 +23,7 @@ def cb(current, total, msg):
         log(f"  {msg}")
 
 try:
-    run_with_progress(cb, base_dir=BASE_DIR, period="max")
+    run_with_progress(cb, base_dir=BASE_DIR, period="10y")
     log("✅ SET stocks เสร็จ")
 except Exception as e:
     log(f"❌ SET stocks ผิดพลาด: {e}")
