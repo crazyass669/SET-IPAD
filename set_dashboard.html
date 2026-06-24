@@ -5747,6 +5747,19 @@ function _bandZone(cur, b) {
   return               { label: 'สูงกว่า +2SD  (Overvalued มาก)',         color: '#ef4444' };
 }
 
+function openMrlikestock(sym) {
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = 'https://www.mrlikestock.com/web/np_chart/np_chart.php';
+  form.target = '_blank';
+  const input = document.createElement('input');
+  input.type = 'hidden'; input.name = 'quote'; input.value = sym;
+  form.appendChild(input);
+  document.body.appendChild(form);
+  form.submit();
+  document.body.removeChild(form);
+}
+
 async function searchBand() {
   const sym = (document.getElementById('band-input').value || '').trim().toUpperCase();
   if (!sym) return;
@@ -5754,7 +5767,7 @@ async function searchBand() {
   document.getElementById('band-result').style.display  = 'none';
   document.getElementById('band-error').style.display   = 'block';
   document.getElementById('band-error').innerHTML     =
-    `<a href="https://www.mrlikestock.com/web/np_chart/np_chart.php?quote=${sym}" target="_blank" style="color:#58a6ff">ดู PE/PB Band ของ ${sym} บน mrlikestock.com</a>`;
+    `<button onclick="openMrlikestock('${sym}')" style="background:none;border:none;color:#58a6ff;cursor:pointer;font-size:13px;padding:0;text-decoration:underline">ดู PE/PB Band ของ ${sym} บน mrlikestock.com</button>`;
 }
 
 function _renderBandResult(data) {
