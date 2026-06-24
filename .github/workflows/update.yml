@@ -1,0 +1,40 @@
+name: Update SET Data
+
+on:
+  schedule:
+    - cron: '30 11 * * 1-5'   # 18:30 ICT (11:30 UTC) วันจันทร์–ศุกร์
+  workflow_dispatch:            # รันมือได้ผ่าน GitHub UI
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install yfinance pandas openpyxl xlrd tqdm requests
+
+      - name: Download listedCompanies.xlsx
+        run: |
+          curl -L "https://www.set.or.th/dat/eod/listedcompany/static/listedCompanies_en_US.xls" \
+               -o listedCompanies_en_US.xlsx || echo "ดาวน์โหลดรายชื่อหุ้นไม่สำเร็จ"
+
+      - name: Run SET data fetcher (Full Refresh)
+        run: python run_static_update.py
+
+      - name: Commit updated JSON files
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add set_data.json set_dr_data.json set_indices.json || true
+          git diff --staged --quiet || git commit -m "data: auto-update $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push

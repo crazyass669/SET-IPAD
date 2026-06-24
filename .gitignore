@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+env/
+
+# Data files — GitHub Actions สร้างและ commit อัตโนมัติ
+# set_data.json     ← commit ✅ (GitHub Pages serve)
+# set_dr_data.json  ← commit ✅
+# set_indices.json  ← commit ✅
+set_history.json
+dr_cache.json
+indices_cache.json
+
+# Backup / test
+*.bak
+set_data_backup.json
+response.txt
+server_out.txt
+server_err.txt
+ttm_test_results.json
+test_batch.py
+test_syms.py
+
+# Local only
+start.bat
+listedCompanies_en_US.xlsx
