@@ -21,7 +21,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install yfinance pandas openpyxl xlrd tqdm requests lxml flask
+        run: pip install yfinance pandas openpyxl xlrd tqdm requests lxml flask websocket-client
 
       - name: Download listedCompanies.xlsx
         run: |

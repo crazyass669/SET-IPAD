@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import json; d=json.load\\(open\\('c:/Users/joeki/Downloads/SET_Dashboard/set_data.json',encoding='utf-8'\\)\\); stocks=d.get\\('stocks',[]\\); dr=[s for s in stocks if '-R' in s.get\\('symbol',''\\) or 'DR' in s.get\\('symbol',''\\).upper\\(\\)]; print\\('DR stocks found:', len\\(dr\\)\\); [print\\(s.get\\('symbol'\\),s.get\\('name',''\\)[:40]\\) for s in dr[:10]]\")"
+    ]
+  }
+}

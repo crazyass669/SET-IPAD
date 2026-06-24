@@ -5,3 +5,4 @@ openpyxl>=3.1
 xlrd>=2.0
 tqdm>=4.66
 lxml>=4.9
+websocket-client>=1.6

@@ -125,19 +125,13 @@ def load_history(base_dir):
 
 
 def _merge_history(existing, new_dates, new_closes, new_volumes):
-    """Merge new bars into existing, deduplicate by date, keep sorted."""
+    """Merge new bars into existing, upsert by date (overwrite if exists), keep sorted."""
     if not existing or not existing.get("dates"):
         return new_dates, new_closes, new_volumes
-    exist_set = set(existing["dates"])
-    all_d = list(existing["dates"])
-    all_c = list(existing["closes"])
-    all_v = list(existing["volumes"])
+    data_map = {d: (c, v) for d, c, v in zip(existing["dates"], existing["closes"], existing["volumes"])}
     for d, c, v in zip(new_dates, new_closes, new_volumes):
-        if d not in exist_set:
-            all_d.append(d)
-            all_c.append(c)
-            all_v.append(v)
-    triples = sorted(zip(all_d, all_c, all_v))
+        data_map[d] = (c, v)  # overwrite ถ้ามีอยู่แล้ว
+    triples = sorted((d, c, v) for d, (c, v) in data_map.items())
     if not triples:
         return [], [], []
     dates, closes, volumes = zip(*triples)
@@ -746,7 +740,7 @@ def run_quick_update(callback, base_dir=None):
         raise ValueError("ไม่มีข้อมูลใน history")
 
     min_last  = min(last_dates)
-    start_dt  = pd.to_datetime(min_last) + pd.Timedelta(days=1)
+    start_dt  = pd.to_datetime(min_last)  # re-fetch วันล่าสุดเสมอ เผื่อดึงก่อนตลาดปิด
     today     = pd.Timestamp.now().normalize()
 
     if start_dt > today:
