@@ -27,7 +27,7 @@ except ImportError as e:
     print(f"Error: {e}")
     raise
 
-XLS_FILE     = "listedCompanies_en_US.xlsx"
+XLS_FILE     = "listedCompanies_en_US.xls"
 OUT_FILE     = "set_data.json"
 HISTORY_FILE = "set_history.json"
 
@@ -44,7 +44,7 @@ def load_set_symbols(base_dir=None):
             "โหลดจาก: https://www.set.or.th/dat/eod/listedcompany/static/listedCompanies_en_US.xls"
         )
 
-    df = pd.read_excel(path, header=None, engine="openpyxl")
+    df = pd.read_excel(path, header=None, engine="xlrd")
 
     # หา header row
     header_row = None
