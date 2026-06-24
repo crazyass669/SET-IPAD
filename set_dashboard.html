@@ -5753,7 +5753,7 @@ async function searchBand() {
   document.getElementById('band-loading').style.display = 'none';
   document.getElementById('band-result').style.display  = 'none';
   document.getElementById('band-error').style.display   = 'block';
-  document.getElementById('band-error').textContent     =
+  document.getElementById('band-error').innerHTML     =
     `⚠ P/E & P/B Band ต้องการ server — ดูงบการเงินได้ที่: <a href="https://www.set.or.th/th/market/product/stock/quote/${sym.toLowerCase()}/financial-statement/company-highlights" target="_blank" style="color:#58a6ff">${sym} บน SET.or.th</a>`;
 }
 
