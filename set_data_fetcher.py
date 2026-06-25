@@ -14,7 +14,9 @@ import os
 import json
 import time
 import warnings
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_ICT = timezone(timedelta(hours=7))
 
 warnings.filterwarnings("ignore")
 
@@ -165,7 +167,7 @@ def save_history(all_data_map, base_dir, existing_hist=None):
         }
 
     new_hist = {
-        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_at": datetime.now(_ICT).strftime("%Y-%m-%d %H:%M:%S"),
         "stocks": stocks_hist,
     }
     path = os.path.join(base_dir, HISTORY_FILE)
@@ -696,7 +698,7 @@ def run_with_progress(callback, base_dir=None, period="max"):
     market_internals = _compute_market_internals(stocks)
 
     output = {
-        "updated_at":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_at":       datetime.now(_ICT).strftime("%Y-%m-%d %H:%M:%S"),
         "update_type":      "Full Refresh",
         "data_as_of":       data_as_of,
         "total":            len(stocks),
@@ -806,7 +808,7 @@ def run_quick_update(callback, base_dir=None):
         default=None
     )
     output = {
-        "updated_at":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_at":  datetime.now(_ICT).strftime("%Y-%m-%d %H:%M:%S"),
         "update_type": "Quick Update",
         "data_as_of":  data_as_of,
         "total":       len(stocks),

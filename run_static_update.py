@@ -3,12 +3,14 @@ run_static_update.py — รันโดย GitHub Actions เพื่ออั
 สร้าง: set_data.json, set_dr_data.json, set_indices.json
 """
 import os, sys, json, time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_ICT = timezone(timedelta(hours=7))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+    print(f"[{datetime.now(_ICT).strftime('%H:%M:%S')}] {msg}", flush=True)
 
 # ── 1. Full Refresh SET stocks ────────────────────────────────
 log("=== เริ่ม Full Refresh SET stocks ===")
@@ -105,7 +107,7 @@ try:
                 result.append([dt, round(float(v[4]), 2)])
         return result
 
-    updated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    updated = datetime.now(_ICT).strftime("%Y-%m-%d %H:%M")
     idx_data = {}
 
     for sym, info in INDEX_INFO.items():
