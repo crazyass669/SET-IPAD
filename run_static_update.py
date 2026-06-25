@@ -110,12 +110,15 @@ try:
     updated = datetime.now(_ICT).strftime("%Y-%m-%d %H:%M")
     idx_data = {}
 
+    failed_syms = []
     for sym, info in INDEX_INFO.items():
         tv_sym = _yf_to_tv(sym)
         try:
-            pairs = _fetch_tv_bars(tv_sym, n_bars=5000, timeout=30)
+            pairs = _fetch_tv_bars(tv_sym, n_bars=5000, timeout=60)
             if not pairs:
-                log(f"  ⚠ {tv_sym}: ไม่ได้ข้อมูล")
+                log(f"  ⚠ {tv_sym}: ไม่ได้ข้อมูล (จะ retry)")
+                failed_syms.append((sym, info, tv_sym))
+                time.sleep(0.6)
                 continue
             dates = [p[0] for p in pairs]
             vals  = [p[1] for p in pairs]
@@ -133,8 +136,38 @@ try:
             }
             log(f"  ✓ {tv_sym} {len(vals)} bars → {dates[-1]}")
         except Exception as e:
-            log(f"  ⚠ {tv_sym}: {e}")
-        time.sleep(0.3)
+            log(f"  ⚠ {tv_sym}: {e} (จะ retry)")
+            failed_syms.append((sym, info, tv_sym))
+        time.sleep(0.6)
+
+    # Retry รอบ 2 สำหรับ symbol ที่ timeout
+    if failed_syms:
+        log(f"  → retry {len(failed_syms)} symbols...")
+        time.sleep(5)
+        for sym, info, tv_sym in failed_syms:
+            try:
+                pairs = _fetch_tv_bars(tv_sym, n_bars=5000, timeout=90)
+                if not pairs:
+                    log(f"  ✗ {tv_sym}: retry ไม่สำเร็จ")
+                    continue
+                dates = [p[0] for p in pairs]
+                vals  = [p[1] for p in pairs]
+
+                def _ret(n, _v=vals):
+                    return round((_v[-1] - _v[-(n+1)]) / _v[-(n+1)] * 100, 2) if len(_v) > n else None
+
+                idx_data[sym] = {
+                    "sym": sym, "name": info["name"], "group": info["group"],
+                    "last": vals[-1],
+                    "ret_1d": _ret(1), "ret_1w": _ret(5),
+                    "ret_1m": _ret(21), "ret_3m": _ret(63),
+                    "ret_6m": _ret(126), "ret_1y": _ret(250),
+                    "closes": vals, "dates": dates, "updated_at": updated,
+                }
+                log(f"  ✓ retry {tv_sym} {len(vals)} bars → {dates[-1]}")
+            except Exception as e:
+                log(f"  ✗ {tv_sym}: retry ล้มเหลว {e}")
+            time.sleep(1)
 
     out = {"updated_at": updated, "data": idx_data}
     with open(os.path.join(BASE_DIR, "set_indices.json"), "w", encoding="utf-8") as f:
