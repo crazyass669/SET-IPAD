@@ -757,7 +757,7 @@ def get_dr_data():
             # YTD%
             try:
                 import datetime as _datetime
-                cur_year   = _datetime.datetime.now().year
+                cur_year   = _datetime.datetime.now(_datetime.timezone(_datetime.timedelta(hours=7))).year
                 close_ytd  = close[close.index >= pd.Timestamp(f"{cur_year}-01-01")]
                 if len(close_ytd) > 0:
                     first_ytd = float(close_ytd.iloc[0])
@@ -943,7 +943,7 @@ def dr_quick_update():
                             entry["low_52w"]  = low_52w
                             entry["ath"]      = ath_val
                             entry["ath_pct"]  = round((price - ath_val) / ath_val * 100, 2) if ath_val else None
-                            cur_year = _datetime.datetime.now().year
+                            cur_year = _datetime.datetime.now(_datetime.timezone(_datetime.timedelta(hours=7))).year
                             ytd_idx  = next((i for i, d in enumerate(old_dates) if d >= f"{cur_year}-01-01"), None)
                             if ytd_idx is not None:
                                 first_ytd = old_closes[ytd_idx]
@@ -1577,6 +1577,7 @@ def _run_refresh(period="max"):
             _update(current=current, total=total, message=msg)
 
         set_data_fetcher.run_with_progress(cb, BASE_DIR, period=period)
+        _market_internals_cache.clear()
         _update(running=False, done=True, message="เสร็จแล้ว!")
 
     except Exception as e:

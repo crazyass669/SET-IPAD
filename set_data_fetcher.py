@@ -709,8 +709,10 @@ def run_with_progress(callback, base_dir=None, period="max"):
     }
 
     out_path = os.path.join(base_dir, OUT_FILE)
-    with open(out_path, "w", encoding="utf-8") as f:
+    tmp_path = out_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(sanitize(output), f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, out_path)
 
     callback(total, total, f"บันทึกเสร็จ! {len(stocks)} หุ้น")
 
@@ -817,8 +819,10 @@ def run_quick_update(callback, base_dir=None):
         "sectors":     sectors,
     }
     out_path = os.path.join(base_dir, OUT_FILE)
-    with open(out_path, "w", encoding="utf-8") as f:
+    tmp_path = out_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(sanitize(output), f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, out_path)
 
     callback(total, total,
              f"Quick Update เสร็จ! {len(stocks)} หุ้น (ดาวน์โหลดใหม่ {len(new_data)} หุ้น)")

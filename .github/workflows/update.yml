@@ -6,6 +6,10 @@ on:
     - cron: '0 23 * * 0-4'    # 06:00 ICT (23:00 UTC คืนก่อน) วันจันทร์–ศุกร์
   workflow_dispatch:            # รันมือได้ผ่าน GitHub UI
 
+concurrency:
+  group: update-set-data
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
