@@ -17,13 +17,8 @@ import sys
 import socket
 
 
-def _atomic_write_json(path, obj, **dump_kw):
-    """เขียน JSON แบบ atomic: เขียนลง .tmp ก่อนแล้ว os.replace ทับ
-    ป้องกันไฟล์เสียหายถ้า process ตาย/ไฟดับกลางคัน"""
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, **dump_kw)
-    os.replace(tmp, path)
+# atomic write ใช้จาก core.store (Phase 3 — เลิก def ซ้ำในไฟล์นี้)
+from core.store import _atomic_write_json
 
 # Band cache — เก็บผล mrlikestock.com ไว้ 6 ชั่วโมง เพื่อลด latency ค้นซ้ำ
 _band_cache: dict = {}
@@ -1192,13 +1187,13 @@ def _run_refresh(period="max"):
     try:
         import importlib
         sys.path.insert(0, BASE_DIR)
-        import set_data_fetcher
-        importlib.reload(set_data_fetcher)
+        from services import refresh as _refresh_svc
+        importlib.reload(_refresh_svc)
 
         def cb(current, total, msg):
             _update(current=current, total=total, message=msg)
 
-        set_data_fetcher.run_with_progress(cb, BASE_DIR, period=period)
+        _refresh_svc.run_with_progress(cb, BASE_DIR, period=period)
 
         # อัพเดท Indices (full history)
         _update(current=98, total=100, message="อัพเดท Indices...")
@@ -1551,13 +1546,13 @@ def _run_quick():
     try:
         import importlib
         sys.path.insert(0, BASE_DIR)
-        import set_data_fetcher
-        importlib.reload(set_data_fetcher)
+        from services import refresh as _refresh_svc
+        importlib.reload(_refresh_svc)
 
         def cb(current, total, msg):
             _update(current=current, total=total, message=msg)
 
-        set_data_fetcher.run_quick_update(cb, BASE_DIR)
+        _refresh_svc.run_quick_update(cb, BASE_DIR)
         _market_internals_cache.clear()
         _insider_cache.clear()
         _major_cache.clear()
