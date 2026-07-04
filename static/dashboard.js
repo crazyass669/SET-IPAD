@@ -64,6 +64,7 @@ async function loadData() {
     initScreenerAutosave();
     renderSavedPresets();
     renderDqBanner();
+    _rotAlertsData = null;   // ข้อมูลใหม่ -> ดึง rotation alerts ใหม่
     renderAll();
     initAlertSystem();
   } catch(e) {
@@ -718,8 +719,65 @@ function setRotTimeframe(tf, btn) {
   renderRotation();
 }
 
+// ============================================================
+// ROTATION QUADRANT ALERTS — sector เปลี่ยน quadrant (ยืนยัน 3 วันทำการ)
+// ============================================================
+let _rotAlertsData = null;
+
+const _QUAD_COLOR = { Leading: '#3fb950', Improving: '#58a6ff',
+                      Weakening: '#e3b341', Lagging: '#f85149' };
+
+function _quadSpan(q) {
+  return `<span style="color:${_QUAD_COLOR[q] || 'var(--text2)'};font-weight:700">${q}</span>`;
+}
+
+async function renderRotAlerts() {
+  const el = document.getElementById('rot-alerts');
+  if (!el) return;
+  try {
+    if (!_rotAlertsData) {
+      const r = await fetch('/api/rotation-alerts');
+      _rotAlertsData = await r.json();
+    }
+    const d = _rotAlertsData;
+    const trans   = (d.transitions || []).slice(0, 8);
+    const pending = (d.pending || []).filter(p => p.days >= 2);  // โชว์เฉพาะใกล้ยืนยัน
+    if (trans.length === 0 && pending.length === 0) { el.style.display = 'none'; return; }
+
+    const transHtml = trans.map(t =>
+      `<div style="padding:3px 0">
+         <span style="color:var(--text2);font-size:11px">${t.date}</span>
+         &nbsp;<b>${t.name}</b> <span style="color:var(--text2);font-size:10px">(${t.type})</span>:
+         ${_quadSpan(t.from)} → ${_quadSpan(t.to)}
+       </div>`).join('');
+    const pendHtml = pending.map(p =>
+      `<div style="padding:3px 0;color:var(--text2)">
+         ⏳ <b style="color:var(--text)">${p.name}</b>
+         <span style="font-size:10px">(${p.type})</span>
+         กำลังเข้า ${_quadSpan(p.to)} — ยืนยันแล้ว ${p.days}/${p.need} วัน
+       </div>`).join('');
+
+    el.innerHTML =
+      `<div class="card" style="padding:10px 16px;font-size:12px">
+         <div style="font-weight:700;margin-bottom:4px">🔔 Quadrant Changes
+           <span class="scr-tip-icon" style="font-size:10px;width:15px;height:15px;margin-left:6px;vertical-align:middle">?<div class="scr-tip-box" style="width:280px">
+             นับจากแกน Long (X=3M%, Y=1M%) — ต้องอยู่ quadrant ใหม่ครบ
+             <b>${d.rules?.confirm_days ?? 3} วันทำการติดต่อกัน</b>ถึงยืนยัน
+             (ค่าในช่วง ±${d.rules?.dead_zone_pct ?? 0.3}% รอบแกน = ไม่นับ กัน flip-flop)
+           </div></span>
+         </div>
+         ${trans.length ? transHtml : '<div style="color:var(--text2);padding:3px 0">ยังไม่มีการเปลี่ยน quadrant ที่ยืนยันแล้ว</div>'}
+         ${pendHtml}
+       </div>`;
+    el.style.display = 'block';
+  } catch (e) {
+    el.style.display = 'none';
+  }
+}
+
 function renderRotation() {
   if (!DATA) return;
+  renderRotAlerts();
   const data = rotView === "sector" ? DATA.sectors : DATA.industries;
   const sorted = [...data].sort((a,b) => (b.ret_1m||0)-(a.ret_1m||0));
   const maxAbs = Math.max(...sorted.map(s => Math.abs(s.ret_1m||0)), 1);

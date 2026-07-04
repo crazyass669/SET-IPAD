@@ -38,3 +38,6 @@ listedCompanies_en_US.xlsx
 set_prices.db
 set_prices.db-wal
 set_prices.db-shm
+
+# Rotation quadrant alert state
+rotation_state.json

@@ -15,7 +15,16 @@ from core.store import (OUT_FILE, DUAL_WRITE_JSON, _atomic_write_json,
                         _check_stock_count, get_last_dates, iter_all_series,
                         load_history, save_history)
 from sources.yahoo import fetch_all_batch, fetch_gap_batch, fetch_market_caps_parallel
+from services.rotation import update_rotation_state
 from set_data_fetcher import load_set_symbols, process_stock, sanitize
+
+
+def _update_rotation_safe(base_dir, data_as_of, sectors, industries):
+    """quadrant alert ห้ามทำ refresh ล่ม — ดัก error แล้ว log อย่างเดียว"""
+    try:
+        update_rotation_state(base_dir, data_as_of, sectors, industries)
+    except Exception as e:
+        print(f"[Rotation] update state failed: {e}")
 
 
 # ============================================================
@@ -84,6 +93,7 @@ def run_with_progress(callback, base_dir=None, period="max"):
 
     industries = summarize_groups(stocks, "industry")
     sectors    = summarize_groups(stocks, "sector")
+    _update_rotation_safe(base_dir, data_as_of, sectors, industries)
 
     output = {
         "updated_at":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -190,6 +200,7 @@ def run_quick_update(callback, base_dir=None):
     stocks     = rank_rs(stocks)
     industries = summarize_groups(stocks, "industry")
     sectors    = summarize_groups(stocks, "sector")
+    _update_rotation_safe(base_dir, data_as_of, sectors, industries)
 
     output = {
         "updated_at":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
