@@ -31,6 +31,17 @@ XLS_FILE     = "listedCompanies_en_US.xls"
 OUT_FILE     = "set_data.json"
 HISTORY_FILE = "set_history.json"
 
+# สูตรคำนวณทั้งหมดอยู่ที่ core/metrics.py (single source of truth)
+# re-export ที่นี่เพื่อ backward compatibility กับ app.py และ tests
+from core.metrics import (                       # noqa: E402
+    calc_return as _calc_return,
+    calc_ema as _calc_ema,
+    calc_rs_raw,
+    validate_stocks,
+    rank_rs,
+    summarize_groups,
+)
+
 
 # ============================================================
 # 1. อ่านรายชื่อหุ้นจากไฟล์ SET
@@ -265,28 +276,6 @@ def save_history(all_data_map, base_dir, existing_hist=None):
 # 2. คำนวณ metrics จาก Series ที่ดาวน์โหลดมาแล้ว
 # ============================================================
 
-def _calc_return(series, days):
-    if len(series) < days + 1:
-        return None
-    try:
-        past = float(series.iloc[-(days + 1)])
-        now  = float(series.iloc[-1])
-        if past == 0:
-            return None
-        return round((now - past) / past * 100, 2)
-    except Exception:
-        return None
-
-
-def _calc_ema(series, period):
-    if len(series) < period:
-        return None
-    try:
-        return round(float(series.ewm(span=period, adjust=False).mean().iloc[-1]), 4)
-    except Exception:
-        return None
-
-
 def process_stock(info_dict, close, volume):
     """คำนวณ metrics จาก close/volume Series — ไม่ดึงข้อมูลเพิ่ม"""
     try:
@@ -319,21 +308,17 @@ def process_stock(info_dict, close, volume):
         above_ema50  = bool(price > ema50)  if ema50  is not None else None
         above_ema200 = bool(price > ema200) if ema200 is not None else None
 
-        parts = [(ret_1m, 2), (ret_3m, 1), (ret_6m, 1), (ret_1y, 1)]
-        valid = [(v, w) for v, w in parts if v is not None]
-        rs_raw = round(sum(v * w for v, w in valid) / sum(w for _, w in valid), 4) if valid else None
+        _rs = calc_rs_raw(ret_1m, ret_3m, ret_6m, ret_1y)
+        rs_raw = round(_rs, 4) if _rs is not None else None
 
         # rs_raw คำนวณ ณ 4 สัปดาห์ก่อน (ใช้ rank ต่างหาก → rs_momentum)
         rs_raw_4w = None
         if len(close) >= 272:  # 21+21+63+126+250 min
             c4w = close.iloc[:-21]
-            r1m = _calc_return(c4w, 21)
-            r3m = _calc_return(c4w, 63)
-            r6m = _calc_return(c4w, 126)
-            r1y = _calc_return(c4w, 250)
-            v4w = [(v, w) for v, w in [(r1m,2),(r3m,1),(r6m,1),(r1y,1)] if v is not None]
-            if v4w:
-                rs_raw_4w = round(sum(v*w for v,w in v4w)/sum(w for _,w in v4w), 4)
+            _rs4 = calc_rs_raw(_calc_return(c4w, 21), _calc_return(c4w, 63),
+                               _calc_return(c4w, 126), _calc_return(c4w, 250))
+            if _rs4 is not None:
+                rs_raw_4w = round(_rs4, 4)
 
         # EMA200 slope: เทียบ EMA200 ปัจจุบัน vs 10 สัปดาห์ก่อน (50 วัน)
         ema200_slope_pct = None
@@ -578,164 +563,6 @@ def fetch_market_caps_parallel(tickers, callback=None, workers=3):
 # ============================================================
 # 5. RS Rank / Group summaries / Sanitize
 # ============================================================
-
-def validate_stocks(stocks, data_as_of=None):
-    """Data Validation Layer — ติด flag คุณภาพข้อมูลต่อหุ้น ก่อนเข้า RS/Sector calc
-    Flags:
-      no_data    : ขาด field สำคัญ (price/ret_1m/rs_raw)         → ออกทุกการคำนวณ
-      stale      : แท่งสุดท้ายเก่ากว่า data_as_of > 7 วัน (พักเทรด) → ออกจาก RS + sector avg
-      thin       : 21 แท่งล่าสุดกินเวลา > 45 วันปฏิทิน (เทรดเบาบาง) → ออกจาก RS + ret เฉลี่ยระยะยาว
-      suspect_ca : |ret_1d| > 31% เกิน ceiling SET (สงสัย corporate action) → พักออกจาก RS รอบนี้
-      penny      : ราคา < 0.10 บาท (tick 0.01 = ±10%+)            → rank ได้ แต่ UI ติด badge/กันออก leader list
-      short_hist : ไม่มี ret_1y (IPO ใหม่)                          → rank ได้ แต่ UI แจ้ง
-    คืน dq_summary dict สำหรับใส่ใน output"""
-    from collections import Counter
-    as_of = None
-    if data_as_of:
-        try:
-            as_of = datetime.strptime(data_as_of, "%Y-%m-%d")
-        except Exception:
-            pass
-
-    counts = Counter()
-    for s in stocks:
-        flags = []
-
-        if s.get("price") is None or s.get("ret_1m") is None or s.get("rs_raw") is None:
-            flags.append("no_data")
-
-        ph = s.get("price_history") or []
-        if as_of and ph:
-            try:
-                gap = (as_of - datetime.strptime(ph[-1][0], "%Y-%m-%d")).days
-                if gap > 7:
-                    flags.append("stale")
-                    s["dq_stale_days"] = gap
-            except Exception:
-                pass
-        if len(ph) >= 22:
-            try:
-                span = (datetime.strptime(ph[-1][0], "%Y-%m-%d")
-                        - datetime.strptime(ph[-22][0], "%Y-%m-%d")).days
-                if span > 45:
-                    flags.append("thin")
-            except Exception:
-                pass
-
-        if s.get("ret_1d") is not None and abs(s["ret_1d"]) > 31:
-            flags.append("suspect_ca")
-        if s.get("price") is not None and s["price"] < 0.10:
-            flags.append("penny")
-        if s.get("ret_1y") is None and "no_data" not in flags:
-            flags.append("short_hist")
-
-        rs_eligible    = not any(f in flags for f in ("no_data", "stale", "thin", "suspect_ca"))
-        group_eligible = not any(f in flags for f in ("no_data", "stale"))
-        s["dq"] = {"flags": flags, "rs_eligible": rs_eligible, "group_eligible": group_eligible}
-        for f in flags:
-            counts[f] += 1
-
-    n_excl = sum(1 for s in stocks if not s["dq"]["rs_eligible"])
-    return {
-        "counts":      dict(counts),
-        "rs_excluded": n_excl,
-        "rs_universe": len(stocks) - n_excl,
-    }
-
-
-def rank_rs(stocks):
-    def _ok(s):
-        return s.get("dq", {}).get("rs_eligible", True)
-
-    # rank rs_score ปัจจุบัน — เฉพาะหุ้นที่ผ่าน validation (ตัวที่ไม่ผ่านคง rs_score=None)
-    valid = [s for s in stocks if s.get("rs_raw") is not None and _ok(s)]
-    valid.sort(key=lambda x: x["rs_raw"])
-    n = len(valid)
-    for i, s in enumerate(valid):
-        s["rs_score"] = int(round(i / n * 99))
-
-    # rank rs_score_4w และคำนวณ rs_momentum
-    valid4w = [s for s in stocks if s.get("rs_raw_4w") is not None and _ok(s)]
-    valid4w.sort(key=lambda x: x["rs_raw_4w"])
-    n4w = len(valid4w)
-    for i, s in enumerate(valid4w):
-        s["rs_score_4w"] = int(round(i / n4w * 99))
-    for s in stocks:
-        if s.get("rs_score") is not None and s.get("rs_score_4w") is not None:
-            s["rs_momentum"] = s["rs_score"] - s["rs_score_4w"]
-
-    # Weinstein Stage จาก above_ema200 + ema200_slope_pct
-    for s in stocks:
-        above = s.get("above_ema200")
-        slope = s.get("ema200_slope_pct")
-        if above is None or slope is None:
-            s["stage"] = None
-            continue
-        if above and slope >= 0:
-            s["stage"] = 2   # Advancing
-        elif above and slope < 0:
-            s["stage"] = 3   # Distribution / Topping
-        elif not above and slope >= -1.5:
-            s["stage"] = 1   # Basing
-        else:
-            s["stage"] = 4   # Declining
-
-    return stocks
-
-
-def summarize_groups(stocks, key):
-    from collections import defaultdict
-    groups = defaultdict(list)
-    for s in stocks:
-        groups[s.get(key, "Unknown")].append(s)
-
-    # ret ระยะยาวของหุ้น thin (เทรดเบาบาง) หน่วยเวลาเพี้ยน — ไม่เอาเข้าเฉลี่ย
-    _LONG_RETS = {"ret_1w", "ret_1m", "ret_3m", "ret_6m", "ret_1y"}
-
-    result = []
-    for name, members in groups.items():
-        eligible = [m for m in members
-                    if m.get("dq", {}).get("group_eligible", True)]
-
-        def _vals(f):
-            pool = eligible
-            if f in _LONG_RETS:
-                pool = [m for m in pool if "thin" not in m.get("dq", {}).get("flags", [])]
-            return [m[f] for m in pool if m.get(f) is not None]
-
-        def avg(f, min_n=3):
-            vals = _vals(f)
-            return round(sum(vals) / len(vals), 2) if len(vals) >= min_n else None
-
-        def med(f, min_n=3):
-            # median สำหรับ valuation fields — กัน outlier (เช่น PE 710) ลากค่าเฉลี่ย
-            vals = sorted(_vals(f))
-            n = len(vals)
-            if n < min_n:
-                return None
-            mid = vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2
-            return round(mid, 2)
-
-        result.append({
-            "name":             name,
-            "count":            len(members),
-            "n_valid":          len(_vals("ret_1m")),
-            "ret_1d":           avg("ret_1d"),
-            "ret_1w":           avg("ret_1w"),
-            "ret_1m":           avg("ret_1m"),
-            "ret_3m":           avg("ret_3m"),
-            "ret_6m":           avg("ret_6m"),
-            "ret_1y":           avg("ret_1y"),
-            "avg_rs":           avg("rs_score"),
-            "pct_above_ema50":  round(
-                sum(1 for m in eligible if m.get("above_ema50")) / len(eligible) * 100
-            ) if eligible else None,
-            "avg_pe":           med("pe"),
-            "avg_pbv":          med("pbv"),
-            "avg_div_yield":    med("div_yield"),
-        })
-    return sorted(result, key=lambda x: x.get("ret_1m") or -999, reverse=True)
-
 
 def sanitize(obj):
     import math

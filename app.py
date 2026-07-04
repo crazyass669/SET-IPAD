@@ -374,6 +374,9 @@ _DR_STATIC = [
 
 from flask import Flask, jsonify, send_file, Response, request
 
+# สูตรคำนวณกลาง — ห้าม copy สูตรมาวางในไฟล์นี้ ให้ import จาก core.metrics เท่านั้น
+from core.metrics import calc_rs_raw
+
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE    = os.path.join(BASE_DIR, "set_data.json")
 BACKUP_FILE  = os.path.join(BASE_DIR, "set_data_backup.json")
@@ -750,9 +753,7 @@ def get_dr_data():
             except Exception:
                 ret_ytd = None
 
-            parts = [(ret_1m, 2), (ret_3m, 1), (ret_6m, 1), (ret_1y, 1)]
-            valid = [(v, w) for v, w in parts if v is not None]
-            rs_raw = sum(v * w for v, w in valid) / sum(w for _, w in valid) if valid else None
+            rs_raw = calc_rs_raw(ret_1m, ret_3m, ret_6m, ret_1y)
 
             # Market cap via fast_info (best-effort)
             mkt_cap = None
@@ -1289,9 +1290,8 @@ def _compute_idx_rs(result: dict):
             set_data = json.load(f)
 
         def _rs_raw(e):
-            parts = [(e.get("ret_1m"), 2), (e.get("ret_3m"), 1), (e.get("ret_6m"), 1), (e.get("ret_1y"), 1)]
-            valid = [(v, w) for v, w in parts if v is not None]
-            return sum(v * w for v, w in valid) / sum(w for _, w in valid) if valid else None
+            return calc_rs_raw(e.get("ret_1m"), e.get("ret_3m"),
+                               e.get("ret_6m"), e.get("ret_1y"))
 
         stock_raws = []
         for s in set_data.get("stocks", []):
@@ -1325,11 +1325,8 @@ def _compute_idx_rs(result: dict):
                     c = closes[:pos + 1]
                     def _ret(n, _c=c):
                         return (_c[-1] - _c[-(n+1)]) / _c[-(n+1)] * 100 if len(_c) > n and _c[-(n+1)] else None
-                    r1m, r3m, r6m, r1y = _ret(21), _ret(63), _ret(126), _ret(250)
-                    parts = [(r1m,2),(r3m,1),(r6m,1),(r1y,1)]
-                    valid = [(v,w) for v,w in parts if v is not None]
-                    if valid:
-                        rr = sum(v*w for v,w in valid) / sum(w for _,w in valid)
+                    rr = calc_rs_raw(_ret(21), _ret(63), _ret(126), _ret(250))
+                    if rr is not None:
                         weekly.append({"date": dates[pos], "raw": rr})
                 if weekly:
                     weekly.reverse()  # เรียงตามเวลา oldest → newest
