@@ -60,6 +60,7 @@ async function loadData() {
       `</span>`;
     _populateScrIndustry();
     loadScreenerSettings();
+    initScreenerAutosave();
     renderSavedPresets();
     renderDqBanner();
     renderAll();
@@ -3393,6 +3394,22 @@ function loadScreenerSettings() {
     if (s['scr-market']) { const el = document.getElementById('scr-market'); if (el) el.value = s['scr-market']; }
     if (s['scr-industry']) { const el = document.getElementById('scr-industry'); if (el) el.value = s['scr-industry']; }
   } catch(e) {}
+}
+
+// autosave ทุกครั้งที่แก้ค่า filter — เดิมบันทึกเฉพาะตอนกด "ค้นหา"
+// ทำให้ค่าที่พิมพ์ไว้แต่ยังไม่ได้กดค้นหาหายเมื่อ refresh หน้า
+let _scrAutosaveWired = false;
+function initScreenerAutosave() {
+  if (_scrAutosaveWired) return;
+  _scrAutosaveWired = true;
+  _SCR_FIELDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', saveScreenerSettings);
+  });
+  _SCR_CHECKS.concat(['scr-market', 'scr-industry']).forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', saveScreenerSettings);
+  });
 }
 
 // ============================================================
