@@ -3446,9 +3446,15 @@ function renderSavedPresets() {
     row.innerHTML = '<span style="font-size:11px;color:var(--text2);font-style:italic">ยังไม่มี preset</span>';
     return;
   }
+  // ชื่อ preset ต้อง escape เป็น HTML entity — JSON.stringify ให้ double quote
+  // ซึ่งชนกับ quote ของ attribute ทำให้ onclick พังเงียบ (บั๊กเดิม)
+  const _attrArg = n => JSON.stringify(n)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const _escHtml = n => String(n)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   row.innerHTML = names.map(n =>
-    `<span class="preset-saved-btn" onclick="loadSavedPreset(${JSON.stringify(n)})">
-      ${n}<button class="preset-del" onclick="event.stopPropagation();deleteSavedPreset(${JSON.stringify(n)})" title="ลบ">✕</button>
+    `<span class="preset-saved-btn" onclick="loadSavedPreset(${_attrArg(n)})">
+      ${_escHtml(n)}<button class="preset-del" onclick="event.stopPropagation();deleteSavedPreset(${_attrArg(n)})" title="ลบ">✕</button>
     </span>`
   ).join('');
 }
