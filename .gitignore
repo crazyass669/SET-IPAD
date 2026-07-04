@@ -33,3 +33,8 @@ listedCompanies_en_US.xlsx
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# SQLite price store
+set_prices.db
+set_prices.db-wal
+set_prices.db-shm

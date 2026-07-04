@@ -1,14 +1,168 @@
 # -*- coding: utf-8 -*-
 """core/store.py — persistence layer: atomic write, history I/O, write guards
 
-seam สำหรับอนาคต: ถ้าย้าย set_history.json ไป SQLite ให้เปลี่ยนเฉพาะไฟล์นี้
+Historical prices เก็บใน SQLite (set_prices.db) เป็นหลัก:
+  - get_series(ticker)   point query ~6ms (แทนการ parse JSON 98MB)
+  - upsert_bars(map)     เขียนเฉพาะแท่งใหม่ใน transaction เดียว
+  - iter_all_series()    generator สำหรับ recompute pipeline
+ทุก connection เปิด per-call ใน thread ของผู้เรียก (WAL: 1 writer + N readers)
+
+ช่วง dual-write: ยังเขียน set_history.json ควบคู่ (DUAL_WRITE_JSON=True)
+เพื่อถอยกลับได้ — เมื่อใช้งานนิ่งแล้วตั้งเป็น False เพื่อเลิกจ่าย cost 98MB
 """
 import json
 import os
+import sqlite3
 from datetime import datetime
 
 OUT_FILE     = "set_data.json"
 HISTORY_FILE = "set_history.json"
+DB_FILE      = "set_prices.db"
+
+# เขียน set_history.json ควบคู่กับ SQLite (ปิดเมื่อมั่นใจว่า DB นิ่งแล้ว)
+DUAL_WRITE_JSON = True
+
+
+# ============================================================
+# 1a. SQLite price store
+# ============================================================
+
+def _db_path(base_dir):
+    return os.path.join(base_dir, DB_FILE)
+
+
+def db_exists(base_dir):
+    return os.path.exists(_db_path(base_dir))
+
+
+def _connect(base_dir):
+    """เปิด connection ใหม่ (per-call, ใน thread ผู้เรียก) — ห้าม share ข้าม thread"""
+    con = sqlite3.connect(_db_path(base_dir))
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA busy_timeout=5000")
+    return con
+
+
+def init_db(base_dir):
+    con = _connect(base_dir)
+    try:
+        con.executescript("""
+            CREATE TABLE IF NOT EXISTS prices(
+              ticker TEXT NOT NULL, date TEXT NOT NULL,
+              close REAL NOT NULL, volume INTEGER NOT NULL,
+              PRIMARY KEY(ticker, date)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def get_meta(base_dir, key, default=None):
+    if not db_exists(base_dir):
+        return default
+    con = _connect(base_dir)
+    try:
+        row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else default
+    finally:
+        con.close()
+
+
+def get_series(base_dir, ticker):
+    """คืน {'dates','closes','volumes'} ของหุ้นตัวเดียว (point query)
+    fallback อ่านจาก set_history.json ถ้ายังไม่ได้ migrate"""
+    if db_exists(base_dir):
+        con = _connect(base_dir)
+        try:
+            rows = con.execute(
+                "SELECT date, close, volume FROM prices WHERE ticker=? ORDER BY date",
+                (ticker,)).fetchall()
+        finally:
+            con.close()
+        if not rows:
+            return None
+        d, c, v = zip(*rows)
+        return {"dates": list(d), "closes": list(c), "volumes": list(v)}
+    hist = load_history(base_dir)
+    return (hist or {}).get("stocks", {}).get(ticker)
+
+
+def get_last_dates(base_dir):
+    """คืน {ticker: วันที่แท่งสุดท้าย} — ใช้หา gap ตอน Quick Update"""
+    if db_exists(base_dir):
+        con = _connect(base_dir)
+        try:
+            rows = con.execute(
+                "SELECT ticker, MAX(date) FROM prices GROUP BY ticker").fetchall()
+        finally:
+            con.close()
+        return dict(rows)
+    hist = load_history(base_dir) or {"stocks": {}}
+    return {t: d["dates"][-1] for t, d in hist["stocks"].items() if d.get("dates")}
+
+
+def iter_all_series(base_dir):
+    """generator: yield (ticker, {'dates','closes','volumes'}) เรียงตาม ticker
+    ผู้เรียกต้อง consume จนจบ (connection ปิดเมื่อ generator จบ/ถูกทิ้ง)"""
+    if db_exists(base_dir):
+        con = _connect(base_dir)
+        try:
+            cur = con.execute(
+                "SELECT ticker, date, close, volume FROM prices ORDER BY ticker, date")
+            cur_t, d, c, v = None, [], [], []
+            for t, dt, cl, vol in cur:
+                if t != cur_t:
+                    if cur_t is not None:
+                        yield cur_t, {"dates": d, "closes": c, "volumes": v}
+                    cur_t, d, c, v = t, [], [], []
+                d.append(dt); c.append(cl); v.append(vol)
+            if cur_t is not None:
+                yield cur_t, {"dates": d, "closes": c, "volumes": v}
+        finally:
+            con.close()
+        return
+    hist = load_history(base_dir) or {"stocks": {}}
+    for t, data in hist["stocks"].items():
+        yield t, data
+
+
+def upsert_bars(base_dir, all_data_map):
+    """เขียนแท่งราคาลง SQLite (INSERT OR REPLACE) ใน transaction เดียว
+    all_data_map: {ticker -> {'close': pd.Series, 'volume': pd.Series}}"""
+    init_db(base_dir)
+    con = _connect(base_dir)
+    try:
+        def rows():
+            for ticker, data in all_data_map.items():
+                for dt, cl, vol in zip(data["close"].index, data["close"], data["volume"]):
+                    yield (ticker, dt.strftime("%Y-%m-%d"),
+                           round(float(cl), 4), int(vol))
+        con.executemany("INSERT OR REPLACE INTO prices VALUES (?,?,?,?)", rows())
+        con.execute("INSERT OR REPLACE INTO meta VALUES ('updated_at', ?)",
+                    (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
+        con.commit()
+    finally:
+        con.close()
+
+
+def upsert_history_dict(base_dir, history):
+    """เขียน history dict ธรรมดา ({stocks:{ticker:{dates,closes,volumes}}}) ลง DB
+    ใช้โดย migrate script และ import_eod_archive.py"""
+    init_db(base_dir)
+    con = _connect(base_dir)
+    try:
+        def rows():
+            for ticker, v in history.get("stocks", {}).items():
+                for dt, cl, vol in zip(v["dates"], v["closes"], v["volumes"]):
+                    yield (ticker, dt, float(cl), int(vol))
+        con.executemany("INSERT OR REPLACE INTO prices VALUES (?,?,?,?)", rows())
+        con.execute("INSERT OR REPLACE INTO meta VALUES ('updated_at', ?)",
+                    (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
+        con.commit()
+    finally:
+        con.close()
 
 
 # ============================================================
@@ -65,9 +219,15 @@ def _merge_history(existing, new_dates, new_closes, new_volumes):
 def save_history(all_data_map, base_dir, existing_hist=None):
     """
     all_data_map: {ticker -> {close: pd.Series, volume: pd.Series}}
-    Merges with existing_hist and writes set_history.json.
-    Returns the new history dict.
+    เขียนลง SQLite (หลัก) + merge/เขียน set_history.json (เมื่อ DUAL_WRITE_JSON)
+    Returns merged history dict (JSON path) หรือ None เมื่อปิด dual-write
     """
+    # SQLite คือ source of truth — upsert เฉพาะแท่งที่ได้มา
+    upsert_bars(base_dir, all_data_map)
+
+    if not DUAL_WRITE_JSON:
+        return None
+
     stocks_hist = {}
     if existing_hist:
         stocks_hist = dict(existing_hist.get("stocks", {}))
