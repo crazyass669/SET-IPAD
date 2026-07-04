@@ -60,15 +60,24 @@ for ticker, data in stocks.items():
 
 # ── 3. ไม่ต้องใช้ yfinance — ข้อมูลในโฟลเดอร์ครบถึงวานนี้แล้ว ──
 
-# ── 4. บันทึก set_history.json ──────────────────────────────────
-log("บันทึก set_history.json...")
+# ── 4. บันทึกผ่าน store layer (SQLite + JSON ช่วง dual-write) ────
+import sys
+sys.path.insert(0, BASE_DIR)
+from core import store
+
+log(f"บันทึกลง {store.DB_FILE}...")
 history = {
     "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     "stocks": dict(stocks)
 }
-with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-    json.dump(history, f, ensure_ascii=False)
+store.upsert_history_dict(BASE_DIR, history)
+log(f"  {store.DB_FILE} = {os.path.getsize(store._db_path(BASE_DIR))/1024/1024:.1f} MB")
 
-size_mb = os.path.getsize(HISTORY_FILE) / 1024 / 1024
-log(f"เสร็จ! set_history.json = {size_mb:.1f} MB, {len(stocks)} tickers")
+if store.DUAL_WRITE_JSON:
+    log("บันทึก set_history.json (dual-write)...")
+    store._atomic_write_json(HISTORY_FILE, history)
+    size_mb = os.path.getsize(HISTORY_FILE) / 1024 / 1024
+    log(f"  set_history.json = {size_mb:.1f} MB")
+
+log(f"เสร็จ! {len(stocks)} tickers")
 log("ขั้นตอนถัดไป: กด Full Refresh บน dashboard เพื่อสร้าง set_data.json ใหม่")
