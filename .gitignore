@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+env/
+
+# Data files (สร้างโดย Actions)
+set_data.json
+set_dr_data.json
+set_history.json
+dr_cache.json
+indices_cache.json
+nvdr_data.json
+short_sales_data.json
+set_market_stats.json
+*.json.tmp
+
+# Backup / test
+*.bak
+set_data_backup.json
+response.txt
+server_out.txt
+server_err.txt
+ttm_test_results.json
+test_batch.py
+test_syms.py
+
+# Local only
+start.bat
+listedCompanies_en_US.xlsx
+
+# Claude Code local settings
+.claude/settings.local.json
