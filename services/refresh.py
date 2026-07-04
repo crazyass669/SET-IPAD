@@ -11,7 +11,8 @@ from datetime import datetime
 import pandas as pd
 
 from core.metrics import validate_stocks, rank_rs, summarize_groups
-from core.store import (OUT_FILE, _atomic_write_json, _check_stock_count,
+from core.store import (OUT_FILE, DUAL_WRITE_JSON, _atomic_write_json,
+                        _check_stock_count, get_last_dates, iter_all_series,
                         load_history, save_history)
 from sources.yahoo import fetch_all_batch, fetch_gap_batch, fetch_market_caps_parallel
 from set_data_fetcher import load_set_symbols, process_stock, sanitize
@@ -40,8 +41,8 @@ def run_with_progress(callback, base_dir=None, period="max"):
     sym_map  = {s["ticker"]: s for s in symbols}
     all_data = fetch_all_batch(tickers, callback=callback, period=period)
 
-    callback(total, total, f"บันทึก set_history.json ({len(all_data)} หุ้น)...")
-    existing_hist = load_history(base_dir)
+    callback(total, total, f"บันทึกราคา ({len(all_data)} หุ้น)...")
+    existing_hist = load_history(base_dir) if DUAL_WRITE_JSON else None
     save_history(all_data, base_dir, existing_hist=existing_hist)
 
     callback(total, total, f"ดาวน์โหลดเสร็จ — คำนวณ metrics ({len(all_data)}/{total} หุ้น)...")
@@ -114,21 +115,14 @@ def run_quick_update(callback, base_dir=None):
     if base_dir is None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
 
-    callback(0, 100, "โหลด set_history.json...")
-    history = load_history(base_dir)
-    if not history:
-        raise ValueError("ไม่พบ set_history.json — กรุณา Full Refresh ก่อน")
-
     # หา last date ที่เก่าที่สุดในทุกหุ้น (เพื่อครอบคลุมหุ้นที่ตามหลัง)
-    last_dates = [
-        data["dates"][-1]
-        for data in history["stocks"].values()
-        if data.get("dates")
-    ]
-    if not last_dates:
-        raise ValueError("ไม่มีข้อมูลใน history")
+    # query จาก SQLite ตรงๆ — ไม่ต้อง parse JSON 98MB อีก
+    callback(0, 100, "ตรวจสอบวันล่าสุดของข้อมูล...")
+    last_map = get_last_dates(base_dir)
+    if not last_map:
+        raise ValueError("ไม่พบข้อมูลราคา (set_prices.db) — กรุณา Full Refresh ก่อน")
 
-    min_last  = min(last_dates)
+    min_last  = min(last_map.values())
     start_dt  = pd.to_datetime(min_last)  # re-fetch วันล่าสุดเสมอ เผื่อดึงก่อนตลาดปิด
     today     = pd.Timestamp.now().normalize()
 
@@ -148,15 +142,18 @@ def run_quick_update(callback, base_dir=None):
         callback(100, 100, "ไม่มีข้อมูลใหม่ (อาจเป็นวันหยุด)")
         return
 
-    callback(total, total, f"Merge history ({len(new_data)} หุ้น มีข้อมูลใหม่)...")
-    history = save_history(new_data, base_dir, existing_hist=history)
+    callback(total, total, f"บันทึกราคา ({len(new_data)} หุ้น มีข้อมูลใหม่)...")
+    existing_hist = load_history(base_dir) if DUAL_WRITE_JSON else None
+    save_history(new_data, base_dir, existing_hist=existing_hist)
 
     callback(0, total, f"คำนวณ metrics ใหม่ ({total} หุ้น)...")
-    stocks = []
-    for i, info_dict in enumerate(symbols):
-        tick      = info_dict["ticker"]
-        hist_data = history["stocks"].get(tick)
-        if not hist_data or not hist_data.get("dates"):
+    sym_map = {s["ticker"]: s for s in symbols}
+    stocks  = []
+    done    = 0
+    # stream จาก SQLite ทีละหุ้น — ไม่ต้องถือ history ทั้งก้อนใน RAM
+    for tick, hist_data in iter_all_series(base_dir):
+        info_dict = sym_map.get(tick)
+        if not info_dict or not hist_data.get("dates"):
             continue
         try:
             dates  = pd.to_datetime(hist_data["dates"])
@@ -167,8 +164,9 @@ def run_quick_update(callback, base_dir=None):
         result = process_stock(info_dict, close, volume)
         if result:
             stocks.append(result)
-        if i % 100 == 0:
-            callback(i, total, f"คำนวณ {i}/{total}...")
+        done += 1
+        if done % 100 == 0:
+            callback(done, total, f"คำนวณ {done}/{total}...")
 
     # คงค่า fundamentals เดิมไว้ (ไม่ดึงใหม่ใน Quick Update)
     existing_data_path = os.path.join(base_dir, OUT_FILE)
@@ -185,10 +183,7 @@ def run_quick_update(callback, base_dir=None):
         except Exception:
             pass
 
-    data_as_of = max(
-        (data["dates"][-1] for data in history["stocks"].values() if data.get("dates")),
-        default=None
-    )
+    data_as_of = max(get_last_dates(base_dir).values(), default=None)
 
     callback(total, total, "ตรวจสอบคุณภาพข้อมูล + คำนวณ RS Rank...")
     dq_summary = validate_stocks(stocks, data_as_of)

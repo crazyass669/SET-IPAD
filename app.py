@@ -77,25 +77,9 @@ def _save_dr_cache_to_file(result):
     except Exception as e:
         print(f"[DR] Failed to save cache: {e}")
 
-# History cache — โหลดครั้งเดียว reload เมื่อไฟล์เปลี่ยน
-_history_cache      = None
-_history_cache_mtime = None
-_hist_lock          = threading.Lock()
-
-
-def _get_history():
-    global _history_cache, _history_cache_mtime
-    with _hist_lock:
-        try:
-            mtime = os.path.getmtime(HISTORY_FILE)
-        except OSError:
-            return None
-        if _history_cache is not None and mtime == _history_cache_mtime:
-            return _history_cache
-        with open(HISTORY_FILE, encoding="utf-8") as f:
-            _history_cache = json.load(f)
-        _history_cache_mtime = mtime
-        return _history_cache
+# History: อ่านจาก SQLite ผ่าน core.store (point query ~6ms) — ไม่มี in-memory
+# cache 434MB อีกต่อไป และไม่ต้องมี mtime invalidation (query ตรงทุกครั้ง)
+from core import store as price_store
 
 app = Flask(__name__)
 
@@ -243,14 +227,11 @@ def progress_stream():
 
 @app.route("/api/history/<symbol>")
 def get_history(symbol):
-    """ส่ง full price history จาก set_history.json (สำหรับ 5Y/Max chart)"""
-    h = _get_history()
-    if h is None:
-        return jsonify({"error": "ไม่พบ set_history.json — กรุณา Full Refresh ก่อน"}), 404
+    """ส่ง full price history จาก SQLite point query (สำหรับ 5Y/Max chart)"""
     ticker = symbol.upper().strip() + ".BK"
-    data   = h.get("stocks", {}).get(ticker)
+    data = price_store.get_series(BASE_DIR, ticker)
     if not data:
-        return jsonify({"error": f"ไม่พบข้อมูล {symbol}"}), 404
+        return jsonify({"error": f"ไม่พบข้อมูล {symbol} — กรุณา Full Refresh ก่อน"}), 404
     return jsonify(data)
 
 
@@ -1480,25 +1461,22 @@ _market_internals_cache: dict = {}
 def market_internals():
     """
     คำนวณ 52W New High / New Low count ต่อวัน ย้อนหลัง 63 วันทำการ (~3 เดือน)
-    จาก set_history.json — cache ไว้ใน memory, expire เมื่อ Quick Update เสร็จ
+    จาก SQLite price store — cache ผลลัพธ์ใน memory, expire เมื่อ Quick Update เสร็จ
+    (result-cache ใช้ event invalidation: ถูก clear หลัง refresh — ไม่พึ่ง mtime)
     """
     if _market_internals_cache.get("data"):
         return jsonify(_market_internals_cache["data"])
 
-    hist_path = os.path.join(BASE_DIR, "set_history.json")
-    if not os.path.exists(hist_path):
-        return jsonify({"error": "ไม่พบ set_history.json"}), 404
+    if not (price_store.db_exists(BASE_DIR)
+            or os.path.exists(os.path.join(BASE_DIR, "set_history.json"))):
+        return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณา Full Refresh ก่อน"}), 404
 
     try:
-        with open(hist_path, encoding="utf-8") as f:
-            hist = json.load(f)
-        stocks_hist = hist.get("stocks", {})
-
         import pandas as pd
 
         # สร้าง dict: ticker -> pd.Series ของ close (indexed by date string)
         all_series = {}
-        for ticker, data in stocks_hist.items():
+        for ticker, data in price_store.iter_all_series(BASE_DIR):
             dates  = data.get("dates", [])
             closes = data.get("closes", [])
             if len(dates) < 260 or len(closes) < 260:
