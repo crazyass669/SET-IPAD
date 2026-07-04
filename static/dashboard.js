@@ -1057,9 +1057,11 @@ function drawRotationScatter(sectors) {
   const isShort = rotTimeframe === 'short';
   // ไม่ plot กลุ่มที่ค่าแกนเป็น null (เช่น sector สมาชิก < 3 ตัวที่ validation
   // ตัดค่าเฉลี่ยทิ้ง) — เดิม || 0 ทำให้ไปกองที่จุด (0,0) หลอกตา
-  sectors = sectors.filter(s => isShort
+  const _hasAxes = s => isShort
     ? (s.ret_1m != null && s.ret_1w != null)
-    : (s.ret_3m != null && s.ret_1m != null));
+    : (s.ret_3m != null && s.ret_1m != null);
+  const _rotExcluded = sectors.filter(s => !_hasAxes(s)).map(s => s.name);
+  sectors = sectors.filter(_hasAxes);
   if (sectors.length === 0) return;
   const getX = s => isShort ? (s.ret_1m || 0) : (s.ret_3m || 0);
   const getY = s => isShort ? (s.ret_1w || 0) : (s.ret_1m || 0);
@@ -1420,7 +1422,13 @@ function drawRotationScatter(sectors) {
                    style="color:${p.color};opacity:0.65">
                 <span class="rot-chip-sq" style="background:${p.color}"></span>${label}
               </div>`;
-    }).join("");
+    }).join("")
+    + (_rotExcluded.length
+       ? `<div style="font-size:11px;color:var(--text2);font-style:italic;padding:4px 8px"
+               title="กลุ่มที่มีหุ้นน้อยกว่า 3 ตัว — ค่าเฉลี่ยไม่ represent จึงไม่แสดงบนแผนที่">
+            ⚠ ไม่แสดง ${_rotExcluded.length} กลุ่ม (ข้อมูลไม่พอ): ${_rotExcluded.join(", ")}
+          </div>`
+       : "");
     legendEl.querySelectorAll(".rot-chip").forEach(chip => {
       chip.addEventListener("click", () => {
         const name = chip.dataset.sector;
