@@ -46,7 +46,8 @@ async function loadData() {
       DATA[key].forEach(g => {
         if (g.ret_1y == null) {
           const vals = DATA.stocks.filter(s => s[groupKey] === g.name && s.ret_1y != null).map(s => s.ret_1y);
-          g.ret_1y = vals.length ? +(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(2) : null;
+          // เคารพกฎเดียวกับ backend (G3): กลุ่มต้องมีข้อมูล >= 3 ตัวถึงจะเฉลี่ย
+          g.ret_1y = vals.length >= 3 ? +(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(2) : null;
         }
       });
     });
@@ -1054,6 +1055,12 @@ function drawRotationScatter(sectors) {
   const PH = H - PAD.top  - PAD.bottom;
 
   const isShort = rotTimeframe === 'short';
+  // ไม่ plot กลุ่มที่ค่าแกนเป็น null (เช่น sector สมาชิก < 3 ตัวที่ validation
+  // ตัดค่าเฉลี่ยทิ้ง) — เดิม || 0 ทำให้ไปกองที่จุด (0,0) หลอกตา
+  sectors = sectors.filter(s => isShort
+    ? (s.ret_1m != null && s.ret_1w != null)
+    : (s.ret_3m != null && s.ret_1m != null));
+  if (sectors.length === 0) return;
   const getX = s => isShort ? (s.ret_1m || 0) : (s.ret_3m || 0);
   const getY = s => isShort ? (s.ret_1w || 0) : (s.ret_1m || 0);
   const xs = sectors.map(getX);
