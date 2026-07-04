@@ -99,6 +99,16 @@ def _get_history():
 
 app = Flask(__name__)
 
+
+@app.after_request
+def _static_no_cache(resp):
+    # /static (dashboard.js/css) ให้ browser revalidate ทุกครั้ง — werkzeug ใส่
+    # ETag/Last-Modified ให้อยู่แล้ว จึงได้ 304 เมื่อไฟล์ไม่เปลี่ยน
+    if request.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 # โหลด DR cache จากไฟล์ตอน import (ใช้ได้ทั้ง __main__ และ WSGI)
 _load_dr_cache_from_file()
 
