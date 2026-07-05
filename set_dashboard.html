@@ -394,11 +394,48 @@
   <div class="page-sub">ผลตอบแทนและ RS เฉลี่ยแต่ละหมวดธุรกิจ</div>
 
   <div class="filter-row">
-    <button class="filter-btn active" onclick="setSectorView('sector',this)">Sector (28)</button>
-    <button class="filter-btn" onclick="setSectorView('industry',this)">Industry Group (9)</button>
+    <span id="sector-view-btns">
+      <button class="filter-btn active" onclick="setSectorView('sector',this)">Sector (28)</button>
+      <button class="filter-btn" onclick="setSectorView('industry',this)">Industry Group (9)</button>
+    </span>
+    <span style="width:1px;background:var(--border);height:18px;display:inline-block;margin:0 6px;vertical-align:middle"></span>
+    <span id="sector-mode-btns">
+      <button class="filter-btn active" onclick="setSectorMode('pct',this)">% ผลตอบแทน</button>
+      <button class="filter-btn" onclick="setSectorMode('rank',this)" title="เปรียบเทียบอันดับข้ามช่วงเวลา 1M/3M/6M/1Y ในสเกลเดียวกัน">อันดับ (Rank)</button>
+    </span>
   </div>
 
-  <div class="card">
+  <!-- RANK VIEW: เปรียบเทียบอันดับข้าม 4 ช่วงเวลา -->
+  <div class="card" id="sector-rank-card" style="display:none">
+    <table class="tbl">
+      <thead><tr>
+        <th>ชื่อ</th>
+        <th class="r sortable" onclick="sortSectorRank('r1m')">1M</th>
+        <th class="r sortable" onclick="sortSectorRank('r3m')">3M</th>
+        <th class="r sortable" onclick="sortSectorRank('r6m')">6M</th>
+        <th class="r sortable" onclick="sortSectorRank('r1y')">1Y</th>
+        <th class="r sortable" onclick="sortSectorRank('avg')">Avg Rank <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:230px">
+          <strong>อันดับเฉลี่ย 4 ช่วงเวลา</strong><br>
+          ยิ่งน้อย = แข็งแรงสม่ำเสมอทุกช่วง<br>
+          เหมาะเป็น core holding
+        </div></span></th>
+        <th class="r sortable" onclick="sortSectorRank('mom')">Δ Momentum <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:250px">
+          <strong>อันดับ 1Y − อันดับ 1M</strong><br>
+          <span style="color:#3fb950">🔥 บวกมาก</span> = อันดับระยะสั้นดีกว่าฐานะระยะยาว
+          = sector กำลังหมุนเข้า (rotation in)<br><br>
+          <span style="color:#58a6ff">❄️ ลบมาก</span> = เคยแข็งแรงแต่ระยะสั้นกำลังจาง
+          (rotation out)
+        </div></span></th>
+        <th style="min-width:70px">Trajectory <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:230px">
+          เส้นอันดับเรียงจาก 1Y → 6M → 3M → 1M (ซ้ายไปขวา)<br>
+          <strong>เส้นชี้ขึ้น = อันดับกำลังดีขึ้นเรื่อยๆ</strong>
+        </div></span></th>
+      </tr></thead>
+      <tbody id="sector-rank-tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="card" id="sector-pct-card">
     <table class="tbl" id="tbl-sectors">
       <thead><tr>
         <th>อันดับ</th><th>ชื่อ</th><th class="r">จำนวน</th>

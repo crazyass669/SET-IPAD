@@ -1865,16 +1865,136 @@ function openSectorPage(name) {
 }
 function setSectorView(v, btn) {
   sectorView = v;
-  document.querySelectorAll("#page-sectors .filter-btn").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll("#sector-view-btns .filter-btn").forEach(b => b.classList.remove("active"));
   btn.classList.add("active");
-  renderSectorTable();
+  renderSectors();
 }
 function sortSectors(key) {
   if (sectorSort.key === key) sectorSort.dir *= -1;
   else { sectorSort.key = key; sectorSort.dir = -1; }
   renderSectorTable();
 }
-function renderSectors() { renderSectorTable(); }
+
+// ============================================================
+// SECTOR RANK VIEW — เทียบอันดับข้าม 1M/3M/6M/1Y ในสเกลเดียว
+// ============================================================
+let sectorMode = 'pct';                         // 'pct' | 'rank'
+let sectorRankSort = { key: 'avg', dir: 1 };    // อันดับน้อย = ดี -> default ascending
+
+function setSectorMode(m, btn) {
+  sectorMode = m;
+  document.querySelectorAll('#sector-mode-btns .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const pctCard  = document.getElementById('sector-pct-card');
+  const rankCard = document.getElementById('sector-rank-card');
+  if (pctCard)  pctCard.style.display  = m === 'pct'  ? '' : 'none';
+  if (rankCard) rankCard.style.display = m === 'rank' ? '' : 'none';
+  renderSectors();
+}
+
+function sortSectorRank(key) {
+  if (sectorRankSort.key === key) {
+    sectorRankSort.dir *= -1;
+  } else {
+    sectorRankSort.key = key;
+    sectorRankSort.dir = key === 'mom' ? -1 : 1;  // mom เริ่มจากบวกมาก (rotation in) ก่อน
+  }
+  renderSectorRankTable();
+}
+
+function _rankBadge(rank, total, pct) {
+  if (rank == null) return '<span style="color:var(--text2)">—</span>';
+  const q = rank / total;
+  const c = q <= 0.25 ? '#3fb950' : q <= 0.5 ? '#e3b341' : q <= 0.75 ? '#f0883e' : '#f85149';
+  const pctTxt = pct != null
+    ? ` <span style="font-size:10px;color:var(--text2)">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>` : '';
+  return `<span style="background:${c}22;color:${c};border:1px solid ${c}55;` +
+         `padding:1px 6px;border-radius:4px;font-weight:700;font-size:11px">#${rank}</span>${pctTxt}`;
+}
+
+function _rankSpark(seq, total) {
+  // seq เรียง 1Y -> 1M (ซ้ายไปขวา), rank 1 อยู่บนสุด -> เส้นขึ้น = อันดับดีขึ้น
+  if (seq.some(v => v == null)) return '<span style="color:var(--text2)">—</span>';
+  const W = 56, H = 18, span = Math.max(total - 1, 1);
+  const pts = seq.map((v, i) => [
+    2 + (i / (seq.length - 1)) * W,
+    2 + ((v - 1) / span) * (H - 4),
+  ]);
+  const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+  const improving = seq[seq.length - 1] < seq[0];
+  const color = improving ? '#3fb950' : '#f85149';
+  return `<svg width="${W + 4}" height="${H + 2}" style="vertical-align:middle">` +
+         `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.5"/>` +
+         `<circle cx="${pts[3][0]}" cy="${pts[3][1]}" r="2" fill="${color}"/></svg>`;
+}
+
+function renderSectorRankTable() {
+  if (!DATA) return;
+  const el = document.getElementById('sector-rank-tbody');
+  if (!el) return;
+  const groups = [...(sectorView === 'sector' ? DATA.sectors : DATA.industries)];
+
+  // จัดอันดับต่อ horizon (1 = return สูงสุด) — กลุ่มที่ค่าเป็น null ไม่ถูกจัด
+  const H = [['ret_1m', 'r1m'], ['ret_3m', 'r3m'], ['ret_6m', 'r6m'], ['ret_1y', 'r1y']];
+  const ranks = {}, totals = {};
+  groups.forEach(g => ranks[g.name] = {});
+  H.forEach(([f, k]) => {
+    const valid = groups.filter(g => g[f] != null).sort((a, b) => b[f] - a[f]);
+    valid.forEach((g, i) => ranks[g.name][k] = i + 1);
+    totals[k] = valid.length;
+  });
+
+  const rows = groups.map(g => {
+    const r = ranks[g.name];
+    const seq = [r.r1y, r.r6m, r.r3m, r.r1m];      // เรียงตาม trajectory ซ้าย->ขวา
+    const have = seq.filter(x => x != null);
+    return {
+      g, name: g.name,
+      r1m: r.r1m ?? null, r3m: r.r3m ?? null, r6m: r.r6m ?? null, r1y: r.r1y ?? null,
+      avg: have.length === 4 ? +(have.reduce((a, b) => a + b, 0) / 4).toFixed(1) : null,
+      mom: (r.r1m != null && r.r1y != null) ? r.r1y - r.r1m : null,
+      seq,
+    };
+  });
+
+  const { key, dir } = sectorRankSort;
+  rows.sort((a, b) => {
+    const av = a[key], bv = b[key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;                       // ข้อมูลไม่พอ -> ท้ายตารางเสมอ
+    if (bv == null) return -1;
+    return (av - bv) * dir;
+  });
+
+  el.innerHTML = rows.map(r => {
+    const abbr = SECTOR_ABBR[r.name] || "";
+    const abbrTag = abbr && abbr !== "—"
+      ? ` <span style="font-size:10px;color:var(--blue);background:#0d2847;padding:1px 5px;border-radius:3px;margin-left:4px">${abbr}</span>` : "";
+    let momHtml = '<span style="color:var(--text2)">—</span>';
+    if (r.mom != null) {
+      const fire = r.mom >= 10 ? ' 🔥' : r.mom <= -10 ? ' ❄️' : '';
+      const c = r.mom > 0 ? '#3fb950' : r.mom < 0 ? '#f85149' : 'var(--text2)';
+      momHtml = `<span style="color:${c};font-weight:${fire ? 700 : 400}">` +
+                `${r.mom > 0 ? '+' : ''}${r.mom}${fire}</span>`;
+    }
+    return `
+    <tr style="cursor:pointer" onclick="openSectorPage('${r.name.replace(/'/g, "\\'")}')">
+      <td style="font-size:12px"><strong>${r.name}</strong>${abbrTag}</td>
+      <td class="r">${_rankBadge(r.r1m, totals.r1m, r.g.ret_1m)}</td>
+      <td class="r">${_rankBadge(r.r3m, totals.r3m, r.g.ret_3m)}</td>
+      <td class="r">${_rankBadge(r.r6m, totals.r6m, r.g.ret_6m)}</td>
+      <td class="r">${_rankBadge(r.r1y, totals.r1y, r.g.ret_1y)}</td>
+      <td class="r" style="font-weight:700">${r.avg ?? '—'}</td>
+      <td class="r">${momHtml}</td>
+      <td>${_rankSpark(r.seq, Math.max(totals.r1m || 1, totals.r1y || 1))}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderSectors() {
+  if (sectorMode === 'rank') renderSectorRankTable();
+  else renderSectorTable();
+}
 function renderSectorTable() {
   if (!DATA) return;
 
