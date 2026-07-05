@@ -1,11 +1,17 @@
 """
 ทดสอบ SEC OpenData API — เช็คว่ามีข้อมูลอะไรบ้าง
-ใส่ API Key ก่อนรัน
+ตั้ง key ผ่าน env var ก่อนรัน (ห้าม hardcode ในไฟล์ — ไฟล์นี้อยู่ใน git):
+    PowerShell:  $env:SEC_API_KEY = "your-key"; python test_sec_api.py
 """
+import os
+import sys
+
 import requests
 import json
 
-SEC_API_KEY = "ใส่ Key ของคุณตรงนี้"
+SEC_API_KEY = os.environ.get("SEC_API_KEY", "")
+if not SEC_API_KEY:
+    sys.exit("ยังไม่ได้ตั้ง env var SEC_API_KEY — ดูวิธีที่หัวไฟล์")
 
 HEADERS = {
     "accept": "application/json",
