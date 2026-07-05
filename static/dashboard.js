@@ -3368,7 +3368,7 @@ async function loadRegimeLight() {
        <span style="color:#e3b341">🟡 30–50</span> Caution ·
        <span style="color:#f85149">🔴 &lt; 30</span> Risk-Off<br><br>
        <span style="color:var(--text2);font-size:11px">เกณฑ์มาจาก backtest RS+RRG 10.5 ปี (2016–2026) —
-       regime filter เปลี่ยนปี 2018/2019 จาก −36.6%/−25.3% เป็น +1.9%/+2.4%
+       regime filter เปลี่ยนปี 2018/2019 จาก −36.6%/−25.3% เป็น +4.5%/+7.1%
        แต่มีข้อจำกัดสำคัญ (survivorship bias ฯลฯ)</span><br>
        <a href="/backtest-report" target="_blank" rel="noopener">📄 อ่านรายงาน backtest ฉบับเต็ม + ข้อจำกัด →</a><br>
        <span style="color:var(--text2);font-size:10px">ข้อมูลบริบท ไม่ใช่คำแนะนำการลงทุน · คลิกที่ไฟเพื่อเปิดรายงาน</span>`;

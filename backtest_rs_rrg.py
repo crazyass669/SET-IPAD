@@ -119,7 +119,15 @@ def run(close, vol, sec_of, use_rrg=True, regime=None, regime_min=None):
         else:
             ret = 0.0                                          # ไม่มีตัวผ่านเกณฑ์ -> ถือเงินสด
 
-        changed = 1.0 if not prev_hold else len(set(picks) ^ prev_hold) / max(len(picks) + len(prev_hold), 1)
+        # สัดส่วนพอร์ตที่เปลี่ยน (สำหรับคิดต้นทุน) — ถือเงินสดต่อเนื่อง = ไม่มี
+        # การซื้อขาย ห้ามหัก cost (บั๊กเดิม: prev_hold ว่าง -> changed=1.0 เสมอ
+        # ทำให้งวดเงินสดโดนหัก 0.5% ฟรี ผล regime variant ต่ำกว่าจริง)
+        if not picks and not prev_hold:
+            changed = 0.0
+        elif not prev_hold or not picks:
+            changed = 1.0
+        else:
+            changed = len(set(picks) ^ prev_hold) / max(len(picks) + len(prev_hold), 1)
         ret -= changed * COST_SIDE * 2
         prev_hold = set(picks)
 
