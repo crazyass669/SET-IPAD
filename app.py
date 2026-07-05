@@ -16,6 +16,13 @@ import traceback
 import sys
 import socket
 
+# log ภาษาไทยต้องไม่ทำ thread ตาย ไม่ว่า stdout จะเป็น console/ไฟล์/cp1252
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 
 # atomic write ใช้จาก core.store (Phase 3 — เลิก def ซ้ำในไฟล์นี้)
 from core.store import _atomic_write_json

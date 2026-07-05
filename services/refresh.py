@@ -12,11 +12,71 @@ import pandas as pd
 
 from core.metrics import validate_stocks, rank_rs, summarize_groups
 from core.store import (OUT_FILE, DUAL_WRITE_JSON, _atomic_write_json,
-                        _check_stock_count, get_last_dates, iter_all_series,
-                        load_history, save_history)
+                        _check_stock_count, get_closes_map, get_last_dates,
+                        iter_all_series, load_history, save_history)
 from sources.yahoo import fetch_all_batch, fetch_gap_batch, fetch_market_caps_parallel
 from services.rotation import update_rotation_state
 from set_data_fetcher import load_set_symbols, process_stock, sanitize
+
+
+def detect_ca_mismatch(base_dir, new_data, tol=0.005, min_bad=2):
+    """Split detector: เทียบราคาแท่ง overlap (ที่ดึงมาใหม่ vs ที่เก็บไว้)
+    ถ้า Yahoo เพิ่งปรับราคาย้อนหลัง (แตกพาร์/รวมพาร์/ปันผลเป็นหุ้น) แท่งเดิม
+    จะไม่ตรงกับที่เก็บไว้ทั้งแถบ — คืน list ของ ticker ที่ต้อง refetch เต็ม
+
+    min_bad=2: ต้องเพี้ยนอย่างน้อย 2 แท่ง กัน false positive จากการแก้ข้อมูล
+    จุดเดียว/ความต่างจากการปัดเศษ"""
+    suspects = []
+    for tick, d in new_data.items():
+        try:
+            dates  = [x.strftime("%Y-%m-%d") for x in d["close"].index]
+            if len(dates) < 2:
+                continue
+            closes = {dt: float(c) for dt, c in zip(dates, d["close"])}
+            # ตัดแท่งล่าสุดออก (วันนี้เป็นราคาใหม่จริง ไม่ใช่ overlap)
+            stored = get_closes_map(base_dir, tick, dates[:-1])
+            bad = 0
+            for dt, sc in stored.items():
+                nc = closes.get(dt)
+                if nc is None or sc is None or sc <= 0:
+                    continue
+                if abs(nc - sc) / sc > tol:
+                    bad += 1
+                    if bad >= min_bad:
+                        suspects.append(tick)
+                        break
+        except Exception:
+            continue
+    return suspects
+
+
+MAX_CA_REPAIR = 30   # เพดานซ่อมต่อรอบ — mismatch เกินนี้ = ผิดปกติทั้งกระดาน
+
+
+def _repair_ca_tickers(base_dir, new_data, suspects, callback):
+    """refetch เต็ม (period=max) เฉพาะหุ้นที่ตรวจพบ CA — แทนข้อมูลใน new_data
+    คืน set ของ ticker ที่ซ่อมสำเร็จ (ให้ save_history replace ทั้ง series)"""
+    if len(suspects) > MAX_CA_REPAIR:
+        print(f"[CA] mismatch {len(suspects)} ตัว — มากผิดปกติ "
+              f"(แหล่งข้อมูลอาจเปลี่ยนฐานทั้งกระดาน?) ซ่อมรอบนี้ {MAX_CA_REPAIR} ตัวแรก "
+              f"ที่เหลือรอรอบถัดไป")
+    repaired = set()
+    for i, tick in enumerate(suspects[:MAX_CA_REPAIR]):
+        callback(i, len(suspects[:MAX_CA_REPAIR]),
+                 f"พบ corporate action — refetch เต็ม {tick} ({i+1}/{min(len(suspects), MAX_CA_REPAIR)})...")
+        try:
+            full = fetch_all_batch([tick], period="max")
+            fd = full.get(tick)
+            # sanity: ข้อมูลใหม่ต้องยาวพอ ไม่ใช่ response ขาดๆ
+            if fd is not None and len(fd["close"]) >= 100:
+                new_data[tick] = fd
+                repaired.add(tick)
+                print(f"[CA] repaired {tick}: refetch {len(fd['close'])} แท่ง")
+            else:
+                print(f"[CA] {tick}: refetch ได้ข้อมูลสั้นผิดปกติ — ข้าม (คงข้อมูลเดิม)")
+        except Exception as e:
+            print(f"[CA] {tick}: refetch ล้มเหลว ({e}) — ข้าม")
+    return repaired
 
 
 def _update_rotation_safe(base_dir, data_as_of, sectors, industries):
@@ -161,9 +221,21 @@ def run_quick_update(callback, base_dir=None):
         callback(100, 100, "ไม่มีข้อมูลใหม่ (อาจเป็นวันหยุด)")
         return
 
-    callback(total, total, f"บันทึกราคา ({len(new_data)} หุ้น มีข้อมูลใหม่)...")
+    # ── Split detector: เทียบแท่ง overlap ก่อนบันทึก — ถ้า Yahoo เพิ่งปรับ
+    # ราคาย้อนหลัง (แตกพาร์ ฯลฯ) ต้อง refetch เต็มเฉพาะตัว ไม่งั้น series
+    # จะเป็นฐานเก่าต่อฐานใหม่ → return/RS ปลอม
+    callback(total, total, "ตรวจ corporate action (เทียบราคาแท่ง overlap)...")
+    suspects = detect_ca_mismatch(base_dir, new_data)
+    repaired = set()
+    if suspects:
+        print(f"[CA] พบ overlap mismatch: {suspects[:MAX_CA_REPAIR]}")
+        repaired = _repair_ca_tickers(base_dir, new_data, suspects, callback)
+
+    callback(total, total, f"บันทึกราคา ({len(new_data)} หุ้น มีข้อมูลใหม่"
+             + (f", replace {len(repaired)} ตัวจาก CA" if repaired else "") + ")...")
     existing_hist = load_history(base_dir) if DUAL_WRITE_JSON else None
-    save_history(new_data, base_dir, existing_hist=existing_hist)
+    save_history(new_data, base_dir, existing_hist=existing_hist,
+                 replace_tickers=repaired)
 
     callback(0, total, f"คำนวณ metrics ใหม่ ({total} หุ้น)...")
     sym_map = {s["ticker"]: s for s in symbols}

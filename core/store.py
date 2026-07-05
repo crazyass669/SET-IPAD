@@ -165,6 +165,41 @@ def upsert_history_dict(base_dir, history):
         con.close()
 
 
+def get_closes_map(base_dir, ticker, dates):
+    """คืน {date: close} ของ ticker เฉพาะวันที่ระบุ — ใช้เทียบแท่ง overlap
+    ตอนตรวจ corporate action (split detector)"""
+    if not dates:
+        return {}
+    if db_exists(base_dir):
+        con = _connect(base_dir)
+        try:
+            q = ",".join("?" * len(dates))
+            rows = con.execute(
+                f"SELECT date, close FROM prices WHERE ticker=? AND date IN ({q})",
+                (ticker, *dates)).fetchall()
+        finally:
+            con.close()
+        return dict(rows)
+    s = get_series(base_dir, ticker)
+    if not s:
+        return {}
+    m = dict(zip(s["dates"], s["closes"]))
+    return {d: m[d] for d in dates if d in m}
+
+
+def delete_ticker_bars(base_dir, ticker):
+    """ลบราคาทั้งหมดของหุ้นตัวเดียว — ใช้ก่อน replace ด้วยข้อมูล refetch เต็ม
+    (กรณี Yahoo ปรับราคาย้อนหลังหลัง corporate action)"""
+    if not db_exists(base_dir):
+        return
+    con = _connect(base_dir)
+    try:
+        con.execute("DELETE FROM prices WHERE ticker=?", (ticker,))
+        con.commit()
+    finally:
+        con.close()
+
+
 # ============================================================
 # 1b. History helpers — load / merge / save set_history.json
 # ============================================================
@@ -216,12 +251,18 @@ def _merge_history(existing, new_dates, new_closes, new_volumes):
     return list(dates), list(closes), list(volumes)
 
 
-def save_history(all_data_map, base_dir, existing_hist=None):
+def save_history(all_data_map, base_dir, existing_hist=None, replace_tickers=None):
     """
     all_data_map: {ticker -> {close: pd.Series, volume: pd.Series}}
     เขียนลง SQLite (หลัก) + merge/เขียน set_history.json (เมื่อ DUAL_WRITE_JSON)
+    replace_tickers: หุ้นที่ต้อง "แทนที่ทั้ง series" แทนการ merge
+      (กรณี refetch เต็มหลังตรวจพบ corporate action — ข้อมูลเก่าฐานราคาผิดแล้ว)
     Returns merged history dict (JSON path) หรือ None เมื่อปิด dual-write
     """
+    replace_tickers = set(replace_tickers or ())
+    for t in replace_tickers:
+        delete_ticker_bars(base_dir, t)
+
     # SQLite คือ source of truth — upsert เฉพาะแท่งที่ได้มา
     upsert_bars(base_dir, all_data_map)
 
@@ -238,7 +279,8 @@ def save_history(all_data_map, base_dir, existing_hist=None):
         new_dates   = [d.strftime("%Y-%m-%d") for d in close.index]
         new_closes  = [round(float(c), 4) for c in close]
         new_volumes = [int(v) for v in volume]
-        existing = stocks_hist.get(ticker)
+        # replace ticker: ทิ้งของเก่าทั้ง series (ฐานราคาผิดหลัง CA) ไม่ merge
+        existing = None if ticker in replace_tickers else stocks_hist.get(ticker)
         merged_d, merged_c, merged_v = _merge_history(
             existing, new_dates, new_closes, new_volumes
         )
