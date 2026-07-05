@@ -1,0 +1,195 @@
+# -*- coding: utf-8 -*-
+"""
+backtest_rs_rrg.py — Simple backtest ของ strategy RS Score + RRG sector filter
+
+รัน:  python backtest_rs_rrg.py [ปีเริ่ม เช่น 2016]
+
+กฎ (fix ไว้ก่อนรัน — ไม่ optimize):
+  Universe   : มีข้อมูล >= 250 แท่ง, ราคา >= 1 บาท, มูลค่าซื้อขายเฉลี่ย 20 วัน >= 5 ล้านบาท
+  Entry      : rs_score >= 90 (percentile ณ วันนั้น) และ sector 1M momentum > 0
+               (= quadrant Leading/Improving ตามตรรกะ RRG)
+  Portfolio  : top 10 ตาม rs_raw, equal weight
+  Rebalance  : ทุก 21 วันทำการ, ขายตัวที่หลุดเงื่อนไข
+  ต้นทุน      : 0.25% ต่อข้าง เฉพาะสัดส่วนที่เปลี่ยนตัว
+  Look-ahead : สัญญาณจาก close วัน t -> เข้า/ออกที่ close วัน t+1
+
+ข้อจำกัดสำคัญพิมพ์ท้ายรายงาน — อ่านก่อนเชื่อตัวเลข
+"""
+import json
+import os
+import sys
+
+import numpy as np
+import pandas as pd
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE)
+sys.stdout.reconfigure(encoding="utf-8")
+
+from core.store import iter_all_series
+
+REB_BARS    = 21
+TOP_N       = 10
+RS_MIN      = 90
+PRICE_MIN   = 1.0
+VALUE_MIN   = 5e6
+COST_SIDE   = 0.0025
+START_YEAR  = int(sys.argv[1]) if len(sys.argv) > 1 else 2016
+
+
+def load_frames():
+    closes, vols = {}, {}
+    for tick, d in iter_all_series(BASE):
+        if len(d["dates"]) < 300:
+            continue
+        idx = pd.to_datetime(d["dates"])
+        closes[tick] = pd.Series(d["closes"], index=idx, dtype="float32")
+        vols[tick]   = pd.Series(d["volumes"], index=idx, dtype="float32")
+    close = pd.DataFrame(closes).sort_index()
+    vol   = pd.DataFrame(vols).sort_index()
+    return close, vol
+
+
+def sector_map():
+    d = json.load(open(os.path.join(BASE, "set_data.json"), encoding="utf-8"))
+    return {s["ticker"]: s["sector"] for s in d["stocks"]}
+
+
+def set_index_series():
+    try:
+        idx = json.load(open(os.path.join(BASE, "indices_cache.json"), encoding="utf-8"))
+        e = idx["data"]["^SET.BK"]
+        return pd.Series(e["closes"], index=pd.to_datetime(e["dates"]), dtype="float64")
+    except Exception:
+        return None
+
+
+def run(close, vol, sec_of, use_rrg=True):
+    """คืน (dates, equity_curve, stats_dict)"""
+    # ---- สัญญาณ (คำนวณจาก close ทั้ง DataFrame แบบ vectorized) ----
+    r21  = close.pct_change(21,  fill_method=None)
+    r63  = close.pct_change(63,  fill_method=None)
+    r126 = close.pct_change(126, fill_method=None)
+    r250 = close.pct_change(250, fill_method=None)
+    rs_raw = (2 * r21 + r63 + r126 + r250) / 5 * 100          # ต้องครบทั้ง 4 ช่วง
+    rs_pct = rs_raw.rank(axis=1, pct=True) * 99               # percentile 0-99 ต่อวัน
+
+    value20 = (close * vol).rolling(20).mean()
+
+    # sector 1M momentum (equal-weight ของสมาชิก) -> RRG filter
+    sec_ser = pd.Series({t: sec_of.get(t) for t in close.columns})
+    sec_mom = r21.T.groupby(sec_ser).mean().T                 # dates × sectors
+
+    # ---- เดินพอร์ตทีละ rebalance ----
+    dates = close.index
+    start_i = max(260, int(np.searchsorted(dates, pd.Timestamp(f"{START_YEAR}-01-01"))))
+    reb_idx = list(range(start_i, len(dates) - REB_BARS - 1, REB_BARS))
+
+    equity, eq_dates = [1.0], [dates[reb_idx[0]]]
+    prev_hold = set()
+    per_period = []
+    ffilled = close.ffill()
+
+    for t in reb_idx:
+        dt = dates[t]
+        row_rs, row_pct = rs_raw.iloc[t], rs_pct.iloc[t]
+        ok = (row_pct >= RS_MIN) & (close.iloc[t] >= PRICE_MIN) & (value20.iloc[t] >= VALUE_MIN)
+        if use_rrg:
+            mom = sec_mom.iloc[t]
+            ok &= sec_ser.map(lambda s: bool(mom.get(s, np.nan) > 0)).values
+        picks = row_rs[ok].nlargest(TOP_N).index.tolist()
+
+        if picks:
+            entry = ffilled.iloc[t + 1][picks]
+            exit_ = ffilled.iloc[min(t + 1 + REB_BARS, len(dates) - 1)][picks]
+            ret = float((exit_ / entry - 1).mean())
+        else:
+            ret = 0.0                                          # ไม่มีตัวผ่านเกณฑ์ -> ถือเงินสด
+
+        changed = 1.0 if not prev_hold else len(set(picks) ^ prev_hold) / max(len(picks) + len(prev_hold), 1)
+        ret -= changed * COST_SIDE * 2
+        prev_hold = set(picks)
+
+        equity.append(equity[-1] * (1 + ret))
+        eq_dates.append(dates[min(t + 1 + REB_BARS, len(dates) - 1)])
+        per_period.append({"date": str(dt.date()), "n": len(picks), "ret": ret})
+
+    eq = pd.Series(equity, index=pd.DatetimeIndex(eq_dates))
+    years = (eq.index[-1] - eq.index[0]).days / 365.25
+    cagr  = eq.iloc[-1] ** (1 / years) - 1 if years > 0 else 0
+    dd    = float((eq / eq.cummax() - 1).min())
+    wins  = sum(1 for p in per_period if p["ret"] > 0)
+    return eq, {
+        "total":    eq.iloc[-1] - 1,
+        "cagr":     cagr,
+        "max_dd":   dd,
+        "win_rate": wins / len(per_period) if per_period else 0,
+        "periods":  len(per_period),
+        "avg_n":    np.mean([p["n"] for p in per_period]),
+        "per_period": per_period,
+    }
+
+
+def main():
+    print(f"โหลดข้อมูลจาก SQLite... (backtest ตั้งแต่ {START_YEAR})")
+    close, vol = load_frames()
+    print(f"  {close.shape[1]} หุ้น × {close.shape[0]} วันทำการ "
+          f"({close.index[0].date()} → {close.index[-1].date()})")
+    sec_of = sector_map()
+
+    print("รัน strategy RS>=90 + RRG sector filter ...")
+    eq_rrg, s_rrg = run(close, vol, sec_of, use_rrg=True)
+    print("รัน variant RS-only (ไม่มี RRG filter) ...")
+    eq_rs, s_rs = run(close, vol, sec_of, use_rrg=False)
+
+    # ---- benchmarks ----
+    win = eq_rrg.index
+    set_idx = set_index_series()
+    bench = {}
+    if set_idx is not None:
+        s = set_idx.reindex(win, method="ffill").dropna()
+        bench["SET Index"] = s / s.iloc[0]
+    # equal-weight universe (rebalance รายเดือนเท่ากันทุกตัวที่มีราคา)
+    monthly = close.ffill().reindex(win)
+    uni_ret = (monthly.pct_change(fill_method=None)).mean(axis=1).fillna(0)
+    bench["Universe EW"] = (1 + uni_ret).cumprod()
+
+    def fmt(eq, st=None):
+        years = (eq.index[-1] - eq.index[0]).days / 365.25
+        cagr = eq.iloc[-1] ** (1 / years) - 1
+        dd = float((eq / eq.cummax() - 1).min())
+        base = f"total {eq.iloc[-1]-1:+8.0%} | CAGR {cagr:+6.1%} | MaxDD {dd:6.1%}"
+        if st:
+            base += f" | win {st['win_rate']:.0%} ของ {st['periods']} งวด | ถือเฉลี่ย {st['avg_n']:.1f} ตัว"
+        return base
+
+    print("\n" + "=" * 78)
+    print(f"ผล Backtest {START_YEAR} → {win[-1].date()}  (rebalance ทุก {REB_BARS} วันทำการ)")
+    print("=" * 78)
+    print(f"RS>=90 + RRG filter : {fmt(eq_rrg, s_rrg)}")
+    print(f"RS>=90 อย่างเดียว    : {fmt(eq_rs, s_rs)}")
+    for name, b in bench.items():
+        print(f"{name:<19} : {fmt(b)}")
+
+    # รายปี
+    print("\nผลตอบแทนรายปี (%):")
+    rows = {"RS+RRG": eq_rrg, "RS-only": eq_rs, **bench}
+    yr_table = {}
+    for name, e in rows.items():
+        yearly = e.resample("YE").last().pct_change(fill_method=None)
+        first_year = e.resample("YE").last().iloc[0] / e.iloc[0] - 1
+        yearly.iloc[0] = first_year
+        yr_table[name] = {d.year: v for d, v in yearly.items()}
+    years_all = sorted({y for v in yr_table.values() for y in v})
+    hdr = "ปี     " + "".join(f"{n:>12}" for n in rows)
+    print(hdr)
+    for y in years_all:
+        line = f"{y}   "
+        for n in rows:
+            v = yr_table[n].get(y)
+            line += f"{v:>11.1%} " if v is not None and np.isfinite(v) else f"{'—':>11} "
+        print(line)
+
+
+if __name__ == "__main__":
+    main()
