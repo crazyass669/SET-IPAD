@@ -8592,6 +8592,25 @@ let _flowView   = 'cum';
 // ============================================================
 // NVDR RANKING (section ในหน้า Capital Flow)
 // ============================================================
+let _nvdrDeltaMode = 1;   // จำนวน snapshots ย้อนหลังที่ใช้คิด Δ (1 = ล่าสุด, 5, 20)
+
+function _nvdrDeltaOf(v, n) {
+  // คืน {dPct, dShr} จาก daily_tail โดยเทียบ snapshot ล่าสุดกับ n ครั้งก่อน
+  // ต้องมีครบ n+1 snapshots — ไม่ครบคืน null (ไม่เดา ไม่ใช้ช่วงสั้นกว่าแทน)
+  const t = v.daily_tail;
+  if (!t || t.length < n + 1) return { dPct: null, dShr: null };
+  const last = t[t.length - 1], base = t[t.length - 1 - n];
+  return { dPct: (last[1] ?? 0) - (base[1] ?? 0),
+           dShr: (last[2] ?? 0) - (base[2] ?? 0) };
+}
+
+function setNvdrDeltaMode(n, btn) {
+  _nvdrDeltaMode = n;
+  document.querySelectorAll('[id^="nvdr-d-"]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderNvdrRanking();
+}
+
 async function renderNvdrRanking() {
   const elHold = document.getElementById('nvdr-top-hold');
   const elIn   = document.getElementById('nvdr-top-in');
@@ -8604,12 +8623,11 @@ async function renderNvdrRanking() {
     return;
   }
 
+  const n = _nvdrDeltaMode;
   const rows = Object.entries(d.stocks).map(([sym, v]) => {
-    const dPct = (v.last_snap && v.prev_snap)
-      ? v.last_snap.nvdr_pct - v.prev_snap.nvdr_pct : null;
-    const dShr = (v.last_snap && v.prev_snap)
-      ? (v.last_snap.nvdr_shares ?? 0) - (v.prev_snap.nvdr_shares ?? 0) : null;
-    return { sym, pct: v.nvdr_pct ?? 0, shares: v.nvdr_shares ?? 0, dPct, dShr };
+    const { dPct, dShr } = _nvdrDeltaOf(v, n);
+    return { sym, pct: v.nvdr_pct ?? 0, shares: v.nvdr_shares ?? 0, dPct, dShr,
+             snaps: v.daily_count ?? 0 };
   });
 
   const symTd = r =>
@@ -8636,12 +8654,39 @@ async function renderNvdrRanking() {
         <td class="r" style="color:var(--text2)">${r.pct.toFixed(2)}%</td></tr>`).join('');
   const inn = withD.filter(r => r.dPct > 0).sort((a, b) => b.dPct - a.dPct).slice(0, 30);
   const out = withD.filter(r => r.dPct < 0).sort((a, b) => a.dPct - b.dPct).slice(0, 30);
-  const empty = '<tr><td style="color:var(--muted);padding:10px;font-size:11px">ยังไม่มีข้อมูลเปลี่ยนแปลง — ต้องมี snapshot อย่างน้อย 2 ครั้ง (กด Quick Update วันถัดไป)</td></tr>';
+  const empty = `<tr><td style="color:var(--muted);padding:10px;font-size:11px">ยังไม่มีข้อมูลพอสำหรับ Δ ${n === 1 ? 'ล่าสุด' : n + ' วัน'} — ต้องมี snapshot อย่างน้อย ${n + 1} ครั้ง (เก็บเพิ่มทุกครั้งที่กด Quick Update วันทำการใหม่)</td></tr>`;
   elIn.innerHTML  = inn.length ? mk(inn) : empty;
   elOut.innerHTML = out.length ? mk(out) : empty;
 
   const st = document.getElementById('nvdr-rank-status');
-  if (st) st.textContent = `อัพเดท: ${d.updated_at || '—'} · ${withD.length} หุ้นมีการเปลี่ยนแปลง`;
+  if (st) {
+    const modeLbl = n === 1 ? 'Δ ล่าสุด' : `Δ สะสม ${n} snapshots`;
+    st.textContent = `อัพเดท: ${d.updated_at || '—'} · ${modeLbl} · ${withD.length} หุ้นมีการเปลี่ยนแปลง`;
+  }
+}
+
+function exportNvdrCSV() {
+  // ข้อ 4: ดูครบทุกตัวไม่จำกัดอันดับ — export ทุกหุ้นพร้อม Δ ทุกช่วง
+  if (!_nvdrData || !_nvdrData.stocks) { alert('ยังไม่ได้โหลดข้อมูล NVDR'); return; }
+  const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const header = ['Symbol', 'NVDR %', 'NVDR Shares (M)',
+                  'D1 %', 'D1 Shares (M)', 'D5 %', 'D5 Shares (M)',
+                  'D20 %', 'D20 Shares (M)', 'Snapshots', 'Last Date'].map(esc).join(',');
+  const lines = Object.entries(_nvdrData.stocks).map(([sym, v]) => {
+    const d1 = _nvdrDeltaOf(v, 1), d5 = _nvdrDeltaOf(v, 5), d20 = _nvdrDeltaOf(v, 20);
+    const t = v.daily_tail;
+    const f = (x, dg = 4) => x == null ? '' : x.toFixed(dg);
+    const m = x => x == null ? '' : (x / 1e6).toFixed(2);
+    return [sym, (v.nvdr_pct ?? 0).toFixed(4), ((v.nvdr_shares ?? 0) / 1e6).toFixed(2),
+            f(d1.dPct), m(d1.dShr), f(d5.dPct), m(d5.dShr), f(d20.dPct), m(d20.dShr),
+            v.daily_count ?? 0, t && t.length ? t[t.length - 1][0] : ''].map(esc).join(',');
+  });
+  const csv = '﻿' + header + '\n' + lines.join('\n');
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })),
+    download: `NVDR_${new Date().toISOString().slice(0, 10)}.csv`,
+  });
+  a.click(); URL.revokeObjectURL(a.href);
 }
 
 async function loadFlowPage() {

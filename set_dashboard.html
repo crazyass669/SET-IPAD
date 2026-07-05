@@ -1681,6 +1681,11 @@
       <span style="color:var(--text2)">คลิกชื่อหุ้นเพื่อเปิดกราฟ · badge N ในตารางอื่น
       ก็มาจากข้อมูลชุดเดียวกันนี้</span>
     </div></span>
+    <span style="font-size:11px;color:var(--text2);margin-left:4px">Δ:</span>
+    <button class="filter-btn active" id="nvdr-d-1" onclick="setNvdrDeltaMode(1,this)" title="เทียบ snapshot ล่าสุดกับครั้งก่อนหน้า">ล่าสุด</button>
+    <button class="filter-btn" id="nvdr-d-5" onclick="setNvdrDeltaMode(5,this)" title="สะสมย้อนหลัง 5 snapshots (~1 สัปดาห์ถ้ากด Quick Update ทุกวันทำการ) — จับการสะสม/แจกจ่ายต่อเนื่อง มีนัยยะกว่าการขยับวันเดียว">5 วัน</button>
+    <button class="filter-btn" id="nvdr-d-20" onclick="setNvdrDeltaMode(20,this)" title="สะสมย้อนหลัง 20 snapshots (~1 เดือน) — เห็นภาพการสะสม/ออกระยะกลางชัดที่สุด">20 วัน</button>
+    <button class="filter-btn" onclick="exportNvdrCSV()" title="ดาวน์โหลด NVDR ทุกหุ้น (ไม่จำกัด 30 อันดับ) พร้อม Δ ทุกช่วงเวลา เป็น CSV">⬇ CSV ทั้งหมด</button>
     <span id="nvdr-rank-status" style="font-size:11px;color:var(--muted)"></span>
   </div>
   <div class="rotation-grid" style="grid-template-columns:1fr 1fr 1fr;gap:12px">

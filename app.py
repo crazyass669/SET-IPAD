@@ -2234,6 +2234,10 @@ def nvdr_summary():
             "daily_count": len(daily),
             "last_snap":   daily[-1] if daily else None,
             "prev_snap":   daily[-2] if len(daily) >= 2 else None,
+            # 21 snapshots ล่าสุดแบบ compact [date, pct, shares] —
+            # ให้ frontend คำนวณ delta สะสม 5/20 snapshots ได้
+            "daily_tail":  [[d.get("date"), d.get("nvdr_pct"), d.get("nvdr_shares", 0)]
+                            for d in daily[-21:]],
         }
     return jsonify({"updated_at": data.get("updated_at"), "stocks": out})
 
