@@ -61,6 +61,20 @@ HTML_FILE    = os.path.join(BASE_DIR, "set_dashboard.html")
 HISTORY_FILE = os.path.join(BASE_DIR, "set_history.json")
 DR_CACHE_FILE = os.path.join(BASE_DIR, "dr_cache.json")
 
+# ── Logging: rotating file (5MB × 3) รับทั้ง log แอปและ werkzeug ──
+import logging
+from logging.handlers import RotatingFileHandler
+
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+_log_handler = RotatingFileHandler(
+    os.path.join(LOG_DIR, "dashboard.log"),
+    maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+_log_handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+logging.getLogger().addHandler(_log_handler)
+logging.getLogger().setLevel(logging.INFO)
+
 _dr_refresh_state = {"running": False, "error": None, "done": False}
 
 def _load_dr_cache_from_file():
@@ -227,7 +241,8 @@ def progress_stream():
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
+            # ห้ามใส่ "Connection" — เป็น hop-by-hop header, waitress (PEP 3333)
+            # จะ raise AssertionError ทำ SSE 500 ทั้ง endpoint
         },
     )
 
@@ -1156,15 +1171,31 @@ def get_status():
     updated_at = None
     if has_data:
         try:
+            # updated_at เป็น key แรกของไฟล์ — อ่านแค่หัวไฟล์พอ
+            # (เดิม json.load ทั้ง 12.6MB ทุกครั้งที่ถูกเรียก)
+            import re as _re
             with open(DATA_FILE, encoding="utf-8") as f:
-                d = json.load(f)
-            updated_at = d.get("updated_at")
+                head = f.read(200)
+            m = _re.search(r'"updated_at":\s*"([^"]+)"', head)
+            updated_at = m.group(1) if m else None
         except Exception:
             pass
     return jsonify({
         "has_data": has_data,
         "updated_at": updated_at,
         "refresh_running": _state["running"],
+    })
+
+
+@app.route("/healthz")
+def healthz():
+    """Health check แบบเบา (~1ms) สำหรับ monitor/uptime check —
+    ไม่แตะไฟล์ใหญ่ ตอบจาก SQLite meta + สถานะ process"""
+    return jsonify({
+        "ok":                True,
+        "db":                price_store.db_exists(BASE_DIR),
+        "prices_updated_at": price_store.get_meta(BASE_DIR, "updated_at"),
+        "refresh_running":   _state["running"],
     })
 
 
@@ -2277,8 +2308,32 @@ def get_local_ip():
         return "localhost"
 
 
+def _wait_port_free(port, timeout=12):
+    """Port guard: Windows ยอมให้ bind ซ้อนได้ (SO_REUSEADDR) ทำให้เกิด
+    server ผีหลายตัวแล้ว request วิ่งเข้าตัวเก่า — เช็คก่อน start
+    รอสั้นๆ เผื่อเป็นจังหวะ /api/restart ที่ตัวเก่ากำลังจะปิด (0.8s)"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1)
+        try:
+            busy = s.connect_ex(("127.0.0.1", port)) == 0
+        finally:
+            s.close()
+        if not busy:
+            return True
+        time.sleep(0.5)
+    return False
+
+
 if __name__ == "__main__":
     port = 5001
+
+    if not _wait_port_free(port):
+        print(f"[!] พอร์ต {port} มี server อื่นรันอยู่แล้ว — ไม่ start ซ้อน")
+        print(f"    ปิดตัวเก่าก่อน (Task Manager -> python) หรือใช้ตัวที่รันอยู่ได้เลย")
+        sys.exit(1)
+
     local_ip = get_local_ip()
 
     # โหลด DR cache จากไฟล์ก่อนเริ่ม server
@@ -2292,4 +2347,13 @@ if __name__ == "__main__":
     print("=" * 50)
     print("  Press Ctrl+C to stop\n")
 
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+    try:
+        from waitress import serve
+        print("  Server: waitress (production WSGI, 12 threads)\n")
+        logging.getLogger("waitress").setLevel(logging.INFO)
+        # channel_timeout สูงเพื่อ SSE /api/progress ที่เปิดค้างระหว่าง
+        # Full Refresh (10+ นาที)
+        serve(app, host="0.0.0.0", port=port, threads=12, channel_timeout=1200)
+    except ImportError:
+        print("  Server: Flask dev (ติดตั้ง waitress เพื่อใช้ production server)\n")
+        app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

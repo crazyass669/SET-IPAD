@@ -41,3 +41,6 @@ set_prices.db-shm
 
 # Rotation quadrant alert state
 rotation_state.json
+
+# Logs
+logs/
