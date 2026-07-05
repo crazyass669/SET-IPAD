@@ -68,13 +68,22 @@ def run_with_progress(callback, base_dir=None, period="max"):
         if i % 100 == 0:
             callback(i, total, f"คำนวณ {i}/{total}...")
 
-    callback(0, total, f"ดึง Fundamentals ({len(stocks)} หุ้น) แบบ parallel...")
+    callback(0, total, f"ดึง Fundamentals ({len(stocks)} หุ้น)...")
     cap_tickers = [s["ticker"] for s in stocks]
+    # Primary: SET API (เร็ว ~20 วิ + ข้อมูลจากเจ้าของตลาด) -> fallback: Yahoo
+    fundamentals = {}
     try:
-        fundamentals = fetch_market_caps_parallel(cap_tickers, callback=callback)
+        from sources.set_api import fetch_fundamentals
+        fundamentals = fetch_fundamentals(cap_tickers, callback=callback)
+        print(f"[Fundamentals] SET API: {len(fundamentals)}/{len(cap_tickers)} ตัว")
     except Exception as e:
-        print(f"[Fundamentals] ดึงไม่สำเร็จ ({e}) — ข้ามไป ใช้ค่า None แทน")
-        fundamentals = {}
+        print(f"[Fundamentals] SET API ล้มเหลว ({e}) — fallback Yahoo...")
+        callback(0, total, f"Fundamentals fallback Yahoo ({len(stocks)} หุ้น)...")
+        try:
+            fundamentals = fetch_market_caps_parallel(cap_tickers, callback=callback)
+        except Exception as e2:
+            print(f"[Fundamentals] Yahoo ก็ล้มเหลว ({e2}) — ใช้ค่า None แทน")
+            fundamentals = {}
     for s in stocks:
         fund = fundamentals.get(s["ticker"]) or {}
         s["mkt_cap"]   = fund.get("mkt_cap")
