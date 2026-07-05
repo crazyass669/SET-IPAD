@@ -839,6 +839,12 @@
       หุ้น Undervalued ที่เริ่มกลับตัว ต้องใจอดทน<br>
       <span style="color:var(--text2)">เหมาะสำหรับนักลงทุนระยะกลาง-ยาว</span>
     </div></span>
+    <button class="filter-btn" onclick="applyPreset('backtest_strategy')" style="border-color:#3fb950;color:#3fb950">🧪 Backtest Strategy</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:260px">
+      <strong>🧪 Backtest Strategy</strong><br>
+      หุ้นที่ผ่านเกณฑ์ entry ของ backtest RS+RRG วันนี้<br>
+      (RS ≥ 90 + Sector Leading/Improving + สภาพคล่อง ≥ 5M/วัน)<br><br>
+      <a href="/backtest-report" target="_blank" rel="noopener" style="color:var(--blue)">📄 ผล backtest ฉบับเต็ม →</a>
+    </div></span>
     <button class="filter-btn" onclick="applyPreset('clear')" style="color:var(--text2)">✕ ล้าง</button>
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
@@ -1238,6 +1244,19 @@
             <span style="color:#3fb950">แรงซื้อผิดปกติ + ราคาตอบรับดี</span><br>
             มักเกิดก่อน Breakout หรือวัน Momentum พุ่ง<br><br>
             <span style="color:var(--text2)">RVOL5d = Vol วันนี้ ÷ avg 5วัน × 100</span>
+          </div></span>
+        </label>
+
+        <label class="scr-check"><input type="checkbox" id="scr-backtest"> 🧪 เกณฑ์ Backtest (RS+RRG)
+          <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:290px">
+            <strong>🧪 เกณฑ์ entry จาก Backtest RS+RRG</strong><br>
+            เงื่อนไขเดียวกับที่ทดสอบย้อนหลัง 10.5 ปี:<br>
+            · RS Score ≥ 90 (top decile)<br>
+            · Sector อยู่ quadrant Leading/Improving (1M momentum &gt; 0)<br>
+            · ราคา ≥ 1 บาท + มูลค่าซื้อขายเฉลี่ย ≥ 5 ล้าน/วัน<br><br>
+            <span style="color:#e3b341">⚠️ ดูไฟ Market Regime บนขวาก่อน —
+            backtest บอกว่าเกณฑ์นี้ทำงานดีเฉพาะช่วง 🟢/🟡</span><br><br>
+            <a href="/backtest-report" target="_blank" rel="noopener" style="color:var(--blue)">📄 อ่านผล backtest + ข้อจำกัด →</a>
           </div></span>
         </label>
 

@@ -2980,6 +2980,8 @@ function applyPreset(name) {
     document.getElementById('scr-rsi-rebound').checked = true;
   } else if (name === 'bullish_vol') {
     document.getElementById('scr-bullish-vol').checked = true;
+  } else if (name === 'backtest_strategy') {
+    document.getElementById('scr-backtest').checked = true;
   }
   runScreener();
 }
@@ -3019,8 +3021,23 @@ function runScreener() {
   const sigEmaCr200 = document.getElementById('scr-ema-cross200').checked;
   const sigRsiReb   = document.getElementById('scr-rsi-rebound').checked;
   const sigBullVol  = document.getElementById('scr-bullish-vol').checked;
+  const sigBacktest = document.getElementById('scr-backtest')?.checked || false;
+
+  // เกณฑ์ backtest: sector ที่ 1M momentum > 0 (quadrant Leading/Improving)
+  // — ตรรกะเดียวกับ sector filter ใน backtest_rs_rrg.py
+  let _btSectors = null;
+  if (sigBacktest) {
+    _btSectors = new Set(
+      (DATA.sectors || []).filter(g => (g.ret_1m ?? -1) > 0).map(g => g.name));
+  }
 
   _scrStocks = DATA.stocks.filter(s => {
+    if (sigBacktest) {
+      if ((s.rs_score ?? -1) < 90)                          return false;
+      if ((s.price ?? 0) < 1)                               return false;
+      if (((s.vol_avg20 || 0) * (s.price || 0)) < 5e6)      return false;
+      if (!_btSectors.has(s.sector))                        return false;
+    }
     if (!isNaN(rsMin)    && (s.rs_score  ?? -1) < rsMin)              return false;
     if (!isNaN(ret1m)    && (s.ret_1m    ?? -Infinity) < ret1m)       return false;
     if (!isNaN(ret3m)    && (s.ret_3m    ?? -Infinity) < ret3m)       return false;
@@ -3730,7 +3747,8 @@ const _SCR_FIELDS = ['scr-rs-min','scr-1m','scr-3m','scr-1d','scr-ytd','scr-cap'
                      'scr-pe','scr-pbv','scr-dy','scr-rvol','scr-1w','scr-6m','scr-1y'];
 const _SCR_CHECKS = ['scr-ema20','scr-ema50','scr-ema200','scr-golden-cross',
                      'scr-new52h','scr-sma-cross50','scr-sma-cross200',
-                     'scr-ema-cross50','scr-ema-cross200','scr-rsi-rebound','scr-bullish-vol'];
+                     'scr-ema-cross50','scr-ema-cross200','scr-rsi-rebound','scr-bullish-vol',
+                     'scr-backtest'];
 
 function _populateScrIndustry() {
   if (!DATA) return;
