@@ -1903,6 +1903,62 @@ def short_sales_daily_update():
                     stocks[sym]["daily"] = daily[-365:]
             updated += 1
 
+        # ── อัปเดตยอดสะสมรายงวด YTD จาก API เดียวกัน (fromDate/toDate) ──
+        # แทนการ import Excel มือ — พิสูจน์แล้วว่าค่าตรงกับ Excel 100%
+        # (API snap fromDate 01/01 ไปวันทำการแรกของปีให้เอง)
+        try:
+            y, m, d_ = trade_date[:4], trade_date[5:7], trade_date[8:10]
+            # fromDate ต้องเป็น "วันทำการ" ไม่งั้น API ตอบ 400 — ใช้ period_from
+            # เดิม (ปีเดียวกัน) ก่อน แล้วค่อยไล่หาวันทำการแรกของปี 1-10 ม.ค.
+            candidates = []
+            old_from = (data.get("period_from") or "")
+            if old_from.startswith(y):
+                candidates.append(f"{old_from[8:10]}/{old_from[5:7]}/{y}")
+            candidates += [f"{dd:02d}/01/{y}" for dd in range(1, 11)]
+            presp = None
+            for fd in candidates:
+                try:
+                    purl = (BASE + "/api/set/shortsales/statistics/list"
+                            + f"?fromDate={fd}&toDate={d_}/{m}/{y}")
+                    with _ur.urlopen(_ur.Request(purl, headers=hdr),
+                                     context=ctx, timeout=25) as r:
+                        presp = json.loads(r.read().decode("utf-8", "ignore"))
+                    break
+                except Exception:
+                    continue
+            if presp is None:
+                raise ValueError("ไม่พบ fromDate ที่ API ยอมรับ")
+            p_from = (presp.get("tradingBeginDate") or "")[:10]
+            p_to   = (presp.get("tradingEndDate") or "")[:10]
+            p_items = presp.get("shortSales") or []
+            if p_from and p_items:
+                # ล้างยอดงวดเดิมก่อน (กันค้างข้ามปี/หุ้นที่ไม่มี short ในงวดใหม่)
+                for s in stocks.values():
+                    s["period_vol"] = s["period_local_vol"] = s["period_nvdr_vol"] = 0
+                    s["period_value"] = s["period_pct_value"] = 0
+                for item in p_items:
+                    sym = item.get("symbol")
+                    if not sym:
+                        continue
+                    s = stocks.setdefault(sym, {
+                        "period_vol": 0, "period_local_vol": 0, "period_nvdr_vol": 0,
+                        "period_value": 0, "period_pct_value": 0,
+                        "short_pos": 0, "short_pos_local": 0, "short_pos_nvdr": 0,
+                        "short_pos_pct": 0, "daily": [],
+                    })
+                    s["period_vol"]       = int(item.get("totalVolume") or 0)
+                    s["period_local_vol"] = int(item.get("localVolume") or 0)
+                    s["period_nvdr_vol"]  = int(item.get("nvdrVolume") or 0)
+                    s["period_value"]     = round((item.get("totalValue") or 0) / 1e6, 2)
+                    s["period_pct_value"] = round(item.get("percentValue") or 0, 4)
+                    s["short_pos_local"]  = int(item.get("localShortPosition") or 0)
+                    s["short_pos_nvdr"]   = int(item.get("nvdrShortPosition") or 0)
+                data["period_from"] = p_from
+                data["period_to"]   = p_to
+                print(f"[short-sales] period YTD {p_from} -> {p_to}: {len(p_items)} stocks")
+        except Exception as pe:
+            print(f"[short-sales] period update failed (ใช้ยอดงวดเดิมไปก่อน): {pe}")
+
         data["stocks"]          = stocks
         data["last_api_update"] = trade_date
         _atomic_write_json(_SHORT_DATA_FILE, data)

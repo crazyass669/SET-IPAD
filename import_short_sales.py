@@ -1,6 +1,11 @@
 """
 import_short_sales.py
 อ่าน Excel ข้อมูลการขายชอร์ต → short_sales_data.json
+
+*** DEPRECATED — ไม่ต้องใช้แล้วในการใช้งานปกติ ***
+ยอดสะสมรายงวดถูกดึงอัตโนมัติจาก SET API (fromDate/toDate) ทุกครั้งที่
+Quick Update แล้ว (ดู short_sales_daily_update ใน app.py)
+เก็บสคริปต์นี้ไว้เผื่อ backfill ฉุกเฉิน/สร้างไฟล์ใหม่จากศูนย์เท่านั้น
 """
 import os, json, re, sys, io
 from datetime import datetime
