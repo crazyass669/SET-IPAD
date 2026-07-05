@@ -8589,7 +8589,63 @@ let _flowData   = null;
 let _flowPeriod = 3;    // months
 let _flowView   = 'cum';
 
+// ============================================================
+// NVDR RANKING (section ในหน้า Capital Flow)
+// ============================================================
+async function renderNvdrRanking() {
+  const elHold = document.getElementById('nvdr-top-hold');
+  const elIn   = document.getElementById('nvdr-top-in');
+  const elOut  = document.getElementById('nvdr-top-out');
+  if (!elHold) return;
+  const d = await loadNvdrData();
+  if (!d || !d.stocks) {
+    elHold.innerHTML = '<tr><td style="color:var(--muted);padding:10px">ไม่มีข้อมูล NVDR</td></tr>';
+    elIn.innerHTML = elOut.innerHTML = '';
+    return;
+  }
+
+  const rows = Object.entries(d.stocks).map(([sym, v]) => {
+    const dPct = (v.last_snap && v.prev_snap)
+      ? v.last_snap.nvdr_pct - v.prev_snap.nvdr_pct : null;
+    const dShr = (v.last_snap && v.prev_snap)
+      ? (v.last_snap.nvdr_shares ?? 0) - (v.prev_snap.nvdr_shares ?? 0) : null;
+    return { sym, pct: v.nvdr_pct ?? 0, shares: v.nvdr_shares ?? 0, dPct, dShr };
+  });
+
+  const symTd = r =>
+    `<td><strong class="sym-link" onclick="openChartModal('${r.sym}')">${r.sym}</strong></td>`;
+  const dHtml = r => {
+    if (r.dPct == null) return '<span class="text2">—</span>';
+    const c = r.dPct > 0 ? 'green' : r.dPct < 0 ? 'red' : 'text2';
+    return `<span class="${c}">${r.dPct >= 0 ? '+' : ''}${r.dPct.toFixed(3)}%</span>`;
+  };
+  const shrHtml = v => v == null ? '' :
+    `<span style="font-size:10px;color:var(--text2)">${v >= 0 ? '+' : ''}${(v/1e6).toFixed(1)}M</span>`;
+
+  // 1) ถือครองสูงสุด
+  elHold.innerHTML = [...rows].sort((a, b) => b.pct - a.pct).slice(0, 15).map((r, i) => `
+    <tr><td class="r" style="color:var(--text2);width:22px">${i+1}</td>${symTd(r)}
+        <td class="r" style="font-weight:700;color:${r.pct >= 20 ? '#5ab4ff' : r.pct >= 10 ? '#7090d0' : 'var(--text)'}">${r.pct.toFixed(2)}%</td>
+        <td class="r">${dHtml(r)}</td></tr>`).join('');
+
+  // 2)/3) เข้าเพิ่ม / ขายออก — เฉพาะตัวที่มี delta และขยับจริง (>0.005%)
+  const withD = rows.filter(r => r.dPct != null && Math.abs(r.dPct) > 0.005);
+  const mk = list => list.map((r, i) => `
+    <tr><td class="r" style="color:var(--text2);width:22px">${i+1}</td>${symTd(r)}
+        <td class="r">${dHtml(r)} ${shrHtml(r.dShr)}</td>
+        <td class="r" style="color:var(--text2)">${r.pct.toFixed(2)}%</td></tr>`).join('');
+  const inn = withD.filter(r => r.dPct > 0).sort((a, b) => b.dPct - a.dPct).slice(0, 15);
+  const out = withD.filter(r => r.dPct < 0).sort((a, b) => a.dPct - b.dPct).slice(0, 15);
+  const empty = '<tr><td style="color:var(--muted);padding:10px;font-size:11px">ยังไม่มีข้อมูลเปลี่ยนแปลง — ต้องมี snapshot อย่างน้อย 2 ครั้ง (กด Quick Update วันถัดไป)</td></tr>';
+  elIn.innerHTML  = inn.length ? mk(inn) : empty;
+  elOut.innerHTML = out.length ? mk(out) : empty;
+
+  const st = document.getElementById('nvdr-rank-status');
+  if (st) st.textContent = `อัพเดท: ${d.updated_at || '—'} · ${withD.length} หุ้นมีการเปลี่ยนแปลง`;
+}
+
 async function loadFlowPage() {
+  renderNvdrRanking();   // section NVDR โหลดคู่ขนาน ไม่ block ตาราง flow
   if (_flowData) { renderFlowPage(); return; }
   document.getElementById('flow-tbody').innerHTML =
     '<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--muted)">กำลังดึงข้อมูลจาก siamchart.com...</td></tr>';
