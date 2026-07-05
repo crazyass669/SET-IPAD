@@ -58,6 +58,9 @@ def validate_stocks(stocks, data_as_of=None):
       suspect_ca : |ret_1d| > 31% เกิน ceiling SET (สงสัย corporate action) → พักออกจาก RS รอบนี้
       penny      : ราคา < 0.10 บาท (tick 0.01 = ±10%+)            → rank ได้ แต่ UI ติด badge/กันออก leader list
       short_hist : ไม่มี ret_1y (IPO ใหม่)                          → rank ได้ แต่ UI แจ้ง
+      no_trade   : volume = 0 ติดกัน >= 5 แท่งท้าย (SP ที่ Yahoo ยังส่ง
+                   แท่ง carry-forward มา — "zombie bars" ดูสดแต่ไม่มีเทรดจริง)
+                   → ออกจาก RS + sector avg เหมือน stale
     คืน dq_summary dict สำหรับใส่ใน output"""
     as_of = None
     if data_as_of:
@@ -98,8 +101,15 @@ def validate_stocks(stocks, data_as_of=None):
         if s.get("ret_1y") is None and "no_data" not in flags:
             flags.append("short_hist")
 
-        rs_eligible    = not any(f in flags for f in ("no_data", "stale", "thin", "suspect_ca"))
-        group_eligible = not any(f in flags for f in ("no_data", "stale"))
+        # V7 no_trade: หุ้น SP ที่แท่งดูสดแต่ volume = 0 ต่อเนื่อง — return
+        # ทุกช่วงเป็น 0% ปลอมๆ ถ้าปล่อยเข้า rank จะกอง percentile กลางตาราง
+        vh = s.get("vol_history") or []
+        if len(vh) >= 5 and all(v == 0 for v in vh[-5:]):
+            flags.append("no_trade")
+
+        rs_eligible    = not any(f in flags for f in
+                                 ("no_data", "stale", "thin", "suspect_ca", "no_trade"))
+        group_eligible = not any(f in flags for f in ("no_data", "stale", "no_trade"))
         s["dq"] = {"flags": flags, "rs_eligible": rs_eligible, "group_eligible": group_eligible}
         for f in flags:
             counts[f] += 1

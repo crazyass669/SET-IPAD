@@ -106,13 +106,17 @@ def base(sym, **kw):
     return d
 
 vs = [
-    base("NORM"),
+    base("NORM",  vol_history=[100, 100, 100, 100, 100]),
     base("STALE", price_history=ph("2025-12-01", 60)),          # ห่าง 60 วัน
     base("THIN",  price_history=ph(AS_OF, 30, step_days=4)),    # 21 แท่ง = 80 วัน
     base("CA",    ret_1d=35.0),
     base("PENNY", price=0.05),
     base("IPO",   ret_1y=None),
     base("NODATA", ret_1m=None),
+    # V7 zombie bars: แท่งสด (ph ถึง as_of) แต่ volume = 0 ต่อเนื่อง
+    base("ZOMBIE", vol_history=[0] * 10),
+    # volume 0 แค่ 4 วันท้าย (มีเทรดวันที่ 5 นับถอยหลัง) -> ไม่ flag
+    base("THINVOL", vol_history=[100, 0, 0, 0, 0][::-1] + [0, 0, 0, 0]),
 ]
 summ = validate_stocks(vs, AS_OF)
 flags = {s["symbol"]: set(s["dq"]["flags"]) for s in vs}
@@ -126,7 +130,10 @@ check("penny (<0.10) ยัง rank ได้", "penny" in flags["PENNY"] and vs
 check("short_hist ยัง rank ได้", "short_hist" in flags["IPO"] and vs[5]["dq"]["rs_eligible"])
 check("no_data ออกทุกอย่าง", "no_data" in flags["NODATA"]
       and not vs[6]["dq"]["rs_eligible"] and not vs[6]["dq"]["group_eligible"])
-check("dq_summary นับถูก", summ["rs_excluded"] == 4 and summ["rs_universe"] == 3)
+check("V7 zombie (vol=0 >=5 แท่ง) ออกจาก RS + กลุ่ม", "no_trade" in flags["ZOMBIE"]
+      and not vs[7]["dq"]["rs_eligible"] and not vs[7]["dq"]["group_eligible"])
+check("vol=0 แค่ 4 แท่งท้าย -> ไม่ flag", "no_trade" not in flags["THINVOL"])
+check("dq_summary นับถูก", summ["rs_excluded"] == 5 and summ["rs_universe"] == 4)
 
 # ============================================================
 # 3. core/metrics — Sector Return (summarize_groups)

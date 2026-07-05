@@ -2854,6 +2854,7 @@ function dqBadge(s) {
   if (!f.length) return '';
   const parts = [];
   if (f.includes('stale'))      parts.push(`<span class="dq-badge dq-red" title="หยุดเทรดมา ${s.dq_stale_days || '?'} วัน — ไม่ถูกนำเข้า RS Rank และค่าเฉลี่ยกลุ่ม">⏸</span>`);
+  if (f.includes('no_trade'))   parts.push(`<span class="dq-badge dq-red" title="ไม่มีการซื้อขาย (volume = 0 ต่อเนื่อง ≥ 5 วัน — หุ้นติด SP ที่แหล่งข้อมูลยังส่งแท่งราคาค้างมา) — ไม่ถูกนำเข้า RS Rank และค่าเฉลี่ยกลุ่ม">🚫</span>`);
   if (f.includes('thin'))       parts.push(`<span class="dq-badge dq-yellow" title="เทรดเบาบาง (21 แท่ง > 45 วัน) — return ระยะยาวหน่วยเวลาเพี้ยน ไม่ถูกนำเข้า RS Rank">◔</span>`);
   if (f.includes('suspect_ca')) parts.push(`<span class="dq-badge dq-yellow" title="ราคาเคลื่อนเกิน ceiling ±30% — สงสัย corporate action พักออกจาก RS Rank รอบนี้">⚠</span>`);
   if (f.includes('penny'))      parts.push(`<span class="dq-badge dq-gray" title="ราคาต่ำกว่า 0.10 บาท — 1 tick = ±10% ขึ้นไป return/RS อาจเพี้ยนจาก tick เดียว">¢</span>`);
@@ -2880,11 +2881,12 @@ function renderDqBanner() {
     const c = dq.counts || {};
     const detail = [
       c.stale      ? `พักเทรด ${c.stale}` : null,
+      c.no_trade   ? `ไม่มีเทรด (SP) ${c.no_trade}` : null,
       c.thin       ? `เทรดเบาบาง ${c.thin}` : null,
       c.suspect_ca ? `สงสัย CA ${c.suspect_ca}` : null,
       c.no_data    ? `ข้อมูลไม่ครบ ${c.no_data}` : null,
     ].filter(Boolean).join(', ');
-    msgs.push(`ℹ️ RS Rank คำนวณจาก <b>${dq.rs_universe}</b> หุ้น — กันออก ${dq.rs_excluded} ตัว (${detail}) ดู badge ⏸◔⚠ ในตาราง`);
+    msgs.push(`ℹ️ RS Rank คำนวณจาก <b>${dq.rs_universe}</b> หุ้น — กันออก ${dq.rs_excluded} ตัว (${detail}) ดู badge ⏸🚫◔⚠ ในตาราง`);
   }
 
   el.innerHTML = msgs.join('<br>');
