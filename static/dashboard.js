@@ -8681,10 +8681,13 @@ function renderFlowPage() {
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - _flowPeriod);
   const cutStr = cutoff.toISOString().slice(0, 10);
-  const rows = _flowData.rows.filter(r => r.date >= cutStr).slice().reverse(); // newest first
+  // sort ตามวันที่ตรงๆ ไม่พึ่งลำดับจาก API (เดิม .reverse() เดาว่า API ส่ง
+  // oldest-first แต่จริงๆ ส่ง newest-first มา ทำให้ตาราง/กราฟกลับหัว)
+  const rows = _flowData.rows.filter(r => r.date >= cutStr)
+    .slice().sort((a, b) => b.date.localeCompare(a.date));   // newest first สำหรับตาราง
 
   _renderFlowTable(rows);
-  _renderFlowChart(rows.slice().reverse()); // oldest first for chart
+  _renderFlowChart(rows.slice().reverse()); // oldest first สำหรับกราฟ
 }
 
 function _renderFlowTable(rows) {
