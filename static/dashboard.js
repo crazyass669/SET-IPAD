@@ -14,6 +14,7 @@ let industryFilter = "ALL";
 let sectorFilter = "ALL";
 let stageFilter = "ALL";
 let stockSearch = "";
+let dqOnlyFilter = false;
 
 // ============================================================
 // LOAD DATA — ดึงจาก Flask /api/data
@@ -66,6 +67,7 @@ async function loadData() {
     renderDqBanner();
     _rotAlertsData = null;   // ข้อมูลใหม่ -> ดึง rotation alerts ใหม่
     _breadthData   = null;   // ข้อมูลใหม่ -> ดึง breadth ใหม่
+    _breadthCacheByRange = {};
     loadRegimeLight();       // ไฟ regime บน nav (async ไม่ block การ render)
     renderAll();
     initAlertSystem();
@@ -2095,6 +2097,18 @@ function setStocksStageFilter(val, btn) {
   renderStocksTable();
 }
 
+function setDqOnlyFilter(v) {
+  dqOnlyFilter = v;
+  renderStocksTable();
+}
+
+// เรียกจาก banner คุณภาพข้อมูล — พาไปหน้า "หุ้นทั้งหมด" พร้อมกรองเฉพาะหุ้นที่ติด badge ⚠
+function goToDqStocks() {
+  const btn = [...document.querySelectorAll(".nav-btn")].find(b => b.getAttribute("onclick")?.includes("'stocks'"));
+  showPage("stocks", btn);
+  setDqOnlyFilter(true);
+}
+
 function _rebuildSectorBtns() {
   const base = industryFilter === "ALL" ? DATA.stocks : DATA.stocks.filter(s => s.industry === industryFilter);
   const sectors = ["ALL", ...new Set(base.map(s => s.sector || "Unknown").sort())];
@@ -2121,6 +2135,9 @@ function renderStocksTable() {
   if (stockSearch) stocks = stocks.filter(s =>
     s.symbol.toLowerCase().includes(stockSearch)
   );
+  if (dqOnlyFilter) stocks = stocks.filter(s => s.dq && s.dq.rs_eligible === false);
+  const dqChip = document.getElementById("dq-only-chip");
+  if (dqChip) dqChip.style.display = dqOnlyFilter ? "inline-flex" : "none";
   // แปลง bool -> number เพื่อ sort ได้ + คำนวณ _stage ไว้ล่วงหน้า
   stocks = stocks.map(s => ({
     ...s,
@@ -2448,6 +2465,7 @@ function showPage(id, btn) {
   if (id === "flow")         loadFlowPage();
   if (id === "indices")      loadIndicesPage();
   if (id === "stage")        renderStage();
+  if (id === "ema-breadth")  loadBreadthCharts();
   if (id === "overview")     { setTimeout(() => { if (!_nhLoaded) loadNewHighChart(); }, 100); }
 }
 
@@ -2849,21 +2867,36 @@ function _rsi(arr, period=14) {
 // ============================================================
 // DATA QUALITY — badges ต่อหุ้น + banner ระดับ dataset
 // ============================================================
+const DQ_FLAG_DEFS = [
+  ['stale',      'red',    s => `หยุดเทรดมา ${s.dq_stale_days || '?'} วัน — ไม่ถูกนำเข้า RS Rank และค่าเฉลี่ยกลุ่ม`],
+  ['no_trade',   'red',    () => 'ไม่มีการซื้อขาย (volume = 0 ต่อเนื่อง ≥ 5 วัน — หุ้นติด SP ที่แหล่งข้อมูลยังส่งแท่งราคาค้างมา) — ไม่ถูกนำเข้า RS Rank และค่าเฉลี่ยกลุ่ม'],
+  ['thin',       'yellow', () => 'เทรดเบาบาง (21 แท่ง > 45 วัน) — return ระยะยาวหน่วยเวลาเพี้ยน ไม่ถูกนำเข้า RS Rank'],
+  ['suspect_ca', 'yellow', () => 'ราคาเคลื่อนเกิน ceiling ±30% — สงสัย corporate action พักออกจาก RS Rank รอบนี้'],
+  ['penny',      'gray',   () => 'ราคาต่ำกว่า 0.10 บาท — 1 tick = ±10% ขึ้นไป return/RS อาจเพี้ยนจาก tick เดียว'],
+  ['short_hist', 'gray',   () => 'ข้อมูลไม่ถึง 1 ปี (IPO ใหม่) — RS คำนวณจากช่วงเวลาสั้นกว่าหุ้นอื่น'],
+];
 function dqBadge(s) {
   const f = (s.dq && s.dq.flags) || [];
   if (!f.length) return '';
-  const parts = [];
-  if (f.includes('stale'))      parts.push(`<span class="dq-badge dq-red" title="หยุดเทรดมา ${s.dq_stale_days || '?'} วัน — ไม่ถูกนำเข้า RS Rank และค่าเฉลี่ยกลุ่ม">⏸</span>`);
-  if (f.includes('no_trade'))   parts.push(`<span class="dq-badge dq-red" title="ไม่มีการซื้อขาย (volume = 0 ต่อเนื่อง ≥ 5 วัน — หุ้นติด SP ที่แหล่งข้อมูลยังส่งแท่งราคาค้างมา) — ไม่ถูกนำเข้า RS Rank และค่าเฉลี่ยกลุ่ม">🚫</span>`);
-  if (f.includes('thin'))       parts.push(`<span class="dq-badge dq-yellow" title="เทรดเบาบาง (21 แท่ง > 45 วัน) — return ระยะยาวหน่วยเวลาเพี้ยน ไม่ถูกนำเข้า RS Rank">◔</span>`);
-  if (f.includes('suspect_ca')) parts.push(`<span class="dq-badge dq-yellow" title="ราคาเคลื่อนเกิน ceiling ±30% — สงสัย corporate action พักออกจาก RS Rank รอบนี้">⚠</span>`);
-  if (f.includes('penny'))      parts.push(`<span class="dq-badge dq-gray" title="ราคาต่ำกว่า 0.10 บาท — 1 tick = ±10% ขึ้นไป return/RS อาจเพี้ยนจาก tick เดียว">¢</span>`);
-  if (f.includes('short_hist')) parts.push(`<span class="dq-badge dq-gray" title="ข้อมูลไม่ถึง 1 ปี (IPO ใหม่) — RS คำนวณจากช่วงเวลาสั้นกว่าหุ้นอื่น">N</span>`);
-  return parts.join('');
+  const hits = DQ_FLAG_DEFS.filter(([flag]) => f.includes(flag));
+  if (!hits.length) return '';
+  const sevRank = { red: 2, yellow: 1, gray: 0 };
+  const sev = hits.reduce((worst, [, s2]) => sevRank[s2] > sevRank[worst] ? s2 : worst, 'gray');
+  const title = hits.map(([, , msg]) => msg(s)).join(' | ');
+  // badge เดียวรวมทุก flag — สีตามความรุนแรงสูงสุด (red > yellow > gray) ลด icon ที่ต้องจำ เหลือแค่ ⚠
+  return `<span class="dq-badge dq-${sev}" title="${title}">⚠</span>`;
 }
 
 function _dqIsPenny(s) { return ((s.dq && s.dq.flags) || []).includes('penny'); }
 
+function reopenDqBanner() {
+  sessionStorage.removeItem('dqBannerDismissed');
+  renderDqBanner();
+}
+function dismissDqBanner() {
+  sessionStorage.setItem('dqBannerDismissed', '1');
+  renderDqBanner();
+}
 function renderDqBanner() {
   const el = document.getElementById('dq-banner');
   if (!el || !DATA) return;
@@ -2886,11 +2919,34 @@ function renderDqBanner() {
       c.suspect_ca ? `สงสัย CA ${c.suspect_ca}` : null,
       c.no_data    ? `ข้อมูลไม่ครบ ${c.no_data}` : null,
     ].filter(Boolean).join(', ');
-    msgs.push(`ℹ️ RS Rank คำนวณจาก <b>${dq.rs_universe}</b> หุ้น — กันออก ${dq.rs_excluded} ตัว (${detail}) ดู badge ⏸🚫◔⚠ ในตาราง`);
+    // หมายเหตุ: ผลรวมในวงเล็บอาจมากกว่าจำนวนกันออกจริง เพราะหุ้นบางตัวเข้าเงื่อนไขซ้อนกันมากกว่า 1 เหตุผล
+    msgs.push(`ℹ️ RS Rank คำนวณจาก <b>${dq.rs_universe}</b> หุ้น — กันออก ${dq.rs_excluded} ตัว (เหตุผล: ${detail} — บางตัวเข้าเงื่อนไขซ้อนกันมากกว่า 1 อย่าง) <a href="#" onclick="goToDqStocks(); return false;" style="color:inherit;text-decoration:underline;font-weight:600">ดูรายชื่อหุ้น →</a>`);
   }
 
-  el.innerHTML = msgs.join('<br>');
-  el.style.display = msgs.length ? 'block' : 'none';
+  if (!msgs.length) {
+    el.style.cssText = 'display:none';
+    el.innerHTML = '';
+    return;
+  }
+
+  if (sessionStorage.getItem('dqBannerDismissed') === '1') {
+    // ปิดไปแล้ว — เหลือ chip เล็กๆ ให้กดเปิดอ่านใหม่ได้ตลอด แทนที่จะหายไปเลย
+    el.style.cssText = 'display:block; margin:8px 16px 0; padding:0; background:none; border:none';
+    el.innerHTML = `<button onclick="reopenDqBanner()"
+      style="background:none;border:1px dashed var(--border);color:var(--text2);border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer">
+      ℹ️ มีแจ้งเตือนคุณภาพข้อมูล (ปิดไว้) — คลิกเพื่อดูอีกครั้ง
+    </button>`;
+    return;
+  }
+
+  el.style.cssText = '';
+  el.innerHTML = `<div style="display:flex;align-items:flex-start;gap:8px">
+    <div style="flex:1">${msgs.join('<br>')}</div>
+    <button onclick="dismissDqBanner()"
+      title="ปิดข้อความนี้ (จะเหลือปุ่มเล็กให้กดเปิดดูใหม่ได้ตลอด)"
+      style="background:none;border:none;color:inherit;opacity:.7;cursor:pointer;font-size:14px;line-height:1;padding:0 2px">✕</button>
+  </div>`;
+  el.style.display = 'block';
 }
 
 function _enrichTechSignals(stocks) {
@@ -3205,19 +3261,38 @@ function setEMABreadthView(v, btn) {
 }
 
 // ============================================================
-// MARKET BREADTH CHARTS — % above EMA / NH-NL / McClellan (1 ปี)
+// MARKET BREADTH CHARTS — % above EMA / NH-NL / McClellan
+// ช่วงเวลาเลือกได้: 1Y / 3Y / 5Y / All — cache แยกต่อ range ในฝั่ง client ด้วย
 // ============================================================
 let _breadthData = null;
+let _breadthRange = '1y';
+let _breadthCacheByRange = {};
 let _breadthLoading = false;
 
+function setBreadthRange(range, btn) {
+  if (_breadthRange === range) return;
+  _breadthRange = range;
+  document.querySelectorAll('#breadth-range-btns .filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  loadBreadthCharts();
+}
+
 async function loadBreadthCharts() {
-  if (_breadthData) { drawBreadthCharts(); return; }
+  const cached = _breadthCacheByRange[_breadthRange];
+  if (cached) { _breadthData = cached; drawBreadthCharts(); return; }
   if (_breadthLoading) return;
   _breadthLoading = true;
+  ['bc-ema', 'bc-nhnl', 'bc-mcc'].forEach(id => {
+    const loading = document.getElementById(id + '-loading');
+    const canvas  = document.getElementById(id);
+    if (loading) { loading.style.display = 'block'; loading.textContent = 'กำลังโหลด...'; }
+    if (canvas)  canvas.style.display = 'none';
+  });
   try {
-    const r = await fetch('/api/breadth');
+    const r = await fetch('/api/breadth?range=' + encodeURIComponent(_breadthRange));
     const d = await r.json();
     if (d.error) throw new Error(d.error);
+    _breadthCacheByRange[_breadthRange] = d;
     _breadthData = d;
     drawBreadthCharts();
   } catch (e) {
@@ -3234,11 +3309,23 @@ function _bcSetup(id) {
   const loading = document.getElementById(id + '-loading');
   const canvas  = document.getElementById(id);
   if (!canvas) return null;
-  if (loading) loading.style.display = 'none';
+  // reset เป็น 100% ก่อนวัดทุกครั้ง — กันค่า px เก่า (จากรอบที่วาดตอนแท็บซ่อน) ค้างทับ
+  canvas.style.width = '100%';
   canvas.style.display = 'block';
-  const W = canvas.offsetWidth || 300, H = 130;
-  canvas.width = W; canvas.height = H;
-  return { canvas, ctx: canvas.getContext('2d'), W, H,
+  const W = canvas.offsetWidth, H = canvas.offsetHeight || 170;
+  if (!W) {
+    // แท็บยังซ่อนอยู่ วัดความกว้างจริงไม่ได้ — ข้ามไป ให้ showPage วาดตอนเปิดแท็บ
+    canvas.style.display = 'none';
+    return null;
+  }
+  if (loading) loading.style.display = 'none';
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+  return { canvas, ctx, W, H,
            pad: { l: 34, r: 6, t: 6, b: 18 } };
 }
 
@@ -3438,11 +3525,35 @@ function setBoSort(col) {
   renderBreakout();
 }
 
-function boTh(col, label, cls='') {
+// tooltip อธิบายแต่ละคอลัมน์ของตาราง 52W H/L & Breakout (แสดงเมื่อ hover หัวตาราง)
+const _BO_TIPS = {
+  rs_score:     'RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)',
+  sec_rank:     'อันดับ RS ภายใน sector เดียวกัน เช่น 3/25 = RS สูงเป็นอันดับ 3 จาก 25 ตัวในกลุ่ม',
+  symbol:       'ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ',
+  name:         'ชื่อบริษัท',
+  sector:       'กลุ่มอุตสาหกรรม',
+  price:        'ราคาปิดล่าสุด (บาท)',
+  high_52w:     'ราคาสูงสุดใน 52 สัปดาห์ย้อนหลัง (ไม่รวมแท่งวันล่าสุด)',
+  low_52w:      'ราคาต่ำสุดใน 52 สัปดาห์ย้อนหลัง (ไม่รวมแท่งวันล่าสุด)',
+  ret_1m:       'ผลตอบแทนย้อนหลัง 1 เดือน',
+  ret_3m:       'ผลตอบแทนย้อนหลัง 3 เดือน',
+  ret_ytd:      'ผลตอบแทนตั้งแต่ต้นปี (Year-to-Date)',
+  vol_today:    'Relative Volume = volume วันนี้ ÷ ค่าเฉลี่ย 20 วัน — เช่น 2.0x = ซื้อขายคึกคักกว่าปกติ 2 เท่า',
+  mkt_cap:      'มูลค่าตลาด = ราคา × จำนวนหุ้นจดทะเบียน',
+  above_ema50:  'ราคาอยู่เหนือเส้น EMA 50 วันหรือไม่ (✓ = แนวโน้มระยะกลางขาขึ้น)',
+  above_ema200: 'ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)',
+};
+const _BO_TIP_RANGE     = 'ตำแหน่งราคาในกรอบ 52 สัปดาห์: 0% = ที่ Low, 100% = ที่ High, เกิน 100% = ทะลุ High เดิม (วัดเป็นสัดส่วนของความกว้างกรอบ High−Low ไม่ใช่ % ของราคา)';
+const _BO_TIP_FROM_HIGH = '% ห่างจาก 52W High — ติดลบ = ยังต่ำกว่า high, NEW HIGH = ราคาทะลุ high เดิมแล้ว';
+const _BO_TIP_FROM_LOW  = '% เด้งขึ้นจาก 52W Low — ยิ่งน้อยยิ่งใกล้จุดต่ำสุด, NEW LOW = ทำจุดต่ำสุดใหม่';
+
+function boTh(col, label, cls='', tip=null) {
   const active = _boSortCol === col;
   const arrow  = active ? (_boSortDir === 1 ? '↓' : '↑') : '↕';
   const c = (cls ? cls+' ' : '') + 'sortable';
-  return `<th class="${c}" onclick="setBoSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
+  const t = tip ?? _BO_TIPS[col];
+  const tAttr = t ? ` title="${t}"` : '';
+  return `<th class="${c}"${tAttr} onclick="setBoSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
 }
 
 function setBO(type, val, btn) {
@@ -3495,8 +3606,8 @@ function renderBreakout() {
   const anchorCol = isHigh ? 'high_52w' : 'low_52w';
   document.getElementById('bo-thead').innerHTML = `<tr>
     ${boTh('rs_score','RS')}${boTh('sec_rank','Sec.Rank','r')}${boTh('symbol','Symbol')}${boTh('name','ชื่อ')}${boTh('sector','Sector')}
-    ${boTh('price','ราคา','r')}${boTh(anchorCol,'52W '+aLbl,'r')}${boTh('fromAnchor','% จาก '+aLbl,'r')}
-    <th>Range</th>
+    ${boTh('price','ราคา','r')}${boTh(anchorCol,'52W '+aLbl,'r')}${boTh('fromAnchor','% จาก '+aLbl,'r', isHigh ? _BO_TIP_FROM_HIGH : _BO_TIP_FROM_LOW)}
+    <th title="${_BO_TIP_RANGE}">Range</th>
     ${boTh('ret_1m','1M%','r')}${boTh('ret_3m','3M%','r')}${boTh('ret_ytd','YTD%','r')}
     ${boTh('vol_today','RVOL','r')}${boTh('mkt_cap','MKT CAP','r')}${boTh('above_ema50','EMA50','r')}${boTh('above_ema200','EMA200','r')}
   </tr>`;
