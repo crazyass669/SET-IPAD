@@ -2966,20 +2966,6 @@ function applyPreset(name) {
     document.getElementById('scr-pbv').value    = '1.5';
     document.getElementById('scr-rs-min').value = '45';
     document.getElementById('scr-1m').value     = '0';
-  } else if (name === 'new52h') {
-    document.getElementById('scr-new52h').checked = true;
-  } else if (name === 'sma_cross50') {
-    document.getElementById('scr-sma-cross50').checked = true;
-  } else if (name === 'sma_cross200') {
-    document.getElementById('scr-sma-cross200').checked = true;
-  } else if (name === 'ema_cross50') {
-    document.getElementById('scr-ema-cross50').checked = true;
-  } else if (name === 'ema_cross200') {
-    document.getElementById('scr-ema-cross200').checked = true;
-  } else if (name === 'rsi_rebound') {
-    document.getElementById('scr-rsi-rebound').checked = true;
-  } else if (name === 'bullish_vol') {
-    document.getElementById('scr-bullish-vol').checked = true;
   } else if (name === 'backtest_strategy') {
     document.getElementById('scr-backtest').checked = true;
   }

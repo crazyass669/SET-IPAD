@@ -847,51 +847,6 @@
     </div></span>
     <button class="filter-btn" onclick="applyPreset('clear')" style="color:var(--text2)">✕ ล้าง</button>
   </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
-    <span style="font-size:11px;color:var(--text2)">📡 Technical:</span>
-    <button class="filter-btn" onclick="applyPreset('new52h')">🚀 Break 52W High</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:240px">
-      <strong>🚀 Break 52 Week High</strong><br>
-      ราคาวันนี้ทำจุดสูงสุดใหม่ใน 52 สัปดาห์<br><br>
-      <span style="color:#3fb950">สัญญาณ Breakout ระยะยาว</span> — Momentum แรง สถาบันมักตาม<br>
-      <span style="color:var(--text2)">ใช้คู่กับ RVOL สูงเพื่อยืนยัน breakout จริง</span>
-    </div></span>
-    <button class="filter-btn" onclick="applyPreset('sma_cross50')">📊 SMA Cross 10/50</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:250px">
-      <strong>📊 SMA Crossover 10/50</strong><br>
-      SMA10 ตัดขึ้น SMA50 วันนี้<br><br>
-      สัญญาณ Momentum ระยะกลาง — เส้นสั้นแรงกว่าเส้นกลาง<br>
-      <span style="color:var(--text2)">คำนวณจาก price_history 260 วัน</span>
-    </div></span>
-    <button class="filter-btn" onclick="applyPreset('sma_cross200')">📊 SMA Cross 10/200</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:250px">
-      <strong>📊 SMA Crossover 10/200</strong><br>
-      SMA10 ตัดขึ้น SMA200 วันนี้<br><br>
-      <span style="color:#3fb950">Golden Cross ระยะยาว</span> — หุ้นพลิกกลับจากขาลงยาว<br>
-      <span style="color:var(--text2)">ต้องการข้อมูล ≥ 200 วัน</span>
-    </div></span>
-    <button class="filter-btn" onclick="applyPreset('ema_cross50')">📈 EMA Cross 10/50</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:250px">
-      <strong>📈 EMA Crossover 10/50</strong><br>
-      EMA10 ตัดขึ้น EMA50 วันนี้<br><br>
-      ไวกว่า SMA — จับสัญญาณได้เร็วกว่า แต่อาจมี false signal บ้าง<br>
-      <span style="color:var(--text2)">นิยมใช้ใน Swing Trading</span>
-    </div></span>
-    <button class="filter-btn" onclick="applyPreset('ema_cross200')">📈 EMA Cross 10/200</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:250px">
-      <strong>📈 EMA Crossover 10/200</strong><br>
-      EMA10 ตัดขึ้น EMA200 วันนี้<br><br>
-      <span style="color:#3fb950">สัญญาณแข็งแกร่ง</span> — เกิดน้อยครั้ง แต่น่าเชื่อถือสูง<br>
-      <span style="color:var(--text2)">ต้องการข้อมูล ≥ 200 วัน</span>
-    </div></span>
-    <button class="filter-btn" onclick="applyPreset('rsi_rebound')">🔄 RSI Rebound</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:250px">
-      <strong>🔄 RSI Rebound</strong><br>
-      RSI14 ตัดขึ้น 45 วันนี้ + ราคาเหนือ EMA200 + SMA200<br><br>
-      <span style="color:#3fb950">ฟื้นจาก Oversold ใน Uptrend</span><br>
-      <span style="color:var(--text2)">RSI &lt; 45 วาน → RSI ≥ 45 วันนี้</span>
-    </div></span>
-    <button class="filter-btn" onclick="applyPreset('bullish_vol')">🔥 Bullish High Volume</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:250px">
-      <strong>🔥 Bullish High Volume</strong><br>
-      ราคาขึ้น (1D% ≥ 0) + RVOL5d ≥ 200% + มูลค่า ≥ 10M บาท<br><br>
-      <span style="color:#3fb950">แรงซื้อผิดปกติ + ราคาตอบรับดี</span><br>
-      <span style="color:var(--text2)">มักเกิดก่อนหรือระหว่าง Breakout</span>
-    </div></span>
-  </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
     <span style="font-size:11px;color:var(--text2)">Preset ของฉัน:</span>
     <div id="saved-presets-row" style="display:inline-flex;gap:6px;flex-wrap:wrap"></div>
