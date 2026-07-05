@@ -234,8 +234,6 @@ function renderAll() {
   renderSectors();
   renderStocks();
   renderWatchlist();
-  render52W();
-  render52WLow();
   renderBreakout();
   renderMomentum();
   renderHeatmap();
@@ -3103,144 +3101,6 @@ function resetScreener() {
 }
 
 // ============================================================
-// 52W HIGH WATCH
-// ============================================================
-let _52wFilter = 5;
-let _52wSort = 'fromHigh';
-
-function set52WFilter(val, btn) {
-  _52wFilter = val;
-  document.querySelectorAll('#page-52w .filter-btn[onclick^="set52WFilter"]').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  render52W();
-}
-
-function set52WSort(val, btn) {
-  _52wSort = val;
-  document.querySelectorAll('#page-52w .filter-btn[onclick^="set52WSort"]').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  render52W();
-}
-
-function render52W() {
-  if (!DATA) return;
-  const stocks = DATA.stocks.map(s => {
-    const range   = (s.high_52w ?? 0) - (s.low_52w ?? 0);
-    const fromHigh = s.high_52w > 0 ? (s.price - s.high_52w) / s.high_52w * 100 : null;
-    const rangePct = range > 0 ? Math.round((s.price - s.low_52w) / range * 100) : null;
-    return { ...s, fromHigh, rangePct };
-  }).filter(s => s.fromHigh != null && s.fromHigh >= -_52wFilter)
-    .sort((a, b) => {
-      if (_52wSort === 'rs_desc') return (b.rs_score ?? -1) - (a.rs_score ?? -1);
-      if (_52wSort === 'rs_asc')  return (a.rs_score ?? 100) - (b.rs_score ?? 100);
-      return b.fromHigh - a.fromHigh;
-    });
-
-  const rangeLabel = _52wFilter >= 100 ? 'ทั้งหมด' : `ภายใน ${_52wFilter}% จาก 52W High`;
-  document.getElementById('52w-count').textContent = `${stocks.length} หุ้น — ${rangeLabel}`;
-  document.getElementById('52w-tbody').innerHTML = stocks.map(s => `
-    <tr>
-      <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score ?? '—'}</span></td>
-      <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}</td>
-      <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
-      <td class="r">${s.price?.toFixed(2) ?? '—'}</td>
-      <td class="r text2">${s.high_52w?.toFixed(2) ?? '—'}</td>
-      <td class="r"><span class="${s.fromHigh >= -2 ? 'green' : s.fromHigh >= -5 ? 'yellow' : 'text2'}">${s.fromHigh >= 0 ? 'NEW HIGH' : s.fromHigh.toFixed(1) + '%'}</span></td>
-      <td>
-        <div class="range-bar-wrap">
-          <div class="range-bar-track"><div class="range-bar-fill" style="width:${s.rangePct ?? 0}%"></div></div>
-          <div style="font-size:10px;color:var(--text2);text-align:right">${s.rangePct ?? '—'}%</div>
-        </div>
-      </td>
-      <td class="r">${pct(s.ret_1m)}</td>
-      <td class="r">${pct(s.ret_3m)}</td>
-      <td class="r">${emaBadge(s.above_ema50)}</td>
-      <td class="r">${emaBadge(s.above_ema200)}</td>
-    </tr>`).join('');
-}
-
-// ============================================================
-// 52W LOW WATCH
-// ============================================================
-let _52wlFilter = 5;
-let _52wlSortCol = 'fromLow', _52wlSortDir = -1; // ascending by default: closest to low first
-
-const _52WL_STR  = new Set(['symbol','name','sector']);
-const _52WL_BOOL = new Set(['above_ema50','above_ema200']);
-
-function set52WLFilter(val, btn) {
-  _52wlFilter = val;
-  document.querySelectorAll('#page-52w-low .filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  render52WLow();
-}
-
-function set52WLSort(col) {
-  if (_52wlSortCol === col) _52wlSortDir *= -1;
-  else { _52wlSortCol = col; _52wlSortDir = 1; }
-  render52WLow();
-}
-
-function wlTh(col, label, cls='') {
-  const active = _52wlSortCol === col;
-  const arrow  = active ? (_52wlSortDir === 1 ? '↓' : '↑') : '↕';
-  const c = (cls ? cls+' ' : '') + 'sortable';
-  return `<th class="${c}" onclick="set52WLSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
-}
-
-function render52WLow() {
-  if (!DATA) return;
-  const stocks = DATA.stocks.map(s => {
-    const fromLow  = s.low_52w > 0 ? (s.price - s.low_52w) / s.low_52w * 100 : null;
-    const range    = (s.high_52w ?? 0) - (s.low_52w ?? 0);
-    const rangePct = range > 0 ? Math.round((s.price - s.low_52w) / range * 100) : null;
-    return { ...s, fromLow, rangePct };
-  }).filter(s => {
-    if (s.fromLow == null) return false;
-    if (_52wlFilter < 100 && s.fromLow > _52wlFilter) return false;
-    return true;
-  }).sort((a, b) => {
-    const col = _52wlSortCol;
-    if (_52WL_BOOL.has(col)) return ((b[col]?1:0) - (a[col]?1:0)) * _52wlSortDir;
-    if (_52WL_STR.has(col))  return ((a[col]??'').localeCompare(b[col]??'')) * _52wlSortDir;
-    return ((b[col]??-Infinity) - (a[col]??-Infinity)) * _52wlSortDir;
-  });
-
-  const rangeLabel = _52wlFilter >= 100 ? 'ทั้งหมด' : `ภายใน ${_52wlFilter}% จาก 52W Low`;
-  document.getElementById('52wl-count').textContent = `${stocks.length} หุ้น — ${rangeLabel}`;
-  document.getElementById('52wl-thead').innerHTML = `<tr>
-    ${wlTh('rs_score','RS')}${wlTh('symbol','Symbol')}${wlTh('name','ชื่อ')}${wlTh('sector','Sector')}
-    ${wlTh('price','ราคา','r')}${wlTh('low_52w','52W Low','r')}${wlTh('fromLow','% จาก Low','r')}
-    <th>Range</th>
-    ${wlTh('ret_1d','1D%','r')}${wlTh('ret_1w','1W%','r')}${wlTh('ret_1m','1M%','r')}${wlTh('ret_3m','3M%','r')}
-    ${wlTh('mkt_cap','MKT CAP','r')}${wlTh('above_ema50','EMA50','r')}${wlTh('above_ema200','EMA200','r')}
-  </tr>`;
-  document.getElementById('52wl-tbody').innerHTML = stocks.map(s => `
-    <tr>
-      <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score ?? '—'}</span></td>
-      <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}</td>
-      <td style="font-size:11px;color:var(--text2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
-      <td style="font-size:11px">${s.sector || '—'}</td>
-      <td class="r">${s.price?.toFixed(2) ?? '—'}</td>
-      <td class="r text2">${s.low_52w?.toFixed(2) ?? '—'}</td>
-      <td class="r"><span class="${s.fromLow <= 2 ? 'red' : s.fromLow <= 5 ? 'yellow' : 'text2'}">${s.fromLow <= 0.5 ? 'NEW LOW' : s.fromLow.toFixed(1) + '%'}</span></td>
-      <td>
-        <div class="range-bar-wrap">
-          <div class="range-bar-track"><div class="range-bar-fill" style="width:${s.rangePct ?? 0}%"></div></div>
-          <div style="font-size:10px;color:var(--text2);text-align:right">${s.rangePct ?? '—'}%</div>
-        </div>
-      </td>
-      <td class="r">${pct(s.ret_1d)}</td>
-      <td class="r">${pct(s.ret_1w)}</td>
-      <td class="r">${pct(s.ret_1m)}</td>
-      <td class="r">${pct(s.ret_3m)}</td>
-      <td class="r" style="font-size:11px">${fmtCap(s.mkt_cap, s.is_reit)}</td>
-      <td class="r">${emaBadge(s.above_ema50)}</td>
-      <td class="r">${emaBadge(s.above_ema200)}</td>
-    </tr>`).join('');
-}
-
-// ============================================================
 // HEATMAP
 // ============================================================
 let hmPeriod = 'ret_1d';
@@ -3564,6 +3424,7 @@ function renderEMABreadth() {
 // BREAKOUT RADAR
 // ============================================================
 let _boRS = 70, _boDist = 10, _boEMA = '50';
+let _boSide = 'high';   // 'high' = Breakout/High watch, 'low' = Low watch
 let _boSortCol = 'rs_score', _boSortDir = 1;
 
 const _BO_STR  = new Set(['symbol','name','sector']);
@@ -3586,6 +3447,7 @@ function setBO(type, val, btn) {
   if (type === 'rs')   _boRS   = val;
   if (type === 'dist') _boDist = val;
   if (type === 'ema')  _boEMA  = val;
+  if (type === 'side') _boSide = val;
   document.querySelectorAll(`#page-breakout .filter-btn[id^="bo-${type}"]`).forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   renderBreakout();
@@ -3593,17 +3455,21 @@ function setBO(type, val, btn) {
 
 function renderBreakout() {
   if (!DATA) return;
+  const isHigh = _boSide === 'high';
+  const aLbl   = isHigh ? 'High' : 'Low';
   const secRanks = computeSectorRanks();
   const stocks = DATA.stocks.map(s => {
-    const fromHigh = s.high_52w > 0 ? (s.price - s.high_52w) / s.high_52w * 100 : null;
-    const range    = (s.high_52w ?? 0) - (s.low_52w ?? 0);
-    const rangePct = range > 0 ? Math.round((s.price - s.low_52w) / range * 100) : null;
+    const anchor     = isHigh ? s.high_52w : s.low_52w;
+    const fromAnchor = anchor > 0 ? (s.price - anchor) / anchor * 100 : null;
+    const range      = (s.high_52w ?? 0) - (s.low_52w ?? 0);
+    const rangePct   = range > 0 ? Math.round((s.price - s.low_52w) / range * 100) : null;
     const sr = secRanks[s.symbol];
-    return { ...s, fromHigh, rangePct, sec_rank: sr?.rank ?? null, sec_total: sr?.total ?? null };
+    return { ...s, fromAnchor, rangePct, sec_rank: sr?.rank ?? null, sec_total: sr?.total ?? null };
   }).filter(s => {
-    if (s.fromHigh == null) return false;
+    if (s.fromAnchor == null) return false;
     if ((s.rs_score ?? 0) < _boRS) return false;
-    if (s.fromHigh < -_boDist) return false;
+    // high: ห่างลงจาก High ไม่เกิน X% | low: เด้งขึ้นจาก Low ไม่เกิน X%
+    if (isHigh ? (s.fromAnchor < -_boDist) : (s.fromAnchor > _boDist)) return false;
     if (_boEMA === '50'  && !s.above_ema50)  return false;
     if (_boEMA === '200' && (!s.above_ema50 || !s.above_ema200)) return false;
     return true;
@@ -3614,24 +3480,35 @@ function renderBreakout() {
     return ((b[col]??-Infinity) - (a[col]??-Infinity)) * _boSortDir;
   });
 
-  document.getElementById('bo-count').textContent = `${stocks.length} หุ้น — RS ≥ ${_boRS} · ห่าง High ≤ ${_boDist}%`;
+  const parts = [`${stocks.length} หุ้น`, isHigh ? 'ใกล้ 52W High' : 'ใกล้ 52W Low'];
+  if (_boRS > 0)     parts.push(`RS ≥ ${_boRS}`);
+  if (_boDist < 100) parts.push(`ห่าง ${aLbl} ≤ ${_boDist}%`);
+  if (_boEMA !== 'any') parts.push(_boEMA === '50' ? '> EMA50' : '> EMA50+200');
+  document.getElementById('bo-count').textContent = parts.join(' · ');
+
+  const anchorCol = isHigh ? 'high_52w' : 'low_52w';
   document.getElementById('bo-thead').innerHTML = `<tr>
     ${boTh('rs_score','RS')}${boTh('sec_rank','Sec.Rank','r')}${boTh('symbol','Symbol')}${boTh('name','ชื่อ')}${boTh('sector','Sector')}
-    ${boTh('price','ราคา','r')}${boTh('high_52w','52W High','r')}${boTh('fromHigh','% จาก High','r')}
+    ${boTh('price','ราคา','r')}${boTh(anchorCol,'52W '+aLbl,'r')}${boTh('fromAnchor','% จาก '+aLbl,'r')}
     <th>Range</th>
     ${boTh('ret_1m','1M%','r')}${boTh('ret_3m','3M%','r')}${boTh('ret_ytd','YTD%','r')}
     ${boTh('vol_today','RVOL','r')}${boTh('mkt_cap','MKT CAP','r')}${boTh('above_ema50','EMA50','r')}${boTh('above_ema200','EMA200','r')}
   </tr>`;
-  document.getElementById('bo-tbody').innerHTML = stocks.map(s => `
+  document.getElementById('bo-tbody').innerHTML = stocks.map(s => {
+    const fa = s.fromAnchor;
+    const faHtml = isHigh
+      ? `<span class="${fa >= -2 ? 'green' : fa >= -5 ? 'yellow' : 'text2'}">${fa >= 0 ? 'NEW HIGH' : fa.toFixed(1) + '%'}</span>`
+      : `<span class="${fa <= 2 ? 'red' : fa <= 5 ? 'yellow' : 'text2'}">${fa <= 0.5 ? 'NEW LOW' : '+' + fa.toFixed(1) + '%'}</span>`;
+    return `
     <tr>
       <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score ?? '—'}</span></td>
       <td class="r">${secRankHtml(s.sec_rank ? {rank:s.sec_rank,total:s.sec_total} : null)}</td>
-      <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}</td>
+      <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}${dqBadge(s)}</td>
       <td style="font-size:11px;color:var(--text2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
       <td style="font-size:11px">${s.sector || '—'}</td>
       <td class="r">${s.price?.toFixed(2) ?? '—'}</td>
-      <td class="r text2">${s.high_52w?.toFixed(2) ?? '—'}</td>
-      <td class="r"><span class="${s.fromHigh >= -2 ? 'green' : s.fromHigh >= -5 ? 'yellow' : 'text2'}">${s.fromHigh >= 0 ? 'NEW HIGH' : s.fromHigh.toFixed(1) + '%'}</span></td>
+      <td class="r text2">${(isHigh ? s.high_52w : s.low_52w)?.toFixed(2) ?? '—'}</td>
+      <td class="r">${faHtml}</td>
       <td>
         <div class="range-bar-wrap">
           <div class="range-bar-track"><div class="range-bar-fill" style="width:${s.rangePct ?? 0}%"></div></div>
@@ -3645,7 +3522,8 @@ function renderBreakout() {
       <td class="r" style="font-size:11px">${fmtCap(s.mkt_cap, s.is_reit)}</td>
       <td class="r">${emaBadge(s.above_ema50)}</td>
       <td class="r">${emaBadge(s.above_ema200)}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 // ============================================================

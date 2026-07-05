@@ -34,9 +34,7 @@
   <button class="nav-btn" onclick="showPage('sectors',this)">Sectors</button>
   <button class="nav-btn" onclick="showPage('stocks',this)">หุ้นทั้งหมด</button>
   <button class="nav-btn" onclick="showPage('screener',this)">Screener</button>
-  <button class="nav-btn" onclick="showPage('52w',this)">52W High</button>
-  <button class="nav-btn" onclick="showPage('52w-low',this)">52W Low</button>
-  <button class="nav-btn" onclick="showPage('breakout',this)">Breakout</button>
+  <button class="nav-btn" onclick="showPage('breakout',this)">52W H/L &amp; Breakout</button>
   <button class="nav-btn" onclick="showPage('momentum',this)">Momentum</button>
   <button class="nav-btn" onclick="showPage('heatmap',this)">Heatmap</button>
   <button class="nav-btn" onclick="showPage('ema-breadth',this)">EMA Breadth</button>
@@ -648,9 +646,12 @@
       นี่คือ setup ที่ William O'Neil (CAN SLIM) และ growth investor ใช้ค้นหาหุ้นที่มีโอกาส breakout ต่อ
     </div></span>
   </div>
-  <div class="page-sub">RS สูง · ใกล้ 52W High · เหนือ EMA — Classic Growth Setup</div>
+  <div class="page-sub">รวม 52W High Watch · 52W Low Watch · Breakout Radar ไว้หน้าเดียว — เลือกด้านแล้วปรับ filter</div>
   <div class="filter-row" style="margin-bottom:8px">
-    <span style="font-size:11px;color:var(--text2);align-self:center;display:flex;align-items:center;gap:4px">
+    <span style="font-size:11px;color:var(--text2);align-self:center">ด้าน:</span>
+    <button class="filter-btn active" id="bo-side-high" onclick="setBO('side','high',this)">🔼 ใกล้ High</button>
+    <button class="filter-btn" id="bo-side-low" onclick="setBO('side','low',this)" title="หุ้นใกล้จุดต่ำสุด 52 สัปดาห์ — Reversal &amp; Recovery Watch (ใช้ RS/EMA filter ร่วมได้ เช่น RS สูง+ใกล้ Low = หา false breakdown)">🔽 ใกล้ Low</button>
+    <span style="margin-left:16px;font-size:11px;color:var(--text2);align-self:center;display:flex;align-items:center;gap:4px">
       RS ≥
       <span class="scr-tip-icon">?<div class="scr-tip-box">
         <strong>RS Score (Relative Strength)</strong><br>
@@ -661,11 +662,12 @@
         <span style="color:#e3b341">≥ 70</span> = Top 30%
       </div></span>
     </span>
+    <button class="filter-btn" id="bo-rs-0" onclick="setBO('rs',0,this)">ไม่กรอง</button>
     <button class="filter-btn active" id="bo-rs-70" onclick="setBO('rs',70,this)">70</button>
     <button class="filter-btn" id="bo-rs-80" onclick="setBO('rs',80,this)">80</button>
     <button class="filter-btn" id="bo-rs-90" onclick="setBO('rs',90,this)">90</button>
     <span style="margin-left:16px;font-size:11px;color:var(--text2);align-self:center;display:flex;align-items:center;gap:4px">
-      ห่าง High ≤
+      ห่าง H/L ≤
       <span class="scr-tip-icon">?<div class="scr-tip-box">
         <strong>% ห่างจาก 52W High</strong><br>
         ราคาปัจจุบันห่างจากจุดสูงสุดใน 52 สัปดาห์กี่ %<br><br>
@@ -675,9 +677,10 @@
         "NEW HIGH" = ทำราคาสูงสุดใหม่วันนี้
       </div></span>
     </span>
-    <button class="filter-btn active" id="bo-d-10" onclick="setBO('dist',10,this)">10%</button>
     <button class="filter-btn" id="bo-d-5" onclick="setBO('dist',5,this)">5%</button>
+    <button class="filter-btn active" id="bo-d-10" onclick="setBO('dist',10,this)">10%</button>
     <button class="filter-btn" id="bo-d-20" onclick="setBO('dist',20,this)">20%</button>
+    <button class="filter-btn" id="bo-d-100" onclick="setBO('dist',100,this)">ทั้งหมด</button>
     <span style="margin-left:16px;font-size:11px;color:var(--text2);align-self:center;display:flex;align-items:center;gap:4px">
       EMA
       <span class="scr-tip-icon">?<div class="scr-tip-box">
@@ -1226,99 +1229,6 @@
     </div>
   </div>
   <div id="screener-results"><div class="empty">กำหนดเงื่อนไขแล้วกด ค้นหา</div></div>
-</div>
-
-<!-- PAGE: 52W HIGH -->
-<div id="page-52w" class="page">
-  <div class="page-title">52-Week High Watch
-    <span class="scr-tip-icon" style="font-size:11px;width:17px;height:17px;margin-left:8px;vertical-align:middle">?<div class="scr-tip-box" style="width:260px">
-      <strong>52-Week High Watch คืออะไร?</strong><br>
-      หุ้นที่ราคาอยู่ใกล้จุดสูงสุดใน 52 สัปดาห์ — สัญญาณ Breakout<br><br>
-      <span style="color:#3fb950">NEW HIGH</span> = ทำราคาสูงสุดใหม่วันนี้<br>
-      <span style="color:#58a6ff">ใกล้ High ≤ 5%</span> = High Tight Zone พร้อม Breakout<br>
-      <span style="color:#e3b341">ใกล้ High ≤ 10%</span> = Consolidation Zone<br><br>
-      <strong>Range Position</strong> = ตำแหน่งราคาใน 52W Range<br>
-      100% = อยู่ที่ High · 0% = อยู่ที่ Low
-    </div></span>
-  </div>
-  <div class="page-sub">หุ้นที่ราคาใกล้จุดสูงสุด 52 สัปดาห์ — Breakout Candidates</div>
-  <div class="filter-row" style="margin-bottom:8px">
-    <span style="font-size:11px;color:var(--text2);align-self:center;display:flex;align-items:center;gap:4px">ห่าง High ≤
-      <span class="scr-tip-icon">?<div class="scr-tip-box">
-        <strong>กรองตาม % ห่างจาก 52W High</strong><br>
-        Top 5% = หุ้นที่อยู่ห่างจาก 52W High ไม่เกิน 5%<br>
-        Top 10% = ไม่เกิน 10% · Top 20% = ไม่เกิน 20%<br><br>
-        ยิ่งใกล้ High = โอกาส Breakout สูงขึ้น แต่จำนวนหุ้นน้อยลง
-      </div></span>
-    </span>
-    <button class="filter-btn active" onclick="set52WFilter(5,this)">Top 5%</button>
-    <button class="filter-btn" onclick="set52WFilter(10,this)">Top 10%</button>
-    <button class="filter-btn" onclick="set52WFilter(20,this)">Top 20%</button>
-    <button class="filter-btn" onclick="set52WFilter(100,this)">ทั้งหมด</button>
-    <span style="margin-left:16px;font-size:11px;color:var(--text2);align-self:center;display:flex;align-items:center;gap:4px">เรียงโดย:
-      <span class="scr-tip-icon">?<div class="scr-tip-box">
-        <strong>ลำดับการแสดงผล</strong><br>
-        <strong>% จาก High</strong> = เรียงจากใกล้ 52W High มากที่สุดก่อน<br>
-        <strong>RS สูง ↑</strong> = หุ้นที่แข็งแกร่งที่สุดก่อน (เหมาะหา Leader)<br>
-        <strong>RS ต่ำ ↓</strong> = หุ้นที่อ่อนแอกว่า แต่ใกล้ High (Late movers)
-      </div></span>
-    </span>
-    <button class="filter-btn active" id="52w-sort-high" onclick="set52WSort('fromHigh',this)">% จาก High</button>
-    <button class="filter-btn" id="52w-sort-rs-desc" onclick="set52WSort('rs_desc',this)">RS สูง ↑</button>
-    <button class="filter-btn" id="52w-sort-rs-asc" onclick="set52WSort('rs_asc',this)">RS ต่ำ ↓</button>
-  </div>
-  <div class="card">
-    <div id="52w-count" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
-    <table class="tbl">
-      <thead><tr>
-        <th>RS</th><th>Symbol</th><th>ชื่อ</th><th class="r">ราคา</th>
-        <th class="r">52W High</th><th class="r">% จาก High</th>
-        <th>Range Position</th>
-        <th class="r">1M%</th><th class="r">3M%</th>
-        <th class="r">EMA50</th><th class="r">EMA200</th>
-      </tr></thead>
-      <tbody id="52w-tbody"></tbody>
-    </table>
-  </div>
-</div>
-
-<!-- PAGE: 52-WEEK LOW WATCH -->
-<div id="page-52w-low" class="page">
-  <div class="page-title">52-Week Low Watch
-    <span class="scr-tip-icon" style="font-size:11px;width:17px;height:17px;margin-left:8px;vertical-align:middle">?<div class="scr-tip-box" style="width:280px">
-      <strong>52-Week Low Watch คืออะไร?</strong><br>
-      หุ้นที่ราคาอยู่ใกล้จุดต่ำสุดใน 52 สัปดาห์ — จุดสังเกตสัญญาณกลับตัว<br><br>
-      <span style="color:#f85149">① NEW LOW</span> — ทำราคาต่ำสุดใหม่ ระวัง Catch Falling Knife<br>
-      <span style="color:#e3b341">② ใกล้ Low ≤ 5%</span> — เขตอันตราย แต่อาจมี Bounce<br>
-      <span style="color:#8b949e">③ ห่าง Low ≤ 10–20%</span> — หุ้นที่เริ่ม Recovery แล้ว<br><br>
-      <strong>สัญญาณ Turnaround เบื้องต้น:</strong><br>
-      RS เริ่มดีขึ้น + 1D% / 1W% กลับมาเป็นบวก + Range Bar เริ่มขยับขึ้น
-    </div></span>
-  </div>
-  <div class="page-sub">หุ้นใกล้จุดต่ำสุด 52 สัปดาห์ — Reversal &amp; Recovery Watch</div>
-  <div class="filter-row" style="margin-bottom:8px">
-    <span style="font-size:11px;color:var(--text2);align-self:center;display:flex;align-items:center;gap:4px">
-      ห่าง 52W Low ≤
-      <span class="scr-tip-icon">?<div class="scr-tip-box">
-        <strong>% ห่างจาก 52W Low</strong><br>
-        ราคาปัจจุบันสูงกว่าจุดต่ำสุดใน 52 สัปดาห์กี่ %<br><br>
-        <span style="color:#f85149">0–2%</span> = ใกล้ / ทำ NEW LOW<br>
-        <span style="color:#e3b341">5%</span> = ยังอยู่ในเขตอันตราย<br>
-        <span style="color:#8b949e">10–20%</span> = เริ่มฟื้นตัวขึ้นมาบ้างแล้ว
-      </div></span>
-    </span>
-    <button class="filter-btn active" onclick="set52WLFilter(5,this)">5%</button>
-    <button class="filter-btn" onclick="set52WLFilter(10,this)">10%</button>
-    <button class="filter-btn" onclick="set52WLFilter(20,this)">20%</button>
-    <button class="filter-btn" onclick="set52WLFilter(100,this)">ทั้งหมด</button>
-  </div>
-  <div class="card">
-    <div id="52wl-count" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
-    <table class="tbl">
-      <thead id="52wl-thead"></thead>
-      <tbody id="52wl-tbody"></tbody>
-    </table>
-  </div>
 </div>
 
 <!-- PAGE: HEATMAP -->
