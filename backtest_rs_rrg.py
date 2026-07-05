@@ -64,8 +64,15 @@ def set_index_series():
         return None
 
 
-def run(close, vol, sec_of, use_rrg=True):
-    """คืน (dates, equity_curve, stats_dict)"""
+def breadth_pct200(close):
+    """% ของหุ้นที่ปิดเหนือ EMA200 ต่อวัน (ตรรกะเดียวกับ services/breadth.py)"""
+    ema200 = close.ewm(span=200, adjust=False).mean()
+    return (close > ema200).sum(axis=1) / close.notna().sum(axis=1) * 100
+
+
+def run(close, vol, sec_of, use_rrg=True, regime=None, regime_min=None):
+    """คืน (dates, equity_curve, stats_dict)
+    regime/regime_min: ถ้า breadth ณ วัน rebalance < regime_min -> ถือเงินสดงวดนั้น"""
     # ---- สัญญาณ (คำนวณจาก close ทั้ง DataFrame แบบ vectorized) ----
     r21  = close.pct_change(21,  fill_method=None)
     r63  = close.pct_change(63,  fill_method=None)
@@ -90,14 +97,20 @@ def run(close, vol, sec_of, use_rrg=True):
     per_period = []
     ffilled = close.ffill()
 
+    n_cash = 0
     for t in reb_idx:
         dt = dates[t]
-        row_rs, row_pct = rs_raw.iloc[t], rs_pct.iloc[t]
-        ok = (row_pct >= RS_MIN) & (close.iloc[t] >= PRICE_MIN) & (value20.iloc[t] >= VALUE_MIN)
-        if use_rrg:
-            mom = sec_mom.iloc[t]
-            ok &= sec_ser.map(lambda s: bool(mom.get(s, np.nan) > 0)).values
-        picks = row_rs[ok].nlargest(TOP_N).index.tolist()
+        # Regime filter: breadth ต่ำกว่าเกณฑ์ -> ถือเงินสดทั้งงวด
+        if regime is not None and regime_min is not None and regime.iloc[t] < regime_min:
+            picks = []
+            n_cash += 1
+        else:
+            row_rs, row_pct = rs_raw.iloc[t], rs_pct.iloc[t]
+            ok = (row_pct >= RS_MIN) & (close.iloc[t] >= PRICE_MIN) & (value20.iloc[t] >= VALUE_MIN)
+            if use_rrg:
+                mom = sec_mom.iloc[t]
+                ok &= sec_ser.map(lambda s: bool(mom.get(s, np.nan) > 0)).values
+            picks = row_rs[ok].nlargest(TOP_N).index.tolist()
 
         if picks:
             entry = ffilled.iloc[t + 1][picks]
@@ -126,6 +139,7 @@ def run(close, vol, sec_of, use_rrg=True):
         "win_rate": wins / len(per_period) if per_period else 0,
         "periods":  len(per_period),
         "avg_n":    np.mean([p["n"] for p in per_period]),
+        "n_cash":   n_cash,
         "per_period": per_period,
     }
 
@@ -137,10 +151,15 @@ def main():
           f"({close.index[0].date()} → {close.index[-1].date()})")
     sec_of = sector_map()
 
+    print("คำนวณ breadth %>EMA200 สำหรับ regime filter ...")
+    pct200 = breadth_pct200(close)
+
     print("รัน strategy RS>=90 + RRG sector filter ...")
     eq_rrg, s_rrg = run(close, vol, sec_of, use_rrg=True)
     print("รัน variant RS-only (ไม่มี RRG filter) ...")
     eq_rs, s_rs = run(close, vol, sec_of, use_rrg=False)
+    print("รัน variant RS+RRG + Regime (ถือเงินสดเมื่อ %>EMA200 < 30) ...")
+    eq_rg, s_rg = run(close, vol, sec_of, use_rrg=True, regime=pct200, regime_min=30)
 
     # ---- benchmarks ----
     win = eq_rrg.index
@@ -166,14 +185,21 @@ def main():
     print("\n" + "=" * 78)
     print(f"ผล Backtest {START_YEAR} → {win[-1].date()}  (rebalance ทุก {REB_BARS} วันทำการ)")
     print("=" * 78)
+    print(f"RS+RRG+Regime<30    : {fmt(eq_rg, s_rg)} | ถือเงินสด {s_rg['n_cash']} งวด")
     print(f"RS>=90 + RRG filter : {fmt(eq_rrg, s_rrg)}")
     print(f"RS>=90 อย่างเดียว    : {fmt(eq_rs, s_rs)}")
     for name, b in bench.items():
         print(f"{name:<19} : {fmt(b)}")
 
+    # sensitivity ของ regime threshold — ดูความทนทาน ไม่ใช่หาค่าที่สวยสุด
+    print("\nSensitivity ของ regime threshold (RS+RRG + ถือเงินสดเมื่อ breadth < X):")
+    for th in (25, 35, 40, 50):
+        e, s = run(close, vol, sec_of, use_rrg=True, regime=pct200, regime_min=th)
+        print(f"  X={th:>2}: {fmt(e, s)} | เงินสด {s['n_cash']} งวด")
+
     # รายปี
     print("\nผลตอบแทนรายปี (%):")
-    rows = {"RS+RRG": eq_rrg, "RS-only": eq_rs, **bench}
+    rows = {"RS+RRG+Rgm": eq_rg, "RS+RRG": eq_rrg, "RS-only": eq_rs, **bench}
     yr_table = {}
     for name, e in rows.items():
         yearly = e.resample("YE").last().pct_change(fill_method=None)
