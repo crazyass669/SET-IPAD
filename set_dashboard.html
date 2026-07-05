@@ -1686,19 +1686,81 @@
   <div class="rotation-grid" style="grid-template-columns:1fr 1fr 1fr;gap:12px">
     <div class="card" style="padding:10px 12px">
       <div style="font-size:12px;font-weight:700;margin-bottom:6px">👑 ถือครองสูงสุด <span style="font-weight:400;color:var(--text2);font-size:10px">(% ของหุ้นชำระแล้ว)</span></div>
-      <table class="tbl" style="font-size:11px"><tbody id="nvdr-top-hold">
+      <table class="tbl" style="font-size:11px">
+        <thead><tr>
+          <th class="r">#</th><th>หุ้น</th>
+          <th class="r">NVDR% <span class="scr-tip-icon" style="font-size:9px;width:14px;height:14px">?<div class="scr-tip-box" style="width:260px">
+            <strong>NVDR% ถือครอง</strong><br>
+            สัดส่วนหุ้นชำระแล้วทั้งหมดที่ต่างชาติถือผ่าน Thai NVDR<br><br>
+            <span style="color:#5ab4ff">≥ 20%</span> = สูงมาก — ต่างชาติเป็นผู้ถือหลัก มักเป็นหุ้นพื้นฐานดีที่กองทุนโลกถือ<br>
+            <span style="color:#7090d0">10–20%</span> = สูง — อยู่ในเรดาร์ต่างชาติ<br>
+            5–10% = มีนัยยะ<br><br>
+            <span style="color:#e3b341">นัยยะ:</span> หุ้น NVDR% สูงจะอ่อนไหวต่อ fund flow
+            ต่างชาติและค่าเงินบาทมากกว่าหุ้นทั่วไป — วันที่ต่างชาติขายหนัก
+            (ดูตาราง Capital Flow ข้างบน) หุ้นกลุ่มนี้มักโดนแรงขายก่อน
+          </div></span></th>
+          <th class="r">Δ ล่าสุด <span class="scr-tip-icon" style="font-size:9px;width:14px;height:14px">?<div class="scr-tip-box" style="width:250px">
+            <strong>การเปลี่ยนแปลงล่าสุด</strong><br>
+            NVDR% เพิ่ม/ลดเท่าไหร่ เทียบ snapshot ครั้งก่อน<br><br>
+            <span style="color:#3fb950">+ เขียว</span> = ต่างชาติซื้อสะสมเพิ่ม<br>
+            <span style="color:#f85149">− แดง</span> = ต่างชาติทยอยขายออก<br><br>
+            ใช้ดูว่า "เจ้าของหลัก" กำลังเพิ่มหรือลดสถานะ
+          </div></span></th>
+        </tr></thead>
+        <tbody id="nvdr-top-hold">
         <tr><td style="color:var(--text2);padding:10px">กำลังโหลด...</td></tr>
       </tbody></table>
     </div>
     <div class="card" style="padding:10px 12px">
       <div style="font-size:12px;font-weight:700;margin-bottom:6px">📥 ต่างชาติเข้าเพิ่ม <span style="font-weight:400;color:var(--text2);font-size:10px">(Δ NVDR% ล่าสุด)</span></div>
-      <table class="tbl" style="font-size:11px"><tbody id="nvdr-top-in">
+      <table class="tbl" style="font-size:11px">
+        <thead><tr>
+          <th class="r">#</th><th>หุ้น</th>
+          <th class="r">Δ NVDR% <span class="scr-tip-icon" style="font-size:9px;width:14px;height:14px">?<div class="scr-tip-box" style="width:270px">
+            <strong>Δ NVDR% + จำนวนหุ้น (M = ล้านหุ้น)</strong><br>
+            สัดส่วนที่ต่างชาติ<b>ซื้อเพิ่ม</b>เทียบ snapshot ก่อน
+            พร้อมจำนวนหุ้นสุทธิที่เพิ่มขึ้น<br><br>
+            <span style="color:#e3b341">นัยยะ:</span> นี่คือ "การสะสมจริง"
+            (จำนวนหุ้นที่ถือเพิ่มขึ้น) ไม่ใช่แค่ราคาขยับ — หุ้นที่ต่างชาติ
+            เก็บต่อเนื่องหลายวันติดมักนำหน้าราคา<br><br>
+            <span style="color:var(--text2)">Δ% เล็กในหุ้นใหญ่ = เม็ดเงินมหาศาล
+            ดูตัวเลข M หุ้น ประกอบเสมอ · การเปลี่ยนแรงผิดปกติอาจมาจาก
+            corporate action (เพิ่มทุน/แปลงหุ้น) ไม่ใช่การซื้อขายปกติ</span>
+          </div></span></th>
+          <th class="r">ถือรวม <span class="scr-tip-icon" style="font-size:9px;width:14px;height:14px">?<div class="scr-tip-box" style="width:230px">
+            <strong>NVDR% ถือครองรวมปัจจุบัน</strong><br>
+            บริบทของการซื้อครั้งนี้:<br><br>
+            ถือรวมยังต่ำ + เพิ่งเข้าเพิ่ม = ต่างชาติ<b>เริ่ม</b>สนใจ (early)<br>
+            ถือรวมสูงอยู่แล้ว + เข้าเพิ่ม = ยิ่งมั่นใจ เพิ่มน้ำหนักต่อ
+          </div></span></th>
+        </tr></thead>
+        <tbody id="nvdr-top-in">
         <tr><td style="color:var(--text2);padding:10px">กำลังโหลด...</td></tr>
       </tbody></table>
     </div>
     <div class="card" style="padding:10px 12px">
       <div style="font-size:12px;font-weight:700;margin-bottom:6px">📤 ต่างชาติขายออก <span style="font-weight:400;color:var(--text2);font-size:10px">(Δ NVDR% ล่าสุด)</span></div>
-      <table class="tbl" style="font-size:11px"><tbody id="nvdr-top-out">
+      <table class="tbl" style="font-size:11px">
+        <thead><tr>
+          <th class="r">#</th><th>หุ้น</th>
+          <th class="r">Δ NVDR% <span class="scr-tip-icon" style="font-size:9px;width:14px;height:14px">?<div class="scr-tip-box" style="width:270px">
+            <strong>Δ NVDR% + จำนวนหุ้น (M = ล้านหุ้น)</strong><br>
+            สัดส่วนที่ต่างชาติ<b>ขายออก</b>เทียบ snapshot ก่อน
+            พร้อมจำนวนหุ้นสุทธิที่ลดลง<br><br>
+            <span style="color:#e3b341">นัยยะ:</span> การลดสถานะจริงของต่างชาติ —
+            ถ้าขายต่อเนื่องหลายวันในหุ้นที่เคยถือสูง มักเป็นสัญญาณ
+            distribution ที่ควรระวัง โดยเฉพาะเมื่อราคายังไม่ลงตาม<br><br>
+            <span style="color:var(--text2)">เช็คข่าว corporate action ก่อนตีความ
+            การเปลี่ยนแปลงขนาดใหญ่ผิดปกติ</span>
+          </div></span></th>
+          <th class="r">ถือรวม <span class="scr-tip-icon" style="font-size:9px;width:14px;height:14px">?<div class="scr-tip-box" style="width:230px">
+            <strong>NVDR% ถือครองรวมปัจจุบัน</strong><br>
+            บริบทของการขายครั้งนี้:<br><br>
+            ถือรวมสูง + เพิ่งขายออก = แค่ลดน้ำหนัก ยังเป็นผู้ถือใหญ่<br>
+            ถือรวมต่ำ + ขายต่อเนื่อง = กำลัง<b>ออกจากหุ้น</b> (exit)
+          </div></span></th>
+        </tr></thead>
+        <tbody id="nvdr-top-out">
         <tr><td style="color:var(--text2);padding:10px">กำลังโหลด...</td></tr>
       </tbody></table>
     </div>
