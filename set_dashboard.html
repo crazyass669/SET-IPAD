@@ -636,17 +636,21 @@
 
 <!-- PAGE: BREAKOUT RADAR -->
 <div id="page-breakout" class="page">
-  <div class="page-title">Breakout Radar
-    <span class="scr-tip-icon" style="font-size:11px;width:17px;height:17px;margin-left:8px;vertical-align:middle">?<div class="scr-tip-box" style="width:260px">
-      <strong>Breakout Radar คืออะไร?</strong><br>
-      คัดกรองหุ้นที่มีคุณสมบัติครบ 3 อย่างพร้อมกัน:<br><br>
-      <span style="color:#58a6ff">① RS สูง</span> — แข็งแกร่งกว่าตลาด<br>
-      <span style="color:#3fb950">② ใกล้ 52W High</span> — ราคาอยู่ใกล้จุดสูงสุด พร้อม breakout<br>
-      <span style="color:#ffa657">③ เหนือ EMA</span> — อยู่ใน uptrend<br><br>
-      นี่คือ setup ที่ William O'Neil (CAN SLIM) และ growth investor ใช้ค้นหาหุ้นที่มีโอกาส breakout ต่อ
+  <div class="page-title">52W High/Low &amp; Breakout
+    <span class="scr-tip-icon" style="font-size:11px;width:17px;height:17px;margin-left:8px;vertical-align:middle">?<div class="scr-tip-box" style="width:320px">
+      <strong>หน้านี้รวม 3 มุมมองไว้ที่เดียว — สูตรเรียกแต่ละแบบ:</strong><br><br>
+      <span style="color:#3fb950">📈 Breakout Radar</span> <span style="color:var(--text2)">(ค่าเริ่มต้นตอนเปิดหน้า)</span><br>
+      🔼 ใกล้ High · RS ≥ 70 · ห่าง ≤ 10% · EMA50<br>
+      <span style="color:var(--text2)">setup แบบ CAN SLIM: RS สูง + ใกล้จุดสูงสุด + อยู่ใน uptrend</span><br><br>
+      <span style="color:#58a6ff">⛰️ 52W High Watch</span> <span style="color:var(--text2)">(ดูหุ้นใกล้ high ทั้งกระดาน)</span><br>
+      🔼 ใกล้ High · RS <b>ไม่กรอง</b> · EMA <b>ไม่กรอง</b> · ระยะตามต้องการ<br><br>
+      <span style="color:#f85149">🕳️ 52W Low Watch</span> <span style="color:var(--text2)">(เฝ้าหุ้นกลับตัว/หุ้นเสี่ยง)</span><br>
+      🔽 ใกล้ Low · RS ไม่กรอง · EMA ไม่กรอง<br><br>
+      <span style="color:#e3b341">💡 ทริค:</span> 🔽 ใกล้ Low + RS ≥ 70 = หุ้นแข็งแกร่งที่โดนลาก
+      ลงใกล้ low — false breakdown candidates น่าเฝ้าดูเป็นพิเศษ
     </div></span>
   </div>
-  <div class="page-sub">รวม 52W High Watch · 52W Low Watch · Breakout Radar ไว้หน้าเดียว — เลือกด้านแล้วปรับ filter</div>
+  <div class="page-sub">รวม 52W High Watch · 52W Low Watch · Breakout Radar ไว้หน้าเดียว — เลือกด้านแล้วปรับ filter (กดปุ่ม ? ข้างชื่อหน้าเพื่อดูสูตรเรียกแต่ละมุมมอง)</div>
   <div class="filter-row" style="margin-bottom:8px">
     <span style="font-size:11px;color:var(--text2);align-self:center">ด้าน:</span>
     <button class="filter-btn active" id="bo-side-high" onclick="setBO('side','high',this)">🔼 ใกล้ High</button>

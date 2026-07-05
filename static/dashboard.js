@@ -3448,7 +3448,11 @@ function setBO(type, val, btn) {
   if (type === 'dist') _boDist = val;
   if (type === 'ema')  _boEMA  = val;
   if (type === 'side') _boSide = val;
-  document.querySelectorAll(`#page-breakout .filter-btn[id^="bo-${type}"]`).forEach(b => b.classList.remove('active'));
+  // map type -> id prefix ของกลุ่มปุ่ม (dist ใช้ id "bo-d-*" ไม่ใช่ "bo-dist*"
+  // — บั๊กเดิม: prefix ไม่ match ทำให้สี active ของกลุ่มระยะไม่เคยถูกล้าง)
+  const prefix = { rs: 'bo-rs-', dist: 'bo-d-', ema: 'bo-ema-', side: 'bo-side-' }[type];
+  document.querySelectorAll(`#page-breakout .filter-btn[id^="${prefix}"]`)
+    .forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   renderBreakout();
 }
