@@ -212,6 +212,12 @@
   .spark { display: inline-block; width: 60px; height: 24px; vertical-align: middle; }
   .spark-canvas { display: block; }
 
+  /* NVDR RANKING — ตาราง 30 แถวใน scroll container หัวตาราง sticky */
+  .nvdr-scroll { max-height: 480px; overflow-y: auto; }
+  .nvdr-scroll thead th {
+    position: sticky; top: 0; background: var(--bg2); z-index: 2;
+  }
+
   /* MARKET REGIME LIGHT (nav) */
   .regime-wrap { position: relative; display: inline-block; margin-right: 8px; }
   #regime-light {

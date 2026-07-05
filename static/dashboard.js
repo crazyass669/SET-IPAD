@@ -8623,7 +8623,7 @@ async function renderNvdrRanking() {
     `<span style="font-size:10px;color:var(--text2)">${v >= 0 ? '+' : ''}${(v/1e6).toFixed(1)}M</span>`;
 
   // 1) ถือครองสูงสุด
-  elHold.innerHTML = [...rows].sort((a, b) => b.pct - a.pct).slice(0, 15).map((r, i) => `
+  elHold.innerHTML = [...rows].sort((a, b) => b.pct - a.pct).slice(0, 30).map((r, i) => `
     <tr><td class="r" style="color:var(--text2);width:22px">${i+1}</td>${symTd(r)}
         <td class="r" style="font-weight:700;color:${r.pct >= 20 ? '#5ab4ff' : r.pct >= 10 ? '#7090d0' : 'var(--text)'}">${r.pct.toFixed(2)}%</td>
         <td class="r">${dHtml(r)}</td></tr>`).join('');
@@ -8634,8 +8634,8 @@ async function renderNvdrRanking() {
     <tr><td class="r" style="color:var(--text2);width:22px">${i+1}</td>${symTd(r)}
         <td class="r">${dHtml(r)} ${shrHtml(r.dShr)}</td>
         <td class="r" style="color:var(--text2)">${r.pct.toFixed(2)}%</td></tr>`).join('');
-  const inn = withD.filter(r => r.dPct > 0).sort((a, b) => b.dPct - a.dPct).slice(0, 15);
-  const out = withD.filter(r => r.dPct < 0).sort((a, b) => a.dPct - b.dPct).slice(0, 15);
+  const inn = withD.filter(r => r.dPct > 0).sort((a, b) => b.dPct - a.dPct).slice(0, 30);
+  const out = withD.filter(r => r.dPct < 0).sort((a, b) => a.dPct - b.dPct).slice(0, 30);
   const empty = '<tr><td style="color:var(--muted);padding:10px;font-size:11px">ยังไม่มีข้อมูลเปลี่ยนแปลง — ต้องมี snapshot อย่างน้อย 2 ครั้ง (กด Quick Update วันถัดไป)</td></tr>';
   elIn.innerHTML  = inn.length ? mk(inn) : empty;
   elOut.innerHTML = out.length ? mk(out) : empty;
