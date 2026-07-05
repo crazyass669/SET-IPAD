@@ -212,6 +212,26 @@
   .spark { display: inline-block; width: 60px; height: 24px; vertical-align: middle; }
   .spark-canvas { display: block; }
 
+  /* MARKET REGIME LIGHT (nav) */
+  .regime-wrap { position: relative; display: inline-block; margin-right: 8px; }
+  #regime-light {
+    display: inline-block; padding: 3px 10px; border-radius: 12px;
+    font-size: 11px; font-weight: 700; cursor: pointer;
+    border: 1px solid transparent; vertical-align: middle;
+  }
+  .regime-on  { background: rgba(63,185,80,.15);  color: #3fb950; border-color: rgba(63,185,80,.4); }
+  .regime-mid { background: rgba(227,179,65,.15); color: #e3b341; border-color: rgba(227,179,65,.4); }
+  .regime-off { background: rgba(248,81,73,.15);  color: #f85149; border-color: rgba(248,81,73,.4); }
+  .regime-tip {
+    display: none; position: absolute; right: 0; top: calc(100% + 8px);
+    width: 330px; background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; font-size: 12px; line-height: 1.6;
+    z-index: 300; box-shadow: 0 8px 24px rgba(0,0,0,.5); text-align: left;
+    font-weight: 400; color: var(--text);
+  }
+  .regime-wrap:hover .regime-tip { display: block; }
+  .regime-tip a { color: var(--blue); }
+
   /* DATA QUALITY badges + banner */
   .dq-badge {
     display: inline-block; margin-left: 4px; padding: 0 4px;

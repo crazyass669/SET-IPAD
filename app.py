@@ -1455,6 +1455,14 @@ def stock_valuation_stats():
     })
 
 
+@app.route("/backtest-report")
+def backtest_report():
+    """รายงานผล backtest RS+RRG+Regime ฉบับเต็ม (static HTML)"""
+    resp = send_file(os.path.join(BASE_DIR, "backtest_report.html"))
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 @app.route("/api/rotation-alerts")
 def rotation_alerts():
     """Quadrant-change alerts ของ Rotation map — อ่านจาก rotation_state.json"""

@@ -66,6 +66,7 @@ async function loadData() {
     renderDqBanner();
     _rotAlertsData = null;   // ข้อมูลใหม่ -> ดึง rotation alerts ใหม่
     _breadthData   = null;   // ข้อมูลใหม่ -> ดึง breadth ใหม่
+    loadRegimeLight();       // ไฟ regime บน nav (async ไม่ block การ render)
     renderAll();
     initAlertSystem();
   } catch(e) {
@@ -3464,6 +3465,52 @@ function drawBreadthCharts() {
       ` — <span style="color:${cur >= 0 ? '#3fb950' : '#f85149'}">${cur}</span>` +
       ` · summation ${sum >= 0 ? '+' : ''}${sum}`;
   }
+}
+
+// ============================================================
+// MARKET REGIME LIGHT — ไฟ 3 โซนบน nav จาก % หุ้นเหนือ EMA200
+// (เกณฑ์โซนมาจากผล backtest — ดูรายละเอียดที่ /backtest-report)
+// ============================================================
+async function loadRegimeLight() {
+  const wrap  = document.getElementById('regime-wrap');
+  const light = document.getElementById('regime-light');
+  const tip   = document.getElementById('regime-tip');
+  if (!wrap || !light) return;
+  try {
+    if (!_breadthData) {
+      const r = await fetch('/api/breadth');
+      const d = await r.json();
+      if (d.error) return;
+      _breadthData = d;
+    }
+    const arr = _breadthData.pct_above_ema200;
+    const val = arr[arr.length - 1];
+    if (val == null) return;
+
+    let cls, icon, label, desc;
+    if (val >= 50)      { cls = 'regime-on';  icon = '🟢'; label = 'Risk-On';
+      desc = 'หุ้นเกินครึ่งตลาดอยู่เหนือ EMA200 — ช่วงที่สัญญาณ RS สูงทำงานได้ดีตามประวัติศาสตร์'; }
+    else if (val >= 30) { cls = 'regime-mid'; icon = '🟡'; label = 'Caution';
+      desc = 'โซน whipsaw (แบบปี 2024 ใน backtest) — ตลาดแกว่ง ระวังการเข้าออกถี่ พิจารณาลดขนาด position'; }
+    else                { cls = 'regime-off'; icon = '🔴'; label = 'Risk-Off';
+      desc = 'ทุก threshold ที่ backtest ทดสอบเห็นตรงกันว่าช่วงแบบนี้ (เช่น 2018–2019) การถือเงินสดคุ้มกว่า'; }
+
+    light.className = cls;
+    light.innerHTML = `${icon} ${label} <span style="opacity:.75">${val.toFixed(0)}%</span>`;
+    tip.innerHTML =
+      `<b>Market Regime: ${icon} ${label}</b><br>
+       <span style="color:var(--text2)">% หุ้นเหนือ EMA200 ทั้งตลาด = <b>${val.toFixed(1)}%</b></span><br><br>
+       ${desc}<br><br>
+       <span style="color:#3fb950">🟢 ≥ 50</span> Risk-On ·
+       <span style="color:#e3b341">🟡 30–50</span> Caution ·
+       <span style="color:#f85149">🔴 &lt; 30</span> Risk-Off<br><br>
+       <span style="color:var(--text2);font-size:11px">เกณฑ์มาจาก backtest RS+RRG 10.5 ปี (2016–2026) —
+       regime filter เปลี่ยนปี 2018/2019 จาก −36.6%/−25.3% เป็น +1.9%/+2.4%
+       แต่มีข้อจำกัดสำคัญ (survivorship bias ฯลฯ)</span><br>
+       <a href="/backtest-report" target="_blank" rel="noopener">📄 อ่านรายงาน backtest ฉบับเต็ม + ข้อจำกัด →</a><br>
+       <span style="color:var(--text2);font-size:10px">ข้อมูลบริบท ไม่ใช่คำแนะนำการลงทุน · คลิกที่ไฟเพื่อเปิดรายงาน</span>`;
+    wrap.style.display = 'inline-block';
+  } catch (e) { /* เงียบ — ไฟไม่ขึ้นแต่ dashboard ทำงานปกติ */ }
 }
 
 function renderEMABreadth() {

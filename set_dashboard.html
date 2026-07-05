@@ -50,6 +50,11 @@
   <button class="nav-btn" onclick="showPage('short',this)" title="Short Sales — ข้อมูลการขายชอร์ตรายหุ้น, Squeeze Radar">Short</button>
   <button class="nav-btn" onclick="showPage('financials',this)">งบการเงิน</button>
   <div class="nav-right">
+    <!-- Market Regime Light — % หุ้นเหนือ EMA200 (3 โซนจากผล backtest) -->
+    <span class="regime-wrap" id="regime-wrap" style="display:none">
+      <span id="regime-light" onclick="window.open('/backtest-report','_blank')"></span>
+      <div class="regime-tip" id="regime-tip"></div>
+    </span>
     <button id="alert-bell-btn" title="ตั้งแจ้งเตือนราคาหุ้น" onclick="toggleAlertPanel()">
       🔔<span id="alert-badge"></span>
     </button>
