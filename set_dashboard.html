@@ -1347,6 +1347,38 @@
     </div></span>
   </div>
   <div class="page-sub">% หุ้นที่อยู่เหนือ EMA แต่ละเส้น — วัด trend strength แต่ละ sector</div>
+  <!-- Market Breadth Indicators (ทั้งตลาด ย้อนหลัง 1 ปี) -->
+  <div class="rotation-grid" style="grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">
+    <div class="card" style="padding:12px 14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">% หุ้นเหนือ EMA
+        <span id="bc-ema-now" style="font-weight:400;color:var(--text2);font-size:11px"></span>
+      </div>
+      <div id="bc-ema-loading" style="color:var(--text2);font-size:11px">กำลังโหลด...</div>
+      <canvas id="bc-ema" style="display:none;width:100%;height:130px"></canvas>
+    </div>
+    <div class="card" style="padding:12px 14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">52W New High − New Low
+        <span id="bc-nhnl-now" style="font-weight:400;color:var(--text2);font-size:11px"></span>
+      </div>
+      <div id="bc-nhnl-loading" style="color:var(--text2);font-size:11px">กำลังโหลด...</div>
+      <canvas id="bc-nhnl" style="display:none;width:100%;height:130px"></canvas>
+    </div>
+    <div class="card" style="padding:12px 14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">McClellan Oscillator
+        <span class="scr-tip-icon" style="font-size:10px;width:15px;height:15px;margin-left:4px;vertical-align:middle">?<div class="scr-tip-box" style="width:250px">
+          EMA19 − EMA39 ของ ratio-adjusted net advances<br>
+          (1000×(ขึ้น−ลง)/(ขึ้น+ลง))<br><br>
+          <span style="color:#3fb950">&gt; 0</span> = breadth เป็นบวก (หุ้นส่วนใหญ่หนุนตลาด)<br>
+          <span style="color:#f85149">&lt; 0</span> = breadth เป็นลบ<br>
+          ±70 ขึ้นไป = overbought/oversold โซนกลับตัว
+        </div></span>
+        <span id="bc-mcc-now" style="font-weight:400;color:var(--text2);font-size:11px"></span>
+      </div>
+      <div id="bc-mcc-loading" style="color:var(--text2);font-size:11px">กำลังโหลด...</div>
+      <canvas id="bc-mcc" style="display:none;width:100%;height:130px"></canvas>
+    </div>
+  </div>
+
   <div class="filter-row" style="margin-bottom:12px">
     <button class="filter-btn active" onclick="setEMABreadthView('sector',this)">Sector</button>
     <button class="filter-btn" onclick="setEMABreadthView('industry',this)">Industry Group</button>

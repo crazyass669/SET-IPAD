@@ -1479,6 +1479,26 @@ def rotation_alerts():
     })
 
 
+_breadth_cache: dict = {}
+
+@app.route("/api/breadth")
+def market_breadth():
+    """Market Breadth รายวันย้อนหลัง 1 ปี (% above EMA, NH/NL, McClellan)
+    คำนวณครั้งเดียว ~3 วิ แล้ว cache ใน memory — clear หลัง refresh"""
+    if _breadth_cache.get("data"):
+        return jsonify(_breadth_cache["data"])
+    try:
+        from services.breadth import compute_breadth
+        data = compute_breadth(BASE_DIR)
+        if not data:
+            return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณา Full Refresh ก่อน"}), 404
+        _breadth_cache["data"] = data
+        return jsonify(data)
+    except Exception as e:
+        print(f"[Breadth] {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
+
+
 _market_internals_cache: dict = {}
 
 @app.route("/api/market-internals")
@@ -1566,6 +1586,7 @@ def _run_quick():
 
         _refresh_svc.run_quick_update(cb, BASE_DIR)
         _market_internals_cache.clear()
+        _breadth_cache.clear()
         _insider_cache.clear()
         _major_cache.clear()
 

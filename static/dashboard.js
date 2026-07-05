@@ -65,6 +65,7 @@ async function loadData() {
     renderSavedPresets();
     renderDqBanner();
     _rotAlertsData = null;   // ข้อมูลใหม่ -> ดึง rotation alerts ใหม่
+    _breadthData   = null;   // ข้อมูลใหม่ -> ดึง breadth ใหม่
     renderAll();
     initAlertSystem();
   } catch(e) {
@@ -3217,8 +3218,137 @@ function setEMABreadthView(v, btn) {
   renderEMABreadth();
 }
 
+// ============================================================
+// MARKET BREADTH CHARTS — % above EMA / NH-NL / McClellan (1 ปี)
+// ============================================================
+let _breadthData = null;
+let _breadthLoading = false;
+
+async function loadBreadthCharts() {
+  if (_breadthData) { drawBreadthCharts(); return; }
+  if (_breadthLoading) return;
+  _breadthLoading = true;
+  try {
+    const r = await fetch('/api/breadth');
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    _breadthData = d;
+    drawBreadthCharts();
+  } catch (e) {
+    ['bc-ema', 'bc-nhnl', 'bc-mcc'].forEach(id => {
+      const el = document.getElementById(id + '-loading');
+      if (el) el.textContent = 'โหลดไม่สำเร็จ: ' + e.message;
+    });
+  } finally {
+    _breadthLoading = false;
+  }
+}
+
+function _bcSetup(id) {
+  const loading = document.getElementById(id + '-loading');
+  const canvas  = document.getElementById(id);
+  if (!canvas) return null;
+  if (loading) loading.style.display = 'none';
+  canvas.style.display = 'block';
+  const W = canvas.offsetWidth || 300, H = 130;
+  canvas.width = W; canvas.height = H;
+  return { canvas, ctx: canvas.getContext('2d'), W, H,
+           pad: { l: 34, r: 6, t: 6, b: 18 } };
+}
+
+function _bcAxes(c, yMin, yMax, dates, refs) {
+  const { ctx, W, H, pad } = c;
+  const cH = H - pad.t - pad.b;
+  const toY = v => pad.t + (1 - (v - yMin) / (yMax - yMin)) * cH;
+  ctx.font = '9px sans-serif'; ctx.fillStyle = '#8b949e';
+  (refs || []).forEach(rv => {
+    const y = toY(rv);
+    ctx.strokeStyle = 'rgba(139,148,158,.25)'; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.textAlign = 'right'; ctx.fillText(String(rv), pad.l - 4, y + 3);
+  });
+  // label เดือนคร่าวๆ 4 จุด
+  ctx.textAlign = 'center';
+  for (let i = 0; i < 4; i++) {
+    const idx = Math.floor(i * (dates.length - 1) / 3);
+    const x = pad.l + idx / (dates.length - 1) * (W - pad.l - pad.r);
+    ctx.fillText(dates[idx].slice(5, 7) + '/' + dates[idx].slice(2, 4), x, H - 5);
+  }
+  return toY;
+}
+
+function _bcLine(c, data, toY, color) {
+  const { ctx, W, pad } = c;
+  const cW = W - pad.l - pad.r;
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath();
+  let started = false;
+  data.forEach((v, i) => {
+    if (v == null) return;
+    const x = pad.l + i / (data.length - 1) * cW, y = toY(v);
+    started ? ctx.lineTo(x, y) : ctx.moveTo(x, y); started = true;
+  });
+  ctx.stroke();
+}
+
+function _bcBars(c, data, toY, zero) {
+  const { ctx, W, pad } = c;
+  const cW = W - pad.l - pad.r, y0 = toY(zero);
+  const bw = Math.max(1, cW / data.length - 0.5);
+  data.forEach((v, i) => {
+    if (v == null) return;
+    const x = pad.l + i / (data.length - 1) * cW;
+    ctx.fillStyle = v >= zero ? 'rgba(63,185,80,.75)' : 'rgba(248,81,73,.75)';
+    const y = toY(v);
+    ctx.fillRect(x, Math.min(y, y0), bw, Math.max(1, Math.abs(y - y0)));
+  });
+}
+
+function drawBreadthCharts() {
+  const d = _breadthData;
+  if (!d) return;
+  const n = d.dates.length;
+
+  // 1) % above EMA50/200
+  let c = _bcSetup('bc-ema');
+  if (c) {
+    const toY = _bcAxes(c, 0, 100, d.dates, [20, 50, 80]);
+    _bcLine(c, d.pct_above_ema50,  toY, '#e3b341');
+    _bcLine(c, d.pct_above_ema200, toY, '#3fb950');
+    document.getElementById('bc-ema-now').innerHTML =
+      ` — <span style="color:#e3b341">EMA50: ${d.pct_above_ema50[n-1]}%</span> · ` +
+      `<span style="color:#3fb950">EMA200: ${d.pct_above_ema200[n-1]}%</span>`;
+  }
+
+  // 2) NH - NL net bars
+  c = _bcSetup('bc-nhnl');
+  if (c) {
+    const net = d.nh.map((h, i) => h - d.nl[i]);
+    const m = Math.max(...net.map(Math.abs), 5);
+    const toY = _bcAxes(c, -m, m, d.dates, [0]);
+    _bcBars(c, net, toY, 0);
+    const r = d.nhnl_ratio[n-1];
+    document.getElementById('bc-nhnl-now').textContent =
+      ` — NH ${d.nh[n-1]} / NL ${d.nl[n-1]}` + (r != null ? ` (ratio ${r})` : '');
+  }
+
+  // 3) McClellan Oscillator
+  c = _bcSetup('bc-mcc');
+  if (c) {
+    const osc = d.mcclellan_osc;
+    const m = Math.max(...osc.filter(v => v != null).map(Math.abs), 50);
+    const toY = _bcAxes(c, -m, m, d.dates, [-70, 0, 70]);
+    _bcBars(c, osc, toY, 0);
+    const cur = osc[n-1], sum = d.mcclellan_sum[n-1];
+    document.getElementById('bc-mcc-now').innerHTML =
+      ` — <span style="color:${cur >= 0 ? '#3fb950' : '#f85149'}">${cur}</span>` +
+      ` · summation ${sum >= 0 ? '+' : ''}${sum}`;
+  }
+}
+
 function renderEMABreadth() {
   if (!DATA) return;
+  loadBreadthCharts();
   const key = emaBreadthView;
   const groups = {};
   DATA.stocks.forEach(s => {
