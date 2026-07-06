@@ -3278,7 +3278,10 @@ function setBreadthRange(range, btn) {
 }
 
 async function loadBreadthCharts() {
-  const cached = _breadthCacheByRange[_breadthRange];
+  // จับ range ณ ตอนเริ่ม fetch — กัน race: ถ้า user สลับปุ่มระหว่างโหลด
+  // ข้อมูลเก่าต้องเก็บลง cache ใต้ key ที่ขอจริง ไม่ใช่ key ปัจจุบัน
+  const rng = _breadthRange;
+  const cached = _breadthCacheByRange[rng];
   if (cached) { _breadthData = cached; drawBreadthCharts(); return; }
   if (_breadthLoading) return;
   _breadthLoading = true;
@@ -3289,12 +3292,14 @@ async function loadBreadthCharts() {
     if (canvas)  canvas.style.display = 'none';
   });
   try {
-    const r = await fetch('/api/breadth?range=' + encodeURIComponent(_breadthRange));
+    const r = await fetch('/api/breadth?range=' + encodeURIComponent(rng));
     const d = await r.json();
     if (d.error) throw new Error(d.error);
-    _breadthCacheByRange[_breadthRange] = d;
-    _breadthData = d;
-    drawBreadthCharts();
+    _breadthCacheByRange[rng] = d;
+    if (rng === _breadthRange) {   // user ยังอยู่ range เดิม — วาดได้
+      _breadthData = d;
+      drawBreadthCharts();
+    }
   } catch (e) {
     ['bc-ema', 'bc-nhnl', 'bc-mcc'].forEach(id => {
       const el = document.getElementById(id + '-loading');
@@ -3302,6 +3307,8 @@ async function loadBreadthCharts() {
     });
   } finally {
     _breadthLoading = false;
+    // ถ้าระหว่างโหลด user สลับไป range อื่นที่ยังไม่มี cache — โหลดต่อให้เลย
+    if (_breadthRange !== rng && !_breadthCacheByRange[_breadthRange]) loadBreadthCharts();
   }
 }
 
