@@ -3,7 +3,8 @@ name: Update SET Data (static)
 on:
   schedule:
     - cron: '30 11 * * 1-5'   # 18:30 ICT (11:30 UTC) จันทร์–ศุกร์ หลังตลาดปิด
-    - cron: '0 23 * * 0-4'    # 06:00 ICT จันทร์–ศุกร์ (23:00 UTC คืนก่อน)
+    - cron: '10 6 * * 1-5'    # 13:10 ICT (06:10 UTC) จันทร์–ศุกร์ หลังตลาดปิดช่วงเช้า
+    - cron: '0 23 * * *'      # 06:00 ICT ทุกวัน (23:00 UTC คืนก่อน)
   workflow_dispatch:            # กดรันมือได้จาก GitHub UI
 
 concurrency:
