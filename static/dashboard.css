@@ -171,6 +171,7 @@
   .static-mode #spop-btn-fin,
   .static-mode #cm-tf-5y,
   .static-mode .nav-btn[onclick*="'financials'"],
+  .static-mode .nav-btn[onclick*="'band'"],
   .static-mode #pe-reminder-modal { display: none !important; }
 
   /* SORT HEADER */
