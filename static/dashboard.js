@@ -17,6 +17,59 @@ let stockSearch = "";
 let dqOnlyFilter = false;
 
 // ============================================================
+// STATIC MODE — รันบน GitHub Pages (ไม่มี Flask server)
+// ข้อมูลทั้งหมดถูก precompute เป็นไฟล์ใน data/ โดย GitHub Actions
+// (ดู run_static_update.py) — override fetch ให้ /api/* ชี้ไปไฟล์ static
+// ============================================================
+const IS_STATIC = location.hostname.endsWith('github.io')
+  || location.protocol === 'file:'
+  || new URLSearchParams(location.search).has('static');
+
+if (IS_STATIC) {
+  document.addEventListener('DOMContentLoaded', () => document.body.classList.add('static-mode'));
+
+  const STATIC_MAP = {
+    '/api/data':                  'data/set_data.json',
+    '/api/indices':               'data/indices_data.json',
+    '/api/dr':                    'data/dr_data.json',
+    '/api/nvdr':                  'data/nvdr_data.json',
+    '/api/short-sales':           'data/short_sales.json',
+    '/api/market-stats':          'data/market_stats.json',
+    '/api/market-stats-meta':     'data/market_stats_meta.json',
+    '/api/market-flow':           'data/market_flow.json',
+    '/api/market-internals':      'data/market_internals.json',
+    '/api/rotation-alerts':       'data/rotation_alerts.json',
+    '/api/stock-valuation-stats': 'data/stock_valuation_stats.json',
+    '/api/insider-trades':        'data/insider_trades.json',
+    '/api/major-changes':         'data/major_changes.json',
+    '/api/prices':                'data/prices.json',
+  };
+
+  function _staticURL(url) {
+    const [path, query] = url.split('?');
+    if (path === '/api/breadth') {
+      const m = /range=(\w+)/.exec(query || '');
+      return `data/breadth_${m ? m[1] : '1y'}.json`;
+    }
+    return STATIC_MAP[path] || null;
+  }
+
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = function (url, opts) {
+    if (typeof url !== 'string' || !url.startsWith('/api/')) return _origFetch(url, opts);
+    const mapped = _staticURL(url);
+    if (mapped) return _origFetch(mapped);
+    if (url.startsWith('/api/status')) {
+      return Promise.resolve(new Response('{"running":false}', { headers: { 'Content-Type': 'application/json' } }));
+    }
+    // endpoint ที่ต้องมี server จริง (quick-update, history ยาว, งบการเงินสด ฯลฯ)
+    return Promise.resolve(new Response(
+      '{"error":"ฟีเจอร์นี้ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง (Flask) — เวอร์ชันเว็บอัปเดตข้อมูลอัตโนมัติวันละ 2 รอบ"}',
+      { status: 404, headers: { 'Content-Type': 'application/json' } }));
+  };
+}
+
+// ============================================================
 // LOAD DATA — ดึงจาก Flask /api/data
 // ============================================================
 async function loadData() {
@@ -2883,6 +2936,7 @@ function _todayStr() {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 async function checkPeReminder() {
+  if (IS_STATIC) return; // เวอร์ชันเว็บอัปเดตอัตโนมัติ ไม่ต้องเตือนวางไฟล์
   const now = new Date();
   if (now.getDate() < 5) return;
   const todayStr = _todayStr();

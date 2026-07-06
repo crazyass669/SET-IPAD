@@ -1268,6 +1268,16 @@ def market_stats():
         return jsonify(json.load(f))
 
 
+@app.route("/api/market-stats-meta")
+def market_stats_meta():
+    """วันที่ล่าสุดที่กดอัปเดต P/E & P/BV — ใช้เช็คฝั่ง UI ว่าควร pop-up เตือนหรือยัง"""
+    if not os.path.exists(_MARKET_STATS_FILE):
+        return jsonify({"updated_at": None})
+    from datetime import datetime as _dt
+    mtime = os.path.getmtime(_MARKET_STATS_FILE)
+    return jsonify({"updated_at": _dt.fromtimestamp(mtime).strftime("%Y-%m-%d")})
+
+
 @app.route("/api/refresh-market-stats", methods=["POST"])
 def refresh_market_stats():
     """อ่าน Table_PE.xls + Table_PBV.xls แล้วสร้าง set_market_stats.json ใหม่"""

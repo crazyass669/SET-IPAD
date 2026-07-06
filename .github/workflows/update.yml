@@ -1,0 +1,58 @@
+name: Update SET Data (static)
+
+on:
+  schedule:
+    - cron: '30 11 * * 1-5'   # 18:30 ICT (11:30 UTC) จันทร์–ศุกร์ หลังตลาดปิด
+    - cron: '0 23 * * 0-4'    # 06:00 ICT จันทร์–ศุกร์ (23:00 UTC คืนก่อน)
+  workflow_dispatch:            # กดรันมือได้จาก GitHub UI
+
+concurrency:
+  group: update-set-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # SQLite price store (~130MB) — cache ระหว่างรันเพื่อให้เป็น quick update
+      # (ไม่มี cache = full refresh 10 ปี ~30-60 นาที)
+      - name: Restore price store cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            set_prices.db
+            set_data.json
+            dr_cache.json
+          key: set-prices-${{ github.run_id }}
+          restore-keys: set-prices-
+
+      - name: Run static update
+        run: python run_static_update.py
+
+      - name: Commit updated data
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "ไม่มีข้อมูลใหม่ — ข้าม commit"
+            exit 0
+          fi
+          git commit -m "data: auto-update $(date -u '+%Y-%m-%d %H:%M') UTC"
+          git pull --rebase origin main || true
+          git push origin HEAD:main

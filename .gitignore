@@ -44,3 +44,7 @@ rotation_state.json
 
 # Logs
 logs/
+
+# static web data (สร้าง+commit โดย GitHub Actions — ห้าม ignore)
+!data/
+!data/**

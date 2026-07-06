@@ -159,6 +159,19 @@
     font-family: var(--font); transition: all .15s;
   }
   .filter-btn:hover, .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .dr-region-count-badge { opacity: .65; font-size: 10px; }
+  .dr-region-count-badge:empty { display: none; }
+
+  /* STATIC MODE (GitHub Pages) — ซ่อนปุ่ม/ฟีเจอร์ที่ต้องมี Flask server */
+  .static-mode #quick-update-btn,
+  .static-mode #refresh-btn,
+  .static-mode #val-refresh-btn,
+  .static-mode #dr-quick-btn,
+  .static-mode #cm-mode-fin,
+  .static-mode #spop-btn-fin,
+  .static-mode #cm-tf-5y,
+  .static-mode .nav-btn[onclick*="'financials'"],
+  .static-mode #pe-reminder-modal { display: none !important; }
 
   /* SORT HEADER */
   .tbl th.sortable { cursor: pointer; user-select: none; }
