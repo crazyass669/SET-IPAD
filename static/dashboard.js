@@ -1918,7 +1918,7 @@ function _rankSpark(seq, total) {
   // จุดที่เป็น null (ข้อมูลไม่พอ) ถูกข้าม — ต้องเหลืออย่างน้อย 3 จุดถึงวาด
   const vals = seq.filter(v => v != null);
   if (vals.length < 3) return '<span style="color:var(--text2)">—</span>';
-  const W = 130, H = 24, span = Math.max(total - 1, 1);
+  const W = 240, H = 26, span = Math.max(total - 1, 1);
   const pts = vals.map((v, i) => [
     2 + (i / (vals.length - 1)) * W,
     2 + ((v - 1) / span) * (H - 4),
