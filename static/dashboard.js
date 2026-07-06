@@ -1650,6 +1650,34 @@ function drawRotationScatter(sectors) {
     const hit = points.find(p => Math.hypot(p.x-mx, p.y-my) <= p.R + 4);
     if (hit) openSectorModal(hit.name);
   };
+
+  // Touch (ไอแพด/มือถือ): ไม่มี "hover" จริงบนจอสัมผัส ทำให้ onmousemove
+  // ข้างบนไม่ทำงาน -> ใช้ pointerdown แยกเฉพาะ pointerType==='touch' เท่านั้น
+  // (เมาส์/ปากกายังใช้ onmousemove/onclick เดิมทุกอย่างไม่เปลี่ยน)
+  // แตะครั้งแรก = โชว์ tooltip ค้างไว้ (preview เหมือน hover), แตะจุดเดิม
+  // ซ้ำอีกที = เปิดหน้ารายละเอียด กันเปิดหน้าเพี้ยนทั้งที่แค่อยากดูตัวเลข
+  let _touchPreview = null;
+  canvas.addEventListener('pointerdown', function(e) {
+    if (e.pointerType !== 'touch') return;
+    e.preventDefault();
+    const r2 = canvas.getBoundingClientRect();
+    const scaleX = (W*dpr)/r2.width/dpr, scaleY = (H*dpr)/r2.height/dpr;
+    const mx = (e.clientX-r2.left)*scaleX, my = (e.clientY-r2.top)*scaleY;
+    // hit radius กว้างกว่าเมาส์ (+10 แทน +4) เพราะนิ้วไม่แม่นเท่าเคอร์เซอร์
+    const hit = points.find(p => Math.hypot(p.x-mx, p.y-my) <= p.R + 10);
+    if (!hit) {
+      _touchPreview = null;
+      redraw(pinnedSector); tooltipDiv.style.display = "none";
+      return;
+    }
+    if (_touchPreview === hit.name) {
+      openSectorModal(hit.name);
+      _touchPreview = null;
+    } else {
+      _touchPreview = hit.name;
+      redraw(hit.name); showTooltip(hit, e);
+    }
+  }, { passive: false });
 }
 
 
