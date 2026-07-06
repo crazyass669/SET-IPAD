@@ -753,4 +753,17 @@
   nav::-webkit-scrollbar { display: none; }  /* Chrome/Safari */
   .nav-brand, .nav-btn { flex-shrink: 0; white-space: nowrap; }
   .nav-right { flex-shrink: 0; }
+
+  /* Touch target: ปุ่ม nav ยืดเต็มความสูงแถบ (44px ตามเกณฑ์ Apple/Google)
+     แทนที่จะเป็นกล่องข้อความเล็กๆ ลอยอยู่กลางแถบ — พื้นที่แตะโดนได้
+     กว้างขึ้นทั้งแท่ง โดยไม่เปลี่ยนขนาดตัวหนังสือ/หน้าตาเดิมเลย */
+  nav { align-items: stretch; }
+  .nav-btn { display: flex; align-items: center; }
+
+  /* filter chip ต่างๆ (Screener, Rotation ฯลฯ): เพิ่ม padding + ระยะห่าง
+     พอประมาณให้แตะแม่นขึ้น — ไม่ดัน min-height ถึง 44px เต็มรูปแบบ
+     เพราะบาง filter-row มี 8-10 chip ในแถวเดียว จะบวมเทอะทะกว่าจะช่วย
+     (ให้ประโยชน์เชิงพื้นที่แตะแบบพอเหมาะ + เว้นช่องไฟกันแตะโดนชิดกัน) */
+  .filter-btn { padding: 8px 13px; }
+  .filter-row { gap: 10px; }
 }
