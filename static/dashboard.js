@@ -1913,23 +1913,26 @@ function _rankBadge(rank, total, pct) {
          `padding:1px 6px;border-radius:4px;font-weight:700;font-size:11px">#${rank}</span>${pctTxt}`;
 }
 
+// Heat strip: ช่องสี 5 ช่อง (1Y→1W) ตามโซนอันดับ — สีชุดเดียวกับ _rankBadge
+// เขียว = top 25%, เหลือง = 25-50%, ส้ม = 50-75%, แดง = bottom 25%
+const _TRAJ_LABELS = ['1Y', '6M', '3M', '1M', '1W'];
 function _rankSpark(seq, total) {
-  // seq เรียง 1Y -> 1W (ซ้ายไปขวา), rank 1 อยู่บนสุด -> เส้นขึ้น = อันดับดีขึ้น
-  // จุดที่เป็น null (ข้อมูลไม่พอ) ถูกข้าม — ต้องเหลืออย่างน้อย 3 จุดถึงวาด
-  const vals = seq.filter(v => v != null);
-  if (vals.length < 3) return '<span style="color:var(--text2)">—</span>';
-  const W = 240, H = 26, span = Math.max(total - 1, 1);
-  const pts = vals.map((v, i) => [
-    2 + (i / (vals.length - 1)) * W,
-    2 + ((v - 1) / span) * (H - 4),
-  ]);
-  const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
-  const improving = vals[vals.length - 1] < vals[0];
-  const color = improving ? '#3fb950' : '#f85149';
-  const last = pts[pts.length - 1];
-  return `<svg width="${W + 6}" height="${H + 2}" style="vertical-align:middle">` +
-         `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.5"/>` +
-         `<circle cx="${last[0]}" cy="${last[1]}" r="2.5" fill="${color}"/></svg>`;
+  if (seq.every(v => v == null)) return '<span style="color:var(--text2)">—</span>';
+  const cells = seq.map((v, i) => {
+    const lbl = _TRAJ_LABELS[i];
+    if (v == null) {
+      return `<span title="${lbl}: ไม่มีข้อมูล" style="flex:1;height:16px;border-radius:3px;` +
+             `background:rgba(255,255,255,0.05);border:1px solid var(--border)"></span>`;
+    }
+    const q = v / total;
+    const c = q <= 0.25 ? '#3fb950' : q <= 0.5 ? '#e3b341' : q <= 0.75 ? '#f0883e' : '#f85149';
+    // ช่องสุดท้าย (1W = ล่าสุด) แสดงเลขอันดับกำกับ — ช่องอื่นดูจาก hover
+    const num = i === seq.length - 1
+      ? `<span style="font-size:10px;font-weight:700;color:#0d1117">#${v}</span>` : '';
+    return `<span title="${lbl}: อันดับ ${v}/${total}" style="flex:1;height:16px;border-radius:3px;` +
+           `background:${c};display:inline-flex;align-items:center;justify-content:center">${num}</span>`;
+  }).join('');
+  return `<span style="display:inline-flex;gap:3px;width:230px;vertical-align:middle">${cells}</span>`;
 }
 
 function renderSectorRankTable() {
