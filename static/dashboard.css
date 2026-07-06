@@ -723,3 +723,21 @@
 #_vtip-popup .tip-zone-high  { color:#dca032; }
 #_vtip-popup .tip-zone-exp   { color:#dc503c; }
 #_vtip-popup hr { border:none;border-top:1px solid #2a3a4a;margin:7px 0; }
+
+/* ============================================================
+   MOBILE / TABLET (iPad, iPhone) — เฉพาะจอแคบ ≤768px เท่านั้น
+   ทุกกฎในนี้ override เฉพาะตอนจอแคบ ไม่แตะ layout desktop เลย
+   ============================================================ */
+@media (max-width: 768px) {
+  /* Nav bar: 21 ปุ่มล้นจอ -> ให้เลื่อนแนวนอนได้แบบ tab bar
+     (ปุ่มเดิม ข้อความเดิม ตำแหน่งเดิม แค่เพิ่ม scroll แทนการ wrap/ล้น) */
+  nav {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;         /* Firefox */
+  }
+  nav::-webkit-scrollbar { display: none; }  /* Chrome/Safari */
+  .nav-brand, .nav-btn { flex-shrink: 0; white-space: nowrap; }
+  .nav-right { flex-shrink: 0; }
+}
