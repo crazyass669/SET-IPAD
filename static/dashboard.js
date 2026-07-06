@@ -1914,19 +1914,22 @@ function _rankBadge(rank, total, pct) {
 }
 
 function _rankSpark(seq, total) {
-  // seq เรียง 1Y -> 1M (ซ้ายไปขวา), rank 1 อยู่บนสุด -> เส้นขึ้น = อันดับดีขึ้น
-  if (seq.some(v => v == null)) return '<span style="color:var(--text2)">—</span>';
-  const W = 56, H = 18, span = Math.max(total - 1, 1);
-  const pts = seq.map((v, i) => [
-    2 + (i / (seq.length - 1)) * W,
+  // seq เรียง 1Y -> 1W (ซ้ายไปขวา), rank 1 อยู่บนสุด -> เส้นขึ้น = อันดับดีขึ้น
+  // จุดที่เป็น null (ข้อมูลไม่พอ) ถูกข้าม — ต้องเหลืออย่างน้อย 3 จุดถึงวาด
+  const vals = seq.filter(v => v != null);
+  if (vals.length < 3) return '<span style="color:var(--text2)">—</span>';
+  const W = 130, H = 24, span = Math.max(total - 1, 1);
+  const pts = vals.map((v, i) => [
+    2 + (i / (vals.length - 1)) * W,
     2 + ((v - 1) / span) * (H - 4),
   ]);
   const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
-  const improving = seq[seq.length - 1] < seq[0];
+  const improving = vals[vals.length - 1] < vals[0];
   const color = improving ? '#3fb950' : '#f85149';
-  return `<svg width="${W + 4}" height="${H + 2}" style="vertical-align:middle">` +
+  const last = pts[pts.length - 1];
+  return `<svg width="${W + 6}" height="${H + 2}" style="vertical-align:middle">` +
          `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.5"/>` +
-         `<circle cx="${pts[3][0]}" cy="${pts[3][1]}" r="2" fill="${color}"/></svg>`;
+         `<circle cx="${last[0]}" cy="${last[1]}" r="2.5" fill="${color}"/></svg>`;
 }
 
 function renderSectorRankTable() {
@@ -1936,7 +1939,7 @@ function renderSectorRankTable() {
   const groups = [...(sectorView === 'sector' ? DATA.sectors : DATA.industries)];
 
   // จัดอันดับต่อ horizon (1 = return สูงสุด) — กลุ่มที่ค่าเป็น null ไม่ถูกจัด
-  const H = [['ret_1m', 'r1m'], ['ret_3m', 'r3m'], ['ret_6m', 'r6m'], ['ret_1y', 'r1y']];
+  const H = [['ret_1w', 'r1w'], ['ret_1m', 'r1m'], ['ret_3m', 'r3m'], ['ret_6m', 'r6m'], ['ret_1y', 'r1y']];
   const ranks = {}, totals = {};
   groups.forEach(g => ranks[g.name] = {});
   H.forEach(([f, k]) => {
@@ -1947,8 +1950,9 @@ function renderSectorRankTable() {
 
   const rows = groups.map(g => {
     const r = ranks[g.name];
-    const seq = [r.r1y, r.r6m, r.r3m, r.r1m];      // เรียงตาม trajectory ซ้าย->ขวา
-    const have = seq.filter(x => x != null);
+    const seq = [r.r1y, r.r6m, r.r3m, r.r1m, r.r1w];  // เรียงตาม trajectory ซ้าย->ขวา
+    // avg ใช้ 4 horizon เดิม (1M/3M/6M/1Y) — 1W มีไว้เพิ่มความละเอียดปลายเส้น spark เท่านั้น
+    const have = [r.r1y, r.r6m, r.r3m, r.r1m].filter(x => x != null);
     return {
       g, name: g.name,
       r1m: r.r1m ?? null, r3m: r.r3m ?? null, r6m: r.r6m ?? null, r1y: r.r1y ?? null,
