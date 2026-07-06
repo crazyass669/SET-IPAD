@@ -736,6 +736,19 @@
     overflow-y: hidden;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;         /* Firefox */
+
+    /* scroll-shadow technique (Lea Verou): เงาจางที่ขอบซ้าย/ขวา
+       โผล่เฉพาะตอนยังเลื่อนต่อได้ฝั่งนั้น — หายไปเองเมื่อเลื่อนสุดขอบ
+       ให้ผู้ใช้รู้ว่า "ยังมีเมนูซ่อนอยู่อีก" โดยไม่ต้องใช้ JS */
+    background:
+      linear-gradient(to right, var(--bg2) 50%, transparent) left,
+      linear-gradient(to left,  var(--bg2) 50%, transparent) right,
+      linear-gradient(to right, rgba(0,0,0,.5), transparent 70%) left,
+      linear-gradient(to left,  rgba(0,0,0,.5), transparent 70%) right;
+    background-repeat: no-repeat;
+    background-color: var(--bg2);
+    background-size: 24px 100%, 24px 100%, 12px 100%, 12px 100%;
+    background-attachment: local, local, scroll, scroll;
   }
   nav::-webkit-scrollbar { display: none; }  /* Chrome/Safari */
   .nav-brand, .nav-btn { flex-shrink: 0; white-space: nowrap; }
