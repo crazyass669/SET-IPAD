@@ -71,6 +71,7 @@ async function loadData() {
     loadRegimeLight();       // ไฟ regime บน nav (async ไม่ block การ render)
     renderAll();
     initAlertSystem();
+    checkPeReminder();
   } catch(e) {
     console.error("loadData error:", e);
     document.getElementById("updated-at").textContent = "ไม่สามารถโหลดข้อมูลได้: " + e.message;
@@ -2871,6 +2872,40 @@ function _rsi(arr, period=14) {
   }
   return al === 0 ? 100 : 100 - 100 / (1 + ag / al);
 }
+
+// ============================================================
+// MONTHLY REMINDER — เตือนอัปเดต P/E & P/BV (Table_PE.xls/Table_PBV.xls)
+// ตั้งแต่วันที่ 5 ของเดือน จนกว่าจะกดอัปเดตจริง (เช็คจาก mtime ของ set_market_stats.json)
+// เตือนสูงสุดวันละครั้งต่อ browser (ปิดแล้วเงียบจนถึงพรุ่งนี้)
+// ============================================================
+function _todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+async function checkPeReminder() {
+  const now = new Date();
+  if (now.getDate() < 5) return;
+  const todayStr = _todayStr();
+  if (localStorage.getItem('peReminderDismissedDate') === todayStr) return;
+  try {
+    const r = await fetch('/api/market-stats-meta');
+    const d = await r.json();
+    const curYM = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const updatedYM = d.updated_at ? d.updated_at.slice(0, 7) : null;
+    if (updatedYM === curYM) return; // อัปเดตเดือนนี้ไปแล้ว
+    document.getElementById('pe-reminder-modal').classList.add('open');
+  } catch (e) { /* เงียบ — ไม่ใช่ฟีเจอร์หลัก */ }
+}
+function dismissPeReminder() {
+  localStorage.setItem('peReminderDismissedDate', _todayStr());
+  document.getElementById('pe-reminder-modal').classList.remove('open');
+}
+function goToPeUpdate() {
+  document.getElementById('pe-reminder-modal').classList.remove('open');
+  const btn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'valuation'"));
+  showPage('valuation', btn);
+}
+
 // ============================================================
 // DATA QUALITY — badges ต่อหุ้น + banner ระดับ dataset
 // ============================================================
@@ -5335,8 +5370,10 @@ function renderFundamentals() {
 function renderFundTable() {
   if (!DATA) return;
   const secFilter = document.getElementById('fund-sector-filter')?.value || 'ALL';
+  const q = (document.getElementById('fund-search')?.value || '').trim().toUpperCase();
   let stocks = DATA.stocks.filter(s => {
     if (secFilter !== 'ALL' && s.sector !== secFilter) return false;
+    if (q && !s.symbol.toUpperCase().includes(q) && !(s.name || '').toUpperCase().includes(q)) return false;
     if (_fundView === 'high_yield') return s.div_yield != null && s.div_yield >= 3;
     if (_fundView === 'low_pbv')    return s.pbv != null && s.pbv < 1;
     if (_fundView === 'low_pe')     return s.pe  != null && s.pe  < 15;
@@ -5529,6 +5566,7 @@ function loadDRPage() {
         `ราคาและ Performance ของ Underlying Stocks ที่มี DR/DRx เทรดบน SET (${drTotal} DR จาก ${_drData.length} หุ้นต่างประเทศ)`;
       document.getElementById('dr-status').innerHTML =
         `อัปเดต: ${ts} &nbsp;|&nbsp; ${_drData.length} underlying stocks &nbsp;|&nbsp; cache 4 ชั่วโมง`;
+      _updateDRRegionCounts();
       renderDRTable();
       // รีเฟรช datalist และ watchlist ถ้าเปิดอยู่
       const wlDl = document.getElementById("wl-sym-list");
@@ -5571,6 +5609,7 @@ function drQuickUpdate() {
                   const ts = d.ts ? d.ts.replace('T',' ').slice(0,16) : '—';
                   if (statusEl) statusEl.innerHTML =
                     `อัปเดต: ${ts} &nbsp;|&nbsp; ${_drData.length} stocks &nbsp;|&nbsp; <span style="color:var(--green)">✓ อัปเดตราคาสำเร็จ</span>`;
+                  _updateDRRegionCounts();
                   renderDRTable();
                 }
                 if (btn) { btn.disabled = false; btn.textContent = '⚡ อัปเดตราคา'; }
@@ -5591,6 +5630,17 @@ function drQuickUpdate() {
       if (btn) { btn.disabled = false; btn.textContent = '⚡ อัปเดตราคา'; }
       if (statusEl) statusEl.textContent = 'เกิดข้อผิดพลาด: ' + e.message;
     });
+}
+
+function _updateDRRegionCounts() {
+  if (!_drData) return;
+  const counts = {};
+  _drData.forEach(s => { counts[s.region] = (counts[s.region] || 0) + 1; });
+  document.querySelectorAll('#dr-region-btns .dr-region-count-badge').forEach(el => {
+    const region = el.dataset.region;
+    const n = region === 'ALL' ? _drData.length : (counts[region] || 0);
+    el.textContent = `(${n})`;
+  });
 }
 
 function setDRRegion(r, btn) {
@@ -6827,13 +6877,89 @@ function setValPeriod(p, btn) {
 
 function filterByPeriod(dates, vals, period) {
   if (period === 'ALL') return { dates, vals };
-  const years = { '5Y':5, '10Y':10, '20Y':20, '30Y':30 }[period] || 999;
+  const years = { '1Y':1, '2Y':2, '3Y':3, '5Y':5, '10Y':10, '20Y':20, '30Y':30 }[period] || 999;
   const cutoff = new Date();
   cutoff.setFullYear(cutoff.getFullYear() - years);
   const cutStr = cutoff.toISOString().slice(0,7);
   const idx = dates.findIndex(d => d >= cutStr);
   if (idx < 0) return { dates, vals };
   return { dates: dates.slice(idx), vals: vals.slice(idx) };
+}
+
+const VAL_PERIOD_LABEL = { ALL:'ตลอดกาล', '30Y':'30 ปี', '20Y':'20 ปี', '10Y':'10 ปี', '5Y':'5 ปี', '3Y':'3 ปี', '2Y':'2 ปี', '1Y':'1 ปี' };
+
+// ตัด leading/trailing null ออกก่อน filter period (ซีรีส์ mai เริ่มมีข้อมูลช้ากว่า SET)
+function _trimNulls(dates, vals) {
+  let lo = 0, hi = vals.length - 1;
+  while (lo <= hi && vals[lo] === null) lo++;
+  while (hi >= lo && vals[hi] === null) hi--;
+  return { dates: dates.slice(lo, hi + 1), vals: vals.slice(lo, hi + 1) };
+}
+
+// คำนวณ avg/std/percentile/zscore/bands จากช่วงเวลาที่เลือกจริง (ไม่ใช่ตลอดกาลเสมอ)
+// current = ค่าล่าสุด (จุดท้ายของ array ที่กรองแล้ว) ส่วน avg/std/percentile scope ตามช่วงที่เลือก
+function _calcStatsClient(vals) {
+  const v = vals.filter(x => x !== null && x !== undefined && !Number.isNaN(x));
+  if (!v.length) return {};
+  const arr = [...v].sort((a, b) => a - b);
+  const avg = v.reduce((a, b) => a + b, 0) / v.length;
+  const variance = v.reduce((a, b) => a + (b - avg) ** 2, 0) / v.length;
+  const std = Math.sqrt(variance);
+  const current = v[v.length - 1];
+  const round2 = x => Math.round(x * 100) / 100;
+  const pct = Math.round((arr.filter(x => x <= current).length / arr.length) * 1000) / 10;
+  return {
+    current: round2(current), min: round2(arr[0]), max: round2(arr[arr.length - 1]),
+    avg: round2(avg), median: round2(arr[Math.floor(arr.length / 2)]), std: round2(std),
+    zscore: std ? round2((current - avg) / std) : 0, percentile: pct,
+    bands: {
+      '+3σ': round2(avg + 3 * std), '+2σ': round2(avg + 2 * std), '+1σ': round2(avg + std),
+      '-1σ': round2(avg - std), '-2σ': round2(avg - 2 * std), '-3σ': round2(avg - 3 * std),
+    },
+  };
+}
+
+// คืน stats ตาม _valPeriod ที่เลือก — ใช้ของ backend (ตลอดกาล) เมื่อเลือก ALL,
+// คำนวณสดฝั่ง client เมื่อเลือกช่วงสั้นกว่า เพื่อให้ avg/σ/percentile scope ตามช่วงจริง
+function _periodStats(fullStats, filteredVals) {
+  if (_valPeriod === 'ALL') return fullStats;
+  return _calcStatsClient(filteredVals);
+}
+
+function _valZColor(z) {
+  if (z == null) return 'var(--text2)';
+  if (z >  2) return '#dc503c';
+  if (z >  1) return '#dca032';
+  if (z > -1) return '#c8d0dc';
+  if (z > -2) return '#96c850';
+  return '#3ab464';
+}
+
+// ตารางเปรียบเทียบ avg/z-score ทุกช่วงเวลา (Max→1Y) ของ P/E & P/BV ทั้ง SET และ mai
+function renderValPeriodTable(seriesDefs) {
+  const el = document.getElementById('val-period-table');
+  if (!el) return;
+  const periods = ['ALL', '30Y', '20Y', '10Y', '5Y', '3Y', '2Y', '1Y'];
+
+  let html = `<thead><tr><th>ช่วงเวลา</th>` + seriesDefs.map(s =>
+    `<th class="r" colspan="2">${s.label}<div style="font-weight:400;font-size:10px;color:var(--text2)">ปัจจุบัน ${s.current ?? '—'}x</div></th>`
+  ).join('') + `</tr><tr><th style="font-size:10px;color:var(--text2)"></th>` + seriesDefs.map(() =>
+    `<th class="r" style="font-size:10px;color:var(--text2)">avg</th><th class="r" style="font-size:10px;color:var(--text2)">z-score</th>`
+  ).join('') + `</tr></thead><tbody>`;
+
+  for (const p of periods) {
+    html += `<tr><td style="font-weight:600">${p === 'ALL' ? 'Max' : p} <span style="color:var(--text2);font-weight:400;font-size:10px">(${VAL_PERIOD_LABEL[p]})</span></td>`;
+    for (const s of seriesDefs) {
+      const f = filterByPeriod(s.dates, s.vals, p);
+      const st = p === 'ALL' ? (s.full || _calcStatsClient(f.vals)) : _calcStatsClient(f.vals);
+      if (st.avg == null) { html += `<td class="r">—</td><td class="r">—</td>`; continue; }
+      const z = st.zscore;
+      html += `<td class="r">${st.avg}x</td>` +
+        `<td class="r" style="color:${_valZColor(z)};font-weight:600" title="±1σ = ${st.std}x · ต่ำสุด ${st.min}x · สูงสุด ${st.max}x · percentile ${st.percentile}%">${z > 0 ? '+' : ''}${z}</td>`;
+    }
+    html += `</tr>`;
+  }
+  el.innerHTML = html + `</tbody>`;
 }
 
 function valZoneColor(v, thresholds) {
@@ -7143,8 +7269,8 @@ function renderValuation() {
   const peF  = filterByPeriod(pe.dates,  pe.series['SET'],  _valPeriod);
   const pbvF = filterByPeriod(pbv.dates, pbv.series['SET'], _valPeriod);
 
-  const peStats  = pe.stats['SET']  || {};
-  const pbvStats = pbv.stats['SET'] || {};
+  const peStats  = _periodStats(pe.stats['SET']   || {}, peF.vals);
+  const pbvStats = _periodStats(pbv.stats['SET']  || {}, pbvF.vals);
 
   const peThresh  = [10, 15, 20];
   const pbvThresh = [1, 1.5, 2];
@@ -7209,7 +7335,7 @@ function renderValuation() {
 
     peChart: `<div class='tip-head'>วิธีอ่านกราฟ P/E</div>` +
       `<div class='tip-row'><span class='tip-label'>เส้นฟ้า</span><span class='tip-val'>P/E รายเดือน</span></div>` +
-      `<div class='tip-row'><span class='tip-label'>เส้นเหลือง</span><span class='tip-val'>ค่าเฉลี่ยตลอดกาล (${peStats.avg}x)</span></div>` +
+      `<div class='tip-row'><span class='tip-label'>เส้นเหลือง</span><span class='tip-val'>ค่าเฉลี่ย${VAL_PERIOD_LABEL[_valPeriod]} (${peStats.avg}x)</span></div>` +
       `<div class='tip-row'><span class='tip-label'>จุดขาว</span><span class='tip-val'>ค่าปัจจุบัน</span></div><hr>` +
       `<b>เหตุการณ์สำคัญ:</b><br>` +
       `• <b>1993–1994:</b> P/E พุ่ง ~41x (ฟองสบู่ก่อนวิกฤต 2540)<br>` +
@@ -7220,7 +7346,7 @@ function renderValuation() {
 
     pbvChart: `<div class='tip-head'>วิธีอ่านกราฟ P/BV</div>` +
       `<div class='tip-row'><span class='tip-label'>เส้นฟ้า</span><span class='tip-val'>P/BV รายเดือน</span></div>` +
-      `<div class='tip-row'><span class='tip-label'>เส้นเหลือง</span><span class='tip-val'>ค่าเฉลี่ยตลอดกาล (${pbvStats.avg}x)</span></div><hr>` +
+      `<div class='tip-row'><span class='tip-label'>เส้นเหลือง</span><span class='tip-val'>ค่าเฉลี่ย${VAL_PERIOD_LABEL[_valPeriod]} (${pbvStats.avg}x)</span></div><hr>` +
       `<b>เหตุการณ์สำคัญ:</b><br>` +
       `• <b>1997–1998:</b> P/BV ต่ำกว่า 1x — ซื้อถูกกว่า Book Value<br>` +
       `• SET ปกติซื้อขายที่ 1.3–1.8x<br>` +
@@ -7280,10 +7406,21 @@ function renderValuation() {
     </div>`;
   }
 
-  const maiPeStats  = pe.stats['mai']  || {};
-  const maiPbvStats = pbv.stats['mai'] || {};
+  const maiPeRaw  = _trimNulls(pe.dates,  pe.series['mai']);
+  const maiPbvRaw = _trimNulls(pbv.dates, pbv.series['mai']);
+  const maiPeF  = filterByPeriod(maiPeRaw.dates,  maiPeRaw.vals,  _valPeriod);
+  const maiPbvF = filterByPeriod(maiPbvRaw.dates, maiPbvRaw.vals, _valPeriod);
+  const maiPeStats  = _periodStats(pe.stats['mai']  || {}, maiPeF.vals);
+  const maiPbvStats = _periodStats(pbv.stats['mai'] || {}, maiPbvF.vals);
   const maiPeThresh  = [20, 40, 80];   // MAI PE สูงกว่า SET ตามธรรมชาติ
   const maiPbvThresh = [1, 1.5, 2];    // PBV เหมือนกัน
+
+  renderValPeriodTable([
+    { label: 'P/E SET',  dates: pe.dates,        vals: pe.series['SET'],  full: pe.stats['SET'],   current: (pe.stats['SET']   || {}).current },
+    { label: 'P/BV SET', dates: pbv.dates,       vals: pbv.series['SET'], full: pbv.stats['SET'],  current: (pbv.stats['SET']  || {}).current },
+    { label: 'P/E mai',  dates: maiPeRaw.dates,  vals: maiPeRaw.vals,     full: pe.stats['mai'],   current: (pe.stats['mai']   || {}).current },
+    { label: 'P/BV mai', dates: maiPbvRaw.dates, vals: maiPbvRaw.vals,    full: pbv.stats['mai'],  current: (pbv.stats['mai']  || {}).current },
+  ]);
 
   const TIPS_MAI_PE = `<div class='tip-head'>P/E Ratio (mai)</div>` +
     `<b>สูตร:</b> ราคา ÷ กำไรต่อหุ้น — ตลาด mai<hr>` +
@@ -7347,32 +7484,22 @@ function renderValuation() {
     setupValHover('val-pe-canvas',  peThresh,  peStats.avg,  true,  peStats.std);
     setupValHover('val-pbv-canvas', pbvThresh, pbvStats.avg, false, pbvStats.std);
     document.getElementById('val-pe-info').textContent =
-      `${pe.dates[0]} – ${pe.dates[pe.dates.length-1]} | ${pe.dates.length} เดือน | เส้นสีเหลือง = ค่าเฉลี่ย ${peStats.avg}x`;
+      `${peF.dates[0]} – ${peF.dates[peF.dates.length-1]} | ${peF.dates.length} เดือน | เส้นสีเหลือง = ค่าเฉลี่ย${VAL_PERIOD_LABEL[_valPeriod]} ${peStats.avg}x`;
     document.getElementById('val-pbv-info').textContent =
-      `${pbv.dates[0]} – ${pbv.dates[pbv.dates.length-1]} | ${pbv.dates.length} เดือน | เส้นสีเหลือง = ค่าเฉลี่ย ${pbvStats.avg}x`;
+      `${pbvF.dates[0]} – ${pbvF.dates[pbvF.dates.length-1]} | ${pbvF.dates.length} เดือน | เส้นสีเหลือง = ค่าเฉลี่ย${VAL_PERIOD_LABEL[_valPeriod]} ${pbvStats.avg}x`;
 
-    // MAI charts — ตัด leading/trailing nulls ก่อน filter period
-    function trimNulls(dates, vals) {
-      let lo = 0, hi = vals.length - 1;
-      while (lo <= hi && vals[lo] === null) lo++;
-      while (hi >= lo && vals[hi] === null) hi--;
-      return { dates: dates.slice(lo, hi+1), vals: vals.slice(lo, hi+1) };
-    }
-    const maiPeRaw  = trimNulls(pe.dates,  pe.series['mai']);
-    const maiPbvRaw = trimNulls(pbv.dates, pbv.series['mai']);
-    const maiPeF  = filterByPeriod(maiPeRaw.dates,  maiPeRaw.vals,  _valPeriod);
-    const maiPbvF = filterByPeriod(maiPbvRaw.dates, maiPbvRaw.vals, _valPeriod);
+    // MAI charts — maiPeF/maiPbvF ถูกกรองตามช่วงเวลาแล้วด้านบน (ก่อน makeCard)
     if (maiPeStats.avg) {
       drawValChart('val-mai-pe-canvas',  maiPeF.dates,  maiPeF.vals,  maiPeThresh,  maiPeStats);
       setupValHover('val-mai-pe-canvas',  maiPeThresh,  maiPeStats.avg,  true,  maiPeStats.std);
       document.getElementById('val-mai-pe-info').textContent =
-        `${maiPeRaw.dates[0]} – ${maiPeRaw.dates[maiPeRaw.dates.length-1]} | ${maiPeRaw.dates.length} เดือน | เส้นสีเหลือง = ค่าเฉลี่ย ${maiPeStats.avg}x (median ${maiPeStats.median}x)`;
+        `${maiPeF.dates[0]} – ${maiPeF.dates[maiPeF.dates.length-1]} | ${maiPeF.dates.length} เดือน | เส้นสีเหลือง = ค่าเฉลี่ย${VAL_PERIOD_LABEL[_valPeriod]} ${maiPeStats.avg}x (median ${maiPeStats.median}x)`;
     }
     if (maiPbvStats.avg) {
       drawValChart('val-mai-pbv-canvas', maiPbvF.dates, maiPbvF.vals, maiPbvThresh, maiPbvStats);
       setupValHover('val-mai-pbv-canvas', maiPbvThresh, maiPbvStats.avg, false, maiPbvStats.std);
       document.getElementById('val-mai-pbv-info').textContent =
-        `${maiPbvRaw.dates[0]} – ${maiPbvRaw.dates[maiPbvRaw.dates.length-1]} | ${maiPbvRaw.dates.length} เดือน | เส้นสีเหลือง = ค่าเฉลี่ย ${maiPbvStats.avg}x`;
+        `${maiPbvF.dates[0]} – ${maiPbvF.dates[maiPbvF.dates.length-1]} | ${maiPbvF.dates.length} เดือน | เส้นสีเหลือง = ค่าเฉลี่ย${VAL_PERIOD_LABEL[_valPeriod]} ${maiPbvStats.avg}x`;
     }
   }, 50);
 

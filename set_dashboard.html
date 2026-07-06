@@ -577,6 +577,7 @@
     <select id="fund-sector-filter" class="scr-input" style="width:auto;padding:4px 8px" onchange="renderFundTable()">
       <option value="ALL">ทั้งหมด</option>
     </select>
+    <input id="fund-search" class="scr-input" type="text" placeholder="ค้นหา Symbol / ชื่อหุ้น..." style="width:200px;padding:4px 8px;margin-left:8px" oninput="renderFundTable()">
   </div>
   <div class="grid-4" style="margin-bottom:16px" id="fund-stat-cards"></div>
   <div class="card">
@@ -1387,14 +1388,14 @@
 
   <!-- Region filter -->
   <div class="filter-row" id="dr-region-btns" style="margin-bottom:8px">
-    <button class="filter-btn active" onclick="setDRRegion('ALL',this)">ทั้งหมด</button>
-    <button class="filter-btn" onclick="setDRRegion('US',this)">🇺🇸 USA</button>
-    <button class="filter-btn" onclick="setDRRegion('HK',this)">🇭🇰 HK/CN</button>
-    <button class="filter-btn" onclick="setDRRegion('JP',this)">🇯🇵 Japan</button>
-    <button class="filter-btn" onclick="setDRRegion('EU',this)">🇪🇺 Europe</button>
-    <button class="filter-btn" onclick="setDRRegion('SG',this)">🇸🇬 Singapore</button>
-    <button class="filter-btn" onclick="setDRRegion('VN',this)">🇻🇳 Vietnam</button>
-    <button class="filter-btn" onclick="setDRRegion('TW',this)">🇹🇼 Taiwan</button>
+    <button class="filter-btn active" onclick="setDRRegion('ALL',this)">ทั้งหมด <span class="dr-region-count-badge" data-region="ALL"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('US',this)">🇺🇸 USA <span class="dr-region-count-badge" data-region="US"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('HK',this)">🇭🇰 HK/CN <span class="dr-region-count-badge" data-region="HK"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('JP',this)">🇯🇵 Japan <span class="dr-region-count-badge" data-region="JP"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('EU',this)">🇪🇺 Europe <span class="dr-region-count-badge" data-region="EU"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('SG',this)">🇸🇬 Singapore <span class="dr-region-count-badge" data-region="SG"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('VN',this)">🇻🇳 Vietnam <span class="dr-region-count-badge" data-region="VN"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('TW',this)">🇹🇼 Taiwan <span class="dr-region-count-badge" data-region="TW"></span></button>
   </div>
 
   <!-- Sort -->
@@ -1443,6 +1444,17 @@
   <!-- Summary cards -->
   <div id="val-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px"></div>
 
+  <!-- ตารางเปรียบเทียบค่าเฉลี่ยตามช่วงเวลา -->
+  <div class="card" style="margin-bottom:16px;padding:16px">
+    <div style="font-weight:600;margin-bottom:4px;font-size:14px">ค่าเฉลี่ยตามช่วงเวลา — P/E &amp; P/BV (SET / mai)</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+      แต่ละแถวคำนวณ avg / z-score จากข้อมูลเฉพาะช่วงนั้น — z ติดลบ = ค่าปัจจุบันถูกกว่าค่าเฉลี่ยของช่วง, z บวก = แพงกว่า
+    </div>
+    <div style="overflow-x:auto">
+      <table class="tbl" id="val-period-table"></table>
+    </div>
+  </div>
+
   <!-- Timeframe filter -->
   <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
     <span style="color:var(--muted);font-size:12px">ช่วงเวลา:</span>
@@ -1451,6 +1463,9 @@
     <button class="filter-btn" onclick="setValPeriod('20Y',this)">20Y</button>
     <button class="filter-btn" onclick="setValPeriod('10Y',this)">10Y</button>
     <button class="filter-btn" onclick="setValPeriod('5Y',this)">5Y</button>
+    <button class="filter-btn" onclick="setValPeriod('3Y',this)">3Y</button>
+    <button class="filter-btn" onclick="setValPeriod('2Y',this)">2Y</button>
+    <button class="filter-btn" onclick="setValPeriod('1Y',this)">1Y</button>
   </div>
 
   <!-- P/E Chart -->
@@ -2092,6 +2107,29 @@
     </div>
   </div>
 </div>
+
+<!-- MONTHLY REMINDER: อัปเดต P/E & P/BV (Table_PE.xls / Table_PBV.xls) -->
+<div class="modal-overlay" id="pe-reminder-modal" onclick="if(event.target===this)dismissPeReminder()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <div class="modal-title">📅 ถึงเวลาอัปเดต Valuation ตลาด</div>
+      <button class="modal-close" onclick="dismissPeReminder()">✕</button>
+    </div>
+    <div class="modal-body" style="font-size:13px;line-height:1.7;color:var(--text);padding:14px 20px">
+      <p style="margin:0 0 10px">ข้อมูล P/E & P/BV ของตลาด (หน้า Valuation) ยังไม่ถูกอัปเดตในเดือนนี้ — ข้อมูลนี้ไม่ได้อัปเดตอัตโนมัติผ่าน Quick Update / Full Refresh</p>
+      <p style="margin:0 0 14px;color:var(--text2);font-size:12px">
+        1. โหลด <b>Table_PE.xls</b> + <b>Table_PBV.xls</b> จาก set.or.th (Market Data → Market Statistics → P/E & P/BV)<br>
+        2. วางไฟล์ทับของเดิมในโฟลเดอร์โปรเจกต์<br>
+        3. กดปุ่ม ⟳ อัพเดทข้อมูล P/E & P/BV ในหน้า Valuation
+      </p>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="filter-btn" onclick="dismissPeReminder()">เตือนพรุ่งนี้อีกครั้ง</button>
+        <button class="filter-btn active" onclick="goToPeUpdate()">ไปหน้า Valuation</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- FLOATING INFO POPUP -->
 <div id="float-popup" style="display:none;position:fixed;z-index:99999;max-width:280px;background:#1c2333;border:1px solid var(--border);border-radius:10px;padding:14px 16px;font-size:11px;color:var(--text);line-height:1.6;box-shadow:0 8px 32px rgba(0,0,0,.7)">
   <button onclick="document.getElementById('float-popup').style.display='none'" style="position:absolute;top:8px;right:10px;background:none;border:none;color:var(--text2);font-size:14px;cursor:pointer;line-height:1">✕</button>
