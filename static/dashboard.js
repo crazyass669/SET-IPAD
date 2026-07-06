@@ -1529,7 +1529,10 @@ function drawRotationScatter(sectors) {
   let pinnedSector = null;
   const legendEl = document.getElementById("rot-legend");
   if (legendEl) {
-    legendEl.innerHTML = [...points].sort((a,b) => (b.ret_3m||0) - (a.ret_3m||0)).map(p => {
+    // เรียงตาม "ความแข็งแกร่งรวม" = Trend + Momentum ตามแกนของโหมดปัจจุบัน
+    // (Long: ret_3m+ret_1m, Short: ret_1m+ret_1w) — เดิม hardcode ret_3m
+    // ทำให้ (1) สะท้อนแค่ Trend แกนเดียว (2) โหมด Short เรียงผิดแกน
+    legendEl.innerHTML = [...points].sort((a, b) => (getX(b) + getY(b)) - (getX(a) + getY(a))).map(p => {
       const safeId = "rchip_" + p.name.replace(/[^a-zA-Z0-9]/g, "_");
       const label  = p.name.length > 22 ? p.name.slice(0,20)+"…" : p.name;
       return `<div class="rot-chip" id="${safeId}" data-sector="${p.name.replace(/"/g,'&quot;')}"
