@@ -7265,6 +7265,42 @@ function setupValHover(canvasId, thresholds, avg, isPE, std) {
     tip.style.top  = Math.max(4, e.clientY - rect.top - 60) + 'px';
   });
   canvas.addEventListener('mouseleave', () => tip.style.display = 'none');
+
+  // Touch (ไอแพด/มือถือ): mousemove ข้างบนไม่ทำงานบนจอสัมผัส — เพิ่ม
+  // pointermove เฉพาะ pointerType==='touch' ให้ลากนิ้วสแกนดูค่าตามแนวแกน
+  // ได้แบบเดียวกับ chart scrubber ของแอปหุ้นทั่วไป (เมาส์ไม่กระทบ ยังใช้
+  // mousemove/mouseleave เดิม) preventDefault กันหน้าเลื่อนตามตอนลากนิ้ว
+  canvas.addEventListener('pointermove', e => {
+    if (e.pointerType !== 'touch' || !canvas._dates) return;
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const idx = Math.round((mx - canvas._pad.l) / canvas._cw * (canvas._len - 1));
+    if (idx < 0 || idx >= canvas._len) { tip.style.display = 'none'; return; }
+    const val = canvas._vals[idx];
+    if (val === null) { tip.style.display = 'none'; return; }
+    const diff = val - canvas._avg;
+    const zscore = canvas._std ? (diff / canvas._std) : 0;
+    const diffStr = (diff >= 0 ? '+' : '') + diff.toFixed(2) + 'x';
+    const zStr = (zscore >= 0 ? '+' : '') + zscore.toFixed(2) + 'σ';
+    const zColor = Math.abs(zscore) > 2 ? (zscore>0?'#dc503c':'#3ab464')
+                 : Math.abs(zscore) > 1 ? (zscore>0?'#dca032':'#96c850')
+                 : 'rgba(255,255,255,0.6)';
+    tip.innerHTML =
+      `<b style="color:#e8eef5">${canvas._dates[idx]}</b><br>` +
+      `<span style="font-size:15px;font-weight:700">${val.toFixed(2)}x</span>` +
+      `<span style="font-size:12px;color:${zColor};margin-left:8px">${zStr}</span><br>` +
+      `${_valZoneNameFull(val, canvas._thresholds, canvas._isPE)}<br>` +
+      `<span style="color:rgba(255,255,255,0.4);font-size:11px">vs ค่าเฉลี่ย ${canvas._avg}x: </span>` +
+      `<span style="color:${zColor};font-size:11px">${diffStr}</span>`;
+    tip.style.display = 'block';
+    const tipW = 200;
+    const tipX = mx + 14 + tipW > canvas._W ? mx - tipW - 4 : mx + 14;
+    tip.style.left = tipX + 'px';
+    tip.style.top  = Math.max(4, e.clientY - rect.top - 60) + 'px';
+  }, { passive: false });
+  canvas.addEventListener('pointerup', e => { if (e.pointerType === 'touch') tip.style.display = 'none'; });
+  canvas.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') tip.style.display = 'none'; });
 }
 
 function renderValZoneFreq(containerId, vals, thresholds, labels, isPE) {
