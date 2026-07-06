@@ -134,11 +134,11 @@ def fetch_market_caps_parallel(tickers, callback=None, workers=3):
                 pe   = info.get("trailingPE")
                 pbv  = info.get("priceToBook")
                 dy   = info.get("dividendYield")
-                # yfinance .BK ปกติคืน % (เช่น 5.83) แต่บางครั้งคืน decimal (เช่น 0.0583)
-                # ใช้ threshold 1.0: ค่า < 1.0 ถือว่าเป็น decimal format → คูณ 100
-                # (SET stocks ที่มี div_yield จริงๆ < 1% มีน้อยมาก และ yfinance .BK ส่วนใหญ่คืน %)
-                if dy is not None and 0 < float(dy) < 1.0:
-                    dy = float(dy) * 100
+                # เดิมมี heuristic "ค่า < 1.0 ถือว่าเป็น decimal → คูณ 100" เพราะ
+                # yfinance รุ่นเก่าเคยคืนทศนิยม (0.0583) — ปัจจุบัน yfinance คืน
+                # เป็น % ตรงๆ แล้ว (ยืนยันแล้วว่าตรงกับ SET API เช่น DELTA=0.19
+                # หมายถึง 0.19% ไม่ใช่ 19%) heuristic เดิมเลยไปพองหุ้น yield ต่ำ
+                # จริง (growth stock, high P/E) ให้ผิดเพี้ยน ×100 — เอาออก ใช้ค่าตรงๆ
                 return tick, {
                     "mkt_cap":   int(mc)          if mc  is not None else None,
                     "pe":        round(float(pe),  2) if pe  is not None else None,
