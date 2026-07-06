@@ -2066,6 +2066,8 @@ def _fetch_flow_data():
         except (ValueError, TypeError):
             continue
 
+    # siamchart ส่งข้อมูล newest-first — ต้อง sort เก่า→ใหม่ก่อน ไม่งั้น chg กลับเครื่องหมายและเลื่อนวัน
+    rows.sort(key=lambda r: r["date"])
     for i in range(1, len(rows)):
         prev = rows[i-1]["set"]
         curr = rows[i]["set"]
