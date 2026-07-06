@@ -649,7 +649,7 @@ function renderOverview() {
   const losers  = sorted1d.slice(-10).reverse();
 
   const miniTbl = (rows, isGainer) => `
-    <thead><tr><th>Symbol</th><th>Sector</th><th class="r">1D%</th><th class="r">RS</th></tr></thead>
+    <thead><tr><th${colTip('symbol')}>Symbol</th><th${colTip('sector')}>Sector</th><th class="r"${colTip('ret_1d')}>1D%</th><th class="r"${colTip('rs_score')}>RS</th></tr></thead>
     <tbody>${rows.map(s => `
       <tr>
         <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}</td>
@@ -684,7 +684,7 @@ function renderOverview() {
   const leaders = [...stocks].filter(s => s.rs_score != null && !_dqIsPenny(s))
     .sort((a,b) => (b.rs_score||0)-(a.rs_score||0)).slice(0,10);
   document.getElementById("tbl-rs-preview").innerHTML = `
-    <thead><tr><th>RS</th><th>Symbol</th><th>Sector</th><th class="r">1M%</th><th class="r">3M%</th></tr></thead>
+    <thead><tr><th${colTip('rs_score')}>RS</th><th${colTip('symbol')}>Symbol</th><th${colTip('sector')}>Sector</th><th class="r"${colTip('ret_1m')}>1M%</th><th class="r"${colTip('ret_3m')}>3M%</th></tr></thead>
     <tbody>${leaders.map(s => `
       <tr>
         <td><span class="${rsColor(s.rs_score)}">${s.rs_score}</span></td>
@@ -931,7 +931,7 @@ function renderRotMulti(sortKey) {
   ];
   const th = (col) => {
     const active = _multiSortKey === col.key;
-    return `<th class="r" style="cursor:pointer;${active?'color:#58a6ff':''}"
+    return `<th class="r" style="cursor:pointer;${active?'color:#58a6ff':''}"${colTip(col.key)}
       onclick="renderRotMulti('${col.key}')">${col.label}${active?' ↑':''}</th>`;
   };
   const el = document.getElementById('rot-multi-content');
@@ -1075,9 +1075,9 @@ function renderRotRVOL() {
   el.innerHTML = `
     <table class="tbl" style="width:100%;font-size:11px">
       <thead><tr>
-        <th>#</th><th>Symbol</th><th>Sector</th>
-        <th class="r">ราคา</th><th class="r">1D%</th>
-        <th class="r">Vol Today</th><th class="r">RVOL</th>
+        <th>#</th><th${colTip('symbol')}>Symbol</th><th${colTip('sector')}>Sector</th>
+        <th class="r"${colTip('price')}>ราคา</th><th class="r"${colTip('ret_1d')}>1D%</th>
+        <th class="r" title="ปริมาณซื้อขายวันนี้ (จำนวนหุ้น)">Vol Today</th><th class="r"${colTip('rvol')}>RVOL</th>
       </tr></thead>
       <tbody>${stocks.map((s,i) => {
         const rv = s.rvol;
@@ -2761,7 +2761,7 @@ function renderScrTable() {
     const active = _scrSortCol === col;
     const arrow  = active ? (_scrSortDir === 1 ? '↓' : '↑') : '↕';
     const c = (cls ? cls+' ' : '') + 'sortable';
-    return `<th class="${c}" onclick="setScrSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
+    return `<th class="${c}"${colTip(col)} onclick="setScrSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
   }
 
   document.getElementById('screener-results').innerHTML = `
@@ -3525,34 +3525,52 @@ function setBoSort(col) {
   renderBreakout();
 }
 
-// tooltip อธิบายแต่ละคอลัมน์ของตาราง 52W H/L & Breakout (แสดงเมื่อ hover หัวตาราง)
-const _BO_TIPS = {
+// tooltip กลางอธิบายคอลัมน์ตาราง — ใช้ร่วมกันทุกเมนู (hover หัวตารางเพื่อดู)
+const _COL_TIPS = {
   rs_score:     'RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)',
+  rs_momentum:  'RS ปัจจุบัน − RS เมื่อ 4 สัปดาห์ก่อน — บวก = ความแข็งแกร่งกำลังเร่งขึ้น, ลบ = กำลังแผ่ว',
   sec_rank:     'อันดับ RS ภายใน sector เดียวกัน เช่น 3/25 = RS สูงเป็นอันดับ 3 จาก 25 ตัวในกลุ่ม',
   symbol:       'ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ',
   name:         'ชื่อบริษัท',
   sector:       'กลุ่มอุตสาหกรรม',
+  industry:     'หมวดธุรกิจ (ละเอียดกว่า sector)',
   price:        'ราคาปิดล่าสุด (บาท)',
   high_52w:     'ราคาสูงสุดใน 52 สัปดาห์ย้อนหลัง (ไม่รวมแท่งวันล่าสุด)',
   low_52w:      'ราคาต่ำสุดใน 52 สัปดาห์ย้อนหลัง (ไม่รวมแท่งวันล่าสุด)',
+  ret_1d:       'ผลตอบแทนวันนี้ (เทียบราคาปิดเมื่อวาน)',
+  ret_1w:       'ผลตอบแทนย้อนหลัง 1 สัปดาห์',
   ret_1m:       'ผลตอบแทนย้อนหลัง 1 เดือน',
   ret_3m:       'ผลตอบแทนย้อนหลัง 3 เดือน',
+  ret_6m:       'ผลตอบแทนย้อนหลัง 6 เดือน',
+  ret_1y:       'ผลตอบแทนย้อนหลัง 1 ปี',
   ret_ytd:      'ผลตอบแทนตั้งแต่ต้นปี (Year-to-Date)',
+  fromHigh:     '% ห่างจาก 52W High — ติดลบ = ยังต่ำกว่า high, 0 หรือบวก = ทำ new high',
+  fromLow:      '% เด้งขึ้นจาก 52W Low — ยิ่งน้อยยิ่งใกล้จุดต่ำสุดของปี',
+  pe:           'P/E Ratio = ราคา ÷ กำไรต่อหุ้น — ยิ่งต่ำยิ่งถูก (เทียบภายใน sector เดียวกัน), ติดลบ/ว่าง = ขาดทุน',
+  pbv:          'P/BV Ratio = ราคา ÷ มูลค่าทางบัญชีต่อหุ้น — ต่ำกว่า 1 = ซื้อได้ถูกกว่ามูลค่าบัญชี',
+  div_yield:    'อัตราเงินปันผลตอบแทนต่อปี (% ของราคาปัจจุบัน)',
   vol_today:    'Relative Volume = volume วันนี้ ÷ ค่าเฉลี่ย 20 วัน — เช่น 2.0x = ซื้อขายคึกคักกว่าปกติ 2 เท่า',
+  rvol:         'Relative Volume = volume วันนี้ ÷ ค่าเฉลี่ย 20 วัน — เช่น 2.0x = ซื้อขายคึกคักกว่าปกติ 2 เท่า',
   mkt_cap:      'มูลค่าตลาด = ราคา × จำนวนหุ้นจดทะเบียน',
   above_ema50:  'ราคาอยู่เหนือเส้น EMA 50 วันหรือไม่ (✓ = แนวโน้มระยะกลางขาขึ้น)',
   above_ema200: 'ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)',
+  avg_rs:       'ค่าเฉลี่ย RS Score ของหุ้นทุกตัวในกลุ่ม — ใช้เทียบความแข็งแกร่งระหว่างกลุ่ม',
 };
 const _BO_TIP_RANGE     = 'ตำแหน่งราคาในกรอบ 52 สัปดาห์: 0% = ที่ Low, 100% = ที่ High, เกิน 100% = ทะลุ High เดิม (วัดเป็นสัดส่วนของความกว้างกรอบ High−Low ไม่ใช่ % ของราคา)';
 const _BO_TIP_FROM_HIGH = '% ห่างจาก 52W High — ติดลบ = ยังต่ำกว่า high, NEW HIGH = ราคาทะลุ high เดิมแล้ว';
 const _BO_TIP_FROM_LOW  = '% เด้งขึ้นจาก 52W Low — ยิ่งน้อยยิ่งใกล้จุดต่ำสุด, NEW LOW = ทำจุดต่ำสุดใหม่';
 
+// คืน attribute title="..." สำหรับใส่ใน <th> — คืน '' ถ้าไม่มีคำอธิบายของคอลัมน์นั้น
+function colTip(col) {
+  const t = _COL_TIPS[col];
+  return t ? ` title="${t}"` : '';
+}
+
 function boTh(col, label, cls='', tip=null) {
   const active = _boSortCol === col;
   const arrow  = active ? (_boSortDir === 1 ? '↓' : '↑') : '↕';
   const c = (cls ? cls+' ' : '') + 'sortable';
-  const t = tip ?? _BO_TIPS[col];
-  const tAttr = t ? ` title="${t}"` : '';
+  const tAttr = tip ? ` title="${tip}"` : colTip(col);
   return `<th class="${c}"${tAttr} onclick="setBoSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
 }
 
@@ -3662,7 +3680,7 @@ function momTh(col, label, cls='') {
   const active = _momSortCol === col;
   const arrow  = active ? (_momSortDir === 1 ? '↓' : '↑') : '↕';
   const c = (cls ? cls+' ' : '') + 'sortable';
-  return `<th class="${c}" onclick="setMomSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
+  return `<th class="${c}"${colTip(col)} onclick="setMomSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
 }
 
 function setMomFilter(val, btn) {
@@ -4295,10 +4313,10 @@ function _renderIdxStocks(sym) {
     <div style="overflow-x:auto">
     <table class="sector-table" style="width:100%">
       <thead><tr>
-        <th>RS</th><th>Symbol</th><th>ชื่อ</th>
-        <th class="r">ราคา</th><th class="r">1D%</th><th class="r">1W%</th>
-        <th class="r">1M%</th><th class="r">3M%</th><th class="r">1Y%</th>
-        <th class="r">EMA50</th><th class="r">EMA200</th>
+        <th${colTip('rs_score')}>RS</th><th${colTip('symbol')}>Symbol</th><th${colTip('name')}>ชื่อ</th>
+        <th class="r"${colTip('price')}>ราคา</th><th class="r"${colTip('ret_1d')}>1D%</th><th class="r"${colTip('ret_1w')}>1W%</th>
+        <th class="r"${colTip('ret_1m')}>1M%</th><th class="r"${colTip('ret_3m')}>3M%</th><th class="r"${colTip('ret_1y')}>1Y%</th>
+        <th class="r"${colTip('above_ema50')}>EMA50</th><th class="r"${colTip('above_ema200')}>EMA200</th>
       </tr></thead>
       <tbody>${stocks.map(s=>`
         <tr>
@@ -5267,7 +5285,7 @@ function fundTh(col, label, cls='') {
   const active = _fundSortCol === col;
   const arrow  = active ? (_fundSortDir === 1 ? '↓' : '↑') : '↕';
   const c = (cls ? cls+' ' : '') + 'sortable';
-  return `<th class="${c}" onclick="setFundSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
+  return `<th class="${c}"${colTip(col)} onclick="setFundSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
 }
 
 function setFundSort(col) {
@@ -5689,18 +5707,18 @@ function renderDRTable() {
   }
 
   const thead = `<thead><tr>
-    <th style="width:112px">Symbol</th>
-    <th class="r" style="width:80px">Close</th>
-    <th class="r" style="width:64px">CHG%</th>
-    <th class="r" style="width:42px">RS</th>
-    <th class="r" style="width:58px">1W%</th>
-    <th class="r" style="width:58px">1M%</th>
-    <th class="r" style="width:58px">3M%</th>
-    <th class="r" style="width:58px">1Y%</th>
-    <th style="min-width:150px">Company</th>
-    <th style="min-width:180px">DR Tickers บน SET</th>
-    <th style="min-width:140px">Industry</th>
-    <th class="r" style="width:72px">MKT CAP</th>
+    <th style="width:112px" title="ชื่อย่อหุ้นต่างประเทศ (underlying) — คลิกเพื่อเปิดกราฟ">Symbol</th>
+    <th class="r" style="width:80px" title="ราคาปิดล่าสุด (สกุลเงินท้องถิ่นของตลาดนั้น)">Close</th>
+    <th class="r" style="width:64px"${colTip('ret_1d')}>CHG%</th>
+    <th class="r" style="width:42px" title="RS Score 0–99 — จัดอันดับเทียบภายในกลุ่ม underlying ทั้ง 84 ตัว ยิ่งสูงยิ่งแข็งแกร่ง">RS</th>
+    <th class="r" style="width:58px"${colTip('ret_1w')}>1W%</th>
+    <th class="r" style="width:58px"${colTip('ret_1m')}>1M%</th>
+    <th class="r" style="width:58px"${colTip('ret_3m')}>3M%</th>
+    <th class="r" style="width:58px"${colTip('ret_1y')}>1Y%</th>
+    <th style="min-width:150px"${colTip('name')}>Company</th>
+    <th style="min-width:180px" title="DR/DRx ที่อ้างอิงหุ้นตัวนี้ ซื้อขายได้บน SET ด้วยเงินบาท">DR Tickers บน SET</th>
+    <th style="min-width:140px"${colTip('industry')}>Industry</th>
+    <th class="r" style="width:72px"${colTip('mkt_cap')}>MKT CAP</th>
     <th style="width:108px;text-align:center">Trend (100D)</th>
     <th style="width:136px;text-align:center">Pattern (30D)</th>
     <th class="r" style="width:52px" title="ตั้งราคาแจ้งเตือน">🔔</th>
@@ -6583,14 +6601,14 @@ async function openValSectorModal(secName) {
   modalBody.innerHTML = `
     <table class="tbl tbl-clickable" style="width:100%">
       <thead><tr>
-        <th>Symbol</th>
-        <th>ชื่อ</th>
-        <th class="r" style="color:#dca032">PE<br><span style="font-size:9px;color:var(--muted)">vs sector</span></th>
-        <th class="r" style="color:#5ab4ff">PBV<br><span style="font-size:9px;color:var(--muted)">vs sector</span></th>
-        <th class="r">RS</th>
-        <th class="r">ราคา</th>
-        <th class="r">1D%</th>
-        <th class="r">1M%</th>
+        <th${colTip('symbol')}>Symbol</th>
+        <th${colTip('name')}>ชื่อ</th>
+        <th class="r" style="color:#dca032" title="P/E ของหุ้น เทียบกับค่าเฉลี่ย sector — ต่ำกว่า -1σ = ถูกผิดปกติ, สูงกว่า +1σ = แพงผิดปกติ">PE<br><span style="font-size:9px;color:var(--muted)">vs sector</span></th>
+        <th class="r" style="color:#5ab4ff" title="P/BV ของหุ้น เทียบกับค่าเฉลี่ย sector — ต่ำกว่า -1σ = ถูกผิดปกติ, สูงกว่า +1σ = แพงผิดปกติ">PBV<br><span style="font-size:9px;color:var(--muted)">vs sector</span></th>
+        <th class="r"${colTip('rs_score')}>RS</th>
+        <th class="r"${colTip('price')}>ราคา</th>
+        <th class="r"${colTip('ret_1d')}>1D%</th>
+        <th class="r"${colTip('ret_1m')}>1M%</th>
       </tr></thead>
       <tbody>
       ${stocks.map(s => {
@@ -6665,8 +6683,8 @@ async function renderValSectorTable() {
       </tr>
       <tr style="border-bottom:1px solid var(--border);color:var(--muted);font-size:10px">
         <th></th>
-        <th>avg±σ</th><th style="color:#dca032">+1σ</th><th style="color:#96c850">-1σ</th><th style="color:#5ab4ff">med</th>
-        <th>avg±σ</th><th style="color:#dca032">+1σ</th><th style="color:#96c850">-1σ</th><th style="color:#5ab4ff">med</th>
+        <th title="ค่าเฉลี่ย ± ส่วนเบี่ยงเบนมาตรฐาน (σ) ของหุ้นทุกตัวใน sector">avg±σ</th><th style="color:#dca032" title="เพดานบน = avg + 1σ — หุ้นที่สูงกว่านี้ถือว่าแพงผิดปกติเทียบกลุ่ม">+1σ</th><th style="color:#96c850" title="พื้นล่าง = avg − 1σ — หุ้นที่ต่ำกว่านี้ถือว่าถูกผิดปกติเทียบกลุ่ม">-1σ</th><th style="color:#5ab4ff" title="ค่ามัธยฐาน (median) — ตัวแทนกลางของกลุ่ม ทนต่อ outlier กว่า avg">med</th>
+        <th title="ค่าเฉลี่ย ± ส่วนเบี่ยงเบนมาตรฐาน (σ) ของหุ้นทุกตัวใน sector">avg±σ</th><th style="color:#dca032" title="เพดานบน = avg + 1σ — หุ้นที่สูงกว่านี้ถือว่าแพงผิดปกติเทียบกลุ่ม">+1σ</th><th style="color:#96c850" title="พื้นล่าง = avg − 1σ — หุ้นที่ต่ำกว่านี้ถือว่าถูกผิดปกติเทียบกลุ่ม">-1σ</th><th style="color:#5ab4ff" title="ค่ามัธยฐาน (median) — ตัวแทนกลางของกลุ่ม ทนต่อ outlier กว่า avg">med</th>
         <th></th>
       </tr>
     </thead>
