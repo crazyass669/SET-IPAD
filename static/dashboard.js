@@ -7,7 +7,7 @@ let watchlist = (() => { try { return JSON.parse(localStorage.getItem("set_wl") 
 let stockSort = { key: "rs_score", dir: -1 };
 let sectorSort = { key: "ret_1m", dir: -1 };
 let rotView = "sector";
-let rotTimeframe = 'long';  // 'long'=3M/1M, 'short'=1M/1W
+let rotTimeframe = 'short';  // 'long'=3M/1M, 'short'=1M/1W — default Short
 let sectorView = "sector";
 let rsFilter = "ALL";
 let industryFilter = "ALL";
@@ -767,8 +767,10 @@ function setRotTimeframe(tf, btn) {
   document.getElementById('rot-tf-short')?.classList.toggle('active', tf === 'short');
   const isShort = tf === 'short';
   const yLabel = document.getElementById('rot-ylabel');
+  const xLabel = document.getElementById('rot-xlabel');
   const sub    = document.getElementById('rot-subtitle');
   if (yLabel) yLabel.textContent = isShort ? '↑ 1W Return % (Momentum) ↑' : '↑ 1M Return % (Momentum) ↑';
+  if (xLabel) xLabel.textContent = isShort ? '← 1M Return % (Trend) →' : '← 3M Return % (Trend) →';
   if (sub)    sub.textContent    = isShort
     ? 'แกน X = 1M Return (Trend) · แกน Y = 1W Return (Momentum) · ลูกศรบอกทิศ 1–4 สัปดาห์ล่าสุด'
     : 'แกน X = 3M Return (Trend) · แกน Y = 1M Return (Momentum)';
