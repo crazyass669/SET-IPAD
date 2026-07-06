@@ -7663,7 +7663,7 @@ function _accumRow(r) {
                 cursor:pointer;margin-bottom:3px;transition:background .15s;flex-wrap:wrap"
          onmouseover="this.style.background='rgba(255,255,255,0.04)'"
          onmouseout="this.style.background=''">
-      <span style="font-weight:700;font-size:13px;color:#5ab4ff;min-width:50px">${r.sym}</span>
+      <span style="font-weight:700;font-size:13px;color:#5ab4ff;min-width:50px">${r.sym}${tvLink(r.sym)}</span>
       ${clusterBadge}
       ${unusualBadge}
       <span style="font-size:10px;color:var(--muted);flex:1;min-width:60px">${sector}</span>
@@ -7821,7 +7821,7 @@ function renderShortSqueeze() {
                  onmouseover="this.style.background='rgba(255,255,255,0.08)'"
                  onmouseout="this.style.background='rgba(255,255,255,0.04)'">
               <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-                <span style="font-weight:700;font-size:14px;color:#5ab4ff">${r.sym}</span>
+                <span style="font-weight:700;font-size:14px;color:#5ab4ff">${r.sym}${tvLink(r.sym)}</span>
                 ${isCluster ? `<span title="Cluster = มี Insider ≥2 คนซื้อพร้อมกัน — สัญญาณแข็งแกร่งกว่า 1 คนซื้อ" style="font-size:9px;background:#1a3060;color:#5ab4ff;border-radius:3px;padding:1px 5px;cursor:help">Cluster</span>` : ''}
               </div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:6px">${stock?.sector||''}</div>
@@ -7934,7 +7934,7 @@ function renderShortTable() {
           const posCol = r.short_pos_pct >= 2 ? '#e05252' : r.short_pos_pct >= 1 ? '#d07030' : r.short_pos_pct >= 0.5 ? '#b09030' : '#8090a0';
           return `<tr style="cursor:pointer" onclick="showShortDetail('${r.sym}',this)">
             <td class="r" style="color:var(--muted);font-size:11px">${i+1}</td>
-            <td><strong class="sym-link" style="color:#5ab4ff" onclick="event.stopPropagation();openChartModal('${r.sym}')">${r.sym}</strong>${insiderBadge(r.sym)}</td>
+            <td><strong class="sym-link" style="color:#5ab4ff" onclick="event.stopPropagation();openChartModal('${r.sym}')">${r.sym}</strong>${tvLink(r.sym)}${insiderBadge(r.sym)}</td>
             <td style="font-size:11px;color:var(--text2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${stock?.name||'—'}</td>
             <td style="font-size:11px;color:var(--muted)">${stock?.sector||'—'}</td>
             <td class="r" style="font-weight:700;color:${posCol}">
@@ -8279,7 +8279,7 @@ function renderInsiderTable() {
                       onmouseout="this.style.background=''">
             <td style="padding:7px 10px;color:var(--muted)">${row.trade_date||'—'}</td>
             <td style="padding:7px 10px">
-              <strong style="color:#5ab4ff">${row.symbol}</strong>
+              <strong style="color:#5ab4ff">${row.symbol}</strong>${tvLink(row.symbol)}
             </td>
             <td style="padding:7px 10px">${srcBadge}</td>
             <td style="padding:7px 10px;color:#c8d0dc;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
@@ -8762,7 +8762,7 @@ async function renderNvdrRanking() {
   });
 
   const symTd = r =>
-    `<td><strong class="sym-link" onclick="openChartModal('${r.sym}')">${r.sym}</strong></td>`;
+    `<td><strong class="sym-link" onclick="openChartModal('${r.sym}')">${r.sym}</strong>${tvLink(r.sym)}</td>`;
   const dHtml = r => {
     if (r.dPct == null) return '<span class="text2">—</span>';
     const c = r.dPct > 0 ? 'green' : r.dPct < 0 ? 'red' : 'text2';
