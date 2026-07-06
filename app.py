@@ -1529,16 +1529,21 @@ _breadth_cache: dict = {}
 
 @app.route("/api/breadth")
 def market_breadth():
-    """Market Breadth รายวันย้อนหลัง 1 ปี (% above EMA, NH/NL, McClellan)
-    คำนวณครั้งเดียว ~3 วิ แล้ว cache ใน memory — clear หลัง refresh"""
-    if _breadth_cache.get("data"):
-        return jsonify(_breadth_cache["data"])
+    """Market Breadth รายวัน (% above EMA, NH/NL, McClellan)
+    รับ query param ?range=1y|3y|5y|all (default 1y) — cache แยกต่อ range ใน memory,
+    clear ทั้งหมดหลัง refresh"""
+    from services.breadth import RANGE_DAYS
+    rng = request.args.get("range", "1y")
+    if rng not in RANGE_DAYS:
+        rng = "1y"
+    if _breadth_cache.get(rng):
+        return jsonify(_breadth_cache[rng])
     try:
         from services.breadth import compute_breadth
-        data = compute_breadth(BASE_DIR)
+        data = compute_breadth(BASE_DIR, days=RANGE_DAYS[rng])
         if not data:
             return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณา Full Refresh ก่อน"}), 404
-        _breadth_cache["data"] = data
+        _breadth_cache[rng] = data
         return jsonify(data)
     except Exception as e:
         print(f"[Breadth] {traceback.format_exc()}")

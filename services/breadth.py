@@ -18,17 +18,25 @@ import pandas as pd
 
 from core.store import iter_all_series
 
-DISPLAY_DAYS = 252   # ~1 ปีซื้อขาย
-WARMUP_BARS  = 800   # ต่อหุ้น: 252 แสดง + 252 rolling 52W + ~300 EMA warmup
+DISPLAY_DAYS = 252   # ~1 ปีซื้อขาย (ค่า default เมื่อไม่ระบุ days)
+WARMUP_EXTRA = 550   # buffer เพิ่มจาก days ที่แสดง: 252 rolling 52W + ~300 EMA warmup
+
+# ตัวเลือกช่วงเวลาที่หน้า UI เรียกใช้ได้ (~จำนวนวันซื้อขาย, None = ทั้งหมดที่มี)
+RANGE_DAYS = {"1y": 252, "3y": 756, "5y": 1260, "all": None}
 
 
 def compute_breadth(base_dir, days=DISPLAY_DAYS):
+    """days=None → ใช้ข้อมูลทั้งหมดที่มี (ไม่ตัด warmup ต่อหุ้น)"""
+    warmup = None if days is None else days + WARMUP_EXTRA
+
     series = {}
     for tick, d in iter_all_series(base_dir):
         if len(d["dates"]) < 60:          # ข้อมูลน้อยเกินกว่าจะมีความหมาย
             continue
-        idx = pd.to_datetime(d["dates"][-WARMUP_BARS:])
-        series[tick] = pd.Series(d["closes"][-WARMUP_BARS:], index=idx, dtype="float64")
+        dates  = d["dates"][-warmup:]  if warmup else d["dates"]
+        closes = d["closes"][-warmup:] if warmup else d["closes"]
+        idx = pd.to_datetime(dates)
+        series[tick] = pd.Series(closes, index=idx, dtype="float64")
 
     if not series:
         return None
@@ -59,7 +67,7 @@ def compute_breadth(base_dir, days=DISPLAY_DAYS):
     nl = (close <= prior_min).sum(axis=1)
 
     # ---- ตัดเหลือ window แสดงผล ----
-    tail = close.index[-days:]
+    tail = close.index[-days:] if days is not None else close.index
     mcc_win = mcc_osc.loc[tail]
     out = {
         "dates":            [d.strftime("%Y-%m-%d") for d in tail],
