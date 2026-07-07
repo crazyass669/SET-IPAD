@@ -132,6 +132,7 @@ async function loadData() {
     renderAll();
     initAlertSystem();
     checkPeReminder();
+    checkFlowFreshness();    // ซ่อนเมนู Capital Flow บนเวอร์ชันเว็บถ้าข้อมูลค้าง
   } catch(e) {
     console.error("loadData error:", e);
     document.getElementById("updated-at").textContent = "ไม่สามารถโหลดข้อมูลได้: " + e.message;
@@ -3070,6 +3071,31 @@ function goToPeUpdate() {
   document.getElementById('pe-reminder-modal').classList.remove('open');
   const btn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'valuation'"));
   showPage('valuation', btn);
+}
+
+// ============================================================
+// CAPITAL FLOW FRESHNESS CHECK — เฉพาะเวอร์ชันเว็บ (GitHub Pages)
+// market_flow.json มาจาก siamchart.com ที่สงสัยว่าโดนบล็อคจาก IP ของ
+// GitHub Actions runner (auto-update ไม่เคยสำเร็จเลยตั้งแต่แก้มือครั้งล่าสุด
+// ต่างจาก endpoint อื่นที่อัปเดตได้ปกติ) — ถ้าข้อมูลค้างเกิน 4 วัน (กันวันหยุด
+// สุดสัปดาห์นับเป็น false positive) ให้ซ่อนเมนู Capital Flow ไปเลยแทนที่จะ
+// โชว์ข้อมูลเก่าให้เข้าใจผิดว่าเป็นของวันนี้
+// ============================================================
+async function checkFlowFreshness() {
+  if (!IS_STATIC) return; // local ดึงสดทุกครั้งอยู่แล้ว ไม่มีปัญหาข้อมูลค้าง
+  try {
+    const r = await fetch('/api/market-flow');
+    const d = await r.json();
+    const rows = d.rows || [];
+    const lastDate = rows.length ? rows[rows.length - 1].date : null;
+    if (!lastDate) throw new Error('no rows');
+    const ageDays = (Date.now() - new Date(lastDate).getTime()) / 86400000;
+    if (ageDays > 4) {
+      const btn = [...document.querySelectorAll('.nav-btn')]
+        .find(b => b.getAttribute('onclick')?.includes("'flow'"));
+      if (btn) btn.style.display = 'none';
+    }
+  } catch (e) { /* เงียบ — ถ้าเช็คไม่ได้ก็ปล่อยเมนูโชว์ตามปกติ ไม่ใช่ฟีเจอร์หลัก */ }
 }
 
 // ============================================================
