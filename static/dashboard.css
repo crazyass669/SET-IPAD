@@ -772,14 +772,19 @@
   .filter-row { gap: 10px; }
 
   /* ตารางข้อมูล (Screener, หุ้นทั้งหมด, Fundamentals ฯลฯ) กว้างเกินจอแคบ
-     เดิมไม่มี wrapper ให้เลื่อน ทำให้ดันทั้งหน้าล้นซ้ายขวา —
-     display:block บนตัว <table> เอง ทำให้ thead/tbody กลายเป็น anonymous
-     table ที่คำนวณความกว้างตามเนื้อหาจริง แล้วให้ overflow-x:auto
-     เลื่อนเฉพาะตัวตาราง โดยไม่ต้องแก้ HTML ที่ฝัง style="width:100%" มา
-     ยกเว้นตารางที่มี <canvas> อยู่ข้างใน (เช่น sparkline ในหน้า "หุ้นทั้งหมด"
-     และ "52W High/Low & Breakout") — Safari/WebKit บนไอแพดมีบั๊กที่ทำให้
-     canvas หลุดตำแหน่งออกจากแถวเมื่อ table ถูกบังคับ display:block */
-  .tbl:not(:has(canvas)) { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+     เดิมลองใช้ display:block บนตัว <table> เอง แต่ชนกับตารางที่มี <canvas>
+     (sparkline ในหน้า "หุ้นทั้งหมด"/Watchlist) — Safari/WebKit บนไอแพดมีบั๊ก
+     ทำให้ canvas หลุดตำแหน่งเมื่อ table ถูกบังคับ display:block เลยต้อง
+     ยกเว้นตารางกลุ่มนั้นไว้ก่อน แต่ผลคือตารางกลุ่มที่มี canvas ไม่มี wrapper
+     ให้เลื่อนเลย ดันทั้งการ์ด/หน้าล้นซ้ายขวาแทน (ปัญหาที่เจอจริง)
+
+     แก้ใหม่: ให้ .card (ตัวห่อ) เป็นตัวเลื่อนแทน ไม่ไปแตะ display ของ
+     <table> เองเลย — ปลอดภัยกับ canvas ทุกกรณี เพราะบั๊ก Safari เกิดจาก
+     การเปลี่ยน display ของ table ไม่ใช่จาก overflow ของ parent */
+  .card:has(> table.tbl) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 /* ซ่อนคอลัมน์ "ชื่อ" (ชื่อเต็มบริษัท เช่น "MIDA LEASING PUBLIC CO., LTD.")
