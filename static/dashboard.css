@@ -780,10 +780,15 @@
 
      แก้ใหม่: ให้ .card (ตัวห่อ) เป็นตัวเลื่อนแทน ไม่ไปแตะ display ของ
      <table> เองเลย — ปลอดภัยกับ canvas ทุกกรณี เพราะบั๊ก Safari เกิดจาก
-     การเปลี่ยน display ของ table ไม่ใช่จาก overflow ของ parent */
+     การเปลี่ยน display ของ table ไม่ใช่จาก overflow ของ parent
+
+     ตัด -webkit-overflow-scrolling:touch ออก — property เก่านี้บังคับให้
+     Safari สร้าง compositing layer แยกสำหรับ scroll ซึ่งมีบั๊กเก่าแก่ที่
+     เนื้อหาที่เลื่อน "หลุด" ออกนอกขอบ border-radius/พื้นหลังของ .card ระหว่าง
+     momentum scroll (ตรงกับอาการที่เจอ) — iOS 13+ มี momentum scroll ให้
+     overflow-x:auto เฉยๆ อยู่แล้วโดยไม่ต้องพึ่ง property นี้ */
   .card:has(> table.tbl) {
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
   }
 }
 
