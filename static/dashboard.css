@@ -786,9 +786,20 @@
      Safari สร้าง compositing layer แยกสำหรับ scroll ซึ่งมีบั๊กเก่าแก่ที่
      เนื้อหาที่เลื่อน "หลุด" ออกนอกขอบ border-radius/พื้นหลังของ .card ระหว่าง
      momentum scroll (ตรงกับอาการที่เจอ) — iOS 13+ มี momentum scroll ให้
-     overflow-x:auto เฉยๆ อยู่แล้วโดยไม่ต้องพึ่ง property นี้ */
-  .card:has(> table.tbl) {
+     overflow-x:auto เฉยๆ อยู่แล้วโดยไม่ต้องพึ่ง property นี้
+
+     เจอสาเหตุจริงที่ยังล้นอยู่ (หุ้นทั้งหมด, DR/DRx): base rule ".tbl{width:
+     100%}" บังคับตารางให้กว้างแค่เท่า .card เสมอ (auto table-layout เลย
+     บีบทุกคอลัมน์ให้พอดี แทนที่จะกว้างเกินแล้ว scroll) — ต้องคืน width
+     เป็น auto (ปล่อยกว้างตามเนื้อหาจริง) ให้ overflow-x:auto ทำงานได้จริง
+     ส่วน :has(table.tbl) ไม่ใช้ > (direct child) อีกต่อไป เพราะหน้า DR/DRx
+     ห่อ <table> ไว้อีกชั้นด้วย #dr-table-wrap (เป็นหลานของ .card ไม่ใช่ลูก) */
+  .card:has(table.tbl) {
     overflow-x: auto;
+  }
+  .card:has(table.tbl) table.tbl {
+    width: auto;
+    min-width: 100%;
   }
 }
 
