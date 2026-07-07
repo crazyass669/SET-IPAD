@@ -495,6 +495,16 @@ function _scrSectorAbbr(name) {
   return _SECTOR_ABBR_MAP[name] || name;
 }
 
+// จอมือถือ/ไอแพด/เดสก์ท็อป มีพื้นที่ต่างกันมาก — ใช้ตรวจ window.innerWidth
+// สดตอน render แทนการพึ่ง media query อย่างเดียว เพราะบางตาราง (Screener)
+// ความกว้างคอลัมน์กำหนดผ่าน inline <col style="width:Npx"> ไม่ใช่ CSS
+function _screenTier() {
+  const w = window.innerWidth;
+  if (w <= 480)  return 'phone';
+  if (w <= 1024) return 'tablet';
+  return 'desktop';
+}
+
 function pct(v, dec=2) {
   if (v == null) return '<span class="text2">—</span>';
   const c = v > 0 ? "green" : v < 0 ? "red" : "text2";
@@ -2900,7 +2910,13 @@ function renderScrTable() {
     return ((b[col]??-Infinity) - (a[col]??-Infinity)) * _scrSortDir;
   });
 
-  const sectorAbbr = _scrSectorAbbr;
+  // มือถือจอแคบ (≤480px) ย่อ Sector สุด ๆ เอาพื้นที่คืนให้คอลัมน์ตัวเลข
+  // ไอแพด/เดสก์ท็อป มีพื้นที่พอ โชว์ชื่อ sector เต็มได้เลยไม่ต้องย่อ
+  const _tier = _screenTier();
+  const secColWidth = _tier === 'phone' ? 56 : 110;
+  const sectorCellHtml = s => _tier === 'phone'
+    ? `<td style="font-size:11px" title="${s.sector || ''}">${_scrSectorAbbr(s.sector)}</td>`
+    : `<td style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.sector || ''}">${s.sector || '—'}</td>`;
 
   function th(col, label, cls='') {
     const active = _scrSortCol === col;
@@ -2916,7 +2932,7 @@ function renderScrTable() {
         <col style="width:60px"><!-- SEC.RANK -->
         <col style="width:72px"><!-- SYMBOL -->
         <col style="width:130px"><!-- ชื่อ -->
-        <col style="width:56px"><!-- SECTOR (ย่อ) -->
+        <col style="width:${secColWidth}px"><!-- SECTOR -->
         <col style="width:46px"><!-- ราคา -->
         <col style="width:48px"><!-- 1D% -->
         <col style="width:48px"><!-- 1W% -->
@@ -2949,7 +2965,7 @@ function renderScrTable() {
           <td class="r">${secRankHtml(s.sec_rank ? {rank:s.sec_rank,total:s.sec_total} : null)}</td>
           <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}</td>
           <td style="font-size:11px;color:var(--text2);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
-          <td style="font-size:11px" title="${s.sector || ''}">${sectorAbbr(s.sector)}</td>
+          ${sectorCellHtml(s)}
           <td class="r">${s.price?.toFixed(2) ?? '—'}</td>
           <td class="r">${pct(s.ret_1d)}</td>
           <td class="r">${pct(s.ret_1w)}</td>
