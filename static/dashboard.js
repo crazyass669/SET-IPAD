@@ -453,6 +453,48 @@ function calcMarketRegime(stocks) {
   return { score: capped, desc };
 }
 
+const _SECTOR_ABBR_MAP = {
+  'Agribusiness': 'AGRI',
+  'Agro & Food Industry -mai': 'AGRO-M',
+  'Automotive': 'AUTO',
+  'Banking': 'BANK',
+  'Commerce': 'COMM',
+  'Construction Materials': 'CONMAT',
+  'Construction Services': 'CONSVC',
+  'Consumer Products -mai': 'CONS-M',
+  'Electronic Components': 'ELEC',
+  'Energy & Utilities': 'ENERGY',
+  'Fashion': 'FASHION',
+  'Finance & Securities': 'FIN',
+  'Financials -mai': 'FIN-M',
+  'Food & Beverage': 'FOOD',
+  'Health Care Services': 'HEALTH',
+  'Home & Office Products': 'HOME',
+  'Industrial -mai': 'IND-M',
+  'Industrial Materials & Machinery': 'INDMAT',
+  'Information & Communication Technology': 'ICT',
+  'Insurance': 'INSUR',
+  'Media & Publishing': 'MEDIA',
+  'Packaging': 'PACK',
+  'Paper & Printing Materials': 'PAPER',
+  'Personal Products & Pharmaceuticals': 'PERSPH',
+  'Petrochemicals & Chemicals': 'PETRO',
+  'Professional Services': 'PROF',
+  'Property & Construction -mai': 'PROP-M',
+  'Property Development': 'PROPDV',
+  'Property Fund & REITs': 'REIT',
+  'Resources -mai': 'RES-M',
+  'Services -mai': 'SVC-M',
+  'Steel and Metal Products': 'STEEL',
+  'Technology -mai': 'TECH-M',
+  'Tourism & Leisure': 'TOURSM',
+  'Transportation & Logistics': 'TRANSP',
+};
+function _scrSectorAbbr(name) {
+  if (!name) return '—';
+  return _SECTOR_ABBR_MAP[name] || name;
+}
+
 function pct(v, dec=2) {
   if (v == null) return '<span class="text2">—</span>';
   const c = v > 0 ? "green" : v < 0 ? "red" : "text2";
@@ -2858,6 +2900,8 @@ function renderScrTable() {
     return ((b[col]??-Infinity) - (a[col]??-Infinity)) * _scrSortDir;
   });
 
+  const sectorAbbr = _scrSectorAbbr;
+
   function th(col, label, cls='') {
     const active = _scrSortCol === col;
     const arrow  = active ? (_scrSortDir === 1 ? '↓' : '↑') : '↕';
@@ -2872,20 +2916,20 @@ function renderScrTable() {
         <col style="width:60px"><!-- SEC.RANK -->
         <col style="width:72px"><!-- SYMBOL -->
         <col style="width:130px"><!-- ชื่อ -->
-        <col style="width:90px"><!-- SECTOR -->
+        <col style="width:56px"><!-- SECTOR (ย่อ) -->
         <col style="width:46px"><!-- ราคา -->
-        <col style="width:44px"><!-- 1D% -->
-        <col style="width:44px"><!-- 1W% -->
-        <col style="width:44px"><!-- 1M% -->
-        <col style="width:44px"><!-- 3M% -->
-        <col style="width:44px"><!-- 6M% -->
-        <col style="width:44px"><!-- 1Y% -->
-        <col style="width:44px"><!-- YTD% -->
+        <col style="width:48px"><!-- 1D% -->
+        <col style="width:48px"><!-- 1W% -->
+        <col style="width:48px"><!-- 1M% -->
+        <col style="width:48px"><!-- 3M% -->
+        <col style="width:48px"><!-- 6M% -->
+        <col style="width:48px"><!-- 1Y% -->
+        <col style="width:48px"><!-- YTD% -->
         <col style="width:56px"><!-- %HIGH -->
         <col style="width:48px"><!-- %LOW -->
-        <col style="width:36px"><!-- P/E -->
-        <col style="width:36px"><!-- P/BV -->
-        <col style="width:40px"><!-- DIV% -->
+        <col style="width:38px"><!-- P/E -->
+        <col style="width:38px"><!-- P/BV -->
+        <col style="width:42px"><!-- DIV% -->
         <col style="width:52px"><!-- RVOL -->
         <col style="width:60px"><!-- MKT CAP -->
         <col style="width:44px"><!-- EMA50 -->
@@ -2905,7 +2949,7 @@ function renderScrTable() {
           <td class="r">${secRankHtml(s.sec_rank ? {rank:s.sec_rank,total:s.sec_total} : null)}</td>
           <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}</td>
           <td style="font-size:11px;color:var(--text2);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
-          <td style="font-size:11px">${s.sector || '—'}</td>
+          <td style="font-size:11px" title="${s.sector || ''}">${sectorAbbr(s.sector)}</td>
           <td class="r">${s.price?.toFixed(2) ?? '—'}</td>
           <td class="r">${pct(s.ret_1d)}</td>
           <td class="r">${pct(s.ret_1w)}</td>
