@@ -780,4 +780,21 @@
      และ "52W High/Low & Breakout") — Safari/WebKit บนไอแพดมีบั๊กที่ทำให้
      canvas หลุดตำแหน่งออกจากแถวเมื่อ table ถูกบังคับ display:block */
   .tbl:not(:has(canvas)) { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* ซ่อนคอลัมน์ "ชื่อ" (ชื่อเต็มบริษัท เช่น "MIDA LEASING PUBLIC CO., LTD.")
+     บนจอแคบ — กินพื้นที่มากแต่ข้อมูลซ้ำกับ Symbol อยู่แล้ว (แตะ/hover
+     Symbol หรือเปิดกราฟดูชื่อเต็มได้อยู่แล้ว) ทำทุกตารางที่มีคอลัมน์นี้:
+     RS Leaders & Emerging, หุ้นทั้งหมด, Stage Analysis, Watchlist,
+     52W High/Low & Breakout, Momentum Alignment, Fundamental View
+     (Stock Screener แยกจัดการใน JS เพราะใช้ colgroup กำหนดความกว้างตรงๆ) */
+  #tbl-rs-leaders th:nth-child(3),  #tbl-rs-leaders td:nth-child(3),
+  #tbl-emerging   th:nth-child(3),  #tbl-emerging   td:nth-child(3),
+  #tbl-stocks     th:nth-child(3),  #tbl-stocks     td:nth-child(3),
+  #tbl-watchlist  th:nth-child(3),  #tbl-watchlist  td:nth-child(3),
+  #tbl-fundamentals th:nth-child(3), #tbl-fundamentals td:nth-child(3),
+  #tbl-stage      th:nth-child(4),  #tbl-stage      td:nth-child(4),
+  #tbl-breakout   th:nth-child(4),  #tbl-breakout   td:nth-child(4),
+  #tbl-momentum   th:nth-child(4),  #tbl-momentum   td:nth-child(4) {
+    display: none;
+  }
 }

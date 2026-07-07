@@ -2917,6 +2917,14 @@ function renderScrTable() {
   const sectorCellHtml = s => _tier === 'phone'
     ? `<td style="font-size:11px" title="${s.sector || ''}">${_scrSectorAbbr(s.sector)}</td>`
     : `<td style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.sector || ''}">${s.sector || '—'}</td>`;
+  // คอลัมน์ "ชื่อ" (ชื่อเต็มบริษัท) ซ้ำกับ Symbol อยู่แล้ว — ซ่อนบนจอแคบ
+  // (มือถือ+ไอแพด) ทั้ง colgroup/th/td เก็บไว้เฉพาะเดสก์ท็อปที่มีพื้นที่พอ
+  const _showName = _tier === 'desktop';
+  const nameColHtml = _showName ? `<col style="width:130px"><!-- ชื่อ -->` : '';
+  const nameThHtml  = _showName ? th('name','ชื่อ') : '';
+  const nameCellHtml = s => _showName
+    ? `<td style="font-size:11px;color:var(--text2);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>`
+    : '';
 
   function th(col, label, cls='') {
     const active = _scrSortCol === col;
@@ -2931,7 +2939,7 @@ function renderScrTable() {
         <col style="width:36px"><!-- RS -->
         <col style="width:60px"><!-- SEC.RANK -->
         <col style="width:72px"><!-- SYMBOL -->
-        <col style="width:130px"><!-- ชื่อ -->
+        ${nameColHtml}
         <col style="width:${secColWidth}px"><!-- SECTOR -->
         <col style="width:46px"><!-- ราคา -->
         <col style="width:48px"><!-- 1D% -->
@@ -2952,7 +2960,7 @@ function renderScrTable() {
         <col style="width:44px"><!-- EMA200 -->
       </colgroup>
       <thead><tr>
-        ${th('rs_score','RS')}${th('sec_rank','SEC.RANK','r')}${th('symbol','SYMBOL')}${th('name','ชื่อ')}${th('sector','SECTOR')}
+        ${th('rs_score','RS')}${th('sec_rank','SEC.RANK','r')}${th('symbol','SYMBOL')}${nameThHtml}${th('sector','SECTOR')}
         ${th('price','ราคา','r')}${th('ret_1d','1D%','r')}${th('ret_1w','1W%','r')}${th('ret_1m','1M%','r')}
         ${th('ret_3m','3M%','r')}${th('ret_6m','6M%','r')}${th('ret_1y','1Y%','r')}${th('ret_ytd','YTD%','r')}
         ${th('fromHigh','%HIGH','r')}${th('fromLow','%LOW','r')}
@@ -2964,7 +2972,7 @@ function renderScrTable() {
           <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score ?? '—'}</span></td>
           <td class="r">${secRankHtml(s.sec_rank ? {rank:s.sec_rank,total:s.sec_total} : null)}</td>
           <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}</td>
-          <td style="font-size:11px;color:var(--text2);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
+          ${nameCellHtml(s)}
           ${sectorCellHtml(s)}
           <td class="r">${s.price?.toFixed(2) ?? '—'}</td>
           <td class="r">${pct(s.ret_1d)}</td>

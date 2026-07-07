@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260707c">
+<link rel="stylesheet" href="static/dashboard.css?v=20260707d">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -582,7 +582,7 @@
   <div class="grid-4" style="margin-bottom:16px" id="fund-stat-cards"></div>
   <div class="card">
     <div id="fund-count" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
-    <table class="tbl">
+    <table class="tbl" id="tbl-fundamentals">
       <thead id="fund-thead"></thead>
       <tbody id="fund-tbody"></tbody>
     </table>
@@ -717,7 +717,7 @@
   </div>
   <div class="card">
     <div id="bo-count" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
-    <table class="tbl">
+    <table class="tbl" id="tbl-breakout">
       <thead id="bo-thead"></thead>
       <tbody id="bo-tbody"></tbody>
     </table>
@@ -761,7 +761,7 @@
   </div>
   <div class="card">
     <div id="mom-count" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
-    <table class="tbl">
+    <table class="tbl" id="tbl-momentum">
       <thead id="mom-thead"></thead>
       <tbody id="mom-tbody"></tbody>
     </table>
@@ -2230,6 +2230,6 @@
   </div>
 </div>
 
-<script src="static/dashboard.js?v=20260707d"></script>
+<script src="static/dashboard.js?v=20260707e"></script>
 </body>
 </html>
