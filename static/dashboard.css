@@ -790,15 +790,14 @@
   .card:has(> table.tbl) {
     overflow-x: auto;
   }
+}
 
-  /* ลดจำนวนคอลัมน์เพิ่มเติมบนจอแคบ (มือถือ/ไอแพด) เพื่อลดระยะที่ต้องเลื่อน
-     เลือกตัดเฉพาะคอลัมน์ที่ซ้ำซ้อน/สำคัญน้อยสุดตามที่ผู้ใช้เลือกไว้ —
-     "หุ้นทั้งหมด": Industry (ซ้ำกับ Sector คอลัมน์ถัดไป)
-     "52W High/Low & Breakout": 3M% */
-  #tbl-stocks    th:nth-child(4),  #tbl-stocks    td:nth-child(4),
-  #tbl-breakout  th:nth-child(11), #tbl-breakout  td:nth-child(11) {
-    display: none;
-  }
+/* ซ่อนถาวรทุกขนาดจอ (ไม่มีเงื่อนไขจอแคบ) — คอลัมน์ที่ซ้ำซ้อน/สำคัญน้อยสุด
+   ตามที่ผู้ใช้เลือกไว้: "หุ้นทั้งหมด" ตัด Industry (ซ้ำกับ Sector คอลัมน์
+   ถัดไป), "52W High/Low & Breakout" ตัด 3M% */
+#tbl-stocks    th:nth-child(4),  #tbl-stocks    td:nth-child(4),
+#tbl-breakout  th:nth-child(11), #tbl-breakout  td:nth-child(11) {
+  display: none;
 }
 
 /* ซ่อนคอลัมน์ "ชื่อ" (ชื่อเต็มบริษัท เช่น "MIDA LEASING PUBLIC CO., LTD.")
