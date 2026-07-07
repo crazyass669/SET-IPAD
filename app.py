@@ -51,7 +51,7 @@ from core.metrics import calc_rs_raw
 # HTTP clients / static universe — แยกไว้ที่ sources/ (Phase 2 refactor)
 from sources.tradingview import INDEX_INFO, _yf_to_tv, _fetch_tv_bars
 from sources.dr_universe import _DR_STATIC, is_latest_bar_stable
-from sources.sec import _thai_date, _extract_symbol, sec_fetch_chunked
+from sources import sec_store
 
 
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
@@ -1670,8 +1670,14 @@ def _run_quick():
         _refresh_svc.run_quick_update(cb, BASE_DIR)
         _market_internals_cache.clear()
         _breadth_cache.clear()
-        _insider_cache.clear()
-        _major_cache.clear()
+
+        _update(current=93, total=100, message="อัพเดท Insider/ผู้ถือหุ้นใหญ่...")
+        try:
+            from sources import sec_store as _sec_store
+            _sec_store.sync_insider_trades(BASE_DIR)
+            _sec_store.sync_major_changes(BASE_DIR)
+        except Exception as e:
+            print(f"[QuickUpdate] Insider sync error: {e}")
 
         # อัพเดท Indices
         _update(current=95, total=100, message="อัพเดท Indices...")
@@ -1703,194 +1709,72 @@ def _run_quick():
 
 
 # ============================================================
-# SEC Insider / Major-Holder endpoints
+# SEC Insider / Major-Holder endpoints — เก็บสะสมใน sec_filings.db
+# (sources/sec_store.py) sync ตอน Quick Update / auto-update cron
 # ============================================================
-
-_insider_cache: dict = {}
-_major_cache:   dict = {}
-_SEC_CACHE_TTL = 6 * 3600   # 6 hours
 
 @app.route("/api/insider-trades")
 def insider_trades():
-    """ดึงการซื้อขายหุ้นของผู้บริหาร (แบบ 59) — cache 6 ชม."""
-    from datetime import datetime as _dt, timedelta as _td
-    import re as _re
+    """ผู้บริหารซื้อขายหุ้น (แบบ 59) — อ่านจากฐานข้อมูลสะสม (sec_filings.db)
+    ไม่ยิง SEC สดทุกครั้งอีกต่อไป ข้อมูลใหม่เข้ามาจาก sync_insider_trades()
+    (เรียกตอน Quick Update / auto-update cron) เท่านั้น"""
+    from datetime import datetime as _dt
 
     days = int(request.args.get("days", 30))
     days = max(1, min(days, 365))
-    cache_key = f"r59_{days}"
 
-    cached = _insider_cache.get(cache_key)
-    if cached and (time.time() - cached["ts"] < _SEC_CACHE_TTL):
-        return jsonify(cached["data"])
+    if not sec_store.db_exists(BASE_DIR):
+        # ยังไม่เคย sync เลย -> sync ครั้งแรก (ช้า ~2-3 นาที ดึงย้อนหลัง 180 วัน)
+        try:
+            sec_store.sync_insider_trades(BASE_DIR)
+        except Exception as e:
+            return jsonify({"error": f"sync ครั้งแรกล้มเหลว: {e}"}), 500
 
-    UA  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
-    URL = "https://market.sec.or.th/public/idisc/th/r59"
-
-    try:
-        date_to   = _dt.now()
-        date_from = date_to - _td(days=days)
-
-        def _build_payload(d_from, d_to, vs, vsg, ev):
-            return {
-                "__VIEWSTATE": vs,
-                "__VIEWSTATEGENERATOR": vsg,
-                "__EVENTVALIDATION": ev,
-                "ctl00$CPH$rblDateType": "T",
-                "ctl00$CPH$BSDateFrom": _thai_date(d_from),
-                "ctl00$CPH$BSDateTo":   _thai_date(d_to),
-                "ctl00$CPH$btSearch":   "Search",
-                "ctl00$CPH$ddlCompany": "",
-            }
-        df = sec_fetch_chunked(URL, UA, date_from, date_to, _build_payload)
-
-        records = []
-        for _, row in df.iterrows():
-            vals = row.tolist()
-            if len(vals) < 8:
-                continue
-            company = str(vals[0])
-            sym = _extract_symbol(company)
-            if not sym:
-                continue
-            method = str(vals[7]) if len(vals) > 7 else ""
-            action = "buy" if "ซื้อ" in method else \
-                     "sell" if "ขาย" in method else "other"
-            try:    qty = int(str(vals[5]).replace(",", ""))
-            except: qty = 0
-            try:
-                price = float(str(vals[6]).replace(",", ""))
-                if price != price: price = None  # NaN check
-            except: price = None
-
-            # parse date dd/mm/yyyy (Buddhist year)
-            raw_date = str(vals[4]) if len(vals) > 4 else ""
-            trade_date = ""
-            m = _re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", raw_date)
-            if m:
-                dd, mm, yy = m.groups()
-                ce_year = int(yy) - 543
-                trade_date = f"{ce_year}-{mm.zfill(2)}-{dd.zfill(2)}"
-
-            records.append({
-                "symbol":     sym,
-                "company":    company,
-                "name":       str(vals[1]),
-                "relation":   str(vals[2]),
-                "sec_type":   str(vals[3]),
-                "trade_date": trade_date,
-                "qty":        qty,
-                "price":      price,
-                "method":     method,
-                "action":     action,
-            })
-
-        result = {
-            "records": records,
-            "days": days,
-            "from": date_from.strftime("%Y-%m-%d"),
-            "to":   date_to.strftime("%Y-%m-%d"),
-            "fetched_at": _dt.now().strftime("%H:%M น. %d/%m/%Y"),
-        }
-        _insider_cache[cache_key] = {"ts": time.time(), "data": result}
-        return jsonify(result)
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    records = sec_store.query_insider_trades(BASE_DIR, days)
+    last_synced = sec_store._get_meta(BASE_DIR, "insider_last_synced_at")
+    return jsonify({
+        "records": records,
+        "days": days,
+        "from": (_dt.now() - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d"),
+        "to":   _dt.now().strftime("%Y-%m-%d"),
+        "fetched_at": last_synced or "-",
+    })
 
 
 @app.route("/api/major-changes")
 def major_changes():
-    """ดึงการเปลี่ยนแปลงผู้ถือหุ้นรายใหญ่ (แบบ 246-2) — cache 6 ชม."""
-    from datetime import datetime as _dt, timedelta as _td
-    import re as _re
+    """ผู้ถือหุ้นรายใหญ่เปลี่ยนแปลง (แบบ 246-2) — อ่านจากฐานข้อมูลสะสม (sec_filings.db)"""
+    from datetime import datetime as _dt
 
     days = int(request.args.get("days", 30))
     days = max(1, min(days, 365))
-    cache_key = f"r246_{days}"
 
-    cached = _major_cache.get(cache_key)
-    if cached and (time.time() - cached["ts"] < _SEC_CACHE_TTL):
-        return jsonify(cached["data"])
+    if not sec_store.db_exists(BASE_DIR):
+        try:
+            sec_store.sync_major_changes(BASE_DIR)
+        except Exception as e:
+            return jsonify({"error": f"sync ครั้งแรกล้มเหลว: {e}"}), 500
 
-    UA  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
-    URL = "https://market.sec.or.th/public/idisc/th/r246"
+    records = sec_store.query_major_changes(BASE_DIR, days)
+    last_synced = sec_store._get_meta(BASE_DIR, "major_last_synced_at")
+    return jsonify({
+        "records": records,
+        "days": days,
+        "from": (_dt.now() - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d"),
+        "to":   _dt.now().strftime("%Y-%m-%d"),
+        "fetched_at": last_synced or "-",
+    })
 
+
+@app.route("/api/insider-sync", methods=["POST"])
+def insider_sync():
+    """sync ฐานข้อมูลสะสม SEC filings แบบ manual (เรียกจากปุ่มในหน้า Insider)"""
     try:
-        date_to   = _dt.now()
-        date_from = date_to - _td(days=days)
-
-        def _build_payload(d_from, d_to, vs, vsg, ev):
-            return {
-                "__VIEWSTATE": vs,
-                "__VIEWSTATEGENERATOR": vsg,
-                "__EVENTVALIDATION": ev,
-                "ctl00$CPH$BsCompany": "",
-                "ctl00$CPH$BsCompany_t": "",
-                "ctl00$CPH$BsCompany_v": "",
-                "ctl00$CPH$txtSearchPerson": "",
-                "ctl00$CPH$rblDateType": "T",
-                "ctl00$CPH$BSDateFrom": _thai_date(d_from),
-                "ctl00$CPH$BSDateTo":   _thai_date(d_to),
-                "ctl00$CPH$btSearch":   "Search",
-            }
-        df = sec_fetch_chunked(URL, UA, date_from, date_to, _build_payload)
-
-        records = []
-        for _, row in df.iterrows():
-            vals = row.tolist()
-            if len(vals) < 5:
-                continue
-            sym = str(vals[0]).strip().upper()
-            if not sym or sym == "NAN" or sym == "หลักทรัพย์":
-                continue
-            # symbol อาจมี format "GULF" โดยตรง หรือ "GULF (หุ้นสามัญ)"
-            sym_clean = sym.split()[0].split("(")[0].strip()
-
-            holder = str(vals[1])
-            method = str(vals[2])
-            action = "buy" if "ได้มา" in method else \
-                     "sell" if "จำหน่าย" in method else "other"
-
-            try:    pct_before = float(str(vals[4]).replace(",", ""))
-            except: pct_before = None
-            try:    pct_change = float(str(vals[5]).replace(",", ""))
-            except: pct_change = None
-            try:    pct_after  = float(str(vals[6]).replace(",", ""))
-            except: pct_after  = None
-
-            raw_date = str(vals[7]) if len(vals) > 7 else ""
-            trade_date = ""
-            m = _re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", raw_date)
-            if m:
-                dd, mm, yy = m.groups()
-                ce_year = int(yy) - 543
-                trade_date = f"{ce_year}-{mm.zfill(2)}-{dd.zfill(2)}"
-
-            records.append({
-                "symbol":     sym_clean,
-                "holder":     holder,
-                "method":     method,
-                "sec_type":   str(vals[3]) if len(vals) > 3 else "",
-                "pct_before": pct_before,
-                "pct_change": pct_change,
-                "pct_after":  pct_after,
-                "trade_date": trade_date,
-                "action":     action,
-            })
-
-        result = {
-            "records": records,
-            "days": days,
-            "from": date_from.strftime("%Y-%m-%d"),
-            "to":   date_to.strftime("%Y-%m-%d"),
-            "fetched_at": _dt.now().strftime("%H:%M น. %d/%m/%Y"),
-        }
-        _major_cache[cache_key] = {"ts": time.time(), "data": result}
-        return jsonify(result)
-
+        n1 = sec_store.sync_insider_trades(BASE_DIR)
+        n2 = sec_store.sync_major_changes(BASE_DIR)
+        return jsonify({"ok": True, "insider_fetched": n1, "major_fetched": n2})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 # ============================================================

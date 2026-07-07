@@ -39,6 +39,11 @@ set_prices.db
 set_prices.db-wal
 set_prices.db-shm
 
+# SQLite SEC filings store (insider trades / major shareholder changes)
+sec_filings.db
+sec_filings.db-wal
+sec_filings.db-shm
+
 # Rotation quadrant alert state
 rotation_state.json
 

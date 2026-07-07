@@ -88,14 +88,29 @@ SNAPSHOTS = [
     ("/api/market-internals",              "market_internals.json",      False),
     ("/api/rotation-alerts",               "rotation_alerts.json",       False),
     ("/api/stock-valuation-stats",         "stock_valuation_stats.json", False),
-    # SEC จำกัดผลลัพธ์ไว้ที่ ~100 แถวต่อ query ไม่ว่าจะขอกี่วัน — /api/insider-trades
-    # และ /api/major-changes แก้ในตัวแล้วด้วย sec_fetch_chunked (แบ่งครึ่งช่วงวัน
-    # แบบ recursive เมื่อผลลัพธ์อิ่มตัว) ที่นี่ดึงแค่ days=180 (ครบสุด) แล้ว derive
-    # ไฟล์ 7/30/90 วันจากชุดข้อมูลเดียวกันด้านล่าง แทนที่จะยิงซ้ำ 4 รอบ (ช้า/เปลือง)
+    # insider-trades/major-changes อ่านจาก sec_filings.db ที่ sync ไว้ด้านล่างแล้ว
+    # (เร็วมาก ไม่ยิง SEC สดตอน bake อีกต่อไป) bake ครบทุกช่วงที่ปุ่ม UI ใช้
+    ("/api/insider-trades?days=7",         "insider_trades_7.json",      False),
+    ("/api/insider-trades?days=30",        "insider_trades_30.json",     False),
+    ("/api/insider-trades?days=90",        "insider_trades_90.json",     False),
     ("/api/insider-trades?days=180",       "insider_trades_180.json",    False),
+    ("/api/major-changes?days=7",          "major_changes_7.json",       False),
+    ("/api/major-changes?days=30",         "major_changes_30.json",      False),
+    ("/api/major-changes?days=90",         "major_changes_90.json",      False),
     ("/api/major-changes?days=180",        "major_changes_180.json",     False),
     ("/api/prices",                        "prices.json",                False),
 ]
+
+# sync ฐานข้อมูลสะสม SEC filings ก่อน bake (เร็ว ~นาทีเดียวถ้า sync แล้วครั้งก่อน
+# มีแค่หน้าต่างทับซ้อน 21 วัน / ช้า ~2-3 นาทีถ้าเป็นการ backfill ครั้งแรก 180 วัน)
+log("=== Sync sec_filings.db (insider/major-changes) ===")
+try:
+    from sources import sec_store
+    n1 = sec_store.sync_insider_trades(BASE_DIR)
+    n2 = sec_store.sync_major_changes(BASE_DIR)
+    log(f"✅ sync เสร็จ: insider {n1} แถว, major-changes {n2} แถว")
+except Exception as e:
+    log(f"⚠️ sync sec_filings.db ล้ม: {e}")
 
 failures = []
 for url, fname, required in SNAPSHOTS:
@@ -117,25 +132,5 @@ for url, fname, required in SNAPSHOTS:
 if failures:
     log(f"❌ ไฟล์จำเป็นล้มเหลว: {failures}")
     sys.exit(1)
-
-# ── derive ไฟล์ 7/30/90 วัน จากชุด 180 วันที่ดึงมาครบแล้ว (ไม่ยิง SEC ซ้ำ) ──
-log("=== Derive insider/major-changes 7/30/90 วัน จากชุด 180 วัน ===")
-_now = datetime.now(_ICT)
-for base, src in [("insider_trades", "insider_trades_180.json"), ("major_changes", "major_changes_180.json")]:
-    src_path = os.path.join(DATA_DIR, src)
-    if not os.path.exists(src_path):
-        continue
-    with open(src_path, encoding="utf-8") as f:
-        full = json.load(f)
-    for d in (7, 30, 90):
-        cutoff = (_now - timedelta(days=d)).strftime("%Y-%m-%d")
-        sub = dict(full)
-        sub["days"] = d
-        sub["from"] = cutoff
-        sub["records"] = [r for r in full["records"] if r.get("trade_date", "") >= cutoff]
-        out_path = os.path.join(DATA_DIR, f"{base}_{d}.json")
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(sub, f, ensure_ascii=False)
-        log(f"✅ {base}_{d}.json ({len(sub['records'])} records)")
 
 log("=== เสร็จทั้งหมด ===")

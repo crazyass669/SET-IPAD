@@ -39,6 +39,7 @@ jobs:
             set_prices.db
             set_data.json
             dr_cache.json
+            sec_filings.db
           key: set-prices-${{ github.run_id }}
           restore-keys: set-prices-
 
