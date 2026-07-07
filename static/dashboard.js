@@ -329,7 +329,11 @@ function fmtVol(v) {
 // วาด sparkline ลงใน canvas element
 function drawSparkline(canvas, prices, retVal) {
   if (!canvas || !prices || prices.length < 2) return;
-  const W = canvas.width  = 60;
+  // canvas ยืด CSS width:100% ตามคอลัมน์จริง (auto-layout table ความกว้าง
+  // เปลี่ยนได้ เช่น ตอนซ่อนคอลัมน์ "ชื่อ" คอลัมน์นี้จะกว้างขึ้น) — วัดขนาด
+  // ที่ render จริงมาตั้งเป็น resolution ของ canvas แทนค่าคงที่ 60px เดิม
+  // กันเส้นกราฟเดิมดูเล็ก/ลอยอยู่แค่ซีกซ้ายของคอลัมน์ที่กว้างขึ้น
+  const W = canvas.width  = Math.max(20, Math.round(canvas.clientWidth || 60));
   const H = canvas.height = 24;
   const ctx = canvas.getContext('2d');
   const vals = prices.map(p => p[1]);
@@ -2332,7 +2336,7 @@ function renderStocksTable() {
         <td class="r">${pct(s.ret_1m)}</td>
         <td class="r">${pct(s.ret_3m)}</td>
         <td class="r">${pct(s.ret_ytd)}</td>
-        <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block"></canvas></td>
+        <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
         <td class="r" style="font-size:11px">${fmtCap(s.mkt_cap, s.is_reit)}</td>
         <td class="r" style="font-size:11px">${rvolHtml(s)}</td>
         <td class="r">${emaBadge(s.above_ema50)}</td>
@@ -2491,7 +2495,7 @@ function renderWatchlist() {
           <td class="r">${pct(d.ret_3m)}</td>
           <td class="r">${pct(d.ret_ytd)}</td>
           <td class="r">${pct(d.ret_1y)}</td>
-          <td class="r"><canvas class="spark-canvas wl-dr-spark" width="60" height="24" style="display:block"></canvas></td>
+          <td class="r"><canvas class="spark-canvas wl-dr-spark" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
           <td class="r" style="font-size:11px">${_drFmtCap(d.mkt_cap)}</td>
           <td class="r text2">—</td>
           <td class="r text2">—</td>
@@ -2538,7 +2542,7 @@ function renderWatchlist() {
             <td class="r">${pct(d.ret_3m)}</td>
             <td class="r">${pct(d.ret_ytd)}</td>
             <td class="r">${pct(d.ret_1y)}</td>
-            <td class="r"><canvas class="spark-canvas wl-dr-spark" width="60" height="24" style="display:block"></canvas></td>
+            <td class="r"><canvas class="spark-canvas wl-dr-spark" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
             <td class="r" style="font-size:11px">${_drFmtCap(d.mkt_cap)}</td>
             <td class="r text2">—</td>
             <td class="r text2">—</td>
@@ -2566,7 +2570,7 @@ function renderWatchlist() {
         <td class="r">${pct(s.ret_3m)}</td>
         <td class="r">${pct(s.ret_ytd)}</td>
         <td class="r">${pct(s.ret_1y)}</td>
-        <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block"></canvas></td>
+        <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
         <td class="r" style="font-size:11px">${fmtCap(s.mkt_cap, s.is_reit)}</td>
         <td class="r">${emaBadge(s.above_ema50)}</td>
         <td class="r">${emaBadge(s.above_ema200)}</td>
