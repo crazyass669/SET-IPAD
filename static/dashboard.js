@@ -2917,9 +2917,9 @@ function renderScrTable() {
   const sectorCellHtml = s => _tier === 'phone'
     ? `<td style="font-size:11px" title="${s.sector || ''}">${_scrSectorAbbr(s.sector)}</td>`
     : `<td style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.sector || ''}">${s.sector || '—'}</td>`;
-  // คอลัมน์ "ชื่อ" (ชื่อเต็มบริษัท) ซ้ำกับ Symbol อยู่แล้ว — ซ่อนบนจอแคบ
-  // (มือถือ+ไอแพด) ทั้ง colgroup/th/td เก็บไว้เฉพาะเดสก์ท็อปที่มีพื้นที่พอ
-  const _showName = _tier === 'desktop';
+  // คอลัมน์ "ชื่อ" (ชื่อเต็มบริษัท) ซ้ำกับ Symbol อยู่แล้ว — ซ่อนเสมอบน
+  // เวอร์ชันเว็บ GitHub Pages (ไม่ว่าจอขนาดไหน) เก็บไว้เฉพาะเวอร์ชัน local
+  const _showName = !IS_STATIC;
   const nameColHtml = _showName ? `<col style="width:130px"><!-- ชื่อ -->` : '';
   const nameThHtml  = _showName ? th('name','ชื่อ') : '';
   const nameCellHtml = s => _showName
