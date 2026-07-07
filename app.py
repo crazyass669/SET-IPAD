@@ -1939,20 +1939,42 @@ _flow_cache: dict = {}
 _FLOW_CACHE_TTL = 4 * 3600
 
 def _fetch_flow_data():
-    """ดึงและ parse ข้อมูล Capital Flow จาก siamchart.com — อัพเดท _flow_cache"""
+    """ดึงและ parse ข้อมูล Capital Flow จาก siamchart.com — อัพเดท _flow_cache
+
+    market_flow.json ไม่เคยถูก auto-update commit อัพเดทเลยตั้งแต่แก้ manual
+    ครั้งล่าสุด (ต่างจาก endpoint อื่นที่ auto-update ได้ปกติทุกรอบ) — สงสัยว่า
+    siamchart.com บล็อค/limit request จาก IP ของ GitHub Actions runner
+    (ยืนยันไม่ได้ตรงๆ เพราะ Actions log ต้อง auth ถึงจะดูได้) เพิ่ม retry +
+    header ที่สมจริงขึ้นเผื่อเป็นแค่ bot-detection ธรรมดา ไม่ใช่ IP-block เต็มรูป
+    """
     import urllib.request as _ur, ssl as _ssl, re as _re, ast as _ast
     ctx = _ssl._create_unverified_context()
-    req = _ur.Request(
-        "https://siamchart.com/stock-summary/",
-        headers={"User-Agent": "Mozilla/5.0 Chrome/125.0",
-                 "Accept": "text/html,application/xhtml+xml"},
-    )
-    with _ur.urlopen(req, context=ctx, timeout=15) as r:
-        html = r.read().decode("utf-8", "ignore")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://siamchart.com/",
+    }
+
+    html = None
+    last_err = None
+    for attempt in range(3):
+        try:
+            req = _ur.Request("https://siamchart.com/stock-summary/", headers=headers)
+            with _ur.urlopen(req, context=ctx, timeout=20) as r:
+                html = r.read().decode("utf-8", "ignore")
+            break
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(3)
+    if html is None:
+        raise RuntimeError(f"ดึง siamchart ไม่สำเร็จหลังลอง 3 ครั้ง: {last_err}")
 
     m = _re.search(r'var\s+market_data\s*=\s*(\[.*?\]);', html, _re.DOTALL)
     if not m:
-        raise ValueError("ไม่พบ market_data ในหน้า siamchart")
+        raise ValueError(f"ไม่พบ market_data ในหน้า siamchart (html {len(html)} bytes)")
 
     raw = _ast.literal_eval(m.group(1))
 
