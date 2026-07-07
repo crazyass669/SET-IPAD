@@ -67,9 +67,27 @@ if os.path.exists(os.path.join(BASE_DIR, "Table_PE.xls")):
 
 # ── 3. Snapshot ทุก API endpoint ลง data/*.json ─────────────
 log("=== Snapshot API endpoints -> data/ ===")
-from app import app  # noqa: E402  (import หลังราคาอัปเดตเสร็จ)
+from app import app, _fetch_indices_tv, _load_indices_existing, short_sales_daily_update  # noqa: E402
 
 client = app.test_client()
+
+# /api/indices และ /api/short-sales ไม่ fetch สดเอง แค่อ่านจาก cache file
+# ในเครื่อง (indices_cache.json, short_sales_data.json) — เดิมไฟล์พวกนี้
+# ถูก .gitignore ไว้ ทำให้ CI (fresh checkout ทุกรอบ) ไม่มีไฟล์เลย 404 เงียบๆ
+# ทุกรอบ auto-update มาตลอด (required=False เลยไม่มีใครสังเกตเห็น) ตอนนี้
+# ไฟล์ถูก commit เข้า repo แล้ว เลย refresh ตรงๆ ก่อน snapshot ได้เลย
+log("=== รีเฟรช Indices + Short Sales ===")
+try:
+    existing = _load_indices_existing()
+    _fetch_indices_tv(existing, full_refresh=False)
+    log("✅ Indices รีเฟรชเสร็จ")
+except Exception as e:
+    log(f"⚠️ Indices รีเฟรชล้ม: {e}")
+try:
+    short_sales_daily_update()
+    log("✅ Short Sales รีเฟรชเสร็จ")
+except Exception as e:
+    log(f"⚠️ Short Sales รีเฟรชล้ม: {e}")
 
 # (endpoint, ไฟล์ปลายทาง, จำเป็นไหม)  จำเป็น=True ถ้าล้มให้ exit 1
 SNAPSHOTS = [

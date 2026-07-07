@@ -11,11 +11,14 @@ set_data.json
 set_dr_data.json
 set_history.json
 dr_cache.json
-indices_cache.json
 nvdr_data.json
-short_sales_data.json
 set_market_stats.json
 *.json.tmp
+
+# indices_cache.json, short_sales_data.json: ไม่ ignore แล้ว (commit เข้า repo
+# ตรงๆ) — เดิม gitignore ไว้ทำให้ CI (fresh checkout ทุกรอบ) ไม่มีไฟล์นี้เลย
+# /api/indices และ /api/short-sales อ่านจากไฟล์นี้อย่างเดียว ไม่ fetch สดเอง
+# เลย 404 ทุกรอบ auto-update เงียบๆ มาตลอด (required=False เลยไม่มีใครสังเกต)
 
 # Backup / test
 *.bak
