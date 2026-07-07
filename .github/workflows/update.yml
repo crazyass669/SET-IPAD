@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,7 +33,7 @@ jobs:
       # SQLite price store (~130MB) — cache ระหว่างรันเพื่อให้เป็น quick update
       # (ไม่มี cache = full refresh 10 ปี ~30-60 นาที)
       - name: Restore price store cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             set_prices.db
