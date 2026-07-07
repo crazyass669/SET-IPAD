@@ -789,17 +789,20 @@
      overflow-x:auto เฉยๆ อยู่แล้วโดยไม่ต้องพึ่ง property นี้
 
      เจอสาเหตุจริงที่ยังล้นอยู่ (หุ้นทั้งหมด, DR/DRx): base rule ".tbl{width:
-     100%}" บังคับตารางให้กว้างแค่เท่า .card เสมอ (auto table-layout เลย
+     100%}" บังคับตารางให้กว้างแค่เท่า parent เสมอ (auto table-layout เลย
      บีบทุกคอลัมน์ให้พอดี แทนที่จะกว้างเกินแล้ว scroll) — ต้องคืน width
      เป็น auto (ปล่อยกว้างตามเนื้อหาจริง) ให้ overflow-x:auto ทำงานได้จริง
-     ส่วน :has(table.tbl) ไม่ใช้ > (direct child) อีกต่อไป เพราะหน้า DR/DRx
-     ห่อ <table> ไว้อีกชั้นด้วย #dr-table-wrap (เป็นหลานของ .card ไม่ใช่ลูก) */
-  .card:has(table.tbl) {
-    overflow-x: auto;
-  }
-  .card:has(table.tbl) table.tbl {
+
+     ทำเป็น blanket rule ให้ .tbl ทุกตัว ไม่ผูกกับ .card อย่างเดียว เพราะ
+     หลายตาราง (Insider, Short Sales, NVDR, Capital Flow, Valuation) ห่อ
+     ด้วย <div style="overflow-x:auto"> ของตัวเองอยู่แล้ว ไม่ใช่ .card —
+     ถ้าไม่แก้ตรงนี้ให้ครอบคลุมด้วย จะโดนบั๊กเดียวกันทันทีที่คอลัมน์เยอะขึ้น */
+  .tbl {
     width: auto;
     min-width: 100%;
+  }
+  .card:has(table.tbl) {
+    overflow-x: auto;
   }
 }
 
