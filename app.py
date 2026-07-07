@@ -50,7 +50,7 @@ from core.metrics import calc_rs_raw
 
 # HTTP clients / static universe — แยกไว้ที่ sources/ (Phase 2 refactor)
 from sources.tradingview import INDEX_INFO, _yf_to_tv, _fetch_tv_bars
-from sources.dr_universe import _DR_STATIC
+from sources.dr_universe import _DR_STATIC, is_latest_bar_stable
 from sources.sec import _thai_date, _extract_symbol, sec_fetch_chunked
 
 
@@ -374,9 +374,25 @@ def get_dr_data():
     for stock in _DR_STATIC:
         yticker = stock["yf"]
         try:
-            close = _series(yticker, "Close")
+            close  = _series(yticker, "Close")
+            open_s = _series(yticker, "Open")
+            high_s = _series(yticker, "High")
+            low_s  = _series(yticker, "Low")
+            vol_s  = _series(yticker, "Volume")
             if len(close) < 2:
                 continue
+
+            # ตลาดยังไม่ปิดจริง/ยังอยู่ pre-market-after-hours -> แท่งล่าสุดยังไม่นิ่ง
+            # (Yahoo เอาราคาที่กำลังไหลไปทับ Close ของแท่งนี้เรื่อยๆ) ตัดทิ้งไปใช้
+            # แท่งก่อนหน้าที่ freeze แล้วแทน ให้ตรงกับ "ราคาปิด" จริงๆ
+            if not is_latest_bar_stable(stock["region"]):
+                close  = close.iloc[:-1]
+                if len(open_s): open_s = open_s.iloc[:-1]
+                if len(high_s): high_s = high_s.iloc[:-1]
+                if len(low_s):  low_s  = low_s.iloc[:-1]
+                if len(vol_s):  vol_s  = vol_s.iloc[:-1]
+                if len(close) < 2:
+                    continue
 
             price = float(close.iloc[-1])
             prev  = float(close.iloc[-2])
@@ -387,11 +403,6 @@ def get_dr_data():
             # เก็บ full price history สำหรับ chart popup (date + price)
             dates_all  = [str(d)[:10] for d in close.index.tolist()]
             closes_all = [round(float(x), 6) for x in close.tolist()]
-
-            open_s = _series(yticker, "Open")
-            high_s = _series(yticker, "High")
-            low_s  = _series(yticker, "Low")
-            vol_s  = _series(yticker, "Volume")
 
             n = min(30, len(close))
             ohlc30 = []
@@ -539,17 +550,28 @@ def dr_quick_update():
             for st in _DR_STATIC:
                 sym, yticker = st["sym"], st["yf"]
                 try:
-                    close = _series(yticker, "Close")
-                    if len(close) < 2:
-                        continue
-                    price = float(close.iloc[-1])
-                    prev  = float(close.iloc[-2])
-                    chg   = round((price - prev) / prev * 100, 2) if prev else 0
-
+                    close  = _series(yticker, "Close")
                     open_s = _series(yticker, "Open")
                     high_s = _series(yticker, "High")
                     low_s  = _series(yticker, "Low")
                     vol_s  = _series(yticker, "Volume")
+                    if len(close) < 2:
+                        continue
+
+                    # แท่งล่าสุดยังไม่นิ่ง (pre-market/after-hours) -> ตัดทิ้ง
+                    # กันดันค่าที่ยังไหลอยู่เข้า history ถาวร (รอบถัดไปค่อยดึงใหม่)
+                    if not is_latest_bar_stable(st["region"]):
+                        close  = close.iloc[:-1]
+                        if len(open_s): open_s = open_s.iloc[:-1]
+                        if len(high_s): high_s = high_s.iloc[:-1]
+                        if len(low_s):  low_s  = low_s.iloc[:-1]
+                        if len(vol_s):  vol_s  = vol_s.iloc[:-1]
+                        if len(close) < 2:
+                            continue
+
+                    price = float(close.iloc[-1])
+                    prev  = float(close.iloc[-2])
+                    chg   = round((price - prev) / prev * 100, 2) if prev else 0
 
                     entry = stock_map.get(sym)
                     if entry:

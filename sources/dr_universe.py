@@ -1,6 +1,44 @@
 # -*- coding: utf-8 -*-
 """sources/dr_universe.py — DR/DRx static mapping: underlying foreign stock → SET DR tickers"""
 
+# เวลาซื้อขายปกติของแต่ละตลาด (timezone, เปิด, ปิด เป็นนาทีนับจากเที่ยงคืน)
+# + buffer ก่อนเปิด/หลังปิด ที่ราคายังไหลปนกับแท่งล่าสุดได้ (pre-market/after-hours)
+# ตลาดสหรัฐฯ มี pre-market/after-hours ที่ retail เทรดจริงและ Yahoo เอาราคามาทับ
+# แท่งล่าสุดไปเรื่อยๆ (พิสูจน์แล้วว่า Close ของแท่งที่ "ยังไม่นิ่ง" ขยับได้แม้เช็คห่างกัน
+# แค่ 1 ชม.) ตลาดเอเชีย/ยุโรปอื่นๆ ไม่มีวัฒนธรรม extended-hours เด่นชัดแบบนี้ ใช้ buffer=0
+_REGION_TZ = {
+    "US": ("America/New_York", 9 * 60 + 30, 16 * 60, 5 * 60, 4 * 60),
+    "HK": ("Asia/Hong_Kong",   9 * 60 + 30, 16 * 60,       0,      0),
+    "EU": ("Europe/Paris",     9 * 60,      17 * 60 + 30,  0,      0),
+    "JP": ("Asia/Tokyo",       9 * 60,      15 * 60,       0,      0),
+    "SG": ("Asia/Singapore",   9 * 60,      17 * 60,       0,      0),
+    "VN": ("Asia/Ho_Chi_Minh", 9 * 60,      15 * 60,       0,      0),
+    "TW": ("Asia/Taipei",      9 * 60,      13 * 60 + 30,  0,      0),
+}
+
+
+def is_latest_bar_stable(region):
+    """เช็คว่าตอนนี้อยู่นอกช่วงที่ราคาแท่งล่าสุดของตลาดนั้นยังไหลอยู่หรือไม่
+
+    Yahoo ไม่สร้างแท่งใหม่ของวันถัดไปจนกว่าตลาดจะเปิดเทรดจริง ระหว่างนั้น
+    (pre-market / กำลังเทรด / after-hours) ราคาล่าสุดจะไปทับ Close ของแท่งเก่าสุด
+    ที่มีอยู่แทน ทำให้ตัวเลข "ราคาปิด" ที่เห็นขยับได้เรื่อยๆ ไม่นิ่งจริง
+    """
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        return True  # เผื่อ python ไม่มี zoneinfo -> ไม่บล็อกอะไร
+
+    cfg = _REGION_TZ.get(region)
+    if not cfg:
+        return True
+    tz, open_min, close_min, pre_buf, post_buf = cfg
+    now = datetime.now(ZoneInfo(tz))
+    now_min = now.hour * 60 + now.minute
+    return not (open_min - pre_buf <= now_min <= close_min + post_buf)
+
+
 # DR / DRx static mapping — underlying foreign stock → Thai SET DR tickers
 _DR_STATIC = [
     # ── United States ─────────────────────────────────────────────────────
