@@ -24,8 +24,43 @@ def _sec_post(url, payload, ua):
     })
     with _ur.urlopen(req, context=ctx, timeout=30) as r:
         html = r.read().decode("utf-8", errors="ignore")
-    tables = _pd.read_html(io.StringIO(html))
+    try:
+        tables = _pd.read_html(io.StringIO(html))
+    except ValueError:
+        # ช่วงวันที่ไม่มีรายการเลย -> หน้าเว็บไม่มี <table> ใดๆ เลย
+        # (read_html โยน ValueError แทนที่จะคืน list ว่าง)
+        return _pd.DataFrame()
     return tables[0] if tables else _pd.DataFrame()
+
+def _fetch_window(url, ua, build_payload, d_from, d_to, cap, depth, max_depth):
+    import pandas as _pd
+    vs, vsg, ev = _sec_viewstate(url, ua)
+    df = _sec_post(url, build_payload(d_from, d_to, vs, vsg, ev), ua)
+    n = len(df)
+    span_days = (d_to - d_from).days + 1
+    if n < cap or span_days <= 1 or depth >= max_depth:
+        # ต่ำกว่า cap (ไม่โดนตัด) หรือแบ่งต่อไม่ได้แล้ว (เหลือ 1 วัน / ลึกเกินกำหนด)
+        return [df]
+    mid = d_from + (d_to - d_from) // 2
+    left  = _fetch_window(url, ua, build_payload, d_from, mid, cap, depth + 1, max_depth)
+    right = _fetch_window(url, ua, build_payload, mid + __import__("datetime").timedelta(days=1), d_to,
+                           cap, depth + 1, max_depth)
+    return left + right
+
+
+def sec_fetch_chunked(url, ua, date_from, date_to, build_payload, cap=95, max_depth=8):
+    """ดึงผลลัพธ์ทั้งช่วง date_from..date_to โดยแบ่งครึ่งช่วงย้อนกลับ (recursive)
+    เฉพาะตอนที่ผลลัพธ์ก้อนนั้น "อิ่มตัว" (>= cap แถว) ซึ่งบ่งชี้ว่าอาจโดนเว็บ SEC
+    ตัดผลลัพธ์ทิ้ง (เว็บจำกัดไว้ ~100 แถว/การค้นหา ไม่ว่าขอช่วงกว้างแค่ไหน)
+    ช่วงที่ข้อมูลน้อยอยู่แล้วจะเสร็จในคำขอเดียว ไม่ต้องแบ่งเพิ่ม
+    """
+    import pandas as _pd
+    frames = _fetch_window(url, ua, build_payload, date_from, date_to, cap, 0, max_depth)
+    frames = [f for f in frames if f is not None and not f.empty]
+    if not frames:
+        return _pd.DataFrame()
+    return _pd.concat(frames, ignore_index=True)
+
 
 def _thai_date(d):
     return d.strftime(f"%d/%m/{d.year + 543}")

@@ -88,17 +88,11 @@ SNAPSHOTS = [
     ("/api/market-internals",              "market_internals.json",      False),
     ("/api/rotation-alerts",               "rotation_alerts.json",       False),
     ("/api/stock-valuation-stats",         "stock_valuation_stats.json", False),
-    # SEC จำกัดผลลัพธ์ไว้ที่ ~100 แถวต่อ query ไม่ว่าจะขอกี่วัน — bake ที่ days=180
-    # ครั้งเดียวจึงกิน "โควตา" ไปกับรายการเก่าทั้งหมด เหลือรายการล่าสุดน้อยผิดปกติ
-    # (เจอจากการ debug: days=180 ได้ record ใน 7 วันล่าสุดแค่ 3 แถว ทั้งที่จริงมี ~97 แถว)
-    # แก้โดย bake แยกทุกช่วงที่ปุ่ม UI ใช้ (7/30/90/180) ให้แต่ละ query แคบพอที่จะไม่โดนตัด
-    ("/api/insider-trades?days=7",         "insider_trades_7.json",      False),
-    ("/api/insider-trades?days=30",        "insider_trades_30.json",     False),
-    ("/api/insider-trades?days=90",        "insider_trades_90.json",     False),
+    # SEC จำกัดผลลัพธ์ไว้ที่ ~100 แถวต่อ query ไม่ว่าจะขอกี่วัน — /api/insider-trades
+    # และ /api/major-changes แก้ในตัวแล้วด้วย sec_fetch_chunked (แบ่งครึ่งช่วงวัน
+    # แบบ recursive เมื่อผลลัพธ์อิ่มตัว) ที่นี่ดึงแค่ days=180 (ครบสุด) แล้ว derive
+    # ไฟล์ 7/30/90 วันจากชุดข้อมูลเดียวกันด้านล่าง แทนที่จะยิงซ้ำ 4 รอบ (ช้า/เปลือง)
     ("/api/insider-trades?days=180",       "insider_trades_180.json",    False),
-    ("/api/major-changes?days=7",          "major_changes_7.json",       False),
-    ("/api/major-changes?days=30",         "major_changes_30.json",      False),
-    ("/api/major-changes?days=90",         "major_changes_90.json",      False),
     ("/api/major-changes?days=180",        "major_changes_180.json",     False),
     ("/api/prices",                        "prices.json",                False),
 ]
@@ -123,5 +117,25 @@ for url, fname, required in SNAPSHOTS:
 if failures:
     log(f"❌ ไฟล์จำเป็นล้มเหลว: {failures}")
     sys.exit(1)
+
+# ── derive ไฟล์ 7/30/90 วัน จากชุด 180 วันที่ดึงมาครบแล้ว (ไม่ยิง SEC ซ้ำ) ──
+log("=== Derive insider/major-changes 7/30/90 วัน จากชุด 180 วัน ===")
+_now = datetime.now(_ICT)
+for base, src in [("insider_trades", "insider_trades_180.json"), ("major_changes", "major_changes_180.json")]:
+    src_path = os.path.join(DATA_DIR, src)
+    if not os.path.exists(src_path):
+        continue
+    with open(src_path, encoding="utf-8") as f:
+        full = json.load(f)
+    for d in (7, 30, 90):
+        cutoff = (_now - timedelta(days=d)).strftime("%Y-%m-%d")
+        sub = dict(full)
+        sub["days"] = d
+        sub["from"] = cutoff
+        sub["records"] = [r for r in full["records"] if r.get("trade_date", "") >= cutoff]
+        out_path = os.path.join(DATA_DIR, f"{base}_{d}.json")
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(sub, f, ensure_ascii=False)
+        log(f"✅ {base}_{d}.json ({len(sub['records'])} records)")
 
 log("=== เสร็จทั้งหมด ===")

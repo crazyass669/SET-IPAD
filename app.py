@@ -51,7 +51,7 @@ from core.metrics import calc_rs_raw
 # HTTP clients / static universe — แยกไว้ที่ sources/ (Phase 2 refactor)
 from sources.tradingview import INDEX_INFO, _yf_to_tv, _fetch_tv_bars
 from sources.dr_universe import _DR_STATIC
-from sources.sec import _sec_viewstate, _sec_post, _thai_date, _extract_symbol
+from sources.sec import _thai_date, _extract_symbol, sec_fetch_chunked
 
 
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
@@ -1706,19 +1706,21 @@ def insider_trades():
     URL = "https://market.sec.or.th/public/idisc/th/r59"
 
     try:
-        vs, vsg, ev = _sec_viewstate(URL, UA)
         date_to   = _dt.now()
         date_from = date_to - _td(days=days)
-        df = _sec_post(URL, {
-            "__VIEWSTATE": vs,
-            "__VIEWSTATEGENERATOR": vsg,
-            "__EVENTVALIDATION": ev,
-            "ctl00$CPH$rblDateType": "T",
-            "ctl00$CPH$BSDateFrom": _thai_date(date_from),
-            "ctl00$CPH$BSDateTo":   _thai_date(date_to),
-            "ctl00$CPH$btSearch":   "Search",
-            "ctl00$CPH$ddlCompany": "",
-        }, UA)
+
+        def _build_payload(d_from, d_to, vs, vsg, ev):
+            return {
+                "__VIEWSTATE": vs,
+                "__VIEWSTATEGENERATOR": vsg,
+                "__EVENTVALIDATION": ev,
+                "ctl00$CPH$rblDateType": "T",
+                "ctl00$CPH$BSDateFrom": _thai_date(d_from),
+                "ctl00$CPH$BSDateTo":   _thai_date(d_to),
+                "ctl00$CPH$btSearch":   "Search",
+                "ctl00$CPH$ddlCompany": "",
+            }
+        df = sec_fetch_chunked(URL, UA, date_from, date_to, _build_payload)
 
         records = []
         for _, row in df.iterrows():
@@ -1793,22 +1795,24 @@ def major_changes():
     URL = "https://market.sec.or.th/public/idisc/th/r246"
 
     try:
-        vs, vsg, ev = _sec_viewstate(URL, UA)
         date_to   = _dt.now()
         date_from = date_to - _td(days=days)
-        df = _sec_post(URL, {
-            "__VIEWSTATE": vs,
-            "__VIEWSTATEGENERATOR": vsg,
-            "__EVENTVALIDATION": ev,
-            "ctl00$CPH$BsCompany": "",
-            "ctl00$CPH$BsCompany_t": "",
-            "ctl00$CPH$BsCompany_v": "",
-            "ctl00$CPH$txtSearchPerson": "",
-            "ctl00$CPH$rblDateType": "T",
-            "ctl00$CPH$BSDateFrom": _thai_date(date_from),
-            "ctl00$CPH$BSDateTo":   _thai_date(date_to),
-            "ctl00$CPH$btSearch":   "Search",
-        }, UA)
+
+        def _build_payload(d_from, d_to, vs, vsg, ev):
+            return {
+                "__VIEWSTATE": vs,
+                "__VIEWSTATEGENERATOR": vsg,
+                "__EVENTVALIDATION": ev,
+                "ctl00$CPH$BsCompany": "",
+                "ctl00$CPH$BsCompany_t": "",
+                "ctl00$CPH$BsCompany_v": "",
+                "ctl00$CPH$txtSearchPerson": "",
+                "ctl00$CPH$rblDateType": "T",
+                "ctl00$CPH$BSDateFrom": _thai_date(d_from),
+                "ctl00$CPH$BSDateTo":   _thai_date(d_to),
+                "ctl00$CPH$btSearch":   "Search",
+            }
+        df = sec_fetch_chunked(URL, UA, date_from, date_to, _build_payload)
 
         records = []
         for _, row in df.iterrows():
