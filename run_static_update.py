@@ -88,8 +88,18 @@ SNAPSHOTS = [
     ("/api/market-internals",              "market_internals.json",      False),
     ("/api/rotation-alerts",               "rotation_alerts.json",       False),
     ("/api/stock-valuation-stats",         "stock_valuation_stats.json", False),
-    ("/api/insider-trades?days=180",       "insider_trades.json",        False),
-    ("/api/major-changes?days=180",        "major_changes.json",         False),
+    # SEC จำกัดผลลัพธ์ไว้ที่ ~100 แถวต่อ query ไม่ว่าจะขอกี่วัน — bake ที่ days=180
+    # ครั้งเดียวจึงกิน "โควตา" ไปกับรายการเก่าทั้งหมด เหลือรายการล่าสุดน้อยผิดปกติ
+    # (เจอจากการ debug: days=180 ได้ record ใน 7 วันล่าสุดแค่ 3 แถว ทั้งที่จริงมี ~97 แถว)
+    # แก้โดย bake แยกทุกช่วงที่ปุ่ม UI ใช้ (7/30/90/180) ให้แต่ละ query แคบพอที่จะไม่โดนตัด
+    ("/api/insider-trades?days=7",         "insider_trades_7.json",      False),
+    ("/api/insider-trades?days=30",        "insider_trades_30.json",     False),
+    ("/api/insider-trades?days=90",        "insider_trades_90.json",     False),
+    ("/api/insider-trades?days=180",       "insider_trades_180.json",    False),
+    ("/api/major-changes?days=7",          "major_changes_7.json",       False),
+    ("/api/major-changes?days=30",         "major_changes_30.json",      False),
+    ("/api/major-changes?days=90",         "major_changes_90.json",      False),
+    ("/api/major-changes?days=180",        "major_changes_180.json",     False),
     ("/api/prices",                        "prices.json",                False),
 ]
 

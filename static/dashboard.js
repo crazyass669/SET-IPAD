@@ -40,8 +40,6 @@ if (IS_STATIC) {
     '/api/market-internals':      'data/market_internals.json',
     '/api/rotation-alerts':       'data/rotation_alerts.json',
     '/api/stock-valuation-stats': 'data/stock_valuation_stats.json',
-    '/api/insider-trades':        'data/insider_trades.json',
-    '/api/major-changes':         'data/major_changes.json',
     '/api/prices':                'data/prices.json',
   };
 
@@ -50,6 +48,15 @@ if (IS_STATIC) {
     if (path === '/api/breadth') {
       const m = /range=(\w+)/.exec(query || '');
       return `data/breadth_${m ? m[1] : '1y'}.json`;
+    }
+    // SEC จำกัดผลลัพธ์ ~100 แถว/query — bake แยกไฟล์ต่อช่วงวัน (7/30/90/180)
+    // เพื่อไม่ให้ query ช่วงกว้างกินโควตาจนช่วงแคบเหลือข้อมูลไม่ครบ
+    if (path === '/api/insider-trades' || path === '/api/major-changes') {
+      const m = /days=(\d+)/.exec(query || '');
+      const base = path === '/api/insider-trades' ? 'insider_trades' : 'major_changes';
+      const allowed = ['7', '30', '90', '180'];
+      const d = m && allowed.includes(m[1]) ? m[1] : '180';
+      return `data/${base}_${d}.json`;
     }
     return STATIC_MAP[path] || null;
   }
