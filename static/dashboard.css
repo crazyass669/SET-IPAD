@@ -250,6 +250,7 @@
     font-weight: 400; color: var(--text);
   }
   .regime-wrap:hover .regime-tip { display: block; }
+  .regime-wrap.tt-open .regime-tip { display: block; } /* จอสัมผัส: ไม่มี hover -> แตะเปิดแทน */
   .regime-tip a { color: var(--blue); }
 
   /* DATA QUALITY badges + banner */
@@ -331,6 +332,7 @@
   .scr-group { display: flex; flex-direction: column; gap: 4px; }
   .scr-tip-icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--border); color: var(--text2); font-size: 9px; font-weight: 700; cursor: default; flex-shrink: 0; position: relative; }
   .scr-tip-icon:hover .scr-tip-box { display: block; }
+  .scr-tip-icon.tt-open .scr-tip-box { display: block; } /* จอสัมผัส: ไม่มี hover -> แตะเปิดแทน */
   .scr-tip-box { display: none; position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: #1c2333; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; width: 220px; font-size: 11px; color: var(--text); line-height: 1.5; z-index: 9999; white-space: normal; text-transform: none; letter-spacing: 0; font-weight: 400; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
   .scr-tip-box::after { content: ''; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); border: 5px solid transparent; border-bottom-color: var(--border); }
   .scr-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 12px; }
@@ -766,4 +768,11 @@
      (ให้ประโยชน์เชิงพื้นที่แตะแบบพอเหมาะ + เว้นช่องไฟกันแตะโดนชิดกัน) */
   .filter-btn { padding: 8px 13px; }
   .filter-row { gap: 10px; }
+
+  /* ตารางข้อมูล (Screener, หุ้นทั้งหมด, Fundamentals ฯลฯ) กว้างเกินจอแคบ
+     เดิมไม่มี wrapper ให้เลื่อน ทำให้ดันทั้งหน้าล้นซ้ายขวา —
+     display:block บนตัว <table> เอง ทำให้ thead/tbody กลายเป็น anonymous
+     table ที่คำนวณความกว้างตามเนื้อหาจริง แล้วให้ overflow-x:auto
+     เลื่อนเฉพาะตัวตาราง โดยไม่ต้องแก้ HTML ที่ฝัง style="width:100%" มา */
+  .tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 }

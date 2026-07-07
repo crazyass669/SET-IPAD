@@ -6053,6 +6053,17 @@ document.addEventListener('mousemove', e => {
   const tt = document.getElementById('idx-tt');
   if (tt && tt.style.display !== 'none') _moveIdxTT(e);
 });
+// จอสัมผัส: ไม่มี mouseenter -> ใช้ tap เปิด/ปิดแทน (onclick ยิงได้ทั้งคลิกเมาส์และแตะ)
+// ทริกเกอร์ tooltip เรียก event.stopPropagation() เอง ทำให้ click นี้ไม่มาถึง document -> tooltip ค้างเปิดจนกว่าจะแตะที่อื่น
+document.addEventListener('click', () => hideIdxTT());
+
+// จอสัมผัส: tooltip ที่เดิมเปิดด้วย CSS :hover เท่านั้น (.scr-tip-icon, .regime-wrap)
+// ไม่มีทาง trigger ได้เลยบนมือถือ -> เพิ่ม tap toggle ผ่าน class .tt-open (ไม่กระทบ hover เดิมบนเดสก์ท็อป)
+document.addEventListener('click', e => {
+  const hit = e.target.closest('.scr-tip-icon, .regime-wrap');
+  document.querySelectorAll('.tt-open').forEach(el => { if (el !== hit) el.classList.remove('tt-open'); });
+  if (hit) { e.stopPropagation(); hit.classList.toggle('tt-open'); }
+});
 
 function toggleIdxReversal(btn) {
   _idxFilterReversal = !_idxFilterReversal;
@@ -6267,7 +6278,8 @@ function renderIdxGrid() {
     const spark = `<canvas class="idx-spark" id="idxspark_${idx.sym.replace(/[^a-z0-9]/gi,'_')}"></canvas>`;
     const revBadge = isReversal(idx)
       ? `<span style="font-size:9px;background:#1f6feb33;color:#58a6ff;border:1px solid #1f6feb;border-radius:4px;padding:1px 5px;margin-left:6px"
-           onmouseenter="showIdxTT('<b>🔄 สัญญาณกลับตัว</b><br>• 1M% &gt; 0 ✓ เดือนนี้เริ่มเป็นบวก<br>• 6M% &lt; 15 ✓ ยังไม่วิ่งไปไกล<br>• Momentum &gt; 1 ✓ momentum กำลังเร่ง<br><br>ตรวจสอบกราฟว่าตัดขึ้น EMA50 หรือยัง',event)" onmouseleave="hideIdxTT()">🔄 กลับตัว</span>`
+           onmouseenter="showIdxTT('<b>🔄 สัญญาณกลับตัว</b><br>• 1M% &gt; 0 ✓ เดือนนี้เริ่มเป็นบวก<br>• 6M% &lt; 15 ✓ ยังไม่วิ่งไปไกล<br>• Momentum &gt; 1 ✓ momentum กำลังเร่ง<br><br>ตรวจสอบกราฟว่าตัดขึ้น EMA50 หรือยัง',event)" onmouseleave="hideIdxTT()"
+           onclick="event.stopPropagation(); showIdxTT('<b>🔄 สัญญาณกลับตัว</b><br>• 1M% &gt; 0 ✓ เดือนนี้เริ่มเป็นบวก<br>• 6M% &lt; 15 ✓ ยังไม่วิ่งไปไกล<br>• Momentum &gt; 1 ✓ momentum กำลังเร่ง<br><br>ตรวจสอบกราฟว่าตัดขึ้น EMA50 หรือยัง',event)">🔄 กลับตัว</span>`
       : '';
     return `
       <div class="idx-card" onclick="openIdxChartModal('${idx.sym}')">
@@ -6289,17 +6301,20 @@ function renderIdxGrid() {
           <div class="idx-ret-cell"><div class="idx-ret-lbl">1Y%</div><div class="idx-ret-val">${pct(idx.ret_1y)}</div></div>
         </div>
         <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div onmouseenter="showIdxTT('<b>Momentum Score</b><br>สูตร: 1M% − (6M%÷6)<br>บวกมาก = momentum เพิ่งเร่งขึ้น<br>ลบมาก = momentum กำลังชะลอ<br><br>&gt;3 แรงมาก · 1–3 ดีขึ้น · &lt;0 ชะลอ',event)" onmouseleave="hideIdxTT()">
+          <div onmouseenter="showIdxTT('<b>Momentum Score</b><br>สูตร: 1M% − (6M%÷6)<br>บวกมาก = momentum เพิ่งเร่งขึ้น<br>ลบมาก = momentum กำลังชะลอ<br><br>&gt;3 แรงมาก · 1–3 ดีขึ้น · &lt;0 ชะลอ',event)" onmouseleave="hideIdxTT()"
+            onclick="event.stopPropagation(); showIdxTT('<b>Momentum Score</b><br>สูตร: 1M% − (6M%÷6)<br>บวกมาก = momentum เพิ่งเร่งขึ้น<br>ลบมาก = momentum กำลังชะลอ<br><br>&gt;3 แรงมาก · 1–3 ดีขึ้น · &lt;0 ชะลอ',event)">
             <div class="idx-ret-lbl">Momentum</div>
             ${momBar(idx.mom)}
           </div>
-          <div onmouseenter="showIdxTT('<b>RS (vs SET)</b><br>Relative Strength เทียบหุ้น SET 930 ตัว<br>0=อ่อนสุด · 99=แรงสุด<br>≥70 แรง · 40–69 กลาง · &lt;40 อ่อน',event)" onmouseleave="hideIdxTT()">
+          <div onmouseenter="showIdxTT('<b>RS (vs SET)</b><br>Relative Strength เทียบหุ้น SET 930 ตัว<br>0=อ่อนสุด · 99=แรงสุด<br>≥70 แรง · 40–69 กลาง · &lt;40 อ่อน',event)" onmouseleave="hideIdxTT()"
+            onclick="event.stopPropagation(); showIdxTT('<b>RS (vs SET)</b><br>Relative Strength เทียบหุ้น SET 930 ตัว<br>0=อ่อนสุด · 99=แรงสุด<br>≥70 แรง · 40–69 กลาง · &lt;40 อ่อน',event)">
             <div class="idx-ret-lbl">RS SET</div>
             ${rsBar2(idx.rs_set)}
           </div>
         </div>
         <div style="margin-top:6px;display:flex;align-items:center;gap:6px"
-          onmouseenter="showIdxTT('<b>RS Trend</b><br>ทิศทาง RS เทียบ 4 สัปดาห์ก่อน<br>↑ RS กำลังดีขึ้น (สัญญาณดี)<br>→ RS ทรงตัว<br>↓ RS กำลังอ่อนลง<br><br>ข้อมูลสะสมหลังกด Quick Update ทุกครั้ง',event)" onmouseleave="hideIdxTT()">
+          onmouseenter="showIdxTT('<b>RS Trend</b><br>ทิศทาง RS เทียบ 4 สัปดาห์ก่อน<br>↑ RS กำลังดีขึ้น (สัญญาณดี)<br>→ RS ทรงตัว<br>↓ RS กำลังอ่อนลง<br><br>ข้อมูลสะสมหลังกด Quick Update ทุกครั้ง',event)" onmouseleave="hideIdxTT()"
+          onclick="event.stopPropagation(); showIdxTT('<b>RS Trend</b><br>ทิศทาง RS เทียบ 4 สัปดาห์ก่อน<br>↑ RS กำลังดีขึ้น (สัญญาณดี)<br>→ RS ทรงตัว<br>↓ RS กำลังอ่อนลง<br><br>ข้อมูลสะสมหลังกด Quick Update ทุกครั้ง',event)">
           <div class="idx-ret-lbl">RS Trend</div>
           ${rsTrend(idx.rs_history)}
         </div>
@@ -8407,9 +8422,15 @@ async function fetchInsiderData() {
       fetch(`/api/insider-trades?days=${_insDays}`).then(r => r.json()),
       fetch(`/api/major-changes?days=${_insDays}`).then(r => r.json()),
     ]);
+    // เวอร์ชันเว็บ (static) เก็บข้อมูลไว้ที่ 180 วันคงที่ ไม่สนใจ query string
+    // days= ที่ส่งไป -> กรองซ้ำฝั่ง client ด้วยวันที่จริง กันปุ่ม 7/30/90 วัน
+    // แสดงข้อมูล 180 วันผิดๆ บนเวอร์ชันเว็บ (เดสก์ท็อป/Flask กรองมาแล้วพอดี ไม่กระทบ)
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - _insDays);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const withinDays = x => !x.trade_date || x.trade_date >= cutoffStr;
     _insData = {
-      r59:   r59res.records  || [],
-      r246:  r246res.records || [],
+      r59:   (r59res.records  || []).filter(withinDays),
+      r246:  (r246res.records || []).filter(withinDays),
       fetched_at: r59res.fetched_at || '',
     };
     document.getElementById('ins-status').textContent =
