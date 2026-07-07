@@ -773,6 +773,9 @@
      เดิมไม่มี wrapper ให้เลื่อน ทำให้ดันทั้งหน้าล้นซ้ายขวา —
      display:block บนตัว <table> เอง ทำให้ thead/tbody กลายเป็น anonymous
      table ที่คำนวณความกว้างตามเนื้อหาจริง แล้วให้ overflow-x:auto
-     เลื่อนเฉพาะตัวตาราง โดยไม่ต้องแก้ HTML ที่ฝัง style="width:100%" มา */
-  .tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+     เลื่อนเฉพาะตัวตาราง โดยไม่ต้องแก้ HTML ที่ฝัง style="width:100%" มา
+     ยกเว้นตารางที่มี <canvas> อยู่ข้างใน (เช่น sparkline ในหน้า "หุ้นทั้งหมด"
+     และ "52W High/Low & Breakout") — Safari/WebKit บนไอแพดมีบั๊กที่ทำให้
+     canvas หลุดตำแหน่งออกจากแถวเมื่อ table ถูกบังคับ display:block */
+  .tbl:not(:has(canvas)) { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 }
