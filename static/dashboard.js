@@ -767,7 +767,7 @@ function renderOverview() {
   const losers  = sorted1d.slice(-10).reverse();
 
   const miniTbl = (rows, isGainer) => `
-    <thead><tr><th${colTip('symbol')}>Symbol</th><th${colTip('sector')}>Sector</th><th class="r"${colTip('ret_1d')}>1D%</th><th class="r"${colTip('rs_score')}>RS</th></tr></thead>
+    <thead><tr><th>Symbol${colTipIcon('symbol')}</th><th>Sector${colTipIcon('sector')}</th><th class="r">1D%${colTipIcon('ret_1d')}</th><th class="r">RS${colTipIcon('rs_score')}</th></tr></thead>
     <tbody>${rows.map(s => `
       <tr>
         <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}</td>
@@ -802,7 +802,7 @@ function renderOverview() {
   const leaders = [...stocks].filter(s => s.rs_score != null && !_dqIsPenny(s))
     .sort((a,b) => (b.rs_score||0)-(a.rs_score||0)).slice(0,10);
   document.getElementById("tbl-rs-preview").innerHTML = `
-    <thead><tr><th${colTip('rs_score')}>RS</th><th${colTip('symbol')}>Symbol</th><th${colTip('sector')}>Sector</th><th class="r"${colTip('ret_1m')}>1M%</th><th class="r"${colTip('ret_3m')}>3M%</th></tr></thead>
+    <thead><tr><th>RS${colTipIcon('rs_score')}</th><th>Symbol${colTipIcon('symbol')}</th><th>Sector${colTipIcon('sector')}</th><th class="r">1M%${colTipIcon('ret_1m')}</th><th class="r">3M%${colTipIcon('ret_3m')}</th></tr></thead>
     <tbody>${leaders.map(s => `
       <tr>
         <td><span class="${rsColor(s.rs_score)}">${s.rs_score}</span></td>
@@ -1051,8 +1051,8 @@ function renderRotMulti(sortKey) {
   ];
   const th = (col) => {
     const active = _multiSortKey === col.key;
-    return `<th class="r" style="cursor:pointer;${active?'color:#58a6ff':''}"${colTip(col.key)}
-      onclick="renderRotMulti('${col.key}')">${col.label}${active?' ↑':''}</th>`;
+    return `<th class="r" style="cursor:pointer;${active?'color:#58a6ff':''}"
+      onclick="renderRotMulti('${col.key}')">${col.label}${colTipIcon(col.key)}${active?' ↑':''}</th>`;
   };
   const el = document.getElementById('rot-multi-content');
   el.innerHTML = `
@@ -1195,9 +1195,9 @@ function renderRotRVOL() {
   el.innerHTML = `
     <table class="tbl" style="width:100%;font-size:11px">
       <thead><tr>
-        <th>#</th><th${colTip('symbol')}>Symbol</th><th${colTip('sector')}>Sector</th>
-        <th class="r"${colTip('price')}>ราคา</th><th class="r"${colTip('ret_1d')}>1D%</th>
-        <th class="r" title="ปริมาณซื้อขายวันนี้ (จำนวนหุ้น)">Vol Today</th><th class="r"${colTip('rvol')}>RVOL</th>
+        <th>#</th><th>Symbol${colTipIcon('symbol')}</th><th>Sector${colTipIcon('sector')}</th>
+        <th class="r">ราคา${colTipIcon('price')}</th><th class="r">1D%${colTipIcon('ret_1d')}</th>
+        <th class="r" title="ปริมาณซื้อขายวันนี้ (จำนวนหุ้น)">Vol Today</th><th class="r">RVOL${colTipIcon('rvol')}</th>
       </tr></thead>
       <tbody>${stocks.map((s,i) => {
         const rv = s.rvol;
@@ -2935,7 +2935,7 @@ function renderScrTable() {
     const active = _scrSortCol === col;
     const arrow  = active ? (_scrSortDir === 1 ? '↓' : '↑') : '↕';
     const c = (cls ? cls+' ' : '') + 'sortable';
-    return `<th class="${c}"${colTip(col)} onclick="setScrSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
+    return `<th class="${c}" onclick="setScrSort('${col}')">${label}${colTipIcon(col)}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
   }
 
   document.getElementById('screener-results').innerHTML = `
@@ -3801,18 +3801,31 @@ const _BO_TIP_RANGE     = 'ตำแหน่งราคาในกรอบ 5
 const _BO_TIP_FROM_HIGH = '% ห่างจาก 52W High — ติดลบ = ยังต่ำกว่า high, NEW HIGH = ราคาทะลุ high เดิมแล้ว';
 const _BO_TIP_FROM_LOW  = '% เด้งขึ้นจาก 52W Low — ยิ่งน้อยยิ่งใกล้จุดต่ำสุด, NEW LOW = ทำจุดต่ำสุดใหม่';
 
-// คืน attribute title="..." สำหรับใส่ใน <th> — คืน '' ถ้าไม่มีคำอธิบายของคอลัมน์นั้น
-function colTip(col) {
-  const t = _COL_TIPS[col];
-  return t ? ` title="${t}"` : '';
+// ไอคอน ℹ แตะ/ชี้เพื่อเปิดคำอธิบาย — ใช้งานได้ทั้ง desktop (hover, ผ่าน CSS :hover เดิม) และ
+// มือถือ/แท็บเล็ต (แตะ) — ก่อนหน้านี้ใช้ title="..." attribute (native tooltip ของ browser)
+// ซึ่งเปิดได้ด้วย hover เท่านั้น จอสัมผัสไม่มี hover จึงไม่มีทางเปิดได้เลย
+// ไอคอนอยู่ใน <th> ที่มักมี onclick sort ของตัวเอง จึงต้อง stopPropagation กันไม่ให้ทะลุไป
+// โดน sort แต่ก็ทำให้ click ไปไม่ถึง document-level listener ที่ทำ tap-toggle ปกติ (ดู .tt-open
+// ด้านล่างของไฟล์) เลยต้องทำ toggle เองตรงนี้แทน
+function _tipIconToggle(el, ev) {
+  ev.stopPropagation();
+  document.querySelectorAll('.tt-open').forEach(o => { if (o !== el) o.classList.remove('tt-open'); });
+  el.classList.toggle('tt-open');
+}
+function _tipIconHtml(text) {
+  if (!text) return '';
+  return `<span class="scr-tip-icon" style="margin-left:4px" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">${text}</div></span>`;
+}
+function colTipIcon(col) {
+  return _tipIconHtml(_COL_TIPS[col]);
 }
 
 function boTh(col, label, cls='', tip=null) {
   const active = _boSortCol === col;
   const arrow  = active ? (_boSortDir === 1 ? '↓' : '↑') : '↕';
   const c = (cls ? cls+' ' : '') + 'sortable';
-  const tAttr = tip ? ` title="${tip}"` : colTip(col);
-  return `<th class="${c}"${tAttr} onclick="setBoSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
+  const icon = _tipIconHtml(tip || _COL_TIPS[col]);
+  return `<th class="${c}" onclick="setBoSort('${col}')">${label}${icon}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
 }
 
 function setBO(type, val, btn) {
@@ -3921,7 +3934,7 @@ function momTh(col, label, cls='') {
   const active = _momSortCol === col;
   const arrow  = active ? (_momSortDir === 1 ? '↓' : '↑') : '↕';
   const c = (cls ? cls+' ' : '') + 'sortable';
-  return `<th class="${c}"${colTip(col)} onclick="setMomSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
+  return `<th class="${c}" onclick="setMomSort('${col}')">${label}${colTipIcon(col)}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
 }
 
 function setMomFilter(val, btn) {
@@ -4554,10 +4567,10 @@ function _renderIdxStocks(sym) {
     <div style="overflow-x:auto">
     <table class="sector-table" style="width:100%">
       <thead><tr>
-        <th${colTip('rs_score')}>RS</th><th${colTip('symbol')}>Symbol</th><th${colTip('name')}>ชื่อ</th>
-        <th class="r"${colTip('price')}>ราคา</th><th class="r"${colTip('ret_1d')}>1D%</th><th class="r"${colTip('ret_1w')}>1W%</th>
-        <th class="r"${colTip('ret_1m')}>1M%</th><th class="r"${colTip('ret_3m')}>3M%</th><th class="r"${colTip('ret_1y')}>1Y%</th>
-        <th class="r"${colTip('above_ema50')}>EMA50</th><th class="r"${colTip('above_ema200')}>EMA200</th>
+        <th>RS${colTipIcon('rs_score')}</th><th>Symbol${colTipIcon('symbol')}</th><th>ชื่อ${colTipIcon('name')}</th>
+        <th class="r">ราคา${colTipIcon('price')}</th><th class="r">1D%${colTipIcon('ret_1d')}</th><th class="r">1W%${colTipIcon('ret_1w')}</th>
+        <th class="r">1M%${colTipIcon('ret_1m')}</th><th class="r">3M%${colTipIcon('ret_3m')}</th><th class="r">1Y%${colTipIcon('ret_1y')}</th>
+        <th class="r">EMA50${colTipIcon('above_ema50')}</th><th class="r">EMA200${colTipIcon('above_ema200')}</th>
       </tr></thead>
       <tbody>${stocks.map(s=>`
         <tr>
@@ -5526,7 +5539,7 @@ function fundTh(col, label, cls='') {
   const active = _fundSortCol === col;
   const arrow  = active ? (_fundSortDir === 1 ? '↓' : '↑') : '↕';
   const c = (cls ? cls+' ' : '') + 'sortable';
-  return `<th class="${c}"${colTip(col)} onclick="setFundSort('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
+  return `<th class="${c}" onclick="setFundSort('${col}')">${label}${colTipIcon(col)}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
 }
 
 function setFundSort(col) {
@@ -5965,16 +5978,16 @@ function renderDRTable() {
   const thead = `<thead><tr>
     <th style="width:112px" title="ชื่อย่อหุ้นต่างประเทศ (underlying) — คลิกเพื่อเปิดกราฟ">Symbol</th>
     <th class="r" style="width:80px" title="ราคาปิดล่าสุด (สกุลเงินท้องถิ่นของตลาดนั้น)">Close</th>
-    <th class="r" style="width:64px"${colTip('ret_1d')}>CHG%</th>
+    <th class="r" style="width:64px">CHG%${colTipIcon('ret_1d')}</th>
     <th class="r" style="width:42px" title="RS Score 0–99 — จัดอันดับเทียบภายในกลุ่ม underlying ทั้ง 84 ตัว ยิ่งสูงยิ่งแข็งแกร่ง">RS</th>
-    <th class="r" style="width:58px"${colTip('ret_1w')}>1W%</th>
-    <th class="r" style="width:58px"${colTip('ret_1m')}>1M%</th>
-    <th class="r" style="width:58px"${colTip('ret_3m')}>3M%</th>
-    <th class="r" style="width:58px"${colTip('ret_1y')}>1Y%</th>
-    <th style="min-width:150px"${colTip('name')}>Company</th>
+    <th class="r" style="width:58px">1W%${colTipIcon('ret_1w')}</th>
+    <th class="r" style="width:58px">1M%${colTipIcon('ret_1m')}</th>
+    <th class="r" style="width:58px">3M%${colTipIcon('ret_3m')}</th>
+    <th class="r" style="width:58px">1Y%${colTipIcon('ret_1y')}</th>
+    <th style="min-width:150px">Company${colTipIcon('name')}</th>
     <th style="min-width:180px" title="DR/DRx ที่อ้างอิงหุ้นตัวนี้ ซื้อขายได้บน SET ด้วยเงินบาท">DR Tickers บน SET</th>
-    <th style="min-width:140px"${colTip('industry')}>Industry</th>
-    <th class="r" style="width:72px"${colTip('mkt_cap')}>MKT CAP</th>
+    <th style="min-width:140px">Industry${colTipIcon('industry')}</th>
+    <th class="r" style="width:72px">MKT CAP${colTipIcon('mkt_cap')}</th>
     <th style="width:108px;text-align:center">Trend (100D)</th>
     <th style="width:136px;text-align:center">Pattern (30D)</th>
     <th class="r" style="width:52px" title="ตั้งราคาแจ้งเตือน">🔔</th>
@@ -6872,14 +6885,14 @@ async function openValSectorModal(secName) {
   modalBody.innerHTML = `
     <table class="tbl tbl-clickable" style="width:100%">
       <thead><tr>
-        <th${colTip('symbol')}>Symbol</th>
-        <th${colTip('name')}>ชื่อ</th>
+        <th>Symbol${colTipIcon('symbol')}</th>
+        <th>ชื่อ${colTipIcon('name')}</th>
         <th class="r" style="color:#dca032" title="P/E ของหุ้น เทียบกับค่าเฉลี่ย sector — ต่ำกว่า -1σ = ถูกผิดปกติ, สูงกว่า +1σ = แพงผิดปกติ">PE<br><span style="font-size:9px;color:var(--muted)">vs sector</span></th>
         <th class="r" style="color:#5ab4ff" title="P/BV ของหุ้น เทียบกับค่าเฉลี่ย sector — ต่ำกว่า -1σ = ถูกผิดปกติ, สูงกว่า +1σ = แพงผิดปกติ">PBV<br><span style="font-size:9px;color:var(--muted)">vs sector</span></th>
-        <th class="r"${colTip('rs_score')}>RS</th>
-        <th class="r"${colTip('price')}>ราคา</th>
-        <th class="r"${colTip('ret_1d')}>1D%</th>
-        <th class="r"${colTip('ret_1m')}>1M%</th>
+        <th class="r">RS${colTipIcon('rs_score')}</th>
+        <th class="r">ราคา${colTipIcon('price')}</th>
+        <th class="r">1D%${colTipIcon('ret_1d')}</th>
+        <th class="r">1M%${colTipIcon('ret_1m')}</th>
       </tr></thead>
       <tbody>
       ${stocks.map(s => {
