@@ -3830,7 +3830,7 @@ const _BO_TIP_FROM_LOW  = '% เด้งขึ้นจาก 52W Low — ย�
 // ด้านล่างของไฟล์) เลยต้องทำ toggle เองตรงนี้แทน
 function _tipIconToggle(el, ev) {
   ev.stopPropagation();
-  document.querySelectorAll('.tt-open').forEach(o => { if (o !== el) o.classList.remove('tt-open'); });
+  document.querySelectorAll('.scr-tip-icon.tt-open').forEach(o => { if (o !== el) o.classList.remove('tt-open'); });
   el.classList.toggle('tt-open');
 }
 function _tipIconHtml(text) {
@@ -3840,6 +3840,30 @@ function _tipIconHtml(text) {
 function colTipIcon(col) {
   return _tipIconHtml(_COL_TIPS[col]);
 }
+
+// .btn-wrap/.btn-note (ปุ่ม Quick Update/Full Refresh/Restart, filter Stage ในหน้าหุ้นทั้งหมด)
+// เดิม CSS ใช้ right:0 ตายตัว — ถ้าปุ่มอยู่ใกล้ขอบซ้ายจอ กล่อง note (กว้าง ~220px)
+// จะยื่นเลยขอบซ้ายจอไปจนถูกตัดขาด อ่านไม่ครบ (เจอกับปุ่ม Stage ในหน้าหุ้นทั้งหมด)
+// แก้โดยดัน right ติดลบชดเชยเมื่อจะล้น — ไม่กระทบปุ่มที่อยู่ใกล้ขอบขวาอยู่แล้ว (right:0 เดิม)
+function _positionBtnNote(wrap) {
+  const note = wrap.querySelector(':scope > .btn-note');
+  if (!note) return;
+  const nw = note.offsetWidth || parseFloat(getComputedStyle(note).width) || 220;
+  const r = wrap.getBoundingClientRect();
+  const wouldBeLeftEdge = r.right - nw;   // ตำแหน่งซ้ายสุดของกล่องถ้าใช้ right:0 ปกติ
+  note.style.right = wouldBeLeftEdge < 8 ? (8 - wouldBeLeftEdge) * -1 + 'px' : '0';
+}
+document.addEventListener('mouseover', e => {
+  const wrap = e.target.closest('.btn-wrap');
+  if (wrap) _positionBtnNote(wrap);
+});
+// จอสัมผัส: ไม่มี hover จริง (iOS จำลอง hover ตอนแตะครั้งแรกแบบไม่เสถียร) — เพิ่ม
+// tap-toggle ชัดเจนแทน ไม่ต้อง stopPropagation เพราะอยากให้ onclick เดิมของปุ่ม (กรอง/รีเฟรช) ทำงานควบคู่ไปด้วย
+document.addEventListener('click', e => {
+  const wrap = e.target.closest('.btn-wrap');
+  document.querySelectorAll('.btn-wrap.tt-open').forEach(w => { if (w !== wrap) w.classList.remove('tt-open'); });
+  if (wrap) { _positionBtnNote(wrap); wrap.classList.toggle('tt-open'); }
+});
 
 function boTh(col, label, cls='', tip=null) {
   const active = _boSortCol === col;
@@ -6200,7 +6224,9 @@ document.addEventListener('click', () => hideIdxTT());
 // ไม่มีทาง trigger ได้เลยบนมือถือ -> เพิ่ม tap toggle ผ่าน class .tt-open (ไม่กระทบ hover เดิมบนเดสก์ท็อป)
 document.addEventListener('click', e => {
   const hit = e.target.closest('.scr-tip-icon, .regime-wrap');
-  document.querySelectorAll('.tt-open').forEach(el => { if (el !== hit) el.classList.remove('tt-open'); });
+  // scope เฉพาะ element ของ delegate นี้เอง — เดิม query ".tt-open" กว้างเกินไป
+  // ไปเคลียร์ .tt-open ของ .btn-wrap (ปุ่ม Stage/Quick Update) ที่ผูก tap-toggle แยกไว้ด้วย
+  document.querySelectorAll('.scr-tip-icon.tt-open, .regime-wrap.tt-open').forEach(el => { if (el !== hit) el.classList.remove('tt-open'); });
   if (hit) { e.stopPropagation(); hit.classList.toggle('tt-open'); }
 });
 

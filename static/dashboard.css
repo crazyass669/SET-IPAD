@@ -73,7 +73,7 @@
     content: ''; position: absolute; bottom: 100%; right: 14px;
     border: 5px solid transparent; border-bottom-color: var(--border);
   }
-  .btn-wrap:hover .btn-note { display: block; }
+  .btn-wrap:hover .btn-note, .btn-wrap.tt-open .btn-note { display: block; }
 
   /* PAGES */
   .page { display: none; padding: 20px; max-width: 1400px; margin: 0 auto; }
