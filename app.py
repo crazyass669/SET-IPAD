@@ -1292,12 +1292,16 @@ def market_stats():
 
 @app.route("/api/market-stats-meta")
 def market_stats_meta():
-    """วันที่ล่าสุดที่กดอัปเดต P/E & P/BV — ใช้เช็คฝั่ง UI ว่าควร pop-up เตือนหรือยัง"""
+    """เดือนล่าสุดที่มีข้อมูล P/E & P/BV จริง (ตาม Table_PE.xls ที่ import ล่าสุด) —
+    ใช้เช็คฝั่ง UI ว่าข้อมูลตกรุ่นหรือยัง เดิมใช้ mtime ของไฟล์ซึ่งผิด: บนเวอร์ชันเว็บ
+    ไฟล์นี้ถูก regenerate ทุกรอบ GitHub Actions (ไม่ว่า Table_PE.xls จะมีข้อมูลใหม่จริง
+    หรือไม่) เลย mtime รีเซ็ตเป็น "วันนี้" ตลอด ทำให้ข้อมูลค้างหลายเดือนก็ยังดูเหมือนสด"""
     if not os.path.exists(_MARKET_STATS_FILE):
         return jsonify({"updated_at": None})
-    from datetime import datetime as _dt
-    mtime = os.path.getmtime(_MARKET_STATS_FILE)
-    return jsonify({"updated_at": _dt.fromtimestamp(mtime).strftime("%Y-%m-%d")})
+    with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
+        data = json.load(f)
+    latest = (data.get("pe", {}).get("dates") or [None])[-1]
+    return jsonify({"updated_at": latest})
 
 
 @app.route("/api/refresh-market-stats", methods=["POST"])

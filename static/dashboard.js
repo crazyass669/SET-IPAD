@@ -2222,9 +2222,9 @@ function sortStocks(key) {
     above_ema50_n:'sh-e50', above_ema200_n:'sh-e200', ath_pct:'sh-ath',
     atr14_pct:'sh-atr', _stage:'sh-stage'
   };
-  document.querySelectorAll('#tbl-stocks th').forEach(th => {
-    const txt = th.textContent.replace(/[↑↓↕]/g,'').trim();
-    th.textContent = txt + (th.id && headers[stockSort.key]===th.id ? (stockSort.dir===-1?' ↓':' ↑') : ' ↕');
+  document.querySelectorAll('#tbl-stocks th[id] .sort-ind').forEach(ind => {
+    const th = ind.closest('th');
+    ind.textContent = headers[stockSort.key] === th.id ? (stockSort.dir === -1 ? '↓' : '↑') : '↕';
   });
   renderStocksTable();
 }
@@ -3049,7 +3049,11 @@ function _todayStr() {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 async function checkPeReminder() {
-  if (IS_STATIC) return; // เวอร์ชันเว็บอัปเดตอัตโนมัติ ไม่ต้องเตือนวางไฟล์
+  // เวอร์ชันเว็บ: ไฟล์ Table_PE.xls/Table_PBV.xls เป็นการอัปเดตด้วยมือล้วนๆ ไม่มี
+  // scraper อัตโนมัติเลย (ต่างจาก Capital Flow ที่อย่างน้อยพยายาม fetch ทุกรอบ) —
+  // ถ้าไม่มีใคร commit ไฟล์ xls ใหม่ ข้อมูลจะค้างได้นานเป็นเดือนโดยไม่มีใครรู้ ไม่โชว์
+  // modal เตือนวางไฟล์ (ทำบนมือถือ/ไอแพดไม่ได้อยู่แล้ว) แต่ซ่อนเมนู Valuation แทน
+  if (IS_STATIC) { checkValuationFreshness(); return; }
   const now = new Date();
   if (now.getDate() < 5) return;
   const todayStr = _todayStr();
@@ -3061,6 +3065,21 @@ async function checkPeReminder() {
     const updatedYM = d.updated_at ? d.updated_at.slice(0, 7) : null;
     if (updatedYM === curYM) return; // อัปเดตเดือนนี้ไปแล้ว
     document.getElementById('pe-reminder-modal').classList.add('open');
+  } catch (e) { /* เงียบ — ไม่ใช่ฟีเจอร์หลัก */ }
+}
+async function checkValuationFreshness() {
+  try {
+    const r = await fetch('/api/market-stats-meta');
+    const d = await r.json();
+    if (!d.updated_at) return;
+    const [uy, um] = d.updated_at.split('-').map(Number);
+    const now = new Date();
+    const monthsOld = (now.getFullYear() * 12 + now.getMonth() + 1) - (uy * 12 + um);
+    if (monthsOld >= 2) { // ตกรุ่นตั้งแต่ 2 เดือนก่อนขึ้นไป (เผื่อรอบเผยแพร่ต้นเดือน)
+      const btn = [...document.querySelectorAll('.nav-btn')]
+        .find(b => b.getAttribute('onclick')?.includes("'valuation'"));
+      if (btn) btn.style.display = 'none';
+    }
   } catch (e) { /* เงียบ — ไม่ใช่ฟีเจอร์หลัก */ }
 }
 function dismissPeReminder() {
@@ -7011,23 +7030,48 @@ let _valData = null;
 let _valPeriod = 'ALL';
 
 // ── Global tooltip popup ─────────────────────
+// เดิมเปิด/ปิด/วางตำแหน่งด้วย mousemove+mouseleave ล้วนๆ — ใช้ไม่ได้เลยบนจอสัมผัส
+// (ไอแพด/มือถือ ไม่มี mousemove ตอนแตะ) เพิ่ม tap-to-pin ทำงานคู่กับ hover เดิมบน desktop
 (function(){
   const pop = document.createElement('div');
   pop.id = '_vtip-popup';
   document.body.appendChild(pop);
+  let pinnedEl = null;
+
+  function place(x, y) {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const pw = pop.offsetWidth + 16, ph = pop.offsetHeight + 16;
+    if (x + pw > vw) x = x - pw + 2;
+    if (y + ph > vh) y = y - ph + 2;
+    pop.style.left = Math.max(4, x) + 'px';
+    pop.style.top  = Math.max(4, y) + 'px';
+  }
+
   document.addEventListener('mousemove', e => {
+    if (pinnedEl) return; // กำลังปักหมุดจากการแตะ ไม่ให้ hover ทับ
     const el = e.target.closest('[data-vtip]');
     if (!el) { pop.style.display='none'; return; }
     pop.innerHTML = el.dataset.vtip;
     pop.style.display = 'block';
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const pw = pop.offsetWidth + 16, ph = pop.offsetHeight + 16;
-    let x = e.clientX + 14, y = e.clientY + 14;
-    if (x + pw > vw) x = e.clientX - pw + 2;
-    if (y + ph > vh) y = e.clientY - ph + 2;
-    pop.style.left = x + 'px'; pop.style.top = y + 'px';
+    place(e.clientX + 14, e.clientY + 14);
   });
-  document.addEventListener('mouseleave', () => pop.style.display='none', true);
+  document.addEventListener('mouseleave', () => { if (!pinnedEl) pop.style.display='none'; }, true);
+
+  // จอสัมผัส: แตะไอคอนเพื่อเปิด/ปิด (ปักหมุดไว้จนกว่าจะแตะที่อื่นหรือแตะไอคอนเดิมซ้ำ)
+  document.addEventListener('click', e => {
+    const el = e.target.closest('[data-vtip]');
+    if (!el) {
+      if (pinnedEl) { pop.style.display = 'none'; pinnedEl = null; }
+      return;
+    }
+    e.stopPropagation();
+    if (pinnedEl === el) { pop.style.display = 'none'; pinnedEl = null; return; }
+    pinnedEl = el;
+    pop.innerHTML = el.dataset.vtip;
+    pop.style.display = 'block';
+    const r = el.getBoundingClientRect();
+    place(r.left, r.bottom + 6);
+  });
 })();
 
 async function refreshMarketStats() {

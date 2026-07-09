@@ -287,12 +287,12 @@
       <button class="filter-btn" id="idx-sort-btn-ret_3m"  onclick="setIdxSort('ret_3m',this)">3M%</button>
       <button class="filter-btn" id="idx-sort-btn-ret_6m"  onclick="setIdxSort('ret_6m',this)">6M%</button>
       <button class="filter-btn" id="idx-sort-btn-ret_1y"  onclick="setIdxSort('ret_1y',this)">1Y%</button>
-      <button class="filter-btn" id="idx-sort-btn-rs_set"  onclick="setIdxSort('rs_set',this)"
+      <button class="filter-btn" id="idx-sort-btn-rs_set"  onclick="event.stopPropagation(); setIdxSort('rs_set',this); showIdxTT('<b>RS SET</b><br>Relative Strength เทียบหุ้น SET 930 ตัว<br>0=อ่อนสุด · 99=แรงสุด<br>≥70 แรง · 40–69 กลาง · &lt;40 อ่อน',event)"
         onmouseenter="showIdxTT('<b>RS SET</b><br>Relative Strength เทียบหุ้น SET 930 ตัว<br>0=อ่อนสุด · 99=แรงสุด<br>≥70 แรง · 40–69 กลาง · &lt;40 อ่อน',event)" onmouseleave="hideIdxTT()">RS SET</button>
-      <button class="filter-btn" id="idx-sort-btn-mom"     onclick="setIdxSort('mom',this)"
+      <button class="filter-btn" id="idx-sort-btn-mom"     onclick="event.stopPropagation(); setIdxSort('mom',this); showIdxTT('<b>Momentum Score</b><br>สูตร: 1M% − (6M%÷6)<br>วัดว่า momentum ระยะสั้นแรงกว่า long-term avg แค่ไหน<br>ค่าสูง = momentum กำลังเร่ง = สัญญาณต้นรอบ',event)"
         onmouseenter="showIdxTT('<b>Momentum Score</b><br>สูตร: 1M% − (6M%÷6)<br>วัดว่า momentum ระยะสั้นแรงกว่า long-term avg แค่ไหน<br>ค่าสูง = momentum กำลังเร่ง = สัญญาณต้นรอบ',event)" onmouseleave="hideIdxTT()">Momentum</button>
       <span style="border-left:1px solid var(--border);margin:0 4px;height:16px;display:inline-block"></span>
-      <button class="filter-btn" id="idx-filter-reversal" onclick="toggleIdxReversal(this)"
+      <button class="filter-btn" id="idx-filter-reversal" onclick="event.stopPropagation(); toggleIdxReversal(this); showIdxTT('<b>🔄 กลับตัว</b><br>กรองเฉพาะ sector ที่อาจกำลังกลับตัว:<br>• 1M% &gt; 0 (เดือนนี้เป็นบวก)<br>• 6M% &lt; 15 (ยังไม่วิ่งไปไกล)<br>• Momentum Score &gt; 1 (momentum กำลังเร่ง)<br><br>ใช้หา sector ต้นรอบ ที่ยังมีโอกาส',event)"
         onmouseenter="showIdxTT('<b>🔄 กลับตัว</b><br>กรองเฉพาะ sector ที่อาจกำลังกลับตัว:<br>• 1M% &gt; 0 (เดือนนี้เป็นบวก)<br>• 6M% &lt; 15 (ยังไม่วิ่งไปไกล)<br>• Momentum Score &gt; 1 (momentum กำลังเร่ง)<br><br>ใช้หา sector ต้นรอบ ที่ยังมีโอกาส',event)" onmouseleave="hideIdxTT()">🔄 กลับตัว</button>
     </div>
     <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text2);margin-left:auto">
@@ -323,10 +323,10 @@
     <div class="filter-row" id="rs-sector-filters"></div>
     <table class="tbl" id="tbl-rs-leaders">
       <thead><tr>
-        <th title="RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)">RS</th><th title="ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ">Symbol</th><th title="ชื่อบริษัท">ชื่อ</th><th title="กลุ่มอุตสาหกรรม">Sector</th>
-        <th class="r" title="ราคาปิดล่าสุด (บาท)">ราคา</th><th class="r" title="ผลตอบแทนวันนี้ (เทียบราคาปิดเมื่อวาน)">1D%</th><th class="r" title="ผลตอบแทนย้อนหลัง 1 สัปดาห์">1W%</th>
-        <th class="r" title="ผลตอบแทนย้อนหลัง 1 เดือน">1M%</th><th class="r" title="ผลตอบแทนย้อนหลัง 3 เดือน">3M%</th><th class="r" title="ผลตอบแทนตั้งแต่ต้นปี (Year-to-Date)">YTD%</th>
-        <th class="r" title="ราคาอยู่เหนือเส้น EMA 50 วันหรือไม่ (✓ = แนวโน้มระยะกลางขาขึ้น)">EMA50</th><th class="r" title="ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)">EMA200</th>
+        <th>RS<span class="scr-tip-icon">ℹ<div class="scr-tip-box">RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)</div></span></th><th>Symbol<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ</div></span></th><th>ชื่อ<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อบริษัท</div></span></th><th>Sector<span class="scr-tip-icon">ℹ<div class="scr-tip-box">กลุ่มอุตสาหกรรม</div></span></th>
+        <th class="r">ราคา<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาปิดล่าสุด (บาท)</div></span></th><th class="r">1D%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนวันนี้ (เทียบราคาปิดเมื่อวาน)</div></span></th><th class="r">1W%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 สัปดาห์</div></span></th>
+        <th class="r">1M%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 เดือน</div></span></th><th class="r">3M%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 3 เดือน</div></span></th><th class="r">YTD%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนตั้งแต่ต้นปี (Year-to-Date)</div></span></th>
+        <th class="r">EMA50<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาอยู่เหนือเส้น EMA 50 วันหรือไม่ (✓ = แนวโน้มระยะกลางขาขึ้น)</div></span></th><th class="r">EMA200<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)</div></span></th>
       </tr></thead>
       <tbody id="rs-tbody"></tbody>
     </table>
@@ -339,9 +339,9 @@
     </div>
     <table class="tbl" id="tbl-emerging">
       <thead><tr>
-        <th title="RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)">RS ▲</th><th title="ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ">Symbol</th><th title="ชื่อบริษัท">ชื่อ</th><th title="กลุ่มอุตสาหกรรม">Sector</th>
-        <th class="r" title="ราคาปิดล่าสุด (บาท)">ราคา</th><th class="r" title="ผลตอบแทนย้อนหลัง 1 เดือน">1M%</th><th class="r" title="ผลตอบแทนย้อนหลัง 3 เดือน">3M%</th>
-        <th class="r" title="RS ปัจจุบัน − RS เมื่อ 4 สัปดาห์ก่อน — บวก = ความแข็งแกร่งกำลังเร่งขึ้น">RS Momentum</th><th class="r" title="ราคาอยู่เหนือเส้น EMA 50 วันหรือไม่ (✓ = แนวโน้มระยะกลางขาขึ้น)">EMA50</th><th class="r" title="ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)">EMA200</th>
+        <th>RS ▲<span class="scr-tip-icon">ℹ<div class="scr-tip-box">RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)</div></span></th><th>Symbol<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ</div></span></th><th>ชื่อ<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อบริษัท</div></span></th><th>Sector<span class="scr-tip-icon">ℹ<div class="scr-tip-box">กลุ่มอุตสาหกรรม</div></span></th>
+        <th class="r">ราคา<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาปิดล่าสุด (บาท)</div></span></th><th class="r">1M%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 เดือน</div></span></th><th class="r">3M%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 3 เดือน</div></span></th>
+        <th class="r">RS Momentum<span class="scr-tip-icon">ℹ<div class="scr-tip-box">RS ปัจจุบัน − RS เมื่อ 4 สัปดาห์ก่อน — บวก = ความแข็งแกร่งกำลังเร่งขึ้น</div></span></th><th class="r">EMA50<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาอยู่เหนือเส้น EMA 50 วันหรือไม่ (✓ = แนวโน้มระยะกลางขาขึ้น)</div></span></th><th class="r">EMA200<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)</div></span></th>
       </tr></thead>
       <tbody id="emerging-tbody"></tbody>
     </table>
@@ -379,15 +379,15 @@
     <div id="stage-count" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
     <table class="tbl" id="tbl-stage">
       <thead><tr>
-        <th title="Weinstein Stage: 1=สร้างฐาน, 2=ขาขึ้น (โซนซื้อ), 3=สร้างยอด, 4=ขาลง">Stage</th>
-        <th class="r" title="RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)">RS</th>
-        <th title="ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ">Symbol</th><th title="ชื่อบริษัท">ชื่อ</th><th title="กลุ่มอุตสาหกรรม">Sector</th>
-        <th class="r" title="ราคาปิดล่าสุด (บาท)">ราคา</th>
-        <th class="r" title="ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)">EMA200</th>
-        <th class="r" title="ความชันของเส้น EMA200 — บวก = แนวโน้มระยะยาวชี้ขึ้น, ลบมาก = ชี้ลงแรง">Slope%</th>
-        <th class="r" title="ผลตอบแทนย้อนหลัง 1 เดือน">1M%</th>
-        <th class="r" title="ผลตอบแทนย้อนหลัง 3 เดือน">3M%</th>
-        <th class="r" title="ATR14% = ช่วงแกว่งเฉลี่ยต่อวันใน 14 วัน (% ของราคา) — ใช้กะ stop loss / position sizing">ATR%</th>
+        <th>Stage<span class="scr-tip-icon">ℹ<div class="scr-tip-box">Weinstein Stage: 1=สร้างฐาน, 2=ขาขึ้น (โซนซื้อ), 3=สร้างยอด, 4=ขาลง</div></span></th>
+        <th class="r">RS<span class="scr-tip-icon">ℹ<div class="scr-tip-box">RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)</div></span></th>
+        <th>Symbol<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ</div></span></th><th>ชื่อ<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อบริษัท</div></span></th><th>Sector<span class="scr-tip-icon">ℹ<div class="scr-tip-box">กลุ่มอุตสาหกรรม</div></span></th>
+        <th class="r">ราคา<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาปิดล่าสุด (บาท)</div></span></th>
+        <th class="r">EMA200<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)</div></span></th>
+        <th class="r">Slope%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ความชันของเส้น EMA200 — บวก = แนวโน้มระยะยาวชี้ขึ้น, ลบมาก = ชี้ลงแรง</div></span></th>
+        <th class="r">1M%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 เดือน</div></span></th>
+        <th class="r">3M%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 3 เดือน</div></span></th>
+        <th class="r">ATR%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ATR14% = ช่วงแกว่งเฉลี่ยต่อวันใน 14 วัน (% ของราคา) — ใช้กะ stop loss / position sizing</div></span></th>
       </tr></thead>
       <tbody id="stage-tbody"></tbody>
     </table>
@@ -450,14 +450,14 @@
   <div class="card" id="sector-pct-card">
     <table class="tbl" id="tbl-sectors">
       <thead><tr>
-        <th>อันดับ</th><th>ชื่อ</th><th class="r" title="จำนวนหุ้นในกลุ่มนี้">จำนวน</th>
-        <th class="r sortable" onclick="sortSectors('ret_1d')" title="ผลตอบแทนวันนี้ (เทียบราคาปิดเมื่อวาน) (เฉลี่ยทั้งกลุ่ม)">1D%</th>
-        <th class="r sortable" onclick="sortSectors('ret_1w')" title="ผลตอบแทนย้อนหลัง 1 สัปดาห์ (เฉลี่ยทั้งกลุ่ม)">1W%</th>
-        <th class="r sortable" onclick="sortSectors('ret_1m')" title="ผลตอบแทนย้อนหลัง 1 เดือน (เฉลี่ยทั้งกลุ่ม)">1M%</th>
+        <th>อันดับ</th><th>ชื่อ</th><th class="r">จำนวน <span class="scr-tip-icon" style="margin-left:1px">?<div class="scr-tip-box">จำนวนหุ้นในกลุ่มนี้</div></span></th>
+        <th class="r sortable" onclick="sortSectors('ret_1d')">1D% <span class="scr-tip-icon" style="margin-left:1px">?<div class="scr-tip-box">ผลตอบแทนวันนี้ (เทียบราคาปิดเมื่อวาน) (เฉลี่ยทั้งกลุ่ม)</div></span></th>
+        <th class="r sortable" onclick="sortSectors('ret_1w')">1W% <span class="scr-tip-icon" style="margin-left:1px">?<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 สัปดาห์ (เฉลี่ยทั้งกลุ่ม)</div></span></th>
+        <th class="r sortable" onclick="sortSectors('ret_1m')">1M% <span class="scr-tip-icon" style="margin-left:1px">?<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 เดือน (เฉลี่ยทั้งกลุ่ม)</div></span></th>
         <th class="r sortable" onclick="sortSectors('vs_set_1m')" title="1M% ของ Sector เทียบกับค่าเฉลี่ย 1M% ของตลาด (SET avg)&#10;บวก = outperform ตลาด&#10;ลบ = underperform ตลาด">1M vs SET <span class="scr-tip-icon" style="margin-left:1px">?<div class="scr-tip-box" style="width:220px"><strong>1M% เทียบ SET avg</strong><br>ผลต่างระหว่าง 1M% ของ Sector กับค่าเฉลี่ย 1M% ของหุ้นทุกตัวในตลาด<br><br><span style="color:#3fb950">บวก</span> = Sector outperform ตลาด<br><span style="color:#f85149">ลบ</span> = Sector underperform ตลาด</div></span></th>
-        <th class="r sortable" onclick="sortSectors('ret_3m')" title="ผลตอบแทนย้อนหลัง 3 เดือน (เฉลี่ยทั้งกลุ่ม)">3M%</th>
-        <th class="r sortable" onclick="sortSectors('ret_1y')" title="ผลตอบแทนย้อนหลัง 1 ปี (เฉลี่ยทั้งกลุ่ม)">1Y%</th>
-        <th class="r sortable" onclick="sortSectors('avg_rs')" title="ค่าเฉลี่ย RS Score ของหุ้นทุกตัวในกลุ่ม — ใช้เทียบความแข็งแกร่งระหว่างกลุ่ม">Avg RS</th>
+        <th class="r sortable" onclick="sortSectors('ret_3m')">3M% <span class="scr-tip-icon" style="margin-left:1px">?<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 3 เดือน (เฉลี่ยทั้งกลุ่ม)</div></span></th>
+        <th class="r sortable" onclick="sortSectors('ret_1y')">1Y% <span class="scr-tip-icon" style="margin-left:1px">?<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 ปี (เฉลี่ยทั้งกลุ่ม)</div></span></th>
+        <th class="r sortable" onclick="sortSectors('avg_rs')">Avg RS <span class="scr-tip-icon" style="margin-left:1px">?<div class="scr-tip-box">ค่าเฉลี่ย RS Score ของหุ้นทุกตัวในกลุ่ม — ใช้เทียบความแข็งแกร่งระหว่างกลุ่ม</div></span></th>
         <th class="r">% &gt;EMA50 <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:220px">
           <strong>% หุ้นที่อยู่เหนือ EMA50</strong><br>
           สัดส่วนหุ้นใน Sector ที่ราคาปิดสูงกว่า EMA 50 วัน<br><br>
@@ -541,22 +541,22 @@
   <div class="card">
     <table class="tbl" id="tbl-stocks">
       <thead><tr>
-        <th class="r sortable" id="sh-rs"   onclick="sortStocks('rs_score')" title="RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)">RS ↕</th>
-        <th class="sortable" id="sh-sym" onclick="sortStocks('symbol')" title="ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ">Symbol ↕</th><th title="ชื่อบริษัท">ชื่อ</th><th title="หมวดธุรกิจ (ละเอียดกว่า sector)">Industry</th><th title="กลุ่มอุตสาหกรรม">Sector</th>
-        <th class="r sortable" id="sh-px"   onclick="sortStocks('price')" title="ราคาปิดล่าสุด (บาท)">ราคา ↕</th>
-        <th class="r sortable" id="sh-1d"   onclick="sortStocks('ret_1d')" title="ผลตอบแทนวันนี้ (เทียบราคาปิดเมื่อวาน)">1D% ↕</th>
-        <th class="r sortable" id="sh-1w"   onclick="sortStocks('ret_1w')" title="ผลตอบแทนย้อนหลัง 1 สัปดาห์">1W% ↕</th>
-        <th class="r sortable" id="sh-1m"   onclick="sortStocks('ret_1m')" title="ผลตอบแทนย้อนหลัง 1 เดือน">1M% ↕</th>
-        <th class="r sortable" id="sh-3m"   onclick="sortStocks('ret_3m')" title="ผลตอบแทนย้อนหลัง 3 เดือน">3M% ↕</th>
-        <th class="r sortable" id="sh-ytd"  onclick="sortStocks('ret_ytd')" title="ผลตอบแทนตั้งแต่ต้นปี (Year-to-Date)">YTD% ↕</th>
-        <th class="r" title="ทิศทางรวมจาก EMA50/EMA200 — ▲ เหนือทั้งคู่ = ขาขึ้นเต็มตัว">Trend</th>
-        <th class="r sortable" id="sh-cap"  onclick="sortStocks('mkt_cap')" title="มูลค่าตลาด = ราคา × จำนวนหุ้นจดทะเบียน">MKT CAP ↕</th>
-        <th class="r sortable" id="sh-vol"  onclick="sortStocks('vol_today')" title="RVOL = Volume วันนี้ ÷ เฉลี่ย 20วัน&#10;⚡ >2x | 🔥 >3x&#10;(เรียงตาม Volume จริง ไม่ใช่ Ratio)">RVOL ↕</th>
-        <th class="r sortable" id="sh-e50"  onclick="sortStocks('above_ema50_n')" title="ราคาอยู่เหนือเส้น EMA 50 วันหรือไม่ (✓ = แนวโน้มระยะกลางขาขึ้น)">EMA50 ↕</th>
-        <th class="r sortable" id="sh-e200" onclick="sortStocks('above_ema200_n')" title="ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)">EMA200 ↕</th>
-        <th class="r sortable" id="sh-ath"  onclick="sortStocks('ath_pct')" title="% ห่างจากราคาสูงสุดตลอดกาล (All-Time High)">ATH% ↕</th>
-        <th class="r sortable" id="sh-atr"  onclick="sortStocks('atr14_pct')" title="ATR14% = ค่าเฉลี่ย daily move 14 วัน ใช้ position sizing">ATR% ↕</th>
-        <th class="r sortable" id="sh-stage" onclick="sortStocks('_stage')" title="Weinstein Stage 1-4">Stage ↕</th>
+        <th class="r sortable" id="sh-rs"   onclick="sortStocks('rs_score')">RS<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)</div></span><span class="sort-ind">↕</span></th>
+        <th class="sortable" id="sh-sym" onclick="sortStocks('symbol')">Symbol<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ</div></span><span class="sort-ind">↕</span></th><th>ชื่อ<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อบริษัท</div></span></th><th>Industry<span class="scr-tip-icon">ℹ<div class="scr-tip-box">หมวดธุรกิจ (ละเอียดกว่า sector)</div></span></th><th>Sector<span class="scr-tip-icon">ℹ<div class="scr-tip-box">กลุ่มอุตสาหกรรม</div></span></th>
+        <th class="r sortable" id="sh-px"   onclick="sortStocks('price')">ราคา<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ราคาปิดล่าสุด (บาท)</div></span><span class="sort-ind">↕</span></th>
+        <th class="r sortable" id="sh-1d"   onclick="sortStocks('ret_1d')">1D%<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ผลตอบแทนวันนี้ (เทียบราคาปิดเมื่อวาน)</div></span><span class="sort-ind">↕</span></th>
+        <th class="r sortable" id="sh-1w"   onclick="sortStocks('ret_1w')">1W%<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 สัปดาห์</div></span><span class="sort-ind">↕</span></th>
+        <th class="r sortable" id="sh-1m"   onclick="sortStocks('ret_1m')">1M%<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 เดือน</div></span><span class="sort-ind">↕</span></th>
+        <th class="r sortable" id="sh-3m"   onclick="sortStocks('ret_3m')">3M%<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 3 เดือน</div></span><span class="sort-ind">↕</span></th>
+        <th class="r sortable" id="sh-ytd"  onclick="sortStocks('ret_ytd')">YTD%<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ผลตอบแทนตั้งแต่ต้นปี (Year-to-Date)</div></span><span class="sort-ind">↕</span></th>
+        <th class="r">Trend<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ทิศทางรวมจาก EMA50/EMA200 — ▲ เหนือทั้งคู่ = ขาขึ้นเต็มตัว</div></span></th>
+        <th class="r sortable" id="sh-cap"  onclick="sortStocks('mkt_cap')">MKT CAP<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">มูลค่าตลาด = ราคา × จำนวนหุ้นจดทะเบียน</div></span><span class="sort-ind">↕</span></th>
+        <th class="r sortable" id="sh-vol"  onclick="sortStocks('vol_today')">RVOL<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">RVOL = Volume วันนี้ ÷ เฉลี่ย 20วัน<br>⚡ &gt;2x | 🔥 &gt;3x<br>(เรียงตาม Volume จริง ไม่ใช่ Ratio)</div></span><span class="sort-ind">↕</span></th>
+        <th class="r sortable" id="sh-e50"  onclick="sortStocks('above_ema50_n')">EMA50<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ราคาอยู่เหนือเส้น EMA 50 วันหรือไม่ (✓ = แนวโน้มระยะกลางขาขึ้น)</div></span><span class="sort-ind">↕</span></th>
+        <th class="r sortable" id="sh-e200" onclick="sortStocks('above_ema200_n')">EMA200<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)</div></span><span class="sort-ind">↕</span></th>
+        <th class="r sortable" id="sh-ath"  onclick="sortStocks('ath_pct')">ATH%<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">% ห่างจากราคาสูงสุดตลอดกาล (All-Time High)</div></span><span class="sort-ind">↕</span></th>
+        <th class="r sortable" id="sh-atr"  onclick="sortStocks('atr14_pct')">ATR%<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ATR14% = ค่าเฉลี่ย daily move 14 วัน ใช้ position sizing</div></span><span class="sort-ind">↕</span></th>
+        <th class="r sortable" id="sh-stage" onclick="sortStocks('_stage')">Stage<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">Weinstein Stage: 1=สร้างฐาน, 2=ขาขึ้น (โซนซื้อ), 3=สร้างยอด, 4=ขาลง</div></span><span class="sort-ind">↕</span></th>
       </tr></thead>
       <tbody id="stocks-tbody"></tbody>
     </table>
@@ -633,14 +633,14 @@
   <div class="card">
     <table class="tbl" id="tbl-watchlist">
       <thead><tr>
-        <th title="RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)">RS</th><th title="ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ">Symbol</th><th title="ชื่อบริษัท">ชื่อ</th><th title="กลุ่มอุตสาหกรรม">Sector</th>
-        <th class="r" title="ราคาปิดล่าสุด (บาท)">ราคา</th>
-        <th class="r" title="ผลตอบแทนวันนี้ (เทียบราคาปิดเมื่อวาน)">1D%</th><th class="r" title="ผลตอบแทนย้อนหลัง 1 สัปดาห์">1W%</th><th class="r" title="ผลตอบแทนย้อนหลัง 1 เดือน">1M%</th><th class="r" title="ผลตอบแทนย้อนหลัง 3 เดือน">3M%</th>
-        <th class="r" title="ผลตอบแทนตั้งแต่ต้นปี (Year-to-Date)">YTD%</th><th class="r" title="ผลตอบแทนย้อนหลัง 1 ปี">1Y%</th>
-        <th class="r" title="กราฟราคาย่อ (sparkline) ช่วงล่าสุด">Chart</th>
-        <th class="r" title="มูลค่าตลาด = ราคา × จำนวนหุ้นจดทะเบียน">MKT CAP</th>
-        <th class="r" title="ราคาอยู่เหนือเส้น EMA 50 วันหรือไม่ (✓ = แนวโน้มระยะกลางขาขึ้น)">EMA50</th><th class="r" title="ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)">EMA200</th>
-        <th class="r" title="ตั้งราคาแจ้งเตือน">🔔</th>
+        <th>RS<span class="scr-tip-icon">ℹ<div class="scr-tip-box">RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)</div></span></th><th>Symbol<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ</div></span></th><th>ชื่อ<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อบริษัท</div></span></th><th>Sector<span class="scr-tip-icon">ℹ<div class="scr-tip-box">กลุ่มอุตสาหกรรม</div></span></th>
+        <th class="r">ราคา<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาปิดล่าสุด (บาท)</div></span></th>
+        <th class="r">1D%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนวันนี้ (เทียบราคาปิดเมื่อวาน)</div></span></th><th class="r">1W%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 สัปดาห์</div></span></th><th class="r">1M%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 เดือน</div></span></th><th class="r">3M%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 3 เดือน</div></span></th>
+        <th class="r">YTD%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนตั้งแต่ต้นปี (Year-to-Date)</div></span></th><th class="r">1Y%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 ปี</div></span></th>
+        <th class="r">Chart<span class="scr-tip-icon">ℹ<div class="scr-tip-box">กราฟราคาย่อ (sparkline) ช่วงล่าสุด</div></span></th>
+        <th class="r">MKT CAP<span class="scr-tip-icon">ℹ<div class="scr-tip-box">มูลค่าตลาด = ราคา × จำนวนหุ้นจดทะเบียน</div></span></th>
+        <th class="r">EMA50<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาอยู่เหนือเส้น EMA 50 วันหรือไม่ (✓ = แนวโน้มระยะกลางขาขึ้น)</div></span></th><th class="r">EMA200<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)</div></span></th>
+        <th class="r">🔔<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ตั้งราคาแจ้งเตือน</div></span></th>
         <th></th>
       </tr></thead>
       <tbody id="wl-tbody"></tbody>
@@ -2038,10 +2038,10 @@
     <div class="modal-body">
       <table class="tbl tbl-clickable" style="width:100%">
         <thead><tr>
-          <th title="RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)">RS</th><th title="ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ">Symbol</th><th title="ชื่อบริษัท">ชื่อ</th>
-          <th class="r" title="ราคาปิดล่าสุด (บาท)">ราคา</th><th class="r" title="ผลตอบแทนวันนี้ (เทียบราคาปิดเมื่อวาน)">1D%</th><th class="r" title="ผลตอบแทนย้อนหลัง 1 สัปดาห์">1W%</th>
-          <th class="r" title="ผลตอบแทนย้อนหลัง 1 เดือน">1M%</th><th class="r" title="ผลตอบแทนย้อนหลัง 3 เดือน">3M%</th><th class="r" title="ผลตอบแทนย้อนหลัง 1 ปี">1Y%</th>
-          <th class="r" title="ราคาอยู่เหนือเส้น EMA 50 วันหรือไม่ (✓ = แนวโน้มระยะกลางขาขึ้น)">EMA50</th><th class="r" title="ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)">EMA200</th>
+          <th>RS<span class="scr-tip-icon">ℹ<div class="scr-tip-box">RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)</div></span></th><th>Symbol<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ</div></span></th><th>ชื่อ<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อบริษัท</div></span></th>
+          <th class="r">ราคา<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาปิดล่าสุด (บาท)</div></span></th><th class="r">1D%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนวันนี้ (เทียบราคาปิดเมื่อวาน)</div></span></th><th class="r">1W%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 สัปดาห์</div></span></th>
+          <th class="r">1M%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 เดือน</div></span></th><th class="r">3M%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 3 เดือน</div></span></th><th class="r">1Y%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 ปี</div></span></th>
+          <th class="r">EMA50<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาอยู่เหนือเส้น EMA 50 วันหรือไม่ (✓ = แนวโน้มระยะกลางขาขึ้น)</div></span></th><th class="r">EMA200<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)</div></span></th>
         </tr></thead>
         <tbody id="modal-tbody"></tbody>
       </table>
