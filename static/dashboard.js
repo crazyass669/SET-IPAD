@@ -205,6 +205,7 @@ async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = nul
           // clear all page caches so next visit fetches fresh data
           _idxData = null; _valData = null; _nvdrData = null;
           _shortData = null; _insData = null;
+          _flowData = null; _valStockData = null;
           _drLoaded = false; _drData = null;
           loadData();
           // if already on a data page, reload it immediately
@@ -214,6 +215,7 @@ async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = nul
           if (_activePage === 'page-valuation') loadValuationPage();
           if (_activePage === 'page-short')     loadShortPage();
           if (_activePage === 'page-insider')   loadInsiderPage();
+          if (_activePage === 'page-flow')      loadFlowPage();
           if (onDone) onDone();
         }
       }, 800);
@@ -3898,7 +3900,7 @@ function renderBreakout() {
   document.getElementById('bo-thead').innerHTML = `<tr>
     ${boTh('rs_score','RS')}${boTh('sec_rank','Sec.Rank','r')}${boTh('symbol','Symbol')}${boTh('name','ชื่อ')}${boTh('sector','Sector')}
     ${boTh('price','ราคา','r')}${boTh(anchorCol,'52W '+aLbl,'r')}${boTh('fromAnchor','% จาก '+aLbl,'r', isHigh ? _BO_TIP_FROM_HIGH : _BO_TIP_FROM_LOW)}
-    <th title="${_BO_TIP_RANGE}">Range</th>
+    <th>Range${_tipIconHtml(_BO_TIP_RANGE)}</th>
     ${boTh('ret_1m','1M%','r')}${boTh('ret_3m','3M%','r')}${boTh('ret_ytd','YTD%','r')}
     ${boTh('vol_today','RVOL','r')}${boTh('mkt_cap','MKT CAP','r')}${boTh('above_ema50','EMA50','r')}${boTh('above_ema200','EMA200','r')}
   </tr>`;
@@ -7134,7 +7136,10 @@ async function loadValuationPage() {
 
 function setValPeriod(p, btn) {
   _valPeriod = p;
-  document.querySelectorAll('#page-valuation .filter-btn').forEach(b => b.classList.remove('active'));
+  // ล้างเฉพาะกลุ่มปุ่มช่วงเวลาด้วยกันเอง — เดิมล้าง .filter-btn ทั้งหน้า ทำให้ไฮไลต์
+  // ปุ่มโซน σ / P/E-P/BV / ขอบเขต หายไปทั้งที่ตัวกรองยังทำงานอยู่
+  document.querySelectorAll('#page-valuation .filter-btn[onclick^="setValPeriod"]')
+    .forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   renderValuation();
 }
@@ -8012,6 +8017,9 @@ function insiderBadge(sym) {
 function renderInsAccumTable() {
   const el = document.getElementById('ins-accum-wrap');
   if (!el) return;
+  // กล่องนี้สรุปจากแบบ 59 (ผู้บริหาร) ล้วนๆ — ถ้าปิดแหล่งข้อมูล 59 อยู่ ให้ซ่อนไปเลย
+  // กันขัดกับตารางล่างที่เหลือแต่รายการผู้ถือหุ้นใหญ่
+  if (!_insSrc.r59) { el.innerHTML = ''; return; }
 
   const rows = Object.entries(_insAccum)
     .map(([sym, a]) => ({sym, ...a, peopleCount: a.people.size}))
@@ -8630,6 +8638,10 @@ function setInsSrc(s, btn) {
   if (_insSrc[s] && !_insSrc[other]) return; // ต้องมีอย่างน้อย 1 แหล่งข้อมูล
   _insSrc[s] = !_insSrc[s];
   btn.classList.toggle('active', _insSrc[s]);
+  // เดิม re-render แค่ตารางล่าง — กล่องสรุป 4 ใบกับกล่องสะสมยังโชว์ตัวเลขของ
+  // แหล่งที่ถูกปิดอยู่ ทำให้บน-ล่างขัดกัน ต้อง re-render ทุก section พร้อมกัน
+  renderInsiderSummary();
+  renderInsAccumTable();
   renderInsiderTable();
 }
 
@@ -8648,11 +8660,16 @@ function renderInsiderSummary() {
   const uniqBuyStocks  = new Set(r59buy.map(x=>x.symbol)).size;
   const uniqSellStocks = new Set(r59sell.map(x=>x.symbol)).size;
 
+  // โชว์การ์ดเฉพาะแหล่งข้อมูลที่เปิดอยู่ — ให้สอดคล้องกับตารางล่างที่กรองตาม _insSrc
   const cards = [
-    { label:'ผู้บริหารซื้อ', value: r59buy.length + ' รายการ', sub: `${uniqBuyStocks} หุ้น · ${(totBuyQty/1e6).toFixed(1)}M หุ้น`, color:'#3ab464' },
-    { label:'ผู้บริหารขาย', value: r59sell.length + ' รายการ', sub: `${uniqSellStocks} หุ้น`, color:'#dc503c' },
-    { label:'ผู้ถือหุ้นใหญ่เพิ่ม', value: r246buy.length + ' รายการ', sub: r246buy.map(x=>x.symbol).join(', ').slice(0,40)||'-', color:'#3ab464' },
-    { label:'ผู้ถือหุ้นใหญ่ลด', value: r246sell.length + ' รายการ', sub: r246sell.map(x=>x.symbol).join(', ').slice(0,40)||'-', color:'#dc503c' },
+    ..._insSrc.r59 ? [
+      { label:'ผู้บริหารซื้อ', value: r59buy.length + ' รายการ', sub: `${uniqBuyStocks} หุ้น · ${(totBuyQty/1e6).toFixed(1)}M หุ้น`, color:'#3ab464' },
+      { label:'ผู้บริหารขาย', value: r59sell.length + ' รายการ', sub: `${uniqSellStocks} หุ้น`, color:'#dc503c' },
+    ] : [],
+    ..._insSrc.r246 ? [
+      { label:'ผู้ถือหุ้นใหญ่เพิ่ม', value: r246buy.length + ' รายการ', sub: r246buy.map(x=>x.symbol).join(', ').slice(0,40)||'-', color:'#3ab464' },
+      { label:'ผู้ถือหุ้นใหญ่ลด', value: r246sell.length + ' รายการ', sub: r246sell.map(x=>x.symbol).join(', ').slice(0,40)||'-', color:'#dc503c' },
+    ] : [],
   ];
   document.getElementById('ins-summary').innerHTML = cards.map(c => `
     <div class="card" style="padding:12px 16px;min-width:160px;flex:1">
