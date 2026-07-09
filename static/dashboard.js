@@ -977,7 +977,7 @@ function renderRotPlaybook(data) {
     },
   ];
 
-  const pc = v => v == null ? '—' : `${v>0?'+':''}${v.toFixed(1)}%`;
+  const pc = v => v == null ? '—' : `${v>0?'+':''}${v.toFixed(2)}%`;
   const rsC = v => v >= 70 ? '#3fb950' : v >= 50 ? '#e3b341' : '#f85149';
 
   const isSector = rotView === 'sector';
@@ -1043,7 +1043,7 @@ function renderRotMulti(sortKey) {
   const data = rotView === 'sector' ? DATA.sectors : DATA.industries;
   const sorted = [...data].sort((a,b) => (b[_multiSortKey]||0)-(a[_multiSortKey]||0));
   const pc = (v) => v == null ? '<span class="text2">—</span>'
-    : `<span class="${v>0?'green':v<0?'red':'text2'}">${v>0?'+':''}${v.toFixed(1)}%</span>`;
+    : `<span class="${v>0?'green':v<0?'red':'text2'}">${v>0?'+':''}${v.toFixed(2)}%</span>`;
   const label = rotView === 'sector' ? 'Sector' : 'Industry';
   const cols = [
     { key:'ret_1d', label:'1D%' },
@@ -1110,9 +1110,9 @@ function renderRotAppendix() {
       const rs = s.rs_score || 0;
       const bg = rs >= 80 ? 'rgba(63,185,80,0.15)' : rs >= 60 ? 'rgba(227,179,65,0.12)' : 'rgba(139,148,158,0.1)';
       const border = rs >= 80 ? 'rgba(63,185,80,0.35)' : rs >= 60 ? 'rgba(227,179,65,0.3)' : 'rgba(139,148,158,0.2)';
-      const ret = s.ret_1d != null ? `${s.ret_1d > 0 ? '+' : ''}${s.ret_1d.toFixed(1)}%` : '';
+      const ret = s.ret_1d != null ? `${s.ret_1d > 0 ? '+' : ''}${s.ret_1d.toFixed(2)}%` : '';
       const retC = s.ret_1d != null ? retCol(s.ret_1d) : '#8b949e';
-      return `<span title="${s.symbol} · RS ${rs} · 1M ${s.ret_1m != null ? (s.ret_1m > 0 ? '+' : '') + s.ret_1m.toFixed(1) + '%' : '—'} · ราคา ${s.price || '—'}"
+      return `<span title="${s.symbol} · RS ${rs} · 1M ${s.ret_1m != null ? (s.ret_1m > 0 ? '+' : '') + s.ret_1m.toFixed(2) + '%' : '—'} · ราคา ${s.price || '—'}"
         onclick="openChartModal('${s.symbol}')"
         style="display:inline-flex;align-items:center;gap:3px;background:${bg};border:1px solid ${border};
                border-radius:4px;padding:2px 6px;font-size:10px;cursor:pointer;white-space:nowrap;
@@ -1124,7 +1124,7 @@ function renderRotAppendix() {
     }).join('');
 
     const avgRetStr = avgRet1m != null
-      ? `<span style="color:${retCol(avgRet1m)};font-weight:600">${avgRet1m > 0 ? '+' : ''}${avgRet1m.toFixed(1)}%</span>`
+      ? `<span style="color:${retCol(avgRet1m)};font-weight:600">${avgRet1m > 0 ? '+' : ''}${avgRet1m.toFixed(2)}%</span>`
       : '';
 
     return `
@@ -1163,7 +1163,7 @@ function renderRotHeat() {
   }
   function heatTxt(v) {
     if (v == null) return '—';
-    return (v>0?'+':'') + v.toFixed(1)+'%';
+    return (v>0?'+':'') + v.toFixed(2)+'%';
   }
 
   const el = document.getElementById('rot-tab-content');
@@ -1645,7 +1645,7 @@ function drawRotationScatter(sectors) {
   }
 
   function showTooltip(hit, e) {
-    const fmt = v => v != null ? `<span style="color:${v>=0?'#3fb950':'#f85149'};font-weight:600">${v>0?'+':''}${v.toFixed(1)}%</span>` : '<span style="color:#6e7681">—</span>';
+    const fmt = v => v != null ? `<span style="color:${v>=0?'#3fb950':'#f85149'};font-weight:600">${v>0?'+':''}${v.toFixed(2)}%</span>` : '<span style="color:#6e7681">—</span>';
     tooltipDiv.innerHTML = `
       <div style="font-weight:700;color:${hit.color};margin-bottom:6px;font-size:13px">${hit.name}</div>
       <div style="display:grid;grid-template-columns:auto 1fr;gap:1px 12px;font-size:11px;color:#8b949e">
