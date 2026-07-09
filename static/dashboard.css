@@ -30,7 +30,10 @@
     gap: 4px;
     height: 44px;
     position: sticky; top: 0; z-index: 100;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
+  .nav-brand, .nav-btn { white-space: nowrap; flex-shrink: 0; }
   .nav-brand { font-weight: 700; font-size: 14px; color: var(--text); margin-right: 16px; letter-spacing: .5px; }
   .nav-brand span { color: var(--blue); }
   .nav-btn {
@@ -40,14 +43,24 @@
   }
   .nav-btn:hover { background: var(--bg3); color: var(--text); }
   .nav-btn.active { background: var(--accent); color: #fff; }
-  .nav-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-  #updated-at { font-size: 11px; color: var(--text2); }
+  .nav-right { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  #updated-at { font-size: 11px; color: var(--text2); white-space: nowrap; }
   .refresh-btn {
     background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
     padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 11px;
-    font-family: var(--font);
+    font-family: var(--font); white-space: nowrap; flex-shrink: 0;
   }
   .refresh-btn:hover { color: var(--text); }
+
+  /* dark, thin scrollbar for the nav bar (and reused wherever .dark-scroll is applied) */
+  nav {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) var(--bg2);
+  }
+  nav::-webkit-scrollbar { height: 6px; }
+  nav::-webkit-scrollbar-track { background: var(--bg2); }
+  nav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  nav::-webkit-scrollbar-thumb:hover { background: var(--text2); }
   .btn-wrap { position: relative; display: inline-block; }
   .btn-wrap .btn-note {
     display: none; position: absolute; top: calc(100% + 6px); right: 0;
@@ -333,8 +346,10 @@
   .scr-tip-icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--border); color: var(--text2); font-size: 9px; font-weight: 700; cursor: default; flex-shrink: 0; position: relative; }
   .scr-tip-icon:hover .scr-tip-box { display: block; }
   .scr-tip-icon.tt-open .scr-tip-box { display: block; } /* จอสัมผัส: ไม่มี hover -> แตะเปิดแทน */
-  .scr-tip-box { display: none; position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: #1c2333; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; width: 220px; font-size: 11px; color: var(--text); line-height: 1.5; z-index: 9999; white-space: normal; text-transform: none; letter-spacing: 0; font-weight: 400; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
-  .scr-tip-box::after { content: ''; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); border: 5px solid transparent; border-bottom-color: var(--border); }
+  /* position: fixed (ไม่ใช่ absolute) — กัน tipbox โดน clip เวลาไอคอนอยู่ในตารางที่มี
+     overflow-x:auto (เช่นตารางงบการเงิน) ตำแหน่ง top/left จริงคำนวณด้วย JS (_tipIconPosition)
+     ตอน hover/tap เพราะ position:fixed ใช้ viewport อ้างอิง ไม่ใช่ตัวไอคอน */
+  .scr-tip-box { display: none; position: fixed; background: #1c2333; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; width: 220px; font-size: 11px; color: var(--text); line-height: 1.5; z-index: 9999; white-space: normal; text-transform: none; letter-spacing: 0; font-weight: 400; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
   .scr-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 12px; }
   .scr-check-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
   .scr-check { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
