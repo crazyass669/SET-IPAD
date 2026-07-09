@@ -1008,13 +1008,13 @@ def _fetch_indices_tv(existing: dict, full_refresh: bool = False) -> dict:
         else:
             n_bars = 30
 
-    def _fetch_one(sym):
+    def _fetch_one(sym, timeout=8):
         info = INDEX_INFO.get(sym)
         if not info:
             return sym, None
         tv_sym = _yf_to_tv(sym)
         try:
-            pairs = _fetch_tv_bars(tv_sym, n_bars=n_bars, timeout=8)
+            pairs = _fetch_tv_bars(tv_sym, n_bars=n_bars, timeout=timeout)
             if not pairs:
                 print(f"[Indices] no data: {tv_sym}")
                 return sym, None
@@ -1023,61 +1023,81 @@ def _fetch_indices_tv(existing: dict, full_refresh: bool = False) -> dict:
             print(f"[Indices] {sym}: {tb.format_exc()}")
             return sym, None
 
+    def _merge_one(sym, pairs):
+        info = INDEX_INFO[sym]
+        new_dates = [p[0] for p in pairs]
+        new_vals  = [p[1] for p in pairs]
+
+        entry = result.get(sym)
+        # Full Refresh ที่ได้ bars กลับมาน้อยกว่าที่สะสมไว้มาก (TV throttle/
+        # ตอบไม่ครบ) → ห้ามทับประวัติเดิม ให้ merge แบบ append แทน
+        destructive_ok = (
+            not entry
+            or not entry.get("dates")
+            or len(new_dates) >= len(entry["dates"]) * 0.9
+        )
+        if entry and (not full_refresh or not destructive_ok):
+            if full_refresh and not destructive_ok:
+                print(f"[Indices] FR {sym}: ได้ {len(new_dates)} bars < 90% ของเดิม "
+                      f"({len(entry['dates'])}) — append แทนการทับ")
+            old_dates = entry["dates"]
+            old_vals  = entry["closes"]
+            last_d    = old_dates[-1] if old_dates else ""
+            added = 0
+            for d, v in zip(new_dates, new_vals):
+                if d > last_d:
+                    old_dates.append(d); old_vals.append(v)
+                    last_d = d; added += 1
+            print(f"[Indices] QU {sym} +{added}d -> {(old_dates or ['?'])[-1]}")
+        else:
+            old_dates = new_dates
+            old_vals  = new_vals
+            print(f"[Indices] {'FR' if full_refresh else 'NEW'} {sym} {len(old_vals)} bars")
+
+        v = old_vals
+        def _ret(n, _v=v):
+            return round((_v[-1] - _v[-(n+1)]) / _v[-(n+1)] * 100, 2) if len(_v) > n else None
+
+        result[sym] = {
+            "sym": sym, "name": info["name"], "group": info["group"],
+            "last": v[-1],
+            "ret_1d": _ret(1), "ret_1w": _ret(5),
+            "ret_1m": _ret(21), "ret_3m": _ret(63),
+            "ret_6m": _ret(126), "ret_1y": _ret(250),
+            "closes": old_vals, "dates": old_dates, "updated_at": updated,
+        }
+
     # ดึงแบบ parallel — สูงสุด 10 connections พร้อมกัน
     max_workers = 10 if not full_refresh else 5
     fetched = 0
-    failed  = 0
+    failed_syms = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(_fetch_one, sym): sym for sym in all_syms}
         for future in as_completed(futures):
             sym, pairs = future.result()
             if pairs is None:
-                failed += 1
+                failed_syms.append(sym)
                 continue
             fetched += 1
-            info = INDEX_INFO[sym]
-            new_dates = [p[0] for p in pairs]
-            new_vals  = [p[1] for p in pairs]
+            _merge_one(sym, pairs)
 
-            entry = result.get(sym)
-            # Full Refresh ที่ได้ bars กลับมาน้อยกว่าที่สะสมไว้มาก (TV throttle/
-            # ตอบไม่ครบ) → ห้ามทับประวัติเดิม ให้ merge แบบ append แทน
-            destructive_ok = (
-                not entry
-                or not entry.get("dates")
-                or len(new_dates) >= len(entry["dates"]) * 0.9
-            )
-            if entry and (not full_refresh or not destructive_ok):
-                if full_refresh and not destructive_ok:
-                    print(f"[Indices] FR {sym}: ได้ {len(new_dates)} bars < 90% ของเดิม "
-                          f"({len(entry['dates'])}) — append แทนการทับ")
-                old_dates = entry["dates"]
-                old_vals  = entry["closes"]
-                last_d    = old_dates[-1] if old_dates else ""
-                added = 0
-                for d, v in zip(new_dates, new_vals):
-                    if d > last_d:
-                        old_dates.append(d); old_vals.append(v)
-                        last_d = d; added += 1
-                print(f"[Indices] QU {sym} +{added}d -> {(old_dates or ['?'])[-1]}")
+    # retry รอบสอง: TV WebSocket แบบขนาน 10 ตัวพร้อมกัน flaky เป็นปกติ (บางรอบล้ม
+    # 10+/50 ตัวแบบสุ่ม) — ตัวที่ล้มซ้ำหลายรอบติดกันจะค้างเป็นข้อมูลเก่าเงียบๆ
+    # (เคยเกิดกับ SET Index/SET100 ค้าง 2 วัน) ดึงซ้ำทีละตัว + timeout ยาวขึ้น ชัวร์กว่ามาก
+    if failed_syms:
+        print(f"[Indices] retry {len(failed_syms)} ดัชนีที่ล้มรอบแรก (ทีละตัว): "
+              f"{', '.join(failed_syms[:10])}{'...' if len(failed_syms) > 10 else ''}")
+        still_failed = []
+        for sym in failed_syms:
+            _, pairs = _fetch_one(sym, timeout=15)
+            if pairs is None:
+                still_failed.append(sym)
             else:
-                old_dates = new_dates
-                old_vals  = new_vals
-                print(f"[Indices] {'FR' if full_refresh else 'NEW'} {sym} {len(old_vals)} bars")
+                fetched += 1
+                _merge_one(sym, pairs)
+        failed_syms = still_failed
 
-            v = old_vals
-            def _ret(n, _v=v):
-                return round((_v[-1] - _v[-(n+1)]) / _v[-(n+1)] * 100, 2) if len(_v) > n else None
-
-            result[sym] = {
-                "sym": sym, "name": info["name"], "group": info["group"],
-                "last": v[-1],
-                "ret_1d": _ret(1), "ret_1w": _ret(5),
-                "ret_1m": _ret(21), "ret_3m": _ret(63),
-                "ret_6m": _ret(126), "ret_1y": _ret(250),
-                "closes": old_vals, "dates": old_dates, "updated_at": updated,
-            }
-
+    failed = len(failed_syms)
     stats = {"fetched": fetched, "failed": failed, "total": len(all_syms)}
 
     # ดึงไม่ได้เลยสักตัว (TV ล่ม) → ไม่เขียนไฟล์/ไม่ประทับเวลาใหม่
