@@ -1,1 +1,1 @@
-{"last_processed":"2026-07-09","pending":[],"rules":{"axes":"x=ret_3m, y=ret_1m","confirm_days":3,"dead_zone_pct":0.3},"transitions":[]}
+{"last_processed":"2026-07-10","pending":[],"pending_fast":[],"rules":{"axes":"x=ret_3m, y=ret_1m","confirm_days":3,"dead_zone_pct":0.3},"rules_fast":{"axes":"x=ret_1m, y=ret_1w","confirm_days":3,"dead_zone_pct":0.8},"transitions":[],"transitions_fast":[]}
