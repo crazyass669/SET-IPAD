@@ -890,7 +890,13 @@ async function renderRotAlerts() {
     const pendHtml  = pending.map(pendRow).join('');
 
     // section สัญญาณเร็ว — แยกป้าย ⚡ ชัดเจน ให้รู้ว่าเชื่อถือได้น้อยกว่าชุดหลัก
-    const fastHtml = (transF.length || pendF.length) ? `
+    // แสดง header เสมอ (ถ้า server รองรับ rules_fast) — ตอนไม่มีสัญญาณโชว์ข้อความบอกสถานะ
+    // แทนการหายไปเฉยๆ ซึ่งแยกไม่ออกว่า "ไม่มีสัญญาณ" หรือ "ยังไม่ได้ seed/server เก่า"
+    const fastBody = (transF.length || pendF.length)
+      ? transF.map(transRow).join('') + pendF.map(pendRow).join('')
+      : `<div style="color:var(--text2);padding:3px 0;font-size:11px">ยังไม่มีสัญญาณจากแกนเร็ว —
+           เริ่มนับสะสมหลังอัปเดตข้อมูลรอบถัดไป (สัญญาณ ⏳ ของชุดเร็วจะโชว์เมื่อนับได้ ≥2/3 วัน)</div>`;
+    const fastHtml = d.rules_fast ? `
       <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
         <div style="font-weight:700;margin-bottom:4px">⚡ สัญญาณเร็ว
           <span style="font-weight:400;font-size:10px;color:var(--text2)">
@@ -903,8 +909,7 @@ async function renderRotAlerts() {
             เหมาะใช้จับ rotation ตั้งแต่ต้นรอบ แล้วรอชุดหลักยืนยันก่อนตัดสินใจน้ำหนักเต็ม
           </div></span>
         </div>
-        ${transF.map(transRow).join('')}
-        ${pendF.map(pendRow).join('')}
+        ${fastBody}
       </div>` : '';
 
     el.innerHTML =
