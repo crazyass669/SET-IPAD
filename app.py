@@ -1967,19 +1967,19 @@ def short_sales_daily_update():
         print(f"[short-sales] daily update error: {e}")
 
 
-# ── Capital Flow (siamchart.com) ─────────────────────────────────────────────
+# ── Capital Flow ─────────────────────────────────────────────────────────────
+# แหล่งหลัก: siamchart.com (ประวัติยาวหลายปี) — แต่บล็อค IP ของ GitHub Actions
+# ทำให้เวอร์ชันเว็บค้างข้อมูลเก่าถาวร (เกิดจริง: ค้างที่ 2026-07-07)
+# แหล่งสำรอง: SET API ทางการ (investor type — ให้เฉพาะวันทำการล่าสุด แต่ CI ดึงได้
+# เสมอเหมือน short sales) สะสมทุกแหล่งลง market_flow_data.json แล้ว commit โดย
+# Actions — เว็บได้ข้อมูลใหม่ทุกรอบแม้ siamchart ล่ม
 _flow_cache: dict = {}
 _FLOW_CACHE_TTL = 4 * 3600
+_MARKET_FLOW_FILE = os.path.join(BASE_DIR, "market_flow_data.json")
 
-def _fetch_flow_data():
-    """ดึงและ parse ข้อมูล Capital Flow จาก siamchart.com — อัพเดท _flow_cache
 
-    market_flow.json ไม่เคยถูก auto-update commit อัพเดทเลยตั้งแต่แก้ manual
-    ครั้งล่าสุด (ต่างจาก endpoint อื่นที่ auto-update ได้ปกติทุกรอบ) — สงสัยว่า
-    siamchart.com บล็อค/limit request จาก IP ของ GitHub Actions runner
-    (ยืนยันไม่ได้ตรงๆ เพราะ Actions log ต้อง auth ถึงจะดูได้) เพิ่ม retry +
-    header ที่สมจริงขึ้นเผื่อเป็นแค่ bot-detection ธรรมดา ไม่ใช่ IP-block เต็มรูป
-    """
+def _fetch_flow_siamchart():
+    """ดึง+parse จาก siamchart.com — คืน list of rows (ไม่คำนวณ chg/ไม่แตะ cache)"""
     import urllib.request as _ur, ssl as _ssl, re as _re, ast as _ast
     ctx = _ssl._create_unverified_context()
     headers = {
@@ -1989,7 +1989,6 @@ def _fetch_flow_data():
         "Accept-Language": "th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7",
         "Referer": "https://siamchart.com/",
     }
-
     html = None
     last_err = None
     for attempt in range(3):
@@ -2008,7 +2007,6 @@ def _fetch_flow_data():
     m = _re.search(r'var\s+market_data\s*=\s*(\[.*?\]);', html, _re.DOTALL)
     if not m:
         raise ValueError(f"ไม่พบ market_data ในหน้า siamchart (html {len(html)} bytes)")
-
     raw = _ast.literal_eval(m.group(1))
 
     rows = []
@@ -2016,31 +2014,93 @@ def _fetch_flow_data():
         if len(item) < 5:
             continue
         try:
-            date_str = str(item[0])[:10]
-            fund    = float(item[1]) if item[1] not in ('', None) else 0.0
-            foreign = float(item[2]) if item[2] not in ('', None) else 0.0
-            retail  = float(item[3]) if item[3] not in ('', None) else 0.0
-            set_val = float(item[4]) if item[4] not in ('', None) else None
             rows.append({
-                "date": date_str,
-                "fund":    round(fund, 2),
-                "foreign": round(foreign, 2),
-                "retail":  round(retail, 2),
-                "set":     set_val,
+                "date":    str(item[0])[:10],
+                "fund":    round(float(item[1]) if item[1] not in ('', None) else 0.0, 2),
+                "foreign": round(float(item[2]) if item[2] not in ('', None) else 0.0, 2),
+                "retail":  round(float(item[3]) if item[3] not in ('', None) else 0.0, 2),
+                "set":     float(item[4]) if item[4] not in ('', None) else None,
             })
         except (ValueError, TypeError):
             continue
+    return rows
 
-    # siamchart ส่งข้อมูล newest-first — ต้อง sort เก่า→ใหม่ก่อน ไม่งั้น chg กลับเครื่องหมายและเลื่อนวัน
-    rows.sort(key=lambda r: r["date"])
+
+def _fetch_flow_set_official():
+    """Fallback: SET API ทางการ /api/set/market/SET/investor-type — วันทำการล่าสุดวันเดียว
+    mapping ให้ตรง schema เดิม: fund = สถาบัน + บัญชีบริษัทหลักทรัพย์ (ตรงกับที่ UI ระบุ
+    'กองทุน+โบรก'), retail = นักลงทุนทั่วไปในประเทศ, หน่วยล้านบาทเหมือน siamchart
+    คืน row เดียว หรือ None ถ้าวันนั้นตลาดยังไม่ปิด (ตัวเลขระหว่างวันยังไหลอยู่)"""
+    from sources.set_api import _bootstrap_headers, _get_json
+    from datetime import datetime as _dt
+    ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, "/api/set/market/SET/investor-type?lang=th")
+    as_of = (d.get("asOfDate") or "")[:10]
+    inv = {x.get("type"): x.get("netValue") for x in (d.get("investors") or [])}
+    if not as_of or not inv:
+        return None
+    # ตลาดยังไม่ปิดของวันนั้น -> ข้าม (เก็บเฉพาะยอดสิ้นวันที่นิ่งแล้ว)
+    now = _dt.now()
+    if as_of == now.strftime("%Y-%m-%d") and (now.hour, now.minute) < (17, 45):
+        return None
+
+    def mb(k):
+        return round((inv.get(k) or 0) / 1e6, 2)
+
+    # ราคาปิด SET index ของวันนั้นจาก indices cache (ไม่มีก็ปล่อย None — แถวนี้จะถูก
+    # siamchart ทับให้เองเมื่อฝั่งไหนดึง siamchart ได้)
+    set_close = None
+    try:
+        e = (_load_indices_existing() or {}).get("^SET.BK") or {}
+        set_close = dict(zip(e.get("dates", []), e.get("closes", []))).get(as_of)
+    except Exception:
+        pass
+    return {"date": as_of, "fund": round(mb("institution") + mb("proprietary"), 2),
+            "foreign": mb("foreign"), "retail": mb("individual"), "set": set_close}
+
+
+def _fetch_flow_data():
+    """รวมข้อมูล Capital Flow จากไฟล์สะสม + siamchart + SET API — คำนวณ chg,
+    บันทึกไฟล์สะสม (atomic) และอัพเดท _flow_cache — ล้มเฉพาะเมื่อไม่มีข้อมูลเลยจริงๆ"""
+    rows_by_date = {}
+    try:
+        with open(_MARKET_FLOW_FILE, encoding="utf-8") as f:
+            for r0 in (json.load(f).get("rows") or []):
+                if r0.get("date"):
+                    rows_by_date[r0["date"]] = {k: r0.get(k) for k in
+                                                ("date", "fund", "foreign", "retail", "set")}
+    except Exception:
+        pass
+
+    sources = []
+    try:
+        for r0 in _fetch_flow_siamchart():
+            rows_by_date[r0["date"]] = r0        # siamchart เป็นแหล่งหลัก — ทับได้
+        sources.append("siamchart")
+    except Exception as e:
+        print(f"[Flow] siamchart ไม่ได้ ({e}) — ลอง fallback SET API")
+    try:
+        row = _fetch_flow_set_official()
+        if row and row["date"] not in rows_by_date:
+            rows_by_date[row["date"]] = row      # เติมเฉพาะวันที่ยังไม่มี ไม่ทับ siamchart
+            sources.append("set.or.th")
+    except Exception as e:
+        print(f"[Flow] SET investor-type ไม่ได้: {e}")
+
+    if not rows_by_date:
+        raise RuntimeError("ไม่มีข้อมูล Capital Flow จากทุกแหล่ง (siamchart + SET API + ไฟล์สะสม)")
+
+    rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
     for i in range(1, len(rows)):
-        prev = rows[i-1]["set"]
-        curr = rows[i]["set"]
+        prev, curr = rows[i - 1].get("set"), rows[i].get("set")
         rows[i]["chg"] = round(curr - prev, 2) if prev and curr else None
-    if rows:
-        rows[0]["chg"] = None
+    rows[0]["chg"] = None
 
-    result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M")}
+    result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
+              "sources": sources or ["ไฟล์สะสม (ดึงใหม่ไม่สำเร็จทั้งสองแหล่ง)"]}
+    if sources:   # ได้ของใหม่จริงค่อยเขียนไฟล์
+        _atomic_write_json(_MARKET_FLOW_FILE,
+                           {"rows": rows, "updated_at": result["fetched_at"]})
     _flow_cache["data"] = result
     _flow_cache["ts"]   = time.time()
     return result
