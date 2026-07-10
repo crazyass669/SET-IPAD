@@ -23,6 +23,11 @@ STATE_FILE    = "rotation_state.json"
 CONFIRM_DAYS  = 3      # ต้องอยู่ quadrant ใหม่กี่วันทำการติดกันถึงยืนยัน
 DEAD_ZONE_PCT = 0.3    # |ret| ต่ำกว่านี้ = วันไม่มีสัญญาณ
 
+# ชุดสัญญาณเร็ว: แกน x=1M, y=1W — เห็น rotation เร็วกว่าชุดหลัก (3M/1M) ได้เป็นสัปดาห์
+# แต่ 1W แกว่ง ±2-3%/สัปดาห์เป็นปกติ noise สูงกว่ามาก จึงใช้ dead zone กว้างขึ้น
+# และฝั่ง UI แสดงแยกป้าย "⚡ สัญญาณเร็ว" ชัดเจน ไม่ปนกับ alert หลัก
+FAST_DEAD_ZONE_PCT = 0.8
+
 QUADRANTS = ("Leading", "Weakening", "Lagging", "Improving")
 
 
@@ -83,7 +88,8 @@ def load_state(base_dir):
 
 def update_rotation_state(base_dir, data_as_of, sectors, industries):
     """เรียกหลัง summarize_groups ทุกครั้งที่ข้อมูลอัปเดต (Quick/Full refresh)
-    เดิน state machine เฉพาะเมื่อ data_as_of ใหม่กว่าที่ประมวลผลไปแล้ว"""
+    เดิน state machine เฉพาะเมื่อ data_as_of ใหม่กว่าที่ประมวลผลไปแล้ว
+    เดินขนานกัน 2 ชุด: หลัก (3M/1M) และสัญญาณเร็ว (1M/1W) — กติกาเดียวกัน ต่างแค่แกน+dead zone"""
     if not data_as_of:
         return
     state = load_state(base_dir)
@@ -91,19 +97,29 @@ def update_rotation_state(base_dir, data_as_of, sectors, industries):
     if last and data_as_of <= last:
         return  # วันเดิม/ย้อนหลัง — ไม่นับซ้ำ
 
-    for gtype, groups in (("sector", sectors or []), ("industry", industries or [])):
-        for g in groups:
-            key  = f"{gtype}:{g['name']}"
-            quad = quadrant_of(g.get("ret_3m"), g.get("ret_1m"))
-            entry, trans = _advance(state["groups"].get(key), quad, data_as_of)
-            if entry is not None:
-                state["groups"][key] = entry
-            if trans:
-                trans.update({"type": gtype, "name": g["name"]})
-                state["transitions"].insert(0, trans)
-                print(f"[Rotation] {gtype} '{g['name']}': "
-                      f"{trans['from']} -> {trans['to']} (ยืนยัน {CONFIRM_DAYS} วัน)")
+    configs = (
+        # (key ของ groups ใน state, key ของ transitions, ฟังก์ชันหา quadrant, ป้าย log)
+        ("groups",      "transitions",
+         lambda g: quadrant_of(g.get("ret_3m"), g.get("ret_1m")), ""),
+        ("groups_fast", "transitions_fast",
+         lambda g: quadrant_of(g.get("ret_1m"), g.get("ret_1w"), dead_zone=FAST_DEAD_ZONE_PCT), " ⚡fast"),
+    )
+    for groups_key, trans_key, quad_fn, tag in configs:
+        state.setdefault(groups_key, {})   # state เก่าก่อนมีชุดเร็ว — seed เงียบรอบแรก
+        state.setdefault(trans_key, [])
+        for gtype, groups in (("sector", sectors or []), ("industry", industries or [])):
+            for g in groups:
+                key  = f"{gtype}:{g['name']}"
+                quad = quad_fn(g)
+                entry, trans = _advance(state[groups_key].get(key), quad, data_as_of)
+                if entry is not None:
+                    state[groups_key][key] = entry
+                if trans:
+                    trans.update({"type": gtype, "name": g["name"]})
+                    state[trans_key].insert(0, trans)
+                    print(f"[Rotation{tag}] {gtype} '{g['name']}': "
+                          f"{trans['from']} -> {trans['to']} (ยืนยัน {CONFIRM_DAYS} วัน)")
+        state[trans_key] = state[trans_key][:50]
 
-    state["transitions"]   = state["transitions"][:50]
     state["last_processed"] = data_as_of
     _atomic_write_json(_state_path(base_dir), state)

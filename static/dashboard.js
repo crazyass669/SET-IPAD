@@ -865,21 +865,47 @@ async function renderRotAlerts() {
     }
     const d = _rotAlertsData;
     const trans   = (d.transitions || []).slice(0, 8);
-    const pending = (d.pending || []).filter(p => p.days >= 2);  // โชว์เฉพาะใกล้ยืนยัน
-    if (trans.length === 0 && pending.length === 0) { el.style.display = 'none'; return; }
+    const pending = (d.pending || []);  // โชว์ตั้งแต่วันแรก (1/3) — early warning เร็วสุดโดยไม่แตะตรรกะ
+    // ชุดสัญญาณเร็ว (แกน 1M/1W): noise สูงกว่าชุดหลักมาก — transition โชว์ 6 รายการล่าสุด
+    // ส่วน pending เริ่มโชว์ที่ 2/3 (วันแรกของแกนสั้นหลอกบ่อยเกินกว่าจะมีประโยชน์)
+    const transF  = (d.transitions_fast || []).slice(0, 6);
+    const pendF   = (d.pending_fast || []).filter(p => p.days >= 2);
+    if (!trans.length && !pending.length && !transF.length && !pendF.length) {
+      el.style.display = 'none'; return;
+    }
 
-    const transHtml = trans.map(t =>
+    const transRow = t =>
       `<div style="padding:3px 0">
          <span style="color:var(--text2);font-size:11px">${t.date}</span>
          &nbsp;<b>${t.name}</b> <span style="color:var(--text2);font-size:10px">(${t.type})</span>:
          ${_quadSpan(t.from)} → ${_quadSpan(t.to)}
-       </div>`).join('');
-    const pendHtml = pending.map(p =>
+       </div>`;
+    const pendRow = p =>
       `<div style="padding:3px 0;color:var(--text2)">
          ⏳ <b style="color:var(--text)">${p.name}</b>
          <span style="font-size:10px">(${p.type})</span>
          กำลังเข้า ${_quadSpan(p.to)} — ยืนยันแล้ว ${p.days}/${p.need} วัน
-       </div>`).join('');
+       </div>`;
+    const transHtml = trans.map(transRow).join('');
+    const pendHtml  = pending.map(pendRow).join('');
+
+    // section สัญญาณเร็ว — แยกป้าย ⚡ ชัดเจน ให้รู้ว่าเชื่อถือได้น้อยกว่าชุดหลัก
+    const fastHtml = (transF.length || pendF.length) ? `
+      <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
+        <div style="font-weight:700;margin-bottom:4px">⚡ สัญญาณเร็ว
+          <span style="font-weight:400;font-size:10px;color:var(--text2)">
+            แกน 1M/1W · ไวกว่าชุดหลักแต่ noise สูงกว่า — ใช้เป็นสัญญาณเตือนล่วงหน้า รอชุดหลัก (3M/1M) ยืนยัน
+          </span>
+          <span class="scr-tip-icon" style="font-size:10px;width:15px;height:15px;margin-left:6px;vertical-align:middle">?<div class="scr-tip-box" style="width:280px">
+            ชุดสัญญาณเร็ว: X=1M%, Y=1W% — กติกาเดียวกับชุดหลัก (ยืนยัน
+            <b>${d.rules_fast?.confirm_days ?? 3} วันทำการ</b>) แต่ใช้ dead zone กว้างขึ้นเป็น
+            ±${d.rules_fast?.dead_zone_pct ?? 0.8}% เพราะ 1W แกว่งแรงกว่า 1M มาก<br><br>
+            เหมาะใช้จับ rotation ตั้งแต่ต้นรอบ แล้วรอชุดหลักยืนยันก่อนตัดสินใจน้ำหนักเต็ม
+          </div></span>
+        </div>
+        ${transF.map(transRow).join('')}
+        ${pendF.map(pendRow).join('')}
+      </div>` : '';
 
     el.innerHTML =
       `<div class="card" style="padding:10px 16px;font-size:12px">
@@ -887,11 +913,14 @@ async function renderRotAlerts() {
            <span class="scr-tip-icon" style="font-size:10px;width:15px;height:15px;margin-left:6px;vertical-align:middle">?<div class="scr-tip-box" style="width:280px">
              นับจากแกน Long (X=3M%, Y=1M%) — ต้องอยู่ quadrant ใหม่ครบ
              <b>${d.rules?.confirm_days ?? 3} วันทำการติดต่อกัน</b>ถึงยืนยัน
-             (ค่าในช่วง ±${d.rules?.dead_zone_pct ?? 0.3}% รอบแกน = ไม่นับ กัน flip-flop)
+             (ค่าในช่วง ±${d.rules?.dead_zone_pct ?? 0.3}% รอบแกน = ไม่นับ กัน flip-flop
+             · วันที่ตกใน dead zone ไม่นับแต่ไม่ล้มการนับ)<br><br>
+             ⏳ = กำลังนับยืนยัน (โชว์ตั้งแต่วันแรก 1/3)
            </div></span>
          </div>
          ${trans.length ? transHtml : '<div style="color:var(--text2);padding:3px 0">ยังไม่มีการเปลี่ยน quadrant ที่ยืนยันแล้ว</div>'}
          ${pendHtml}
+         ${fastHtml}
        </div>`;
     el.style.display = 'block';
   } catch (e) {
