@@ -1901,47 +1901,54 @@ def short_sales_daily_update():
 
         # ── อัปเดตยอดสะสมรายงวด YTD จาก API เดียวกัน (fromDate/toDate) ──
         # แทนการ import Excel มือ — พิสูจน์แล้วว่าค่าตรงกับ Excel 100%
-        # (API snap fromDate 01/01 ไปวันทำการแรกของปีให้เอง)
+        # ก.ค. 2026: SET เริ่มจำกัดข้อมูลย้อนหลังไว้ ~180 วันจากวันปัจจุบัน (เกินตอบ
+        # 400 "Invalid selected period") — ครึ่งปีแรกยัง rebuild ทั้งปีได้ครั้งเดียว
+        # แต่ตั้งแต่ ก.ค. ต้นปีหลุดหน้าต่างไปแล้ว ต้องสะสมเพิ่มทีละช่วงแทน:
+        # ขอเฉพาะ (period_to เดิม + 1วัน -> วันล่าสุด) แล้วบวกยอดเข้ากับของเดิม
         try:
-            y, m, d_ = trade_date[:4], trade_date[5:7], trade_date[8:10]
-            # fromDate ต้องเป็น "วันทำการ" ไม่งั้น API ตอบ 400 — ใช้ period_from
-            # เดิม (ปีเดียวกัน) ก่อน แล้วค่อยไล่หาวันทำการแรกของปี 1-10 ม.ค.
-            candidates = []
-            old_from = (data.get("period_from") or "")
-            if old_from.startswith(y):
-                candidates.append(f"{old_from[8:10]}/{old_from[5:7]}/{y}")
-            candidates += [f"{dd:02d}/01/{y}" for dd in range(1, 11)]
-            presp = None
-            for fd in candidates:
-                try:
-                    purl = (BASE + "/api/set/shortsales/statistics/list"
-                            + f"?fromDate={fd}&toDate={d_}/{m}/{y}")
-                    with _ur.urlopen(_ur.Request(purl, headers=hdr),
-                                     context=ctx, timeout=25) as r:
-                        presp = json.loads(r.read().decode("utf-8", "ignore"))
-                    break
-                except Exception:
-                    continue
-            if presp is None:
-                raise ValueError("ไม่พบ fromDate ที่ API ยอมรับ")
-            p_from = (presp.get("tradingBeginDate") or "")[:10]
-            p_to   = (presp.get("tradingEndDate") or "")[:10]
-            p_items = presp.get("shortSales") or []
-            if p_from and p_items:
+            from datetime import date as _dd, timedelta as _tdel
+            end_d = _dd.fromisoformat(trade_date)
+
+            def _query_range(cs, ce):
+                """ยิง API ช่วง cs..ce — fromDate บางวัน API ไม่รับ (วันหยุด/นอกหน้าต่าง
+                180 วัน) ขยับหน้าไปทีละวันสูงสุด 10 วัน คืน None ถ้าไม่ผ่านเลย"""
+                for shift in range(10):
+                    fd = cs + _tdel(days=shift)
+                    if fd > ce:
+                        return None
+                    try:
+                        purl = (BASE + "/api/set/shortsales/statistics/list"
+                                + f"?fromDate={fd.strftime('%d/%m/%Y')}"
+                                + f"&toDate={ce.strftime('%d/%m/%Y')}")
+                        with _ur.urlopen(_ur.Request(purl, headers=hdr),
+                                         context=ctx, timeout=25) as r:
+                            return json.loads(r.read().decode("utf-8", "ignore"))
+                    except Exception:
+                        continue
+                return None
+
+            def _blank(sym):
+                return stocks.setdefault(sym, {
+                    "period_vol": 0, "period_local_vol": 0, "period_nvdr_vol": 0,
+                    "period_value": 0, "period_pct_value": 0,
+                    "short_pos": 0, "short_pos_local": 0, "short_pos_nvdr": 0,
+                    "short_pos_pct": 0, "daily": [],
+                })
+
+            # (1) พยายาม rebuild ทั้งปีก่อน — แม่นสุดเพราะตั้งยอดใหม่จากศูนย์
+            presp = _query_range(_dd(int(trade_date[:4]), 1, 1), end_d)
+            if presp is not None and presp.get("shortSales"):
+                p_from = (presp.get("tradingBeginDate") or "")[:10]
+                p_to   = (presp.get("tradingEndDate") or "")[:10]
                 # ล้างยอดงวดเดิมก่อน (กันค้างข้ามปี/หุ้นที่ไม่มี short ในงวดใหม่)
                 for s in stocks.values():
                     s["period_vol"] = s["period_local_vol"] = s["period_nvdr_vol"] = 0
                     s["period_value"] = s["period_pct_value"] = 0
-                for item in p_items:
+                for item in presp["shortSales"]:
                     sym = item.get("symbol")
                     if not sym:
                         continue
-                    s = stocks.setdefault(sym, {
-                        "period_vol": 0, "period_local_vol": 0, "period_nvdr_vol": 0,
-                        "period_value": 0, "period_pct_value": 0,
-                        "short_pos": 0, "short_pos_local": 0, "short_pos_nvdr": 0,
-                        "short_pos_pct": 0, "daily": [],
-                    })
+                    s = _blank(sym)
                     s["period_vol"]       = int(item.get("totalVolume") or 0)
                     s["period_local_vol"] = int(item.get("localVolume") or 0)
                     s["period_nvdr_vol"]  = int(item.get("nvdrVolume") or 0)
@@ -1951,7 +1958,48 @@ def short_sales_daily_update():
                     s["short_pos_nvdr"]   = int(item.get("nvdrShortPosition") or 0)
                 data["period_from"] = p_from
                 data["period_to"]   = p_to
-                print(f"[short-sales] period YTD {p_from} -> {p_to}: {len(p_items)} stocks")
+                print(f"[short-sales] period YTD rebuild {p_from} -> {p_to}: "
+                      f"{len(presp['shortSales'])} stocks")
+            else:
+                # (2) ต้นปีอยู่นอกหน้าต่าง 180 วันแล้ว — สะสมเพิ่มเฉพาะช่วงที่ยังไม่รวม
+                old_to = (data.get("period_to") or "")
+                if not old_to:
+                    raise ValueError("ไม่มี period_to เดิมให้สะสมต่อ และ rebuild ทั้งปีไม่ผ่าน")
+                inc_start = _dd.fromisoformat(old_to) + _tdel(days=1)
+                if inc_start > end_d:
+                    pass  # ยอดสะสมครอบถึงวันล่าสุดแล้ว ไม่ต้องทำอะไร
+                else:
+                    presp = _query_range(inc_start, end_d)
+                    if presp is None:
+                        raise ValueError(f"ขอช่วงเพิ่ม {inc_start} -> {end_d} ไม่สำเร็จ")
+                    items = presp.get("shortSales") or []
+                    new_to = (presp.get("tradingEndDate") or "")[:10]
+                    for item in items:
+                        sym = item.get("symbol")
+                        if not sym:
+                            continue
+                        s = _blank(sym)
+                        val_new = item.get("totalValue") or 0
+                        pct_new = item.get("percentValue") or 0
+                        old_val = (s.get("period_value") or 0) * 1e6
+                        old_pct = s.get("period_pct_value") or 0
+                        # ถอดฐานมูลค่าซื้อขาย (ตัวหารของ %) กลับจากค่าที่เก็บไว้ เพื่อรวม % ข้ามช่วง
+                        turnover = (old_val / old_pct * 100) if old_pct > 0 else 0
+                        if val_new and pct_new > 0:
+                            turnover += val_new / pct_new * 100
+                        s["period_vol"]       = (s.get("period_vol") or 0) + int(item.get("totalVolume") or 0)
+                        s["period_local_vol"] = (s.get("period_local_vol") or 0) + int(item.get("localVolume") or 0)
+                        s["period_nvdr_vol"]  = (s.get("period_nvdr_vol") or 0) + int(item.get("nvdrVolume") or 0)
+                        total_val = old_val + val_new
+                        s["period_value"]     = round(total_val / 1e6, 2)
+                        s["period_pct_value"] = (round(total_val / turnover * 100, 4)
+                                                 if turnover > 0 else 0)
+                        s["short_pos_local"]  = int(item.get("localShortPosition") or 0)
+                        s["short_pos_nvdr"]   = int(item.get("nvdrShortPosition") or 0)
+                    if new_to:
+                        data["period_to"] = new_to
+                    print(f"[short-sales] period สะสมเพิ่ม {old_to} + ({inc_start} -> {new_to}): "
+                          f"{len(items)} stocks")
         except Exception as pe:
             print(f"[short-sales] period update failed (ใช้ยอดงวดเดิมไปก่อน): {pe}")
 
