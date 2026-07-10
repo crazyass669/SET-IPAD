@@ -795,7 +795,7 @@ function renderOverview() {
             ? `<div class="sec-fill-pos" style="width:${w}%"></div>`
             : `<div class="sec-fill-neg" style="width:${w}%"></div>`}
         </div>
-        <div class="sec-val ${r>0?'green':r<0?'red':'text2'}">${r>0?"+":""}${r.toFixed(1)}%</div>
+        <div class="sec-val ${r>0?'green':r<0?'red':'text2'}">${r>0?"+":""}${r.toFixed(2)}%</div>
       </div>`;
   }).join("");
 
@@ -1809,7 +1809,7 @@ function renderRSLeaders() {
   const rs90 = stocks.filter(s => s.rs_score >= 90).length;
   const rs80 = stocks.filter(s => s.rs_score >= 80 && s.rs_score < 90).length;
   const avgRS = stocks.length ? Math.round(stocks.reduce((a,s) => a+(s.rs_score||0),0)/stocks.length) : 0;
-  const avgRet1m = stocks.length ? (stocks.reduce((a,s)=>a+(s.ret_1m||0),0)/stocks.length).toFixed(1) : '0.0';
+  const avgRet1m = stocks.length ? (stocks.reduce((a,s)=>a+(s.ret_1m||0),0)/stocks.length).toFixed(2) : '0.00';
 
   document.getElementById("rs-stat-cards").innerHTML = `
     <div class="card"><div class="card-title">RS 90-99</div><div class="stat-val green">${rs90}</div><div class="stat-label">หุ้น</div></div>
@@ -2112,7 +2112,7 @@ function _rankBadge(rank, total, pct) {
   const q = rank / total;
   const c = q <= 0.25 ? '#3fb950' : q <= 0.5 ? '#e3b341' : q <= 0.75 ? '#f0883e' : '#f85149';
   const pctTxt = pct != null
-    ? ` <span style="font-size:10px;color:var(--text2)">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>` : '';
+    ? ` <span style="font-size:10px;color:var(--text2)">${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</span>` : '';
   return `<span style="background:${c}22;color:${c};border:1px solid ${c}55;` +
          `padding:1px 6px;border-radius:4px;font-weight:700;font-size:11px">#${rank}</span>${pctTxt}`;
 }
@@ -2248,7 +2248,7 @@ function renderSectorTable() {
       <td class="r">${pct(s.ret_1d,2)}</td>
       <td class="r">${pct(s.ret_1w,2)}</td>
       <td class="r">${pct(s.ret_1m,2)}</td>
-      <td class="r">${s.vs_set_1m != null ? `<span style="color:${s.vs_set_1m>0?'var(--green)':s.vs_set_1m<0?'var(--red)':'var(--text2)'}; font-weight:${Math.abs(s.vs_set_1m)>=2?'700':'400'}">${s.vs_set_1m>0?'+':''}${s.vs_set_1m.toFixed(1)}%</span>` : '—'}</td>
+      <td class="r">${s.vs_set_1m != null ? `<span style="color:${s.vs_set_1m>0?'var(--green)':s.vs_set_1m<0?'var(--red)':'var(--text2)'}; font-weight:${Math.abs(s.vs_set_1m)>=2?'700':'400'}">${s.vs_set_1m>0?'+':''}${s.vs_set_1m.toFixed(2)}%</span>` : '—'}</td>
       <td class="r">${pct(s.ret_3m,2)}</td>
       <td class="r">${pct(s.ret_1y,2)}</td>
       <td class="r"><span class="${rsColor(s.avg_rs)}">${s.avg_rs!=null?Math.round(s.avg_rs):"—"}</span></td>
@@ -2256,7 +2256,7 @@ function renderSectorTable() {
       <td class="r"><span class="${nhColor}" style="font-weight:600;cursor:pointer;text-decoration:underline dotted" onclick="event.stopPropagation();openSectorModal('${s.name.replace(/'/g,"\\'")}',true)">${s.newHighCount}</span><span class="text2" style="font-size:10px">/${s.count}</span></td>
       <td class="r">${fmtValuation(s.avg_pe, 'pe')}</td>
       <td class="r">${fmtValuation(s.avg_pbv, 'pbv')}</td>
-      <td class="r">${s.avg_div_yield != null ? `<span class="${s.avg_div_yield >= 4 ? 'green' : s.avg_div_yield >= 2 ? 'yellow' : 'text2'}" style="font-weight:600">${s.avg_div_yield.toFixed(1)}%</span>` : '—'}</td>
+      <td class="r">${s.avg_div_yield != null ? `<span class="${s.avg_div_yield >= 4 ? 'green' : s.avg_div_yield >= 2 ? 'yellow' : 'text2'}" style="font-weight:600">${s.avg_div_yield.toFixed(2)}%</span>` : '—'}</td>
     </tr>`;
   }).join("");
 }
@@ -2395,7 +2395,7 @@ function renderStocksTable() {
         <td class="r" style="font-size:11px">${rvolHtml(s)}</td>
         <td class="r">${emaBadge(s.above_ema50)}</td>
         <td class="r">${emaBadge(s.above_ema200)}</td>
-        <td class="r"><span class="${s.ath_pct != null ? (s.ath_pct >= -5 ? 'green' : s.ath_pct >= -20 ? 'yellow' : s.ath_pct >= -40 ? 'text2' : 'red') : 'text2'}" style="font-size:11px">${s.ath_pct != null ? s.ath_pct.toFixed(1)+'%' : '—'}</span></td>
+        <td class="r"><span class="${s.ath_pct != null ? (s.ath_pct >= -5 ? 'green' : s.ath_pct >= -20 ? 'yellow' : s.ath_pct >= -40 ? 'text2' : 'red') : 'text2'}" style="font-size:11px">${s.ath_pct != null ? s.ath_pct.toFixed(2)+'%' : '—'}</span></td>
         <td class="r" style="font-size:11px;color:var(--text2)">${s.atr14_pct != null ? s.atr14_pct.toFixed(2)+'%' : '—'}</td>
         <td class="r">${stageBadge(s._stage)}</td>
       </tr>`).join("");
@@ -2730,8 +2730,8 @@ function openSectorModal(sectorName, nhOnly = false) {
 
   // stats summary
   const n = stocks.length;
-  const avg1m  = n ? (stocks.reduce((a,s)=>a+(s.ret_1m||0),0)/n).toFixed(1) : null;
-  const avg1d  = n ? (stocks.reduce((a,s)=>a+(s.ret_1d||0),0)/n).toFixed(1) : null;
+  const avg1m  = n ? (stocks.reduce((a,s)=>a+(s.ret_1m||0),0)/n).toFixed(2) : null;
+  const avg1d  = n ? (stocks.reduce((a,s)=>a+(s.ret_1d||0),0)/n).toFixed(2) : null;
   const avgRS  = n ? Math.round(stocks.reduce((a,s)=>a+(s.rs_score||0),0)/n) : null;
   const pctEma = n ? Math.round(stocks.filter(s=>s.above_ema50).length/n*100) : null;
 
@@ -3040,9 +3040,9 @@ function renderScrTable() {
           <td class="r">${pct(s.ret_6m)}</td>
           <td class="r">${pct(s.ret_1y)}</td>
           <td class="r">${pct(s.ret_ytd)}</td>
-          <td class="r">${s.fromHigh == null ? '—' : `<span class="${s.fromHigh >= -2 ? 'green' : s.fromHigh >= -5 ? 'yellow' : 'text2'}">${s.fromHigh >= 0 ? 'NEW HIGH' : s.fromHigh.toFixed(1)+'%'}</span>`}</td>
-          <td class="r">${s.fromLow  == null ? '—' : `<span class="${s.fromLow  <= 2  ? 'red'   : s.fromLow  <= 5  ? 'yellow' : 'text2'}">${s.fromLow  <= 0.5  ? 'NEW LOW'  : s.fromLow.toFixed(1)+'%'}</span>`}</td>
-          <td class="r text2">${s.pe        != null ? s.pe.toFixed(1)        : '—'}</td>
+          <td class="r">${s.fromHigh == null ? '—' : `<span class="${s.fromHigh >= -2 ? 'green' : s.fromHigh >= -5 ? 'yellow' : 'text2'}">${s.fromHigh >= 0 ? 'NEW HIGH' : s.fromHigh.toFixed(2)+'%'}</span>`}</td>
+          <td class="r">${s.fromLow  == null ? '—' : `<span class="${s.fromLow  <= 2  ? 'red'   : s.fromLow  <= 5  ? 'yellow' : 'text2'}">${s.fromLow  <= 0.5  ? 'NEW LOW'  : s.fromLow.toFixed(2)+'%'}</span>`}</td>
+          <td class="r text2">${s.pe        != null ? s.pe.toFixed(2)        : '—'}</td>
           <td class="r text2">${s.pbv       != null ? s.pbv.toFixed(2)       : '—'}</td>
           <td class="r">${s.div_yield != null ? `<span class="${s.div_yield >= 5 ? 'green' : s.div_yield >= 3 ? 'yellow' : 'text2'}">${s.div_yield.toFixed(2)}%</span>` : '—'}</td>
           <td class="r">${rvolHtml(s)}</td>
@@ -3495,17 +3495,17 @@ function _heatColorVol(v) {
 }
 
 const HM_CFG = {
-  ret_1d:    { getV:s=>s.ret_1d,   clr:v=>_heatColor(v,15),  fmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>6?'#fff':'var(--text)',              hint:'เขียว = ขึ้น · แดง = ลง' },
-  ret_1w:    { getV:s=>s.ret_1w,   clr:v=>_heatColor(v,15),  fmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>6?'#fff':'var(--text)',              hint:'เขียว = ขึ้น · แดง = ลง' },
-  ret_1m:    { getV:s=>s.ret_1m,   clr:v=>_heatColor(v,20),  fmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>8?'#fff':'var(--text)',              hint:'เขียว = ขึ้น · แดง = ลง' },
-  ret_3m:    { getV:s=>s.ret_3m,   clr:v=>_heatColor(v,30),  fmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>12?'#fff':'var(--text)',             hint:'เขียว = ขึ้น · แดง = ลง' },
-  ret_6m:    { getV:s=>s.ret_6m,   clr:v=>_heatColor(v,40),  fmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>16?'#fff':'var(--text)',             hint:'เขียว = ขึ้น · แดง = ลง (6 เดือน)' },
-  ret_ytd:   { getV:s=>s.ret_ytd,  clr:v=>_heatColor(v,30),  fmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>12?'#fff':'var(--text)',             hint:'เขียว = ขึ้น · แดง = ลง' },
-  ret_1y:    { getV:s=>s.ret_1y,   clr:v=>_heatColor(v,50),  fmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>20?'#fff':'var(--text)',             hint:'เขียว = ขึ้น · แดง = ลง (12 เดือน)' },
+  ret_1d:    { getV:s=>s.ret_1d,   clr:v=>_heatColor(v,15),  fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>6?'#fff':'var(--text)',              hint:'เขียว = ขึ้น · แดง = ลง' },
+  ret_1w:    { getV:s=>s.ret_1w,   clr:v=>_heatColor(v,15),  fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>6?'#fff':'var(--text)',              hint:'เขียว = ขึ้น · แดง = ลง' },
+  ret_1m:    { getV:s=>s.ret_1m,   clr:v=>_heatColor(v,20),  fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>8?'#fff':'var(--text)',              hint:'เขียว = ขึ้น · แดง = ลง' },
+  ret_3m:    { getV:s=>s.ret_3m,   clr:v=>_heatColor(v,30),  fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>12?'#fff':'var(--text)',             hint:'เขียว = ขึ้น · แดง = ลง' },
+  ret_6m:    { getV:s=>s.ret_6m,   clr:v=>_heatColor(v,40),  fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>16?'#fff':'var(--text)',             hint:'เขียว = ขึ้น · แดง = ลง (6 เดือน)' },
+  ret_ytd:   { getV:s=>s.ret_ytd,  clr:v=>_heatColor(v,30),  fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>12?'#fff':'var(--text)',             hint:'เขียว = ขึ้น · แดง = ลง' },
+  ret_1y:    { getV:s=>s.ret_1y,   clr:v=>_heatColor(v,50),  fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>20?'#fff':'var(--text)',             hint:'เขียว = ขึ้น · แดง = ลง (12 เดือน)' },
   rs_score:  { getV:s=>s.rs_score, clr:v=>_heatColorRS(v),   fmt:v=>'RS '+Math.round(v),            aFmt:v=>'avg RS '+Math.round(v),       aPos:v=>v>=50, txt:v=>(v??50)>70||(v??50)<30?'#fff':'var(--text)',        hint:'เขียว = RS สูง (แข็งแกร่ง) · แดง = RS ต่ำ (อ่อนแอ)' },
   vol_ratio: { getV:s=>(s.vol_today&&s.vol_avg20>0)?s.vol_today/s.vol_avg20*100:null, clr:v=>_heatColorVol(v), fmt:v=>(v/100).toFixed(1)+'x', aFmt:v=>'avg '+(v/100).toFixed(1)+'x', aPos:v=>v>=100, txt:v=>(v??0)>175?'#fff':'var(--text)', hint:'น้ำเงินเข้ม = Volume สูงกว่าเฉลี่ย · น้ำเงินจาง = Volume ต่ำกว่าเฉลี่ย' },
-  from_52wh: { getV:s=>s.high_52w>0?(s.price-s.high_52w)/s.high_52w*100:null, clr:v=>_heatColor(v,40), fmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(1)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>16?'#fff':'var(--text)', hint:'เขียว = ใกล้/ทำ 52W High · แดง = ห่างจาก 52W High มาก' },
-  ath_dist:  { getV:s=>s.ath_pct??null, clr:v=>_heatColor(v,50), fmt:v=>(v>0?'+':'')+v.toFixed(1)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(1)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>20?'#fff':'var(--text)', hint:'เขียว = ใกล้/ทำ ATH · แดง = ห่างจาก All-Time High มาก (คำนวณจากข้อมูลที่โหลด)' },
+  from_52wh: { getV:s=>s.high_52w>0?(s.price-s.high_52w)/s.high_52w*100:null, clr:v=>_heatColor(v,40), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>16?'#fff':'var(--text)', hint:'เขียว = ใกล้/ทำ 52W High · แดง = ห่างจาก 52W High มาก' },
+  ath_dist:  { getV:s=>s.ath_pct??null, clr:v=>_heatColor(v,50), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>20?'#fff':'var(--text)', hint:'เขียว = ใกล้/ทำ ATH · แดง = ห่างจาก All-Time High มาก (คำนวณจากข้อมูลที่โหลด)' },
 };
 
 function renderHeatmap() {
@@ -3764,7 +3764,7 @@ async function loadRegimeLight() {
     light.innerHTML = `${icon} ${label} <span style="opacity:.75">${val.toFixed(0)}%</span>`;
     tip.innerHTML =
       `<b>Market Regime: ${icon} ${label}</b><br>
-       <span style="color:var(--text2)">% หุ้นเหนือ EMA200 ทั้งตลาด = <b>${val.toFixed(1)}%</b></span><br><br>
+       <span style="color:var(--text2)">% หุ้นเหนือ EMA200 ทั้งตลาด = <b>${val.toFixed(2)}%</b></span><br><br>
        ${desc}<br><br>
        <span style="color:#3fb950">🟢 ≥ 50</span> Risk-On ·
        <span style="color:#e3b341">🟡 30–50</span> Caution ·
@@ -3982,8 +3982,8 @@ function renderBreakout() {
   document.getElementById('bo-tbody').innerHTML = stocks.map(s => {
     const fa = s.fromAnchor;
     const faHtml = isHigh
-      ? `<span class="${fa >= -2 ? 'green' : fa >= -5 ? 'yellow' : 'text2'}">${fa >= 0 ? 'NEW HIGH' : fa.toFixed(1) + '%'}</span>`
-      : `<span class="${fa <= 2 ? 'red' : fa <= 5 ? 'yellow' : 'text2'}">${fa <= 0.5 ? 'NEW LOW' : '+' + fa.toFixed(1) + '%'}</span>`;
+      ? `<span class="${fa >= -2 ? 'green' : fa >= -5 ? 'yellow' : 'text2'}">${fa >= 0 ? 'NEW HIGH' : fa.toFixed(2) + '%'}</span>`
+      : `<span class="${fa <= 2 ? 'red' : fa <= 5 ? 'yellow' : 'text2'}">${fa <= 0.5 ? 'NEW LOW' : '+' + fa.toFixed(2) + '%'}</span>`;
     return `
     <tr>
       <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score ?? '—'}</span></td>
@@ -4236,7 +4236,7 @@ function exportScreenerCSV() {
       s.ret_1m?.toFixed(2) ?? '', s.ret_3m?.toFixed(2) ?? '',
       s.ret_ytd?.toFixed(2) ?? '', s.ret_1y?.toFixed(2) ?? '',
       fh, fl,
-      s.pe?.toFixed(1) ?? '', s.pbv?.toFixed(2) ?? '',
+      s.pe?.toFixed(2) ?? '', s.pbv?.toFixed(2) ?? '',
       s.div_yield?.toFixed(2) ?? '',
       s.mkt_cap ? Math.round(s.mkt_cap / 1e6) : '',
       s.above_ema50 === true ? 'Y' : s.above_ema50 === false ? 'N' : '',
@@ -4334,7 +4334,7 @@ function openDRChartModal(sym) {
       mk(fmtPx(s.high_52w), '52W High', 'text2') +
       mk(fmtPx(s.low_52w),  '52W Low',  'text2') +
       mk(fmtPx(s.ath),      'ATH',      'text2') +
-      mk(s.ath_pct != null ? (s.ath_pct >= 0 ? '+' : '') + s.ath_pct.toFixed(1) + '%' : '—', '% จาก ATH', athPctCls(s.ath_pct)) +
+      mk(s.ath_pct != null ? (s.ath_pct >= 0 ? '+' : '') + s.ath_pct.toFixed(2) + '%' : '—', '% จาก ATH', athPctCls(s.ath_pct)) +
     `</span>`,
     mk(_drFmtCap(s.mkt_cap), 'MKT CAP', 'text2'),
   ].join('');
@@ -4446,8 +4446,8 @@ function openChartModal(symbol) {
     mk(s.high_52w?.toFixed(2) ?? '—', '52W High', 'text2'),
     mk(s.low_52w?.toFixed(2)  ?? '—', '52W Low',  'text2'),
     s.ath != null ? mk(s.ath.toFixed(2), 'ATH', 'text2') : '',
-    s.ath_pct != null ? mk((s.ath_pct > 0 ? '+' : '') + s.ath_pct.toFixed(1) + '%', '% จาก ATH', s.ath_pct >= -5 ? 'green' : s.ath_pct >= -20 ? 'yellow' : 'red') : '',
-    s.pe        != null ? mk(s.pe.toFixed(1),        'P/E',      'text2') : '',
+    s.ath_pct != null ? mk((s.ath_pct > 0 ? '+' : '') + s.ath_pct.toFixed(2) + '%', '% จาก ATH', s.ath_pct >= -5 ? 'green' : s.ath_pct >= -20 ? 'yellow' : 'red') : '',
+    s.pe        != null ? mk(s.pe.toFixed(2),        'P/E',      'text2') : '',
     s.pbv       != null ? mk(s.pbv.toFixed(2),       'P/BV',     'text2') : '',
     s.div_yield != null ? mk(s.div_yield.toFixed(2)+'%', 'Div Yield', s.div_yield >= 4 ? 'green' : 'text2') : '',
   ].join('');
@@ -4644,8 +4644,8 @@ function _renderIdxStocks(sym) {
   stocks.sort((a,b) => (b.rs_score||0)-(a.rs_score||0));
 
   const n = stocks.length;
-  const avg1d  = n ? (stocks.reduce((a,s)=>a+(s.ret_1d||0),0)/n).toFixed(1) : null;
-  const avg1m  = n ? (stocks.reduce((a,s)=>a+(s.ret_1m||0),0)/n).toFixed(1) : null;
+  const avg1d  = n ? (stocks.reduce((a,s)=>a+(s.ret_1d||0),0)/n).toFixed(2) : null;
+  const avg1m  = n ? (stocks.reduce((a,s)=>a+(s.ret_1m||0),0)/n).toFixed(2) : null;
   const avgRS  = n ? Math.round(stocks.reduce((a,s)=>a+(s.rs_score||0),0)/n) : null;
   const pctEma = n ? Math.round(stocks.filter(s=>s.above_ema50).length/n*100) : null;
   const rsC = v => v==null?'':v>=70?'green':v>=40?'':'red';
@@ -4791,11 +4791,11 @@ function _renderCmFin(d) {
       const ttmMgn = (ttmRev && ttmNI != null) ? ttmNI / ttmRev * 100 : null;
       const cells = marginRow.map((v,i) => {
         const s = v == null ? '<span style="color:var(--text2)">—</span>'
-          : `<span style="color:${v>=0?'var(--green)':'var(--red)'}">${v.toFixed(1)}%</span>`;
+          : `<span style="color:${v>=0?'var(--green)':'var(--red)'}">${v.toFixed(2)}%</span>`;
         return `<td style="${tdStyle}">${s}</td>`;
       }).join('');
       const ttmMgnColor = ttmMgn == null ? '' : ttmMgn >= 0 ? 'var(--green)' : 'var(--red)';
-      const ttmMgnHtml  = ttmMgn != null ? `<span style="color:${ttmMgnColor};font-weight:600">${ttmMgn.toFixed(1)}%</span>` : '<span style="color:var(--text2)">—</span>';
+      const ttmMgnHtml  = ttmMgn != null ? `<span style="color:${ttmMgnColor};font-weight:600">${ttmMgn.toFixed(2)}%</span>` : '<span style="color:var(--text2)">—</span>';
       const ttmCell = hasTTM ? `<td style="${tdTTM}">${ttmMgnHtml}</td>` : '';
       rows += `<tr><td style="${tlStyle}">Net Margin %</td>${cells}${ttmCell}</tr>`;
       continue;
@@ -4938,7 +4938,7 @@ function _drawCmFinChart(d) {
             label: ctx => {
               if (ctx.dataset.yAxisID === 'yRev') return ` Revenue: ${fmtShort(ctx.raw)}`;
               if (ctx.raw == null) return null;
-              return ` Net Margin: ${ctx.raw.toFixed(1)}%`;
+              return ` Net Margin: ${ctx.raw.toFixed(2)}%`;
             }
           }
         }
@@ -5240,7 +5240,7 @@ function _finFmt(v) {
 
 function _finPct(v) {
   if (v == null || isNaN(v)) return '—';
-  return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+  return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
 }
 
 function _finGetRow(dict, keys) {
@@ -6010,7 +6010,7 @@ function _drCardGrid(stocks) {
       `<a class="dr-badge${d.endsWith('X') ? ' dr-badge-x' : ''}" href="https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(d)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="เปิด ${d} ใน TradingView">${d}</a>`
     ).join('');
     const closeData = JSON.stringify(s.close100 || []);
-    const cPct = v => v != null ? `<span class="${v>=0?'green':'red'}">${v>=0?'+':''}${v.toFixed(1)}%</span>` : '—';
+    const cPct = v => v != null ? `<span class="${v>=0?'green':'red'}">${v>=0?'+':''}${v.toFixed(2)}%</span>` : '—';
     const rsDisp = s.rs_score != null ? `<span class="${rsColor(s.rs_score)}" style="font-weight:700">RS ${s.rs_score}</span>` : '';
     return `<div class="dr-card" onclick="openDRChartModal('${s.sym}')" style="cursor:pointer">
       <div class="dr-card-header">
@@ -6121,7 +6121,7 @@ function _drRows(stocks) {
       : `<div class="dr-logo" style="background:${color}">${initials}</div>`;
 
     const drPct = v => v != null
-      ? `<span class="${v >= 0 ? 'green' : 'red'}" style="font-size:11px">${v >= 0 ? '+' : ''}${v.toFixed(1)}%</span>`
+      ? `<span class="${v >= 0 ? 'green' : 'red'}" style="font-size:11px">${v >= 0 ? '+' : ''}${v.toFixed(2)}%</span>`
       : '<span style="color:var(--text2);font-size:11px">—</span>';
     const rsNum = s.rs_score != null
       ? `<span class="${rsColor(s.rs_score)}" style="font-weight:700;font-size:11px">${s.rs_score}</span>`
@@ -6360,7 +6360,7 @@ function renderIdxHeatmap(items) {
   grid.style.display = 'block';
   grid.style.gridTemplateColumns = '';
   grid.style.gap = '';
-  const pct = (v) => v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+  const pct = (v) => v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(2) + '%';
   const groupOrder = ['SET_INDICES','SET_INDUSTRY','SET_SECTORS','MAI_INDUSTRY'];
   const groupLabel = {
     SET_INDICES:  'SET Indices', SET_INDUSTRY: 'Industry Group',
@@ -6450,7 +6450,7 @@ function renderIdxGrid() {
   grid.style.gap = '12px';
 
   const pct = (v) => v == null ? '—'
-    : `<span class="${v>0?'green':v<0?'red':'text2'}">${v>0?'+':''}${v.toFixed(1)}%</span>`;
+    : `<span class="${v>0?'green':v<0?'red':'text2'}">${v>0?'+':''}${v.toFixed(2)}%</span>`;
 
   // RS trend arrow จาก rs_history
   const rsTrend = (hist) => {
@@ -6925,7 +6925,7 @@ async function showVsdZone(zone, btn) {
             const z = s[zField];
             const v = s[valField];
             const zStr = z !== null ? (z >= 0 ? '+' : '') + z.toFixed(2) + 'σ' : '—';
-            const tip = `${s.name||s.symbol} | ${_vsdMetric.toUpperCase()}=${v != null ? v.toFixed(1)+'x' : '—'} | z=${zStr}`.replace(/"/g,'&quot;');
+            const tip = `${s.name||s.symbol} | ${_vsdMetric.toUpperCase()}=${v != null ? v.toFixed(2)+'x' : '—'} | z=${zStr}`.replace(/"/g,'&quot;');
             return `<button
               onclick="openChartModal('${s.symbol}')"
               title="${tip}"
@@ -6937,7 +6937,7 @@ async function showVsdZone(zone, btn) {
               onmouseout="this.style.borderColor='${col}30';this.style.background='var(--bg-card2)'">
               <span style="font-weight:700;font-size:13px">${s.symbol}</span>
               <span style="color:${col};font-size:10px">${zStr}</span>
-              <span style="color:var(--muted);font-size:10px">${v != null ? v.toFixed(1)+'x' : '—'}</span>
+              <span style="color:var(--muted);font-size:10px">${v != null ? v.toFixed(2)+'x' : '—'}</span>
             </button>`;
           }).join('')}
         </div>
@@ -6975,7 +6975,7 @@ async function openValSectorModal(secName) {
   }
   function valCell(val, z) {
     if (!val) return '<td class="r" style="color:var(--muted)">—</td>';
-    return `<td class="r">${val.toFixed(1)}<br>${zBadge(z)}</td>`;
+    return `<td class="r">${val.toFixed(2)}<br>${zBadge(z)}</td>`;
   }
 
   // Replace modal table with valuation columns
@@ -7009,8 +7009,8 @@ async function openValSectorModal(secName) {
           ${valCell(s.pbv, s.pbv_z_sec)}
           <td class="r" style="${rsCol}">${rs ?? '—'}</td>
           <td class="r">${price != null ? price.toFixed(2) : '—'}</td>
-          <td class="r" style="${r1dCol}">${r1d != null ? (r1d>0?'+':'')+r1d.toFixed(1)+'%' : '—'}</td>
-          <td class="r" style="${r1mCol}">${r1m != null ? (r1m>0?'+':'')+r1m.toFixed(1)+'%' : '—'}</td>
+          <td class="r" style="${r1dCol}">${r1d != null ? (r1d>0?'+':'')+r1d.toFixed(2)+'%' : '—'}</td>
+          <td class="r" style="${r1mCol}">${r1m != null ? (r1m>0?'+':'')+r1m.toFixed(2)+'%' : '—'}</td>
         </tr>`;
       }).join('')}
       </tbody>
@@ -7593,7 +7593,7 @@ function renderValZoneFreq(containerId, vals, thresholds, labels, isPE) {
   el.innerHTML = counts.map((c, i) => `
     <div style="text-align:center;min-width:130px;cursor:help"
       data-vtip="${freqTips[i].replace(/"/g,'&quot;')}">
-      <div style="font-size:22px;font-weight:700;color:${colors[i]}">${(c/total*100).toFixed(1)}%</div>
+      <div style="font-size:22px;font-weight:700;color:${colors[i]}">${(c/total*100).toFixed(2)}%</div>
       <div style="font-size:12px;color:${colors[i]};font-weight:600">${labels[i]}</div>
       <div style="font-size:10px;color:var(--muted)">${thStr[i]} · ${c} เดือน</div>
       <div style="margin-top:4px;background:var(--bg-card2);border-radius:3px;height:4px">
@@ -8176,7 +8176,7 @@ function _accumRow(r) {
     if (curPrice) {
       const diff = (curPrice - avgPrice) / avgPrice * 100;
       const diffCol = diff >= 0 ? '#3ab464' : '#dc503c';
-      const diffStr = (diff >= 0 ? '+' : '') + diff.toFixed(1) + '%';
+      const diffStr = (diff >= 0 ? '+' : '') + diff.toFixed(2) + '%';
       pricePart = `<span style="font-size:10px;color:var(--muted)">avg&nbsp;<span style="color:#c8d0dc">${avgStr}</span>&nbsp;<span style="color:${diffCol}">${diffStr}</span></span>`;
     } else {
       pricePart = `<span style="font-size:10px;color:var(--muted)">avg <span style="color:#c8d0dc">${avgStr}</span></span>`;
