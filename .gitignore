@@ -47,8 +47,17 @@ sec_filings.db
 sec_filings.db-wal
 sec_filings.db-shm
 
+# SQLite financials store + ชุดสำรองอัตโนมัติ (local only — ใหญ่และ regenerate ได้)
+financials.db
+financials.db-wal
+financials.db-shm
+financials_backups/
+
 # Rotation quadrant alert state
 rotation_state.json
+
+# DR universe auto-sync overlay (สร้างใหม่ได้เสมอจาก SET API)
+dr_universe_auto.json
 
 # Logs
 logs/
@@ -56,3 +65,12 @@ logs/
 # static web data (สร้าง+commit โดย GitHub Actions — ห้าม ignore)
 !data/
 !data/**
+
+# Backtest results (local-only เหมือน financials.db)
+backtest_screener_results_*.json
+
+# Log จากการรัน server/mirror ในเครื่อง
+mirror.log
+mirror_run.log
+server_run.log
+server_5011.log

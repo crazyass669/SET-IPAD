@@ -140,6 +140,21 @@
   .tbl tr:hover td { background: var(--bg3); }
   .tbl tr:last-child td { border-bottom: none; }
 
+  /* ตารางงบการเงิน (หน้างบ) — ตรึงคอลัมน์ "รายการ" ไว้เวลาเลื่อนดูตัวเลขไปทางขวา
+     คอลัมน์แรกต้องมีพื้นหลังทึบ (var(--bg2) = สีการ์ด) กันตัวเลขที่เลื่อนทะลุขึ้นมา */
+  #fin-result .tbl th:first-child,
+  #fin-result .tbl td:first-child {
+    position: sticky; left: 0; z-index: 1;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+  }
+  #fin-result .tbl thead th:first-child { z-index: 3; }        /* หัวคอลัมน์รายการอยู่บนสุด */
+  /* ตอน hover ยกทั้ง 'แถว' ให้ z-index สูง — เพราะคอลัมน์ sticky แต่ละเซลล์เป็น
+     stacking context แยก ทำให้ tooltip (.scr-tip-box) ของแถวบนโดนแถวล่างทับ
+     พอ hover ยก z-index แถวนั้นขึ้น tooltip เลยลอยเหนือแถวอื่นได้ */
+  #fin-result .tbl tr:hover td:first-child { background: var(--bg3); z-index: 20; }
+  #fin-result .tbl td:first-child:hover { z-index: 20; }
+
   /* SECTOR BAR */
   .sec-bar-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid #1c2128; }
   .sec-bar-row:last-child { border-bottom: none; }

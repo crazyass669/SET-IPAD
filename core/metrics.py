@@ -49,6 +49,47 @@ def calc_rs_raw(ret_1m, ret_3m, ret_6m, ret_1y):
     return sum(v * w for v, w in valid) / sum(w for _, w in valid)
 
 
+def calc_cagr(first, last, years):
+    """Compound Annual Growth Rate % — คืน None ถ้าคำนวณไม่ได้ (ค่าติดลบ/ศูนย์/years<=0)
+    first/last ต้องเป็นบวกทั้งคู่ (ขาดทุน/ติดลบทำ CAGR ไม่มีความหมายทางคณิตศาสตร์)"""
+    if first is None or last is None or years is None or years <= 0:
+        return None
+    if first <= 0 or last <= 0:
+        return None
+    try:
+        return round(((last / first) ** (1 / years) - 1) * 100, 2)
+    except Exception:
+        return None
+
+
+def calc_growth_score(rev_cagr, profit_cagr, margin_trend, roe_trend, de_trend):
+    """รวม CAGR รายได้/กำไร + เทรนด์ margin/ROE/D-E เป็นคะแนนเดียว (raw, ไม่ normalize)
+    น้ำหนัก: revenue/profit CAGR สำคัญสุด, margin/ROE trend รอง, D-E trend เป็น penalty
+    (ยิ่งหนี้โตเร็วกว่าทุน ยิ่งหักคะแนน) — ข้าม component ที่เป็น None, คืน None ถ้าไม่มีเลย"""
+    parts = [
+        (rev_cagr,     3),
+        (profit_cagr,  3),
+        (margin_trend, 2),
+        (roe_trend,    2),
+        (-de_trend if de_trend is not None else None, 1),
+    ]
+    valid = [(v, w) for v, w in parts if v is not None]
+    if not valid:
+        return None
+    return sum(v * w for v, w in valid) / sum(w for _, w in valid)
+
+
+def rank_percentile(values_by_symbol):
+    """แปลง {symbol: raw_value} เป็น {symbol: percentile 0-99} (pattern เดียวกับ rank_rs())
+    ข้าม symbol ที่ value เป็น None"""
+    items = [(sym, v) for sym, v in values_by_symbol.items() if v is not None]
+    items.sort(key=lambda x: x[1])
+    n = len(items)
+    if n == 0:
+        return {}
+    return {sym: int(round(i / n * 99)) for i, (sym, v) in enumerate(items)}
+
+
 def validate_stocks(stocks, data_as_of=None):
     """Data Validation Layer — ติด flag คุณภาพข้อมูลต่อหุ้น ก่อนเข้า RS/Sector calc
     Flags:

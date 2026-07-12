@@ -97,7 +97,9 @@ SNAPSHOTS = [
     ("/api/breadth?range=5y",              "breadth_5y.json",            False),
     ("/api/breadth?range=all",             "breadth_all.json",           False),
     ("/api/indices",                       "indices_data.json",          False),
-    ("/api/dr",                            "dr_data.json",               False),
+    # fresh=1: บังคับดึงสดแบบ blocking — endpoint ปกติเป็น stale-while-revalidate
+    # (ตอบ cache เก่าทันที + refresh เบื้องหลัง) ซึ่งใช้กับการ bake static ไม่ได้
+    ("/api/dr?fresh=1",                    "dr_data.json",               False),
     ("/api/nvdr",                          "nvdr_data.json",             False),
     ("/api/short-sales",                   "short_sales.json",           False),
     ("/api/market-stats",                  "market_stats.json",          False),

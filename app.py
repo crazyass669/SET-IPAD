@@ -35,9 +35,18 @@ _BAND_CACHE_TTL = 6 * 3600
 _dr_cache: dict = {}
 _DR_CACHE_TTL = 4 * 3600
 
+# DR diff-check cache — ผล /api/set/dr/list เทียบ _DR_STATIC ไว้ 6 ชั่วโมง (กดเช็คบ่อยไม่ต้องยิง SET.or.th ซ้ำ)
+_dr_diff_cache: dict = {}
+_DR_DIFF_CACHE_TTL = 6 * 3600
+
 # Financials cache — งบการเงิน cache 24 ชั่วโมง (ข้อมูลไม่เปลี่ยนบ่อย)
 _fin_cache: dict = {}
 _FIN_CACHE_TTL = 24 * 3600
+
+# Financials analytics cache — growth score/PEG/FCF yield ทั้งตลาด (bulk)
+# event-invalidate ตอน sync งบการเงินเสร็จ + TTL 24h กันค้างข้าม restart
+_fin_analytics_cache: dict = {}
+_FIN_ANALYTICS_CACHE_TTL = 24 * 3600
 
 # Indices cache — ดัชนีราคากลุ่ม SET/MAI cache 4 ชั่วโมง
 _indices_cache: dict = {}
@@ -50,8 +59,10 @@ from core.metrics import calc_rs_raw
 
 # HTTP clients / static universe — แยกไว้ที่ sources/ (Phase 2 refactor)
 from sources.tradingview import INDEX_INFO, _yf_to_tv, _fetch_tv_bars
-from sources.dr_universe import _DR_STATIC, is_latest_bar_stable
+from sources.dr_universe import _DR_STATIC, is_latest_bar_stable, load_dr_universe, sync_dr_universe
 from sources import sec_store
+from sources import financials_store
+from sources import factor_snapshot
 
 
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
@@ -326,30 +337,120 @@ def get_band(symbol):
         return jsonify({"error": str(e)}), 500
 
 
+def _dr_light(result, refreshing=False):
+    """ตัด dates/closes (ประวัติราคาเต็มทุกวัน — ~98% ของ payload 33MB) ออกจาก response
+    /api/dr — frontend ใช้แค่ close100 (sparkline) + ohlc30 (แท่งเทียนย่อ) ส่วนกราฟ
+    full history ดึงแยกรายตัวจาก /api/dr-history ซึ่งอ่านจาก _dr_cache ฝั่ง server
+    (cache ในหน่วยความจำ/ไฟล์ยังเก็บเต็มเหมือนเดิม — quick-update ก็ใช้ dates ต่อได้)"""
+    out = {"stocks": [{k: v for k, v in s.items() if k not in ("dates", "closes")}
+                      for s in result.get("stocks", [])],
+           "ts": result.get("ts")}
+    if refreshing:
+        out["refreshing"] = True   # ให้ UI ติดป้าย 'กำลังอัพเดทเบื้องหลัง' แล้ว poll ซ้ำ
+    return out
+
+
+_dr_rebuild_lock = threading.Lock()
+
+
+def _kick_dr_rebuild():
+    """rebuild DR cache ใน background thread — ไม่ start ซ้อนถ้ามีตัวหนึ่งรันอยู่แล้ว"""
+    if _dr_rebuild_lock.locked():
+        return
+
+    def _bg():
+        try:
+            _rebuild_dr_cache()
+            print("[DR] background refresh เสร็จ")
+        except Exception as e:
+            print(f"[DR] background refresh ล้มเหลว: {e}")
+
+    threading.Thread(target=_bg, daemon=True).start()
+
+
 @app.route("/api/dr")
 def get_dr_data():
-    """ดึงราคา underlying foreign stocks ของ DR/DRx ทั้งหมด — cache 4 ชั่วโมง"""
+    """ดึงราคา underlying foreign stocks ของ DR/DRx ทั้งหมด — cache 4 ชั่วโมง
+
+    cache หมดอายุ: ตอบข้อมูลเก่าทันที (flag refreshing=true) แล้ว rebuild เบื้องหลัง
+    (stale-while-revalidate) — ผู้ใช้ไม่ต้องรอ 1-2 นาทีเหมือนเดิมอีก
+    ?fresh=1 = บังคับทำสดแบบ blocking (ใช้ตอน bake static site — ห้ามได้ข้อมูลเก่า)"""
+    fresh = request.args.get("fresh") == "1"
+    cached = _dr_cache.get("result")
+    if not fresh and cached and cached.get("stocks") and _dr_cache.get("ts"):
+        age = time.time() - _dr_cache["ts"]
+        if age < _DR_CACHE_TTL:
+            return jsonify(_dr_light(cached))
+        _kick_dr_rebuild()
+        return jsonify(_dr_light(cached, refreshing=True))
+
+    # ไม่มี cache เลย (รันครั้งแรกสุดของเครื่อง) หรือ fresh=1 — ทำสดแบบ blocking
+    try:
+        result = _rebuild_dr_cache()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify(_dr_light(result))
+
+
+def _rebuild_dr_cache():
+    """ดึงราคา+คำนวณ DR ทั้ง universe แล้วอัพเดท _dr_cache + dr_cache.json — คืน result เต็ม
+    lock กันรันซ้อน (เรียกได้ทั้งจาก request ตรงและ background thread)"""
+    with _dr_rebuild_lock:
+        # อีก thread เพิ่ง rebuild เสร็จระหว่างเรารอ lock — ใช้ผลนั้นเลย ไม่ยิงซ้ำ
+        if (_dr_cache.get("result") and _dr_cache.get("ts")
+                and time.time() - _dr_cache["ts"] < 120):
+            return _dr_cache["result"]
+        return _dr_do_rebuild()
+
+
+def _dr_do_rebuild():
     import yfinance as yf
     import pandas as pd
     from datetime import datetime as _dt
 
-    now = time.time()
-    if _dr_cache.get("ts") and (now - _dr_cache["ts"] < _DR_CACHE_TTL):
-        return jsonify(_dr_cache["result"])
-
-    yf_tickers = list({s["yf"] for s in _DR_STATIC})
-
+    # sync ลิสต์ DR กับ SET ก่อนดึงราคา — DR/underlying ออกใหม่ถูกเพิ่มอัตโนมัติ
+    # (ล้มเหลวก็ไม่เป็นไร ใช้ universe เดิมไปก่อน)
     try:
-        raw = yf.download(
-            yf_tickers,
-            period="max",
-            auto_adjust=True,
-            progress=False,
-            group_by="ticker",
-            threads=True,
-        )
+        _sync_stats = sync_dr_universe(BASE_DIR)
+        if _sync_stats.get("appended") or _sync_stats.get("added"):
+            print(f"[DR-sync] อัปเดตลิสต์: series ใหม่ {_sync_stats['appended']}, "
+                  f"underlying ใหม่ {_sync_stats['added']}, ยัง map ไม่ได้ {_sync_stats['unmapped']}")
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"[DR-sync] ข้ามรอบนี้ (sync ล้มเหลว): {e}")
+    _dr_universe = load_dr_universe(BASE_DIR)
+
+    yf_tickers = list({s["yf"] for s in _dr_universe})
+
+    raw = yf.download(
+        yf_tickers,
+        period="max",
+        auto_adjust=True,
+        progress=False,
+        group_by="ticker",
+        threads=True,
+    )
+
+    # market cap: เดิมยิง fast_info ทีละตัวแบบ sequential ~283 รอบในลูปด้านล่าง
+    # (~1-2 นาที — ตัวการหลักที่ทำให้โหลดหน้า DR ครั้งแรกช้า) — เปลี่ยนเป็นขนาน
+    # 12 threads เหลือ ~15 วิ และถ้าดึงพลาดใช้ค่ารอบก่อนจาก cache แทน
+    # (market cap เปลี่ยนช้า ค่าเก่าอายุไม่กี่ชั่วโมงใช้แทนได้สบาย)
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _mc_one(t):
+        try:
+            v = getattr(yf.Ticker(t).fast_info, "market_cap", None)
+            return t, (float(v) if v else None)
+        except Exception:
+            return t, None
+
+    mkt_map = {}
+    try:
+        with ThreadPoolExecutor(max_workers=12) as _mc_ex:
+            mkt_map = dict(_mc_ex.map(_mc_one, yf_tickers))
+    except Exception as e:
+        print(f"[DR] market cap batch ล้มเหลว (ใช้ค่าเก่าจาก cache): {e}")
+    _old_mc = {s["sym"]: s.get("mkt_cap")
+               for s in (_dr_cache.get("result") or {}).get("stocks", [])}
 
     is_multi = len(yf_tickers) > 1
 
@@ -371,7 +472,7 @@ def get_dr_data():
         return round((n - p) / p * 100, 2) if p else None
 
     results = []
-    for stock in _DR_STATIC:
+    for stock in _dr_universe:
         yticker = stock["yf"]
         try:
             close  = _series(yticker, "Close")
@@ -449,14 +550,10 @@ def get_dr_data():
 
             rs_raw = calc_rs_raw(ret_1m, ret_3m, ret_6m, ret_1y)
 
-            # Market cap via fast_info (best-effort)
-            mkt_cap = None
-            try:
-                fi = yf.Ticker(yticker).fast_info
-                mkt_cap = getattr(fi, "market_cap", None)
-                if mkt_cap: mkt_cap = float(mkt_cap)
-            except Exception:
-                pass
+            # Market cap จาก batch ขนานด้านบน — พลาดก็ใช้ค่ารอบก่อน (best-effort)
+            mkt_cap = mkt_map.get(yticker)
+            if mkt_cap is None:
+                mkt_cap = _old_mc.get(stock["sym"])
 
             results.append({
                 "sym":      stock["sym"],
@@ -482,6 +579,7 @@ def get_dr_data():
                 "rs_score": None,
                 "mkt_cap":  mkt_cap,
                 "drs":      stock["drs"],
+                "etf":      stock.get("etf", False),
                 "close100": close100,
                 "ohlc30":   ohlc30,
                 "dates":    dates_all,
@@ -500,7 +598,25 @@ def get_dr_data():
     result = {"stocks": results, "ts": _dt.now().isoformat()}
     _dr_cache.update(result=result, ts=time.time())
     _save_dr_cache_to_file(result)
-    return jsonify(result)
+    return result
+
+
+@app.route("/api/dr/check-updates")
+def dr_check_updates():
+    """เทียบ DR ที่ซื้อขายอยู่จริงบน SET.or.th (/api/set/dr/list) กับ _DR_STATIC
+    ที่ curate ด้วยมือ — รายงานตัวใหม่/ตัวที่ถูกถอดเท่านั้น ไม่แก้ _DR_STATIC ให้อัตโนมัติ
+    (ยังต้องมีคนใส่ industry/region/yf ticker ให้ครบก่อนเพิ่มจริง)"""
+    cached = _dr_diff_cache.get("result")
+    if cached and (time.time() - _dr_diff_cache.get("ts", 0) < _DR_DIFF_CACHE_TTL):
+        return jsonify(cached)
+    try:
+        from sources.dr_universe import check_dr_diff
+        result = check_dr_diff()
+        _dr_diff_cache["result"] = result
+        _dr_diff_cache["ts"] = time.time()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/dr-quick-update", methods=["POST"])
@@ -520,7 +636,8 @@ def dr_quick_update():
     def _do_quick():
         _dr_refresh_state.update(running=True, error=None, done=False)
         try:
-            yf_tickers = list({s["yf"] for s in _DR_STATIC})
+            _universe = load_dr_universe(BASE_DIR)
+            yf_tickers = list({s["yf"] for s in _universe})
 
             # คำนวณ gap จาก last date ที่บันทึกไว้ในแต่ละ DR stock
             cached_stocks = (cached or {}).get("stocks", [])
@@ -547,7 +664,7 @@ def dr_quick_update():
 
             # Build lookup จาก sym → stock entry เพื่ออัปเดต
             stock_map = {s["sym"]: s for s in cached["stocks"]}
-            for st in _DR_STATIC:
+            for st in _universe:
                 sym, yticker = st["sym"], st["yf"]
                 try:
                     close  = _series(yticker, "Close")
@@ -673,7 +790,7 @@ def get_dr_history(symbol):
     """ดึง price history สำหรับ DR stock — เสิร์ฟจาก cache ก่อน ไม่ต้อง fetch yfinance ซ้ำ"""
     import yfinance as yf
     sym = symbol.upper().strip()
-    dr_entry = next((s for s in _DR_STATIC if s["sym"] == sym), None)
+    dr_entry = next((s for s in load_dr_universe(BASE_DIR) if s["sym"] == sym), None)
     if not dr_entry:
         return jsonify({"error": f"ไม่พบ DR stock: {sym}"}), 404
 
@@ -713,8 +830,8 @@ def get_financials(symbol):
     if cached and (time.time() - cached["ts"] < _FIN_CACHE_TTL):
         return jsonify(cached["data"])
 
-    # หา yfinance ticker: ค้นใน DR static ก่อน ไม่เจอ → ใช้ .BK
-    dr_entry = next((s for s in _DR_STATIC if s["sym"] == sym), None)
+    # หา yfinance ticker: ค้นใน DR universe (static+auto) ก่อน ไม่เจอ → ใช้ .BK
+    dr_entry = next((s for s in load_dr_universe(BASE_DIR) if s["sym"] == sym), None)
     if dr_entry:
         yf_ticker, stock_type, stock_name = dr_entry["yf"], "dr", dr_entry["name"]
     else:
@@ -908,6 +1025,473 @@ def get_financials(symbol):
     except Exception as e:
         print(f"[Financials ERROR] {sym}: {traceback.format_exc()}")
         return jsonify({"error": str(e)}), 500
+
+
+def _finnomena_annual_status(annual, sym, is_dr):
+    """ตรวจทาน 'งบรายปีรวมจากไตรมาส' Finnomena กับ Yahoo รายปี — คืน (status, median_diff)
+
+    เดิมใช้กัน (404) หุ้นที่ยอดไม่ตรงปีปฏิทิน แต่สำรวจจริงพบว่าที่ 'ไม่ตรง' มี 2 แบบ
+    และทั้งคู่ยังมีประโยชน์ถ้าติดป้ายให้ถูก:
+      calendar     : ยอดตรงปีต่อปี (มัธยฐานต่าง ≤3%) — หุ้นปีบัญชี ธ.ค. ปกติ ~0%
+      fiscal_shift : ยอดตรงเมื่อเลื่อนป้ายปี ±1 (บริษัทปีบัญชีไม่ตรงปฏิทิน เช่น NVDA/CRM
+                     จบ ม.ค. — ผลรวม 'ปีบัญชี' ถูกต้อง แค่ป้ายปีเหลื่อมกับแหล่งปีปฏิทิน)
+      mismatch     : มีปีทับกันแต่ยอดไม่ตรงทั้งตรงและเลื่อน — มักเป็นธนาคาร/ประกันที่
+                     นิยาม 'รายได้' ต่างแหล่ง (เช่น BAC gross vs net interest income)
+                     ตัวเลขใช้ดูแนวโน้มภายในชุดเดียวกันได้ แต่อย่าเทียบข้ามแหล่ง
+      unverified   : ไม่มีงบ Yahoo ให้เทียบ (หุ้น mirror US/HK นอกพอร์ต)"""
+    ya = financials_store.get(BASE_DIR, sym, "yahoo", is_dr=is_dr)
+    arev = {int(k[:4]): v for k, v in (annual.get("income", {}).get("Total Revenue", {}) or {}).items()}
+    yrev = {int(d[:4]): v for d, v in ((ya or {}).get("income", {}).get("Total Revenue", {}) or {}).items()}
+
+    def _median_diff(shift):
+        diffs = sorted(abs(arev[y] - yrev[y + shift]) / abs(yrev[y + shift])
+                       for y in arev if yrev.get(y + shift))
+        return diffs[len(diffs) // 2] if diffs else None
+
+    if not ya or not arev or not yrev:
+        return "unverified", None
+    d0 = _median_diff(0)
+    if d0 is None:
+        return "unverified", None
+    if d0 <= 0.03:
+        return "calendar", d0
+    shifted = [d for d in (_median_diff(1), _median_diff(-1)) if d is not None]
+    ds = min(shifted) if shifted else None
+    if ds is not None and ds <= 0.035:
+        return "fiscal_shift", ds
+
+    # ยอดไม่ตรงทั้งตรงและเลื่อนป้าย — แยกสาเหตุจากเดือนสิ้นปีบัญชีของ Yahoo:
+    # FYE != ธ.ค. = 'calendar_window': พิสูจน์แล้ว (MSFT/NIKE เทียบ Yahoo รายไตรมาส
+    # ต่าง 0.0%) ว่า Finnomena จัดกลุ่มเป็น 'ปีปฏิทิน' ซึ่งถูกต้องในตัวเอง แค่คนละ
+    # หน้าต่างกับปีบัญชีบริษัทที่ Yahoo รายปีใช้ — ถ้ามี yahoo_q สะสมพอ ยืนยันซ้ำ
+    # ด้วยผลรวมปีปฏิทินจริงแล้วอัพเกรดเป็น 'calendar_verified'
+    from collections import Counter, defaultdict
+    months = [d[5:7] for d in ya.get("income", {}).get("Total Revenue", {})]
+    fye = Counter(months).most_common(1)[0][0] if months else "12"
+    if fye != "12":
+        yq = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
+        qrow = (yq or {}).get("income", {}).get("Total Revenue", {})
+        by_cal = defaultdict(list)
+        for d, v in qrow.items():
+            by_cal[int(d[:4])].append(v)
+        diffs = sorted(abs(arev[y] - sum(vs)) / abs(sum(vs))
+                       for y, vs in by_cal.items()
+                       if len(vs) == 4 and arev.get(y) and sum(vs))
+        if diffs and diffs[len(diffs) // 2] <= 0.02:
+            return "calendar_verified", diffs[len(diffs) // 2]
+        return "calendar_window", d0
+    return "definition", d0
+
+
+@app.route("/api/financials-full/<symbol>")
+def get_financials_full(symbol):
+    """งบการเงินฉบับเต็ม (ทุก field) จาก DB local — sync ล่วงหน้าด้วย /api/financials/sync-all
+    ถ้ายังไม่เคย sync ตัวนี้มาก่อน จะดึงสดครั้งเดียวแล้วเก็บลง DB ให้ (สะดวกตอนทดสอบ/หุ้นใหม่)"""
+    sym = symbol.upper().strip()
+    source = request.args.get("source", "yahoo")
+    if source not in ("yahoo", "yahoo_q", "finnomena_q", "finnomena_y", "set"):
+        return jsonify({"error": "source ต้องเป็น yahoo, yahoo_q, finnomena_q, finnomena_y หรือ set เท่านั้น"}), 400
+    is_dr = request.args.get("is_dr") == "1"
+
+    # ETF/กองทุนไม่มีงบการเงินแบบบริษัท — บอกสาเหตุชัดๆ แทน error ว่างเปล่า
+    if is_dr:
+        _entry = next((s for s in load_dr_universe(BASE_DIR) if s["sym"] == sym), None)
+        if _entry and _entry.get("etf"):
+            return jsonify({"error": f"{sym} เป็น ETF/กองทุน ({_entry.get('name', '')}) — "
+                                     "ไม่มีงบการเงินแบบบริษัท (งบกำไรขาดทุน/งบดุล/กระแสเงินสด "
+                                     "มีเฉพาะหุ้นสามัญ) ดูราคาและผลตอบแทนได้ที่หน้า DR/DRx"}), 404
+
+    # finnomena_y = งบรายปี รวมสดจากไตรมาส Finnomena (ไม่เก็บแยก — คำนวณจาก finnomena_q)
+    # ได้ประวัติลึก ~16-20 ปี ต่างจาก Yahoo รายปีที่ให้แค่ ~5 ปี
+    if source == "finnomena_y":
+        q = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr)
+        if not q:
+            try:
+                fresh = financials_store.fetch_finnomena_quarterly(sym, is_dr=is_dr)
+                financials_store.upsert(BASE_DIR, sym, "finnomena_q", fresh, is_dr=is_dr)
+                q = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr)
+            except Exception as e:
+                return jsonify({"error": str(e)}), 404
+        annual = financials_store.build_annual_from_quarterly(q)
+        if not annual:
+            return jsonify({"error": f"{sym}: ยังไม่มีปีบัญชีที่ครบ 4 ไตรมาสใน Finnomena"}), 404
+        # ไม่กัน (404) อีกต่อไป — แสดงเสมอพร้อม 'สถานะการตรวจทานกับ Yahoo' ให้ UI ติดป้าย
+        # (calendar/fiscal_shift/mismatch/unverified — ดู _finnomena_annual_status)
+        # เดิมหุ้นปีบัญชีไม่ตรงปฏิทิน (55 ตัว) + mirror US/HK ทั้งหมด (~5,100 ตัว) โดนกันหมด
+        # ทั้งที่ยอดรวม 'ปีบัญชี' ของ Finnomena ถูกต้องในตัวเอง แค่ป้ายปีเหลื่อม/ไม่มีตัวเทียบ
+        status, med = _finnomena_annual_status(annual, sym, is_dr)
+        annual["fy_status"] = status
+        if med is not None:
+            annual["fy_diff_pct"] = round(med * 100, 1)
+        annual["synced_at"] = (q or {}).get("synced_at")
+        return jsonify(annual)
+
+    data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr)
+    if data:
+        return jsonify(data)
+
+    try:
+        if source == "yahoo":
+            payload = financials_store.fetch_yahoo_full(sym, is_dr=is_dr)
+        elif source == "yahoo_q":
+            payload = financials_store.fetch_yahoo_quarterly(sym, is_dr=is_dr)
+        elif source == "finnomena_q":
+            payload = financials_store.fetch_finnomena_quarterly(sym, is_dr=is_dr)
+        else:
+            payload = financials_store.fetch_set_full(sym)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 404
+
+    financials_store.upsert(BASE_DIR, sym, source, payload, is_dr=is_dr)
+    data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr)
+    return jsonify(data)
+
+
+@app.route("/api/financials-meta")
+def financials_meta():
+    """วันที่ sync งบการเงินเต็มล่าสุด — ใช้เช็คฝั่ง UI ว่าถึงรอบเตือนอัพเดท (~2 เดือน) หรือยัง"""
+    return jsonify(financials_store.get_meta_summary(BASE_DIR))
+
+
+def _financials_universe():
+    tickers = sorted(price_store.get_last_dates(BASE_DIR).keys())
+    return [t[:-3] if t.endswith(".BK") else t for t in tickers]
+
+
+def _dr_financials_universe():
+    """หุ้นต่างประเทศ (underlying ของ DR/DRx) — มีข้อมูลจาก Yahoo Finance เท่านั้น
+    ไม่มี SET.or.th เพราะเป็นหุ้นต่างประเทศ (ไม่ใช่หุ้นไทย)
+    ตัด ETF ออก — กองทุน/ETF ไม่มีงบการเงินแบบบริษัท (โชว์ note แยกในหน้า UI แทน)"""
+    return sorted(s["sym"] for s in load_dr_universe(BASE_DIR) if not s.get("etf"))
+
+
+@app.route("/api/financials-coverage")
+def financials_coverage():
+    """เทียบ universe หุ้นทั้งหมดกับที่มีข้อมูลจริงใน DB แล้วต่อแหล่ง (yahoo/set)
+    ใช้เช็คว่า sync ครบหรือยัง หุ้นไหนโดนบล็อค/ยังไม่มีข้อมูล — คืน missing แยกตาม source
+    ?universe=dr เช็คเฉพาะหุ้นต่างประเทศ (มีแค่ yahoo — SET.or.th ไม่มีข้อมูลหุ้นต่างประเทศ)"""
+    if request.args.get("universe") == "dr":
+        symbols = _dr_financials_universe()
+        coverage = financials_store.get_coverage(BASE_DIR, symbols, sources=("yahoo",), is_dr=True)
+        # ETF/กองทุนไม่มีงบการเงินแบบบริษัท — รายงานแยกพร้อมเหตุผล (ไม่นับเป็น missing)
+        coverage["excluded_etf"] = sorted(
+            [{"sym": s["sym"], "name": s.get("name", ""),
+              "reason": "ETF/กองทุน — ไม่มีงบการเงินแบบบริษัท"}
+             for s in load_dr_universe(BASE_DIR) if s.get("etf")],
+            key=lambda x: x["sym"])
+    else:
+        symbols = _financials_universe()
+        coverage = financials_store.get_coverage(BASE_DIR, symbols)
+    return jsonify(coverage)
+
+
+def _run_financials_sync(symbols=None, sources=None, is_dr=False):
+    try:
+        target = symbols if symbols else _financials_universe()
+        # yahoo_q = งบรายไตรมาส (สะสมทุกรอบ sync — ใช้กรอง QoQ/YoY-Q ใน Screener)
+        # finnomena_q = งบไตรมาสย้อนยาว ~20 ปี (backfill ครั้งเดียวได้ streak/เร่งตัว/TTM เต็มสูตร)
+        srcs = tuple(sources) if sources else ("yahoo", "set", "yahoo_q", "finnomena_q")
+
+        def cb(current, total, msg):
+            _update(current=current, total=total, message=msg)
+
+        result = financials_store.sync_all(BASE_DIR, target, sources=srcs, callback=cb, is_dr=is_dr)
+        _fin_analytics_cache.clear()   # ข้อมูลเปลี่ยน — บังคับคำนวณ growth/PEG/FCF ใหม่รอบถัดไป
+        _update(running=False, done=True,
+                message=f"เสร็จแล้ว! สำเร็จ {result['ok']}/{result['total']}"
+                        + (f" (ล้มเหลว {result['fail']} — อาจโดนบล็อคชั่วคราวหรือแหล่งข้อมูลไม่มีจริง ลองอีกครั้งได้)" if result["fail"] else ""))
+    except Exception as e:
+        _update(running=False, done=True, error=str(e),
+                message=f"เกิดข้อผิดพลาด: {e}")
+
+
+@app.route("/api/financials/sync-all", methods=["POST"])
+def start_financials_sync():
+    symbols = None
+    sources = None
+    is_dr = False
+    if request.is_json:
+        body = request.json or {}
+        if body.get("universe") == "dr":
+            symbols = _dr_financials_universe()
+            sources = ["yahoo", "yahoo_q", "finnomena_q"]   # DR ไม่มี SET.or.th; finnomena ครอบ US/HK
+            is_dr = True
+        else:
+            body_symbols = body.get("symbols")
+            if body_symbols:
+                symbols = [str(s).upper().strip() for s in body_symbols]
+        body_sources = body.get("sources")
+        if body_sources:
+            sources = body_sources
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        label = "กำลังเริ่ม sync งบการเงิน" + (" (หุ้นต่างประเทศ DR)" if is_dr else " (เฉพาะที่ขาด)" if symbols else "") + "..."
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=0, message=label)
+    threading.Thread(target=_run_financials_sync, args=(symbols, sources, is_dr), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map):
+    """คำนวณ growth/PEG/FCF/streak/ratio ของ symbol กลุ่มเดียว (หุ้นไทย หรือ DR)
+    แยก percentile ranking กันคนละ universe — ไม่งั้นหุ้นไทยจะถูกเทียบ growth score
+    กับหุ้นเทคยักษ์ใหญ่ระดับโลกที่ปนอยู่ใน DR (และกลับกัน)"""
+    from core.metrics import rank_percentile
+    result = {}
+    growth_raw = {}
+    for sym in symbols:
+        payload = financials_store.get(BASE_DIR, sym, "yahoo", is_dr=is_dr)
+        if not payload:
+            continue
+        gs = financials_store.compute_growth_score(payload)
+        fcf = financials_store.compute_fcf_metrics(payload, mktcap_map.get(sym))
+        streaks = financials_store.compute_growth_streaks(payload)
+        ratios = financials_store.compute_ratio_trends(payload)
+        # การเติบโตรายไตรมาส (QoQ / YoY-Q / streak / เร่งตัว) จากงบ quarterly — Finnomena
+        # ลึกกว่า Yahoo เสมอเมื่อมี (ตรวจแล้วทุกกรณี ~60-80 ไตรมาส vs ~5-6) จึงเช็คแค่ตัวเดียว
+        # ก่อน ไม่ต้อง get() ทั้งคู่ทุกครั้ง — ก่อนนี้ทำให้ endpoint นี้ช้าลงเพราะ get() แต่ละครั้ง
+        # เปิด/ปิด sqlite connection ใหม่ (สังเกตได้จาก /api/financials-analytics ช้าลงเป็น ~23 วิ
+        # ตอน cache miss จนแข่งกับปุ่ม "งบการเงิน" ในหน้า DR ที่รอ _finAnalyticsData โหลดเสร็จ)
+        q_finn = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr)
+        q_used = q_finn if q_finn else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
+        qg = financials_store.compute_quarterly_growth(q_used)
+        # Finnomena สั้นผิดปกติ (<8 ไตรมาส เช่นหุ้นที่ Finnomena เพิ่งเริ่มเก็บ) — เช็ค yahoo_q
+        # เผื่อลึกกว่า ให้เลือกแหล่งแบบเดียวกับ factor_snapshot (ไม่งั้นสองเมนูต่างกันได้)
+        if q_finn is not None and qg["quarters_available"] < 8:
+            q_yah = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
+            qg_y = financials_store.compute_quarterly_growth(q_yah)
+            if qg_y["quarters_available"] > qg["quarters_available"]:
+                qg, q_used = qg_y, q_yah
+        pe = pe_map.get(sym)
+        # PEG = PE ÷ %โตของ 'กำไร' TTM — นิยามเดียวกับ Screener+ (เดิมใช้ CAGR รายได้
+        # หลายปีซึ่งไม่ตรงนิยามสากลและทำให้ค่า PEG สองเมนูไม่ตรงกัน) มีค่าเฉพาะ
+        # growth 1-200%: ต่ำกว่านั้น PEG ระเบิด / เกินนั้นเป็น base effect หลอกตา
+        tg = financials_store.compute_ttm_growth(q_used)
+        g = tg["profit_ttm_yoy"]
+        peg = (pe / g) if (pe and pe > 0 and g is not None and 1 <= g <= 200) else None
+        # P/S = Market Cap / รายได้ปีล่าสุด (Yahoo) — ใช้ได้แม้หุ้นขาดทุนที่ PE คำนวณไม่ได้
+        rev_row = payload.get("income", {}).get("Total Revenue", {})
+        latest_rev = rev_row[max(rev_row)] if rev_row else None
+        mc = mktcap_map.get(sym)
+        ps = (mc / latest_rev) if (mc and latest_rev and latest_rev > 0) else None
+        result[sym] = {**gs, **fcf, **streaks, **ratios, **qg, **tg, "peg": peg, "ps": ps}
+        growth_raw[sym] = gs["growth_score"]
+
+    percentiles = rank_percentile(growth_raw)
+    for sym, pct in percentiles.items():
+        result[sym]["growth_percentile"] = pct
+    return result
+
+
+@app.route("/api/financials-analytics")
+def financials_analytics():
+    """Growth Score / PEG / FCF Yield / Dividend Coverage ทั้งตลาด — คำนวณจาก financials.db
+    (local-only) ผสาน pe/mkt_cap จาก set_data.json — cache ใน memory (event-invalidate ตอน
+    sync งบการเงินเสร็จ + TTL กันค้างข้าม restart)
+
+    คืนแยก {"set": {...}, "dr": {...}} เพราะ symbol อาจชื่อชนกันข้ามสอง universe
+    (เช่น 'META' มีทั้งหุ้นไทย mai และ underlying ของ DR) — merge รวม dict เดียวจะ
+    เขียนทับข้อมูลกันฝั่งใดฝั่งหนึ่งผิด"""
+    cached = _fin_analytics_cache.get("result")
+    if cached and (time.time() - _fin_analytics_cache.get("ts", 0) < _FIN_ANALYTICS_CACHE_TTL):
+        return jsonify(cached)
+
+    pe_map, mktcap_map = {}, {}
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, encoding="utf-8") as f:
+                for s in json.load(f).get("stocks", []):
+                    pe_map[s["symbol"]] = s.get("pe")
+                    mktcap_map[s["symbol"]] = s.get("mkt_cap")
+        except Exception:
+            pass
+
+    set_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=False)
+    dr_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=True)
+    result = {
+        "set": _compute_fin_analytics_for(set_symbols, False, pe_map, mktcap_map),
+        "dr": _compute_fin_analytics_for(dr_symbols, True, pe_map, mktcap_map),
+    }
+
+    _fin_analytics_cache["result"] = result
+    _fin_analytics_cache["ts"] = time.time()
+    return jsonify(result)
+
+
+@app.route("/api/factor-screener")
+def factor_screener():
+    """Deep Screener — ตารางปัจจัยพื้นฐานต่อหุ้น (รวม Finnomena+Yahoo+SET) จาก factor_snapshot
+    (local-only, precompute ด้วย build_snapshot.py) overlay pe/mkt_cap สดจาก set_data.json
+    เพื่อคำนวณ peg/fcf_yield ที่อิงราคาปัจจุบัน — คืน {rows: [...], meta: {...}}
+
+    ?universe=us / hk : คืนหุ้น mirror ทั้งตลาด (นอก universe หลัก, งบ Finnomena ล้วน)
+    แทนชุดหลัก (ไทย+DR) — โหลดแยก เพราะชุดใหญ่ (US ~11k, HK ~2k)"""
+    uni = (request.args.get("universe") or "").lower()
+    if uni in ("us", "hk"):
+        # ชุด mirror ใหญ่มาก (US ~17k) — กรองฝั่ง server ส่งเฉพาะผลลัพธ์ (≤ limit)
+        rows = factor_snapshot.get_mirror_snapshot(BASE_DIR, uni.upper())
+        try:
+            filters = json.loads(request.args.get("filters") or "[]")
+        except Exception:
+            filters = []
+        sort_key = request.args.get("sort") or "roe"
+        sort_dir = 1 if request.args.get("dir") == "asc" else -1
+        try:
+            limit = max(1, min(int(request.args.get("limit", 500)), 1000))
+        except Exception:
+            limit = 500
+
+        def _keep(r):
+            for c in filters:
+                v = r.get(c.get("k"))
+                cmp = c.get("cmp")
+                if cmp == "bool":
+                    if not v:
+                        return False
+                    continue
+                if v is None or isinstance(v, str):
+                    # nullOk (risk filter ชุดตัดความเสี่ยง): ไม่มีข้อมูล = ผ่าน
+                    # (ตัดเฉพาะตัวที่ 'รู้ว่าแย่' ไม่ใช่ตัวที่ไม่มีข้อมูล)
+                    if v is None and c.get("nullOk"):
+                        continue
+                    return False
+                cv = c.get("v")
+                if cmp == "gte" and v < cv:
+                    return False
+                if cmp == "lte" and v > cv:
+                    return False
+            return True
+
+        matched = [r for r in rows if _keep(r)]
+        total = len(matched)
+        # เรียงค่า None ไว้ท้ายเสมอ (ทั้ง asc/desc) — แยก non-null ออกมาเรียงก่อน
+        non_null = [r for r in matched if r.get(sort_key) is not None]
+        null_rows = [r for r in matched if r.get(sort_key) is None]
+        try:
+            non_null.sort(key=lambda r: r.get(sort_key), reverse=(sort_dir < 0))
+        except TypeError:
+            # คอลัมน์ปนชนิด (เลข+string) — เรียงแบบ string ทั้งชุดแทนที่จะพัง
+            non_null.sort(key=lambda r: str(r.get(sort_key)), reverse=(sort_dir < 0))
+        matched = non_null + null_rows
+        return jsonify({"rows": matched[:limit], "total": total, "returned": min(total, limit),
+                        "meta": factor_snapshot.mirror_snapshot_meta(BASE_DIR)})
+
+    rows = factor_snapshot.get_snapshot(BASE_DIR)
+    if not rows:
+        return jsonify({"rows": [], "meta": {"computed_at": None, "count": 0,
+                        "note": "ยังไม่มี factor snapshot — รัน build_snapshot.py ก่อน (local-only)"}})
+
+    th_map = {}
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, encoding="utf-8") as f:
+                for s in json.load(f).get("stocks", []):
+                    th_map[s["symbol"]] = s
+        except Exception:
+            pass
+    dr_map = {}
+    try:
+        with open(os.path.join(BASE_DIR, "dr_cache.json"), encoding="utf-8") as f:
+            for s in json.load(f).get("stocks", []):
+                dr_map[s["sym"]] = s
+    except Exception:
+        pass
+
+    def _pct_vs(price, base):
+        return round((price / base - 1) * 100, 2) if (price and base and base > 0) else None
+
+    # overlay ค่าที่อิงราคาปัจจุบัน — หุ้นไทยจาก set_data.json, DR จาก dr_cache.json
+    # รวม technical (RS / %เหนือ EMA200 / %จาก high 52wk / RVOL) สำหรับ screen
+    # แบบ CANSLIM ครบสูตร (พื้นฐาน x ราคานำตลาด) — mirror US/HK ไม่มีราคารายวัน
+    for r in rows:
+        if not r["is_dr"]:
+            s = th_map.get(r["symbol"]) or {}
+            pe = s.get("pe")
+            mc = s.get("mkt_cap")
+            r["pe_live"] = pe
+            r["mkt_cap"] = mc
+            # PEG = PE สด ÷ กำไรโต TTM (นิยามเดียวกับ snapshot/mirror) — ถ้าไม่มี pe สด
+            # คงค่า peg จาก snapshot (PE Finnomena งวดล่าสุด) ไว้ตามเดิม
+            g = r.get("profit_ttm_yoy")
+            # เงื่อนไขเดียวกับ _calc_peg ใน factor_snapshot (growth 1-200% เท่านั้น —
+            # เกินนั้นเป็น base effect ทำ PEG จิ๋วหลอกตา)
+            if pe and pe > 0 and g is not None and 1 <= g <= 200:
+                r["peg"] = round(pe / g, 2)
+            r["fcf_yield"] = (r["fcf"] / mc * 100) if (r.get("fcf") is not None and mc) else None
+            r["rs"] = s.get("rs_score")
+            r["sector"] = s.get("sector")
+            r["pct_vs_ema200"] = _pct_vs(s.get("price"), s.get("ema200"))
+            r["pct_off_high52"] = _pct_vs(s.get("price"), s.get("high_52w"))
+            va = s.get("vol_avg20")
+            r["rvol"] = round(s["vol_today"] / va, 4) if (s.get("vol_today") is not None and va) else None
+        else:
+            e = dr_map.get(r["symbol"]) or {}
+            r["rs"] = e.get("rs_score")   # RS จัดอันดับภายใน universe DR ด้วยกัน
+            r["pct_off_high52"] = _pct_vs(e.get("price"), e.get("high_52w"))
+            r["pct_vs_ema200"] = None     # dr_cache ไม่เก็บ EMA200/volume เฉลี่ย
+            r["rvol"] = None
+
+    # percentile ภายใน sector (หุ้นไทย — sector จาก set_data.json): PE ต่ำ=ถูกกว่าเพื่อน
+    # ในกลุ่ม, ROE สูง=เด่นกว่ากลุ่ม — แก้จุดอ่อน "PE/ROE เทียบข้ามอุตสาหกรรมไม่ได้"
+    # ต้องมีเพื่อนร่วม sector >= 5 ตัวถึงจัดอันดับ (น้อยกว่านั้น percentile ไม่มีนัยยะ)
+    from core.metrics import rank_percentile
+    by_sector = {}
+    for r in rows:
+        if not r["is_dr"] and r.get("sector"):
+            by_sector.setdefault(r["sector"], []).append(r)
+    for sec_rows in by_sector.values():
+        if len(sec_rows) < 5:
+            continue
+        pe_pct = rank_percentile({r["symbol"]: (r.get("pe_live") or r.get("pe_value")) for r in sec_rows})
+        roe_pct = rank_percentile({r["symbol"]: r.get("roe") for r in sec_rows})
+        for r in sec_rows:
+            r["pe_sector_pctile"] = pe_pct.get(r["symbol"])
+            r["roe_sector_pctile"] = roe_pct.get(r["symbol"])
+    return jsonify({"rows": rows, "meta": factor_snapshot.snapshot_meta(BASE_DIR)})
+
+
+@app.route("/api/track-search", methods=["POST"])
+def track_search():
+    """จำหุ้นที่ถูกค้นในหน้างบการเงิน — ใช้เลือกหุ้น 'ค้นบ่อย' มาอัพเดทในโหมดเบา"""
+    body = request.json or {}
+    sym = (body.get("symbol") or "").upper().strip()
+    if sym:
+        try:
+            financials_store.record_search(BASE_DIR, sym)
+        except Exception:
+            pass
+    return jsonify({"ok": True})
+
+
+@app.route("/api/mirror-symbols")
+def mirror_symbols():
+    """รายชื่อ symbol หุ้น US/HK ทั้งตลาด (mirror) สำหรับ datalist ค้นหาในหน้างบการเงิน"""
+    return jsonify(factor_snapshot.get_mirror_symbols(BASE_DIR))
+
+
+@app.route("/api/mirror-names")
+def mirror_names():
+    """ชื่อบริษัทของหุ้น US/HK ที่มีงบ (จาก mirror_names.json — สร้างด้วย build_mirror_names.py)
+    คืน {US: {ticker: name}, HK: {...}} · ว่างถ้ายังไม่ได้สร้างไฟล์"""
+    path = os.path.join(BASE_DIR, "mirror_names.json")
+    if not os.path.exists(path):
+        return jsonify({})
+    try:
+        with open(path, encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify({})
+
+
+@app.route("/api/financials-dq-check/<symbol>")
+def financials_dq_check(symbol):
+    """เทียบตัวเลขงบการเงิน Yahoo vs SET.or.th ของหุ้นตัวเดียว (on-demand, ไม่ cache — เร็วอยู่แล้ว)
+    เฉพาะหุ้นไทย (DR ไม่มีข้อมูลจาก SET.or.th)"""
+    sym = symbol.upper().strip()
+    payload_yahoo = financials_store.get(BASE_DIR, sym, "yahoo")
+    payload_set = financials_store.get(BASE_DIR, sym, "set")
+    return jsonify(financials_store.compare_sources(payload_yahoo, payload_set))
 
 
 INDICES_FILE = "indices_cache.json"
@@ -1320,8 +1904,9 @@ def market_stats_meta():
         return jsonify({"updated_at": None})
     with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
         data = json.load(f)
-    latest = (data.get("pe", {}).get("dates") or [None])[-1]
-    return jsonify({"updated_at": latest})
+    pe_latest = (data.get("pe", {}).get("dates") or [None])[-1]
+    pbv_latest = (data.get("pbv", {}).get("dates") or [None])[-1]
+    return jsonify({"updated_at": pe_latest, "pe_date": pe_latest, "pbv_date": pbv_latest})
 
 
 @app.route("/api/refresh-market-stats", methods=["POST"])
@@ -2436,6 +3021,28 @@ if __name__ == "__main__":
     print(f"  Network: http://{local_ip}:{port}  (iPad/mobile)")
     print("=" * 50)
     print("  Press Ctrl+C to stop\n")
+
+    # อุ่น cache ของ endpoint ที่คำนวณหนักไว้ล่วงหน้าใน background — เดิมผู้ใช้
+    # ที่คลิกเมนูพวกนี้เป็น "คนแรก" หลังเปิด server ต้องรอคำนวณสด (วัดจริง:
+    # financials-analytics ~15 วิ, market-internals ~10 วิ, breadth ~6 วิ)
+    # ทุกตัว cache ในหน่วยความจำอยู่แล้ว (breadth/internals ไม่หมดอายุจนกว่า
+    # จะ refresh ข้อมูล, analytics 24 ชม.) — อุ่นครั้งเดียวตอนเปิดก็เร็วทั้งวัน
+    # หมายเหตุ: อยู่ใต้ __main__ เท่านั้น — run_static_update.py ที่ import app
+    # ไป bake จะไม่สั่งอุ่นซ้ำ (มันเรียก endpoint เองอยู่แล้ว)
+    def _warmup_caches():
+        import time as _t
+        _t.sleep(3)   # ให้ server เปิดพอร์ตเสร็จก่อน ค่อยเริ่มงานเบื้องหลัง
+        tc = app.test_client()
+        for ep in ("/api/market-flow", "/api/breadth?range=1y",
+                   "/api/market-internals", "/api/financials-analytics"):
+            try:
+                t0 = _t.time()
+                tc.get(ep)
+                print(f"[Warmup] {ep} พร้อม ({_t.time() - t0:.0f} วิ)", flush=True)
+            except Exception as e:
+                print(f"[Warmup] {ep} ล้มเหลว (ไม่กระทบการใช้งาน): {e}", flush=True)
+
+    threading.Thread(target=_warmup_caches, daemon=True).start()
 
     try:
         from waitress import serve

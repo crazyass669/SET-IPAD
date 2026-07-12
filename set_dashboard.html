@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260708c">
+<link rel="stylesheet" href="static/dashboard.css?v=20260712b">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -34,6 +34,7 @@
   <button class="nav-btn" onclick="showPage('sectors',this)">Sectors</button>
   <button class="nav-btn" onclick="showPage('stocks',this)">หุ้นทั้งหมด</button>
   <button class="nav-btn" onclick="showPage('screener',this)">Screener</button>
+  <button class="nav-btn" onclick="showPage('fscreener',this)" title="Fundamental Screener — กรองหุ้นด้วยงบการเงินย้อน 16 ปี (Finnomena+Yahoo+SET) พร้อม preset สำเร็จรูป · ต้องรันบนเครื่อง (local)">🔬 Screener+</button>
   <button class="nav-btn" onclick="showPage('breakout',this)">52W H/L &amp; Breakout</button>
   <button class="nav-btn" onclick="showPage('momentum',this)">Momentum</button>
   <button class="nav-btn" onclick="showPage('heatmap',this)">Heatmap</button>
@@ -42,7 +43,9 @@
   <button class="nav-btn" onclick="showPage('band',this)">Val. Band</button>
   <button class="nav-btn" onclick="showPage('watchlist',this)">Watchlist</button>
   <button class="nav-btn" onclick="showPage('dr',this)">DR/DRx</button>
+  <button class="nav-btn" onclick="showPage('dr-rotation',this)" title="DR Rotation — RRG ของหุ้นต่างประเทศ (DR underlying) เทียบกันในกลุ่ม">🔄 DR Rotation</button>
   <button class="nav-btn" onclick="showPage('valuation',this)">Valuation</button>
+  <button class="nav-btn" onclick="showPage('fcfyield',this)" title="FCF Yield &amp; Dividend Coverage — ต้องดึงงบการเงินในเครื่องก่อน (local-only)">FCF Yield</button>
   <button class="nav-btn" onclick="showPage('insider',this)">Insider</button>
   <button class="nav-btn" onclick="showPage('flow',this)" title="Capital Flow — net buy/sell สถาบัน/ต่างชาติ/รายย่อย">Capital Flow</button>
   <button class="nav-btn" onclick="showPage('short',this)" title="Short Sales — ข้อมูลการขายชอร์ตรายหุ้น, Squeeze Radar">Short</button>
@@ -771,12 +774,18 @@
 <!-- PAGE: SCREENER -->
 <div id="page-screener" class="page">
   <div class="page-title">Stock Screener</div>
-  <div class="page-sub" style="display:flex;align-items:center;gap:10px">
+  <div class="page-sub" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     กำหนดเงื่อนไขค้นหาหุ้นตาม setup ที่ต้องการ
     <span onclick="toggleScrGuide()" style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid #1f6feb;background:#1f6feb22;color:#58a6ff;cursor:pointer;font-weight:600">
       💡 วิธีใช้ Screener สำหรับมือใหม่
     </span>
+    <span onclick="toggleBtNote('scr-bt-note')" style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid #39c5cf;background:#39c5cf22;color:#39c5cf;cursor:pointer;font-weight:600">
+      📊 ผลวิจัย backtest ทั้งสองแบบ
+    </span>
   </div>
+
+  <!-- กล่องสรุปผลวิจัย backtest (เปิด/ปิดจากปุ่ม 📊 ด้านบน) -->
+  <div id="scr-bt-note" style="display:none;margin:10px 0 12px;padding:14px 16px;background:#161b22;border:1px solid #39c5cf55;border-radius:10px"></div>
 
   <!-- GUIDE BOX -->
   <div id="scr-guide-box" style="display:none;margin:10px 0 12px;padding:16px 18px;background:#161b22;border:1px solid #1f6feb55;border-radius:10px;font-size:12px;line-height:1.8;color:var(--fg)">
@@ -790,7 +799,7 @@
       <span>หุ้นแข็งแกร่งทุกด้าน (RS ≥ 70, 1M%≥5, 3M%≥10, EMA50+200✓) — ตลาดขาขึ้น ใช้ได้ดีมาก แต่อาจ entry ช้า</span>
       <span style="color:#cd7f32;font-weight:700">#3</span>
       <span style="background:#30363d;border:1px solid var(--border);border-radius:4px;padding:1px 7px;font-size:11px;cursor:pointer;white-space:nowrap" onclick="applyPreset('breakout')">📈 Breakout</span>
-      <span>Volume พุ่ง + ราคาแข็ง (RS ≥ 60, RVOL ≥ 150%, EMA50✓) — หาจังหวะ entry วันที่มีแรงซื้อผิดปกติ</span>
+      <span>Volume พุ่ง + ราคาแข็ง (RS ≥ 60, RVOL ≥ 1.5 เท่า, EMA50✓) — หาจังหวะ entry วันที่มีแรงซื้อผิดปกติ</span>
       <span style="color:var(--text2);font-weight:700">#4</span>
       <span style="background:#30363d;border:1px solid var(--border);border-radius:4px;padding:1px 7px;font-size:11px;cursor:pointer;white-space:nowrap" onclick="applyPreset('near_ath')">🎯 Near ATH</span>
       <span>ราคาใกล้ All-Time High (ห่างจาก ATH ≤ 10%, RS ≥ 50) — สัญญาณ Breakout ระยะยาว ต้องใจเย็น</span>
@@ -800,6 +809,18 @@
       <span style="color:var(--text2);font-weight:700">#6</span>
       <span style="background:#30363d;border:1px solid var(--border);border-radius:4px;padding:1px 7px;font-size:11px;cursor:pointer;white-space:nowrap" onclick="applyPreset('low_pbv_reversal')">💎 Value Turnaround</span>
       <span>ราคาต่ำกว่ามูลค่า เริ่มกลับตัว (PBV ≤ 1.5, RS ≥ 45, 1M%≥0) — ต้องใจอดทน รอนานกว่า</span>
+      <span style="color:#e3b341;font-weight:700">#7</span>
+      <span style="background:#30363d;border:1px solid #e3b341;border-radius:4px;padding:1px 7px;font-size:11px;cursor:pointer;white-space:nowrap" onclick="applyPreset('canslim')">🏆 CANSLIM</span>
+      <span>หุ้นเติบโตสูตร O'Neil (กำไร YoY-Q ≥ 25%, รายได้ YoY-Q ≥ 15%, RS ≥ 80, EMA200✓, ใกล้ 52W High) — <b>ต้องอัพเดทงบรายไตรมาสก่อน · เฉพาะเวอร์ชันรันบนเครื่อง</b></span>
+      <span style="color:#a371f7;font-weight:700">#8</span>
+      <span style="background:#30363d;border:1px solid #a371f7;border-radius:4px;padding:1px 7px;font-size:11px;cursor:pointer;white-space:nowrap" onclick="applyPreset('growth_insider')">💪 โต+คนในซื้อ</span>
+      <span>งบไตรมาสโต + วอลุ่มเข้า + ผู้บริหารซื้อสุทธิ 90 วัน — สัญญาณ 3 ทางอิสระยืนยันกัน ผลลัพธ์น้อยแต่คมมาก</span>
+      <span style="color:#39c5cf;font-weight:700">#9</span>
+      <span style="background:#30363d;border:1px solid #39c5cf;border-radius:4px;padding:1px 7px;font-size:11px;cursor:pointer;white-space:nowrap" onclick="applyPreset('volume_ignition')">🌊 วอลุ่มจุดชนวน</span>
+      <span>จับต้นเทรนด์/turnaround: RVOL ≥ 3 เท่า + เหนือ/เพิ่งตัดขึ้น EMA200 + กำไรเร่งตัว (ไม่กรองงบดี) — forward test 14 ปี: excess +1.3%/เดือน แต่<b>ชนะแค่ 45% สไตล์ lottery</b> (ตัวถูกตัวใหญ่จ่ายให้ตัวผิดหลายตัว) ใช้เป็น watchlist แล้วคัดต่อเอง</span>
+      <span style="color:#f0883e;font-weight:700">#10</span>
+      <span style="background:#30363d;border:1px solid #f0883e;border-radius:4px;padding:1px 7px;font-size:11px;cursor:pointer;white-space:nowrap" onclick="applyPreset('breakout_confirmed')">💥 Breakout มีของจริง</span>
+      <span><b>แชมป์ forward backtest ทั้งตลาด 2012-2026</b> (44,673 stock-months): ทำ New High 52wk + RVOL ≥ 2 เท่า + กำไรโต YoY ≥ 25% → excess <b>+4.1%/เดือน · ชนะ 53%</b> — เกิดน้อย (~2 ตัว/เดือนทั้งตลาด) แต่คมสุดในทุกสูตรที่ทดสอบ</span>
     </div>
     <div style="padding-top:10px;border-top:1px solid var(--border);display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:11px">
       <div style="background:#0d1117;padding:8px;border-radius:6px;border:1px solid var(--border)">
@@ -817,7 +838,7 @@
       <div style="background:#0d1117;padding:8px;border-radius:6px;border:1px solid var(--border)">
         <div style="color:#3fb950;font-weight:700;margin-bottom:3px">💡 RVOL คืออะไร</div>
         Volume วันนี้ ÷ เฉลี่ย 20 วัน<br>
-        150% = ปริมาณการซื้อขายพุ่ง 1.5×<br>
+        1.5 เท่า = ปริมาณการซื้อขายพุ่ง 1.5× ของเฉลี่ย<br>
         <span style="color:var(--text2)">RVOL สูง = มีแรงซื้อผิดปกติ</span>
       </div>
     </div>
@@ -839,9 +860,9 @@
     </div></span>
     <button class="filter-btn" onclick="applyPreset('breakout')">📈 Breakout</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:240px">
       <strong>📈 Breakout</strong> — แนะนำ #3<br>
-      RS ≥ 60 · RVOL ≥ 150% · EMA50 ✓<br><br>
+      RS ≥ 60 · RVOL ≥ 1.5 เท่า · EMA50 ✓<br><br>
       หา entry วันที่ Volume พุ่งผิดปกติ<br>
-      <span style="color:var(--text2)">RVOL = Volume วันนี้ ÷ avg 20วัน × 100</span>
+      <span style="color:var(--text2)">RVOL = Volume วันนี้ ÷ avg 20วัน (หน่วยเท่า)</span>
     </div></span>
     <button class="filter-btn" onclick="applyPreset('near_ath')">🎯 Near ATH</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:240px">
       <strong>🎯 Near ATH</strong> — แนะนำ #4<br>
@@ -865,6 +886,19 @@
       หุ้นที่ผ่านเกณฑ์ entry ของ backtest RS+RRG วันนี้<br>
       (RS ≥ 90 + Sector Leading/Improving + สภาพคล่อง ≥ 5M/วัน)<br><br>
       <a href="/backtest-report" target="_blank" rel="noopener" style="color:var(--blue)">📄 ผล backtest ฉบับเต็ม →</a>
+    </div></span>
+    <button class="filter-btn" onclick="applyPreset('canslim')" style="border-color:#e3b341;color:#e3b341">🏆 CANSLIM</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:270px">
+      <strong>🏆 CANSLIM (William O'Neil)</strong><br>
+      กำไรโต YoY ไตรมาส ≥ 25% · รายได้โต YoY ไตรมาส ≥ 15%<br>
+      RS ≥ 80 · เหนือ EMA200 ✓ · ห่าง 52W High ≤ 15%<br><br>
+      สูตรหาหุ้นซุปเปอร์สต็อกคลาสสิก: งบไตรมาสโตแรง + เป็นผู้นำตลาด + แนวโน้มขาขึ้น ใกล้จุดสูงสุด<br><br>
+      <span style="color:var(--text2)">⚠ ใช้ข้อมูลงบรายไตรมาส — ต้องกด "อัพเดทงบการเงินทั้งหมด" ก่อน · เฉพาะเวอร์ชันรันบนเครื่อง · เข้มขึ้นอีกได้โดยเพิ่ม "กำไรเร่งตัว ≥ 1-2 ไตรมาส"</span>
+    </div></span>
+    <button class="filter-btn" onclick="applyPreset('growth_insider')" style="border-color:#a371f7;color:#a371f7">💪 โต+คนในซื้อ</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:270px">
+      <strong>💪 งบโต + คนในเก็บของ</strong><br>
+      รายได้โต YoY ไตรมาส ≥ 15% · RVOL ≥ 2 เท่า · Insider ซื้อสุทธิ ✓<br><br>
+      combo 3 สัญญาณอิสระ: ธุรกิจโตจริง (งบ) + เงินไหลเข้าผิดปกติ (วอลุ่ม) + ผู้บริหารซื้อหุ้นตัวเอง (แบบ 59-1 ย้อนหลัง 90 วัน)<br><br>
+      <span style="color:var(--text2)">⚠ เงื่อนไข RVOL เปลี่ยนทุกวัน — ผลลัพธ์จะน้อยและหมุนเวียน เหมาะกดดูรายวัน · ต้องอัพเดทงบการเงินก่อน · เฉพาะเวอร์ชันรันบนเครื่อง</span>
     </div></span>
     <button class="filter-btn" onclick="applyPreset('clear')" style="color:var(--text2)">✕ ล้าง</button>
   </div>
@@ -1017,6 +1051,19 @@
         <input class="scr-input" id="scr-pbv" type="number" placeholder="เช่น 3" min="0">
       </div>
       <div class="scr-group">
+        <div class="scr-label">P/S ≤
+          <span class="scr-tip-icon">?<div class="scr-tip-box">
+            <strong>Price-to-Sales Ratio</strong><br>
+            Market Cap ÷ รายได้ปีล่าสุด (Yahoo)<br><br>
+            <span style="color:var(--text2)"><b>ตัวอย่าง:</b> Market Cap 20,000 ล้าน ÷ รายได้ปีล่าสุด 10,000 ล้าน = P/S <b>2.0</b> — จ่าย 2 บาทต่อยอดขาย 1 บาท</span><br><br>
+            ใช้ได้แม้หุ้นขาดทุน (ที่ P/E ใช้ไม่ได้) — growth / turnaround / วัฏจักรช่วงต่ำ<br>
+            <span style="color:var(--text2)">เทียบข้ามอุตสาหกรรมไม่ได้ · ต้องอัพเดทงบก่อน · local เท่านั้น<br>
+            หมายเหตุ: Screener+ ใช้รายได้ TTM (4 ไตรมาสล่าสุด จาก Finnomena) — ค่าใกล้กันแต่ไม่เท่ากันเป๊ะ</span>
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-ps" type="number" placeholder="เช่น 2" min="0">
+      </div>
+      <div class="scr-group">
         <div class="scr-label">Div Yield ≥ (%)
           <span class="scr-tip-icon">?<div class="scr-tip-box">
             <strong>Dividend Yield (%)</strong><br>
@@ -1028,19 +1075,340 @@
         <input class="scr-input" id="scr-dy" type="number" placeholder="เช่น 3" min="0">
       </div>
       <div class="scr-group">
-        <div class="scr-label">RVOL ≥ (%)
-          <span class="scr-tip-icon">?<div class="scr-tip-box">
-            <strong>Relative Volume (%)</strong><br>
-            Volume วันล่าสุด ÷ Volume เฉลี่ย N วันก่อนหน้า × 100<br>
+        <div class="scr-label">Growth Score ≥
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Fundamental Growth/Quality Score</strong><br>
+            รวม CAGR รายได้/กำไร (ย้อนหลังหลายปี) + เทรนด์ margin/ROE/D-E จากงบการเงิน เป็นคะแนนเดียว — ไม่ใช่ % แต่เป็นคะแนนเทียบสัมพัทธ์ ยิ่งสูงยิ่งดี, ติดลบ = พื้นฐานกำลังแย่ลง<br><br>
+            <span style="color:var(--text2)">
+            <b>ตัวอย่าง:</b> หุ้น A รายได้โต 15%/ปี, กำไรโต 20%/ปี, margin และ ROE ดีขึ้นต่อเนื่อง, หนี้ไม่เพิ่ม → Growth Score ~15-18 (สูง, พื้นฐานกำลังดีขึ้นชัดเจน)<br><br>
+            หุ้น B รายได้โตแค่ 2%/ปี, กำไรลดลง, margin หดตัว → Growth Score ติดลบ (พื้นฐานกำลังแย่ลง)
+            </span><br><br>
+            เช่น ใส่ 5 = กรองเฉพาะหุ้นที่พื้นฐานกำลังดีขึ้นในระดับหนึ่ง<br>
+            ⚠ ต้องดึงงบการเงินทั้งหมดในเครื่อง (หน้า "งบการเงิน") ก่อน — ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-growth-min" type="number" placeholder="เช่น 5">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">PEG ≤
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>PEG Ratio (P/E ÷ %โตของกำไร TTM)</strong><br>
+            P/E หารด้วยอัตราเติบโตของ<u>กำไร</u> (รวม 4 ไตรมาสล่าสุด เทียบ 4 ไตรมาสของปีก่อน) — เทียบว่า "แพงคุ้มกับที่โตไหม" ไม่ใช่ดูแค่ P/E เฉยๆ · นิยามเดียวกับ Screener+ ค่าตรงกันสองเมนู<br><br>
+            <span style="color:var(--text2)">
+            <b>ตัวอย่าง:</b> หุ้น A ราคา P/E 15 เท่า กำไรโต 20%/ปี → PEG = 15 ÷ 20 = <b class="green">0.75</b> (ต่ำกว่า 1 = ถูกเมื่อเทียบกับการเติบโต แม้ P/E จะดูไม่ถูกก็ตาม)<br><br>
+            หุ้น B ราคา P/E 15 เท่าเท่ากัน แต่กำไรโตแค่ 5%/ปี → PEG = 15 ÷ 5 = <b class="red">3.0</b> (แพงเกินตัวเมื่อเทียบกับการเติบโตที่ช้า)
+            </span><br><br>
+            เช่น ใส่ 1 = กรองเฉพาะหุ้นที่ PEG ≤ 1 (คุ้มค่า)<br>
+            ไม่มีค่าเมื่อ: หุ้นขาดทุน/กำไรหด · กำไรโต &lt;1% (PEG จะระเบิดจนไร้ความหมาย) · โต &gt;200% (มักเป็น base effect จากฐานกำไรจิ๋ว ทำ PEG ต่ำหลอกตา)<br>
+            <span style="color:var(--text2)">หมายเหตุ: หุ้นที่ไม่มี P/E สดในระบบ (REIT/กองทุนบางตัว ~19 ตัว) ช่องนี้จะว่าง แต่ Screener+ ใช้ PE จาก Finnomena แทนจึงอาจมีค่า — เป็นความต่างเดียวของ PEG สองเมนู</span><br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-peg-max" type="number" placeholder="เช่น 1" min="0">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">รายได้โตต่อเนื่อง ≥ (ปี)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Revenue Growth Streak</strong><br>
+            นับจำนวนปีติดต่อกัน (นับจากปีล่าสุดย้อนหลัง) ที่รายได้โตขึ้นทุกปีไม่มีสะดุด — ต่างจาก Growth Score ที่เทียบแค่ปีแรกกับปีล่าสุด (อาจดูดีทั้งที่มีปีแย่แทรกอยู่กลางทาง)<br><br>
+            <span style="color:var(--text2)">
+            <b>ตัวอย่าง:</b> หุ้น A รายได้ 100 → 120 → 150 → 180 ล้านบาท (4 ปี) → โตทุกปีติดกัน 3 ครั้ง → streak = 3<br><br>
+            หุ้น B รายได้ 100 → 120 → 90 → 130 ล้านบาท → ปีล่าสุดโตจากปีก่อน (130&gt;90) แต่ปีก่อนหน้านั้นลดลง (90&lt;120) → นับได้แค่ 1 → streak = 1
+            </span><br><br>
+            เช่น ใส่ 3 = กรองหุ้นที่รายได้โตต่อเนื่องอย่างน้อย 3 ปีติด<br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-rev-streak-min" type="number" placeholder="เช่น 3" min="0">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">กำไรโตต่อเนื่อง ≥ (ปี)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Profit Growth Streak</strong><br>
+            นับจำนวนปีติดต่อกัน (นับจากปีล่าสุดย้อนหลัง) ที่กำไรสุทธิโตขึ้นทุกปีไม่มีสะดุด — หลักการเดียวกับรายได้โตต่อเนื่อง แต่ดูที่ Net Income แทน<br><br>
+            เช่น ใส่ 3 = กรองหุ้นที่กำไรโตต่อเนื่องอย่างน้อย 3 ปีติด — ใช้คู่กับ "รายได้โตต่อเนื่อง" จะได้หุ้นที่ทั้งรายได้และกำไรโตพร้อมกันจริง ไม่ใช่แค่กำไรโตเพราะลดต้นทุน/ตัดค่าใช้จ่าย<br><br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-profit-streak-min" type="number" placeholder="เช่น 3" min="0">
+      </div>
+
+      <!-- การเติบโตรายไตรมาส (จากงบ quarterly — source yahoo_q) -->
+      <div class="scr-group">
+        <div class="scr-label">รายได้โต QoQ ≥ (%) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>รายได้ไตรมาสล่าสุด vs ไตรมาสก่อนหน้า</strong><br>
+            จับโมเมนตัมธุรกิจที่เร็วกว่ารายปีมาก — เห็นการเร่งตัว/แผ่วก่อนงบปีออกเป็นไตรมาส<br><br>
+            ⚠ ระวัง seasonality: ธุรกิจที่มี high/low season (ท่องเที่ยว เกษตร ค้าปลีก) QoQ จะแกว่งตามฤดู — ใช้คู่กับ "โต YoY ไตรมาส" จะชัวร์กว่า<br><br>
+            ⚠ ต้องกดอัพเดทงบการเงิน (รวมรายไตรมาส) ก่อน · ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-rev-qoq-min" type="number" placeholder="เช่น 5" step="1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">กำไรโต QoQ ≥ (%) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>กำไรสุทธิไตรมาสล่าสุด vs ไตรมาสก่อนหน้า</strong><br>
+            กำไรเร่งตัวแรงมักนำหน้าราคา — สัญญาณคลาสสิกของหุ้นเติบโต<br><br>
+            หมายเหตุ: ไตรมาสก่อนหน้าขาดทุน (ฐานติดลบ) จะไม่คำนวณ % ให้ (ค่าว่าง) เพราะเปอร์เซ็นต์ไม่มีความหมาย<br><br>
+            ⚠ ต้องกดอัพเดทงบการเงิน (รวมรายไตรมาส) ก่อน · ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-profit-qoq-min" type="number" placeholder="เช่น 10" step="1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">รายได้โต YoY ไตรมาส ≥ (%) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>รายได้ไตรมาสล่าสุด vs ไตรมาสเดียวกันของปีก่อน</strong><br>
+            ตัด seasonality ออกหมด (เทียบฤดูเดียวกัน) — มาตรฐานที่นักวิเคราะห์ใช้วัดการเติบโตรายไตรมาสจริง<br><br>
+            แนวใช้: ≥ 15-20% = หุ้นเติบโตแท้ · ใช้คู่ QoQ เพื่อจับ "โตแรงและกำลังเร่ง"<br><br>
+            ⚠ ต้องกดอัพเดทงบการเงิน (รวมรายไตรมาส) ก่อน · ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-rev-yoyq-min" type="number" placeholder="เช่น 15" step="1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">กำไรโต YoY ไตรมาส ≥ (%) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>กำไรสุทธิไตรมาสล่าสุด vs ไตรมาสเดียวกันของปีก่อน</strong><br>
+            หัวใจของสูตร CANSLIM (ตัว C = Current quarterly earnings) — มองหากำไรไตรมาสโต ≥ 25% YoY<br><br>
+            ฐานปีก่อนขาดทุน = ไม่คำนวณ % (ค่าว่าง)<br><br>
+            ⚠ ต้องกดอัพเดทงบการเงิน (รวมรายไตรมาส) ก่อน · ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-profit-yoyq-min" type="number" placeholder="เช่น 25" step="1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">รายได้โตติดกัน ≥ (ไตรมาส) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>รายได้เพิ่มขึ้นติดต่อกันกี่ไตรมาส (QoQ streak)</strong><br>
+            นับจากไตรมาสล่าสุดย้อนหลัง: รายได้ต้องสูงกว่าไตรมาสก่อนหน้าทุกงวด — ขาดช่วงเดียว streak ตัดเป็น 0<br><br>
+            เช่น ใส่ 2 = รายได้โตมาแล้วอย่างน้อย 2 ไตรมาสติด<br><br>
+            ⚠ ตอนนี้ Yahoo ให้งบย้อนหลัง ~5-6 ไตรมาส ค่าสูงสุดที่เป็นไปได้คือ 4-5 และจะเพิ่มเองเมื่อระบบสะสมงบทุกไตรมาส · ต้องกดอัพเดทงบการเงินก่อน · เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-rev-qstreak-min" type="number" placeholder="เช่น 2" min="0" step="1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">กำไรโตติดกัน ≥ (ไตรมาส) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>กำไรสุทธิเพิ่มขึ้นติดต่อกันกี่ไตรมาส (QoQ streak)</strong><br>
+            เหมือน streak รายปีที่มีอยู่ แต่ละเอียดระดับไตรมาส — จับหุ้นที่กำไรไต่ขึ้นสม่ำเสมอไม่สะดุด<br><br>
+            เช่น ใส่ 3 = กำไรโตมาแล้ว 3 ไตรมาสติด<br><br>
+            ⚠ เพดานตอนนี้ ~4-5 (ข้อมูล Yahoo 5-6 ไตรมาส สะสมเพิ่มเรื่อยๆ) · ต้องกดอัพเดทงบการเงินก่อน · เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-profit-qstreak-min" type="number" placeholder="เช่น 3" min="0" step="1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">Margin เพิ่มติดกัน ≥ (ไตรมาส) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Net Margin (กำไรสุทธิ ÷ รายได้) เพิ่มขึ้นติดต่อกันกี่ไตรมาส</strong><br>
+            มาร์จิ้นขยายตัวต่อเนื่อง = ธุรกิจมีอำนาจต่อรอง/คุมต้นทุนดีขึ้นเรื่อยๆ — กำไรโตเร็วกว่ารายได้<br><br>
+            เช่น ใส่ 2 = margin เพิ่มมาแล้ว 2 ไตรมาสติด<br><br>
+            ⚠ ต้องกดอัพเดทงบการเงิน (รวมรายไตรมาส) ก่อน · เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-margin-qstreak-min" type="number" placeholder="เช่น 2" min="0" step="1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">รายได้เร่งตัว ≥ (ไตรมาส) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>การเร่งตัว (Growth Acceleration) ฝั่งรายได้</strong><br>
+            นับไตรมาสติดกันที่ <u>%โต YoY สูงขึ้นกว่าไตรมาสก่อน</u> เช่น โต 10% → 15% → 22% = เร่งตัว 2 ไตรมาส — "โตเร็วขึ้นเรื่อยๆ" ไม่ใช่แค่โต (แนวคิด CANSLIM แท้)<br><br>
+            ⚠ ตัวชี้วัดนี้ต้องการงบไตรมาสยาว: คำนวณ YoY ได้ต้องมีข้อมูลข้ามปี ช่วงแรกค่าส่วนใหญ่จะเป็น 0-1 และจะแม่นขึ้นเองเมื่อระบบสะสมงบครบหลายไตรมาส · ต้องกดอัพเดทงบการเงินก่อน · เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-rev-accel-min" type="number" placeholder="เช่น 1" min="0" step="1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">กำไรเร่งตัว ≥ (ไตรมาส) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>การเร่งตัว (Growth Acceleration) ฝั่งกำไรสุทธิ</strong><br>
+            นับไตรมาสติดกันที่ %กำไรโต YoY สูงขึ้นกว่าไตรมาสก่อน — O'Neil พบว่าหุ้นซุปเปอร์สต็อกส่วนใหญ่มีกำไร "เร่งตัว" ก่อนราคาวิ่งแรง<br><br>
+            ใช้คู่ "กำไรโต YoY ไตรมาส ≥ 25" = เข้มแบบ CANSLIM เต็มสูตร<br><br>
+            ⚠ ช่วงแรกค่าส่วนใหญ่เป็น 0-1 จนกว่าจะสะสมงบไตรมาสข้ามปี · ต้องกดอัพเดทงบการเงินก่อน · เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-profit-accel-min" type="number" placeholder="เช่น 1" min="0" step="1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">Margin ขยาย YoY ≥ (จุด%) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Net Margin ไตรมาสล่าสุด − ไตรมาสเดียวกันปีก่อน (จุดเปอร์เซ็นต์)</strong><br>
+            เทียบฤดูเดียวกันจึงตัด seasonality — margin ขยาย = กำไรโตเร็วกว่ารายได้ ธุรกิจแข็งแรงขึ้นจริง<br><br>
+            เช่น ใส่ 1 = margin เพิ่มอย่างน้อย 1 จุด% (เช่น 8% → 9%)<br><br>
+            💡 มีเวอร์ชัน TTM (4 ไตรมาสรวม vs 4 ไตรมาสก่อนหน้า) ในช่องถัดไป — เสถียรกว่าแต่ต้องรอสะสมงบครบ 8 ไตรมาส<br><br>
+            ⚠ ต้องกดอัพเดทงบการเงินก่อน · เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-margin-yoyq-min" type="number" placeholder="เช่น 1" step="0.5">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">Margin TTM ขยาย ≥ (จุด%) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Net Margin TTM (4 ไตรมาสล่าสุดรวมกัน) − TTM ชุดก่อนหน้า (จุด%)</strong><br>
+            เวอร์ชันเสถียรที่สุดของ "margin ขยายตัว" — เฉลี่ยทั้งปีจึงไม่แกว่งตามไตรมาสเดียว<br><br>
+            ⚠ ต้องมีงบครบ 8 ไตรมาส — Yahoo ให้ครั้งแรก ~5-6 ไตรมาส ช่องนี้จึง<u>ยังว่างเกือบทุกตัวตอนนี้</u> และจะเริ่มมีค่าเองภายใน 2-3 ไตรมาสข้างหน้าเมื่อระบบสะสมงบครบ (sync ทุกไตรมาสเก็บเพิ่มอัตโนมัติ ไม่ลบของเก่า) · เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-ttm-margin-min" type="number" placeholder="เช่น 0.5" step="0.5">
+      </div>
+
+      <!-- Gross Margin / ROE / Net Margin — snapshot ปีล่าสุด -->
+      <div class="scr-group">
+        <div class="scr-label">Gross Margin ≥ (%)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Gross Profit ÷ Revenue ปีล่าสุด</strong><br>
+            วัด "อำนาจตั้งราคา" ของธุรกิจ — มาร์จิ้นสูงมักแปลว่ามี moat/แข่งขันน้อย<br><br>
+            เช่น ใส่ 30 = กรองเฉพาะหุ้นที่ Gross Margin ≥ 30%<br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-gross-margin-min" type="number" placeholder="เช่น 30">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">ROE ≥ (%)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Net Income ÷ Equity ปีล่าสุด</strong><br>
+            วัดประสิทธิภาพการใช้เงินทุนของผู้ถือหุ้น ยิ่งสูงยิ่งดี<br><br>
+            เช่น ใส่ 15 = กรองเฉพาะหุ้นที่ ROE ≥ 15%<br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-roe-min" type="number" placeholder="เช่น 15">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">Net Margin ≥ (%)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Net Income ÷ Revenue ปีล่าสุด</strong><br>
+            วัดว่ารายได้แต่ละบาทกลายเป็นกำไรสุทธิได้กี่ % หลังหักทุกอย่างแล้ว<br><br>
+            เช่น ใส่ 10 = กรองเฉพาะหุ้นที่ Net Margin ≥ 10%<br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-net-margin-min" type="number" placeholder="เช่น 10">
+      </div>
+
+      <!-- เทรนด์เทียบย้อนหลัง N ปี — ใช้ selector ตัวเดียวร่วมกันทั้ง 5 filter ด้านล่าง -->
+      <div class="scr-group">
+        <div class="scr-label">เทียบย้อนหลัง (ปี)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>ใช้ร่วมกับ 5 filter "...เปลี่ยนแปลง ≥" ด้านล่าง:</strong><br>
+            Gross Margin / ROE / Net Margin / D-E / Interest Coverage เปลี่ยนแปลง ≥<br><br>
+            เลือกว่าจะเทียบค่าปีล่าสุด กับกี่ปีก่อนหน้า<br><br>
+            เช่น เลือก 2 = เทียบปีล่าสุดกับ 2 ปีก่อนหน้า (ข้ามปีตรงกลางไปเลย ไม่ใช่บวกสะสม)<br><br>
+            <span style="color:var(--text2)" id="scr-ratio-years-back-note">ตอนนี้ข้อมูลรองรับเทียบย้อนหลังได้สูงสุด — ปี (โหลดข้อมูลก่อนถึงจะรู้)</span>
+          </div></span>
+        </div>
+        <select class="scr-input" id="scr-ratio-years-back">
+          <option value="1">1 ปี</option>
+          <option value="2">2 ปี</option>
+          <option value="3">3 ปี</option>
+          <option value="4">4 ปี</option>
+        </select>
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">Gross Margin เปลี่ยนแปลง ≥ (จุด%) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Gross Margin ปีล่าสุด − Gross Margin ย้อนหลัง N ปี</strong> (N จาก dropdown "เทียบย้อนหลัง (ปี)")<br><br>
+            เช่น ใส่ 5 = กรองเฉพาะหุ้นที่ Gross Margin ดีขึ้นอย่างน้อย 5 จุดเปอร์เซ็นต์เทียบกับ N ปีก่อน<br>
+            ใส่ค่าติดลบได้ถ้าอยากหาหุ้นที่มาร์จิ้นแย่ลง<br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-gross-margin-trend-min" type="number" placeholder="เช่น 5">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">ROE เปลี่ยนแปลง ≥ (จุด%) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>ROE ปีล่าสุด − ROE ย้อนหลัง N ปี</strong> (N จาก dropdown "เทียบย้อนหลัง (ปี)")<br><br>
+            เช่น ใส่ 5 = กรองเฉพาะหุ้นที่ ROE ดีขึ้นอย่างน้อย 5 จุดเปอร์เซ็นต์เทียบกับ N ปีก่อน<br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-roe-trend-min" type="number" placeholder="เช่น 5">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">Net Margin เปลี่ยนแปลง ≥ (จุด%) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Net Margin ปีล่าสุด − Net Margin ย้อนหลัง N ปี</strong> (N จาก dropdown "เทียบย้อนหลัง (ปี)")<br><br>
+            เช่น ใส่ 3 = กรองเฉพาะหุ้นที่ Net Margin ดีขึ้นอย่างน้อย 3 จุดเปอร์เซ็นต์เทียบกับ N ปีก่อน<br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-net-margin-trend-min" type="number" placeholder="เช่น 3">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">D/E เปลี่ยนแปลง ≤ (เท่า) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>D/E Ratio ปีล่าสุด − D/E Ratio ย้อนหลัง N ปี</strong> (N จาก dropdown "เทียบย้อนหลัง (ปี)")<br><br>
+            เป็นเพดาน (≤) เพราะ D/E ยิ่งต่ำยิ่งดี — ต่างจากช่องเทรนด์อื่นที่เป็น ≥<br>
+            ใส่ค่าติดลบ (เช่น -0.2) = เอาเฉพาะหุ้นที่ลดหนี้ลงอย่างน้อย 0.2 เท่า<br>
+            ใส่ค่าบวก (เช่น 0.5) = ยอมรับหุ้นที่หนี้เพิ่มได้ไม่เกิน 0.5 เท่า<br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-de-ratio-trend-min" type="number" placeholder="เช่น -0.2" step="0.1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">Interest Coverage เปลี่ยนแปลง ≥ (เท่า) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Interest Coverage ปีล่าสุด − ย้อนหลัง N ปี</strong> (N จาก dropdown "เทียบย้อนหลัง (ปี)")<br><br>
+            เช่น ใส่ 2 = หาหุ้นที่ความสามารถจ่ายดอกเบี้ยดีขึ้นอย่างน้อย 2 เท่าเทียบกับ N ปีก่อน<br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-interest-coverage-trend-min" type="number" placeholder="เช่น 2">
+      </div>
+      <div class="scr-group" style="align-self:flex-end;padding-bottom:8px">
+        <span style="color:var(--text2);font-size:12px">* ใช้ร่วมกับ dropdown "เทียบย้อนหลัง (ปี)" ด้านบน</span>
+      </div>
+
+      <!-- D/E Ratio / Interest Coverage — snapshot ปีล่าสุด (ไม่เกี่ยวกับ dropdown เทียบย้อนหลัง) -->
+      <div class="scr-group">
+        <div class="scr-label">D/E Ratio ≤ (เท่า)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Total Debt ÷ Equity ปีล่าสุด</strong><br>
+            วัดว่าใช้หนี้มากแค่ไหนเทียบกับทุนตัวเอง ยิ่งต่ำยิ่งเสี่ยงน้อย<br><br>
+            เช่น ใส่ 1 = กรองเฉพาะหุ้นที่หนี้ไม่เกินทุน (D/E ≤ 1 เท่า)<br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-de-ratio-max" type="number" placeholder="เช่น 1" min="0">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">Interest Coverage ≥ (เท่า)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>EBIT ÷ ดอกเบี้ยจ่าย ปีล่าสุด</strong><br>
+            เช็คว่ากำไรก่อนดอกเบี้ย/ภาษี พอจ่ายดอกเบี้ยกี่เท่า — ต่ำมากๆ (ใกล้ 1) เป็นสัญญาณอันตรายเรื่องหนี้<br><br>
+            เช่น ใส่ 5 = กรองเฉพาะหุ้นที่จ่ายดอกเบี้ยสบายๆ (EBIT ≥ 5 เท่าของดอกเบี้ยจ่าย)<br>
+            หุ้นที่ไม่มีหนี้/ไม่มีดอกเบี้ยจ่ายจะไม่มีค่านี้ (คำนวณไม่ได้)<br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-interest-coverage-min" type="number" placeholder="เช่น 5">
+      </div>
+
+      <div class="scr-group">
+        <div class="scr-label">RVOL ≥ (เท่า)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Relative Volume (เท่า)</strong><br>
+            Volume วันล่าสุด ÷ Volume เฉลี่ย N วันก่อนหน้า — วัดว่าวันนี้คนซื้อขายคึกคักกว่าปกติกี่เท่า<br>
+            <span style="color:#39c5cf">หน่วยเดียวกับ Screener+ แล้ว — ใส่เลขเดียวกันได้ผลตรงกันทั้งสองเมนู (เดิมช่องนี้เป็น % เช่น 150 = 1.5 เท่า)</span><br>
             <span style="color:var(--text2)">(avg ไม่นับวันนี้ เพื่อไม่ให้ bias ตัวเอง)</span><br><br>
-            เช่น ใส่ 150 = volume วันนี้สูงกว่าเฉลี่ย 1.5 เท่า<br>
-            เช่น ใส่ 200 = volume surge (สัญญาณยืนยัน breakout)<br><br>
-            <span style="color:#3fb950">≥ 200%</span> = surge ชัด<br>
-            <span style="color:#e3b341">≥ 130%</span> = above average
+            <span style="color:var(--text2)">
+            <b>ตัวอย่าง:</b> หุ้น C ปกติซื้อขายเฉลี่ยวันละ 1,000,000 หุ้น (20 วันย้อนหลัง) วันนี้มีคนซื้อขาย 1,800,000 หุ้น<br>
+            RVOL = 1,800,000 ÷ 1,000,000 = <b>1.8 เท่า</b> — ซื้อขายคึกคักกว่าปกติ มักเกิดตอนมีข่าว/breakout
+            </span><br><br>
+            เช่น ใส่ 1.5 = volume วันนี้สูงกว่าเฉลี่ย 1.5 เท่า<br>
+            เช่น ใส่ 2 = volume surge (สัญญาณยืนยัน breakout)<br><br>
+            <span style="color:#3fb950">≥ 2 เท่า</span> = surge ชัด<br>
+            <span style="color:#e3b341">≥ 1.3 เท่า</span> = above average
           </div></span>
         </div>
         <div style="display:flex;gap:6px;align-items:center">
-          <input class="scr-input" id="scr-rvol" type="number" placeholder="เช่น 150" min="0" style="flex:1">
+          <input class="scr-input" id="scr-rvol" type="number" step="any" placeholder="เช่น 1.5" min="0" style="flex:1">
           <div style="display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:11px;color:var(--text2)">
             avg
             <input class="scr-input" id="scr-rvol-days" type="number" value="20" min="1" max="260" style="width:48px;text-align:center">
@@ -1201,6 +1569,14 @@
           </div></span>
         </label>
 
+        <label class="scr-check"><input type="checkbox" id="scr-ema200-reclaim"> 🔁 เหนือ/เพิ่งตัดขึ้น EMA200
+          <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:280px">
+            <strong>🔁 ราคายืนเหนือ EMA200 หรือเพิ่งตัดขึ้นภายใน ~15 วัน</strong><br>
+            ต่างจากช่อง "เหนือ EMA200" ปกติตรงที่รวมหุ้นที่<u>เพิ่งกลับขึ้นมา</u>ด้วย — จับต้นเทรนด์ ไม่ใช่เทรนด์ที่ยืนยันไปนานแล้ว<br><br>
+            <span style="color:var(--text2)">จากผลวิจัย event study หุ้นวิ่งแรง 935 events (2015-2026): หุ้นวิ่งแรงมีสัญญาณนี้ตอนเริ่มวิ่ง 47% เทียบหุ้นทั่วไป 32% (lift +15 จุด)</span>
+          </div></span>
+        </label>
+
         <label class="scr-check"><input type="checkbox" id="scr-rsi-rebound"> 🔄 RSI Rebound
           <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:260px">
             <strong>🔄 RSI Rebound</strong><br>
@@ -1233,6 +1609,29 @@
             <span style="color:#e3b341">⚠️ ดูไฟ Market Regime บนขวาก่อน —
             backtest บอกว่าเกณฑ์นี้ทำงานดีเฉพาะช่วง 🟢/🟡</span><br><br>
             <a href="/backtest-report" target="_blank" rel="noopener" style="color:var(--blue)">📄 อ่านผล backtest + ข้อจำกัด →</a>
+          </div></span>
+        </label>
+
+        <label class="scr-check"><input type="checkbox" id="scr-include-dr"> 🌏 รวมหุ้นต่างประเทศ (DR)
+          <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:290px">
+            <strong>รวมหุ้นต่างประเทศ (DR Underlying) เข้าผลลัพธ์ด้วย</strong><br>
+            เพิ่มหุ้นต้นทาง 267 ตัวที่มี DR เทรดบน SET (AAPL, TSLA, NVDA ฯลฯ) เข้าไปในผลการกรอง<br><br>
+            <span style="color:var(--text2)">
+            ⚠ P/E, P/BV, Div Yield, RS Score, EMA ไม่มีข้อมูล (ไม่ได้ดึงจาก SET.or.th) — ถ้าตั้ง filter พวกนี้ หุ้น DR จะถูกกรองออกอัตโนมัติ<br><br>
+            ✅ Growth Score, PEG, FCF Yield, รายได้/กำไรโตต่อเนื่อง ใช้ได้ปกติ (คำนวณจากงบการเงินเหมือนกัน)<br><br>
+            ราคา/มูลค่าตลาดเป็นสกุลเงินของหุ้นต้นทาง ไม่ใช่บาท — อย่าเทียบตรงๆ กับหุ้นไทยในตารางเดียวกัน
+            </span><br><br>
+            โหลดครั้งแรกอาจใช้เวลา 1-2 นาที (ดึงราคาสด 267 ตัว) — ครั้งถัดไปเร็วขึ้นเพราะ cache ไว้แล้ว
+          </div></span>
+        </label>
+
+        <label class="scr-check"><input type="checkbox" id="scr-insider-buy"> 👤 Insider ซื้อสุทธิ
+          <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:290px">
+            <strong>👤 ผู้บริหารซื้อมากกว่าขาย (แบบ 59-1 ก.ล.ต.)</strong><br>
+            นับธุรกรรมย้อนหลัง 90 วัน: จำนวนรายการ "ซื้อ" &gt; "ขาย" = ผ่านตัวกรอง<br><br>
+            <span style="color:#3fb950">ผู้บริหารรู้กิจการดีที่สุด — ซื้อหุ้นตัวเองมักเป็นสัญญาณเชื่อมั่น</span><br>
+            ใช้คู่ "รายได้โต YoY ไตรมาส" + RVOL = combo งบโต + คนในเก็บของ<br><br>
+            <span style="color:var(--text2)">⚠ หุ้น DR ไม่มีข้อมูล ก.ล.ต. ไทย จะถูกกรองออกเสมอเมื่อเปิดตัวนี้ · ข้อมูลชุดเดียวกับเมนู Insider &amp; ผู้ถือหุ้นใหญ่</span>
           </div></span>
         </label>
 
@@ -1386,6 +1785,14 @@
   <div class="page-title">DR / DRx — Depositary Receipts</div>
   <div class="page-sub">ราคาและ Performance ของ Underlying Stocks ที่มี DR/DRx เทรดบน SET</div>
 
+  <!-- DR diff-check: เทียบกับ SET.or.th ว่ามี DR ใหม่/ถูกถอดไหม (local-only) -->
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+    <button class="filter-btn" id="dr-diff-btn" onclick="checkDRUpdates()">🔍 เช็คหุ้นใหม่/ถูกถอดจาก SET.or.th</button>
+    <button class="filter-btn" id="dr-fin-sync-btn" onclick="startDRFinancialsSync()">📥 ดึงงบการเงิน DR ทั้งหมดมาเก็บ (local)</button>
+    <span id="dr-diff-note" style="font-size:11px;color:var(--text2)"></span>
+  </div>
+  <div id="dr-diff-result" style="display:none;margin-bottom:12px"></div>
+
   <!-- Region filter -->
   <div class="filter-row" id="dr-region-btns" style="margin-bottom:8px">
     <button class="filter-btn active" onclick="setDRRegion('ALL',this)">ทั้งหมด <span class="dr-region-count-badge" data-region="ALL"></span></button>
@@ -1440,6 +1847,7 @@
   <div class="page-sub">P/E และ P/BV ย้อนหลัง เพื่อประเมิน Valuation Zone ของตลาด
     <span style="color:var(--muted)"> · วาง Table_PE.xls + Table_PBV.xls ใหม่ในโฟลเดอร์ แล้วกด อัพเดท</span>
   </div>
+  <div id="val-data-month" style="font-size:12px;margin:4px 0 2px;color:var(--muted)"></div>
 
   <!-- Summary cards -->
   <div id="val-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px"></div>
@@ -1592,6 +2000,75 @@
       <button class="filter-btn" onclick="setValSecSort('n',this)">เรียง จำนวนหุ้น</button>
     </div>
     <div id="val-sector-table" style="overflow-x:auto"></div>
+  </div>
+</div>
+
+<!-- PAGE: FCF YIELD -->
+<div id="page-fcfyield" class="page">
+  <div class="page-title">FCF Yield &amp; Dividend Coverage</div>
+  <div class="page-sub">
+    Free Cash Flow ÷ Market Cap และเช็คว่าปันผลจ่ายจาก FCF จริงหรือไม่ — คำนวณจากงบการเงินที่ดึงเก็บไว้ในเครื่อง (local-only)
+  </div>
+  <div class="card" style="padding:16px 18px;margin-bottom:12px;font-size:12.5px;line-height:1.7;color:var(--text)">
+    <div style="font-size:13px;font-weight:700;color:var(--blue);margin-bottom:6px">📘 อธิบายค่าที่เห็นในตารางนี้ (สำหรับคนที่ยังไม่คุ้น)</div>
+
+    <div style="margin-bottom:14px">
+      <b>Free Cash Flow (FCF) คืออะไร?</b><br>
+      <span style="color:var(--text2)">เงินสดที่บริษัทเหลือจริงๆ หลังจากหักค่าใช้จ่ายในการดำเนินธุรกิจและลงทุนในสินทรัพย์ (เช่น เครื่องจักร โรงงาน) ไปแล้ว
+      เป็นเงินที่บริษัท "เอาไปทำอะไรก็ได้" — จ่ายปันผล ซื้อหุ้นคืน ใช้หนี้ หรือเก็บสำรองไว้ — ต่างจาก "กำไรสุทธิ" ที่เป็นตัวเลขทางบัญชี อาจไม่ใช่เงินสดจริงในมือ</span>
+    </div>
+
+    <div style="margin-bottom:14px">
+      <b>FCF Yield</b> = FCF ÷ Market Cap × 100<br>
+      <span style="color:var(--text2)">เทียบเงินสดที่บริษัทหาได้ต่อปี กับราคาที่ตลาดตีมูลค่าบริษัทไว้ทั้งหมด — คล้ายอัตราดอกเบี้ยที่จะได้ถ้า "ซื้อบริษัททั้งบริษัท" ยิ่งสูงยิ่งดี (จ่ายราคาถูกเทียบกับเงินสดที่ได้)</span>
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+        <b>ตัวอย่าง:</b> บริษัท A มูลค่าตลาด (Market Cap) 10,000 ล้านบาท ปีที่แล้วสร้าง FCF ได้ 500 ล้านบาท<br>
+        FCF Yield = 500 ÷ 10,000 × 100 = <b class="green">5%</b><br>
+        <span style="color:var(--text2)">แปลว่า ถ้าซื้อบริษัท A ทั้งบริษัทด้วยเงิน 10,000 ล้าน จะได้เงินสดกลับมาปีละ 5% ของเงินที่จ่ายไป — เทียบกับดอกเบี้ยเงินฝาก/พันธบัตรที่ต่ำกว่านี้มาก ถือว่าน่าสนใจ ถ้าธุรกิจยังโตต่อได้</span>
+      </div>
+      <table style="width:100%;margin-top:8px;font-size:11.5px;border-collapse:collapse">
+        <tr><td style="padding:3px 8px;color:var(--text2)">ต่ำกว่า 2%</td><td style="padding:3px 8px" class="red">ต่ำ — แพงเทียบกับเงินสดที่หาได้ หรือกำลังลงทุนหนักช่วงนี้</td></tr>
+        <tr><td style="padding:3px 8px;color:var(--text2)">2 – 5%</td><td style="padding:3px 8px" class="yellow">ปานกลาง — ใกล้เคียงค่าเฉลี่ยตลาด</td></tr>
+        <tr><td style="padding:3px 8px;color:var(--text2)">5 – 10%</td><td style="padding:3px 8px" class="green">ดี — เงินสดคุ้มค่าเมื่อเทียบกับราคา</td></tr>
+        <tr><td style="padding:3px 8px;color:var(--text2)">สูงกว่า 10%</td><td style="padding:3px 8px" class="yellow">สูงผิดปกติ — ควรเช็คว่าเป็น FCF จริงจากธุรกิจ หรือเป็นรายการพิเศษ (เช่น ขายสินทรัพย์) ที่ปีหน้าอาจไม่มีซ้ำ</td></tr>
+      </table>
+    </div>
+
+    <div>
+      <b>Dividend Coverage</b> = FCF ÷ เงินปันผลที่จ่ายทั้งปี<br>
+      <span style="color:var(--text2)">เช็คว่าเงินที่เอาไปจ่ายปันผล "มาจากเงินสดที่หาได้จริง" หรือ "จ่ายเกินตัว" ต้องไปกู้/ถอนเงินสำรองมาจ่ายแทน</span>
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+        <b>ตัวอย่างที่ 1 (ปลอดภัย):</b> บริษัท B สร้าง FCF ได้ 500 ล้านบาท จ่ายปันผลทั้งปี 300 ล้านบาท<br>
+        Coverage = 500 ÷ 300 = <b class="green">1.67x</b><br>
+        <span style="color:var(--text2)">ทุกๆ 1 บาทที่จ่ายปันผล บริษัทหาเงินสดมาได้ 1.67 บาท — จ่ายแล้วยังเหลือเงินสดเก็บไว้ในบริษัทอีก 200 ล้าน ถือว่าปันผลมั่นคง</span><br><br>
+        <b>ตัวอย่างที่ 2 (ต้องระวัง):</b> บริษัท C สร้าง FCF ได้แค่ 200 ล้านบาท แต่จ่ายปันผลทั้งปี 300 ล้านบาท<br>
+        Coverage = 200 ÷ 300 = <b class="red">0.67x</b><br>
+        <span style="color:var(--text2)">จ่ายปันผลมากกว่าเงินสดที่หาได้ 100 ล้านบาท — ส่วนต่างนี้ต้องมาจากการกู้เงิน ถอนเงินสำรองเก่า หรือขายสินทรัพย์ ถ้าเกิดขึ้นต่อเนื่องหลายปี อาจต้องลดปันผลในอนาคต</span>
+      </div>
+      <table style="width:100%;margin-top:8px;font-size:11.5px;border-collapse:collapse">
+        <tr><td style="padding:3px 8px;color:var(--text2)">มากกว่า 1.5x</td><td style="padding:3px 8px" class="green">ปลอดภัย — เงินสดเหลือเฟือ ปันผลมั่นคง</td></tr>
+        <tr><td style="padding:3px 8px;color:var(--text2)">1.0 – 1.5x</td><td style="padding:3px 8px" class="yellow">พอไหว — จ่ายได้แต่ไม่มีกันชนมาก</td></tr>
+        <tr><td style="padding:3px 8px;color:var(--text2)">ต่ำกว่า 1.0x</td><td style="padding:3px 8px" class="red">ควรระวัง — จ่ายปันผลเกินเงินสดที่หาได้จริง</td></tr>
+        <tr><td style="padding:3px 8px;color:var(--text2)">— (ไม่มีค่า)</td><td style="padding:3px 8px;color:var(--text2)">บริษัทไม่ได้จ่ายปันผลปีล่าสุด — ไม่มีอะไรให้เทียบ</td></tr>
+      </table>
+    </div>
+  </div>
+  <div id="fcfyield-count" style="font-size:12px;color:var(--text2);margin-bottom:8px"></div>
+  <div style="overflow-x:auto">
+    <table class="tbl" id="tbl-fcfyield">
+      <thead>
+        <tr>
+          <th onclick="sortFcf('symbol')" style="cursor:pointer">หุ้น ↕</th>
+          <th style="cursor:default">ชื่อ</th>
+          <th style="cursor:default">อุตสาหกรรม</th>
+          <th class="r" onclick="sortFcf('mkt_cap')" style="cursor:pointer">Market Cap ↕</th>
+          <th class="r" onclick="sortFcf('fcf')" style="cursor:pointer">FCF ↕</th>
+          <th class="r" onclick="sortFcf('fcf_yield')" style="cursor:pointer">FCF Yield % ↕</th>
+          <th class="r" onclick="sortFcf('dividend_coverage')" style="cursor:pointer">Div Coverage ↕</th>
+        </tr>
+      </thead>
+      <tbody id="fcfyield-tbody"></tbody>
+    </table>
   </div>
 </div>
 
@@ -1832,16 +2309,103 @@
   </div>
 </div>
 
+<!-- PAGE: DR ROTATION -->
+<div id="page-dr-rotation" class="page">
+  <div class="page-title">🔄 DR Rotation</div>
+  <div class="page-sub">RRG ของหุ้นต่างประเทศ (DR underlying) แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของ DR ทั้งกลุ่ม</b> (ราคาท้องถิ่น ไม่แปลงค่าเงิน) · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
+  <div id="drrot-gate" class="empty" style="display:none;padding:24px"></div>
+  <div id="drrot-body" style="display:none">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
+      <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn active" id="drrot-tf-long" onclick="setDrRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
+        <button class="filter-btn" id="drrot-tf-short" onclick="setDrRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+      </div>
+      <select id="drrot-region" onchange="renderDRRotation()" style="font-size:13px"></select>
+      <span id="drrot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
+    </div>
+    <div class="card" style="padding:8px">
+      <canvas id="dr-rotation-map" style="width:100%;display:block"></canvas>
+    </div>
+    <div id="dr-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
+    <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
+      🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
+      🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่<br>
+      <span style="color:var(--yellow)">⚠ ราคาท้องถิ่น (ไม่แปลงค่าเงิน) — หุ้นคนละตลาดมีค่าเงินปนอยู่บ้าง เหมาะดู "ตัวไหนนำ/ตามในกลุ่ม DR" มากกว่าเทียบ absolute</span>
+    </div>
+  </div>
+</div>
+
+<!-- PAGE: FUNDAMENTAL SCREENER (Screener+) -->
+<div id="page-fscreener" class="page">
+  <div class="page-title">🔬 Fundamental Screener</div>
+  <div class="page-sub">กรองหุ้นด้วยงบการเงินย้อนหลังสูงสุด 16 ปี (Finnomena) + งบละเอียด (Yahoo) + เลขทางการ (SET) — เลือก preset แล้วปรับตัวเลขเองได้ทุกช่อง</div>
+  <div style="margin:6px 0 10px">
+    <button class="filter-btn" onclick="toggleBtNote('fs-bt-note')" style="font-size:11px">📊 ผลวิจัย backtest ทั้งสองแบบ — กดอ่านสรุป</button>
+    <div id="fs-bt-note" style="display:none;margin-top:8px;padding:12px;background:#0d1117;border:1px solid var(--border);border-radius:8px"></div>
+  </div>
+  <div id="fs-gate" class="empty" style="display:none;padding:24px"></div>
+  <div id="fs-body" style="display:none">
+    <div class="card" style="margin-bottom:12px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <span style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">Universe</span>
+        <select id="fs-universe" onchange="_fsOnUniverseChange()" style="font-size:13px">
+          <option value="all">ทั้งหมด (ไทย + DR)</option>
+          <option value="th" selected>หุ้นไทย (SET/mai)</option>
+          <option value="dr">DR (หุ้นต่างประเทศในพอร์ต)</option>
+          <option value="us">🇺🇸 หุ้น US ทั้งหมด (Finnomena ~4.4k)</option>
+          <option value="hk">🇭🇰 หุ้น HK ทั้งหมด (Finnomena ~1.2k)</option>
+        </select>
+        <span id="fs-meta" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
+      </div>
+
+      <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">💡 สูตรสำเร็จ — กดเพื่อเติมค่า แล้วปรับเองได้</div>
+      <div id="fs-presets" style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:6px"></div>
+
+      <div id="fs-filters" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(195px,1fr));gap:10px 16px;margin:6px 0 12px"></div>
+
+      <div class="scr-actions" style="align-items:center;flex-wrap:wrap">
+        <button class="btn-primary" onclick="runFscreener()">🔍 ค้นหา</button>
+        <button class="btn-secondary" onclick="resetFscreener()">รีเซ็ตทั้งหมด</button>
+        <button class="btn-secondary" id="fs-export" onclick="exportFscreenerCSV()" style="display:none">⬇ Export CSV</button>
+        <span id="fs-count" style="font-size:12px;color:var(--text2)"></span>
+      </div>
+    </div>
+    <div id="fs-results"></div>
+  </div>
+</div>
+
 <!-- PAGE: FINANCIALS -->
 <div id="page-financials" class="page">
   <div class="page-title">งบการเงิน</div>
-  <div class="page-sub">ดูงบกำไรขาดทุน / งบดุล / กระแสเงินสด รายปี — หุ้นไทย (SET) และหุ้นต่างประเทศ (DR)</div>
+  <div class="page-sub">งบกำไรขาดทุน / งบดุล / กระแสเงินสด แบบเต็ม (ทุกรายการ) พร้อมคำแปลไทย — หุ้นไทย (SET) และหุ้นต่างประเทศ (DR)</div>
 
-  <!-- Tab selector -->
-  <div class="filter-row" style="margin-bottom:12px;gap:0">
+  <!-- Tab selector: ประเทศ -->
+  <div class="filter-row" style="margin-bottom:8px;gap:0">
     <button class="filter-btn active" id="fin-tab-set-btn" onclick="setFinTab('set',this)" style="border-radius:6px 0 0 6px;min-width:160px">🇹🇭 หุ้นไทย (SET)</button>
     <button class="filter-btn" id="fin-tab-dr-btn" onclick="setFinTab('dr',this)" style="border-radius:0 6px 6px 0;min-width:160px">🌏 ต่างประเทศ (DR)</button>
   </div>
+
+  <!-- Tab selector: แหล่งข้อมูล (SET.or.th เฉพาะหุ้นไทย, ใช้ได้เฉพาะเวอร์ชัน local) -->
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+    <div class="filter-row" style="gap:0;margin:0;flex-wrap:wrap" id="fin-source-tabs">
+      <button class="filter-btn active" id="fin-view-finn-btn" onclick="setFinView('finnomena',this)" style="border-radius:6px 0 0 6px;min-width:170px"
+        title="งบไตรมาสย้อนยาวที่สุด ~16 ปี (Finnomena) — หุ้นไทย/US/HK · มีกราฟแนวโน้ม + PE/PBV band">📊 Finnomena · รายไตรมาส 16 ปี</button>
+      <button class="filter-btn" id="fin-view-fyear-btn" onclick="setFinView('finnomena_y',this)" style="min-width:150px"
+        title="งบรายปีย้อน ~16-20 ปี (รวมจากงบไตรมาส Finnomena) — ลึกกว่า Yahoo มาก · ยอดตรงกับ Yahoo รายปี">📊 Finnomena · รายปี 16 ปี</button>
+      <button class="filter-btn" id="fin-view-yyear-btn" onclick="setFinView('yahoo',this)" style="min-width:120px"
+        title="งบรายปีละเอียดทุก field จาก Yahoo Finance (~5 ปี) — มีรายการงบดุลครบสุด">📅 Yahoo · รายปี</button>
+      <button class="filter-btn" id="fin-view-yq-btn" onclick="setFinView('yahoo_q',this)" style="min-width:140px"
+        title="งบรายไตรมาสละเอียดจาก Yahoo (~5-6 ไตรมาสล่าสุด สะสมยาวขึ้นทุกรอบ sync)">📆 Yahoo · รายไตรมาส</button>
+      <button class="filter-btn" id="fin-view-set-btn" onclick="setFinView('set',this)" style="border-radius:0 6px 6px 0;min-width:130px"
+        title="งบทางการจาก SET.or.th (หุ้นไทยเท่านั้น)">🇹🇭 SET.or.th</button>
+    </div>
+    <span id="fin-meta-note" style="font-size:11px;color:var(--text2)"></span>
+    <button class="filter-btn" style="margin-left:auto;font-size:12px" id="fin-coverage-btn" onclick="checkFinCoverage()">🔍 ตรวจสอบความครบถ้วน</button>
+    <button class="filter-btn" style="font-size:12px" id="fin-sync-btn" onclick="startFinancialsSync()">🔄 อัพเดทงบการเงินทั้งหมด (local)</button>
+  </div>
+
+  <!-- Coverage result -->
+  <div id="fin-coverage-result" style="display:none;margin-bottom:12px"></div>
 
   <!-- Search SET -->
   <div id="fin-search-set" class="card" style="padding:14px 16px">
@@ -1866,6 +2430,20 @@
       <datalist id="fin-dr-datalist"></datalist>
       <button class="btn-primary" onclick="searchFinancials()">ค้นหา</button>
       <span id="fin-dr-hint" style="font-size:11px;color:var(--text2)"></span>
+    </div>
+
+    <!-- Browse: หุ้น US/HK ทั้งตลาดที่มีข้อมูล (Finnomena mirror) — คลิกเพื่อดูงบ -->
+    <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+        <span style="font-size:12px;color:var(--text2)">📋 เรียกดูหุ้นทั้งตลาดที่มีข้อมูล:</span>
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn active" id="fin-mir-us" onclick="_finMirBrowse('US',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:4px 12px">🇺🇸 US</button>
+          <button class="filter-btn" id="fin-mir-hk" onclick="_finMirBrowse('HK',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:4px 12px">🇭🇰 HK</button>
+        </div>
+        <input id="fin-mir-filter" class="scr-input" style="width:170px;font-size:12px" placeholder="กรองรหัส เช่น NV, 07" oninput="_finMirRender()">
+        <span id="fin-mir-count" style="font-size:11px;color:var(--text2)"></span>
+      </div>
+      <div id="fin-mir-list" style="display:flex;flex-wrap:wrap;gap:6px;max-height:230px;overflow-y:auto;padding:2px"></div>
     </div>
   </div>
 
@@ -2130,6 +2708,24 @@
   </div>
 </div>
 
+<!-- BI-MONTHLY REMINDER: อัพเดทงบการเงินฉบับเต็ม (Yahoo + SET.or.th) -->
+<div class="modal-overlay" id="fin-reminder-modal" onclick="if(event.target===this)dismissFinReminder()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <div class="modal-title">📅 ถึงรอบอัพเดทงบการเงิน</div>
+      <button class="modal-close" onclick="dismissFinReminder()">✕</button>
+    </div>
+    <div class="modal-body" style="font-size:13px;line-height:1.7;color:var(--text);padding:14px 20px">
+      <p style="margin:0 0 10px">งบการเงินฉบับเต็มที่เก็บไว้ในเครื่อง (Yahoo Finance + SET.or.th) ไม่ได้อัพเดทมานานเกิน 2 เดือนแล้ว — ข้อมูลนี้ไม่ได้อัปเดตอัตโนมัติผ่าน Quick Update / Full Refresh</p>
+      <p style="margin:0 0 14px;color:var(--text2);font-size:12px">กดปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ในหน้างบการเงิน — ใช้เวลาประมาณ 10-20 นาทีสำหรับหุ้นทั้งหมด</p>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="filter-btn" onclick="dismissFinReminder()">เตือนพรุ่งนี้อีกครั้ง</button>
+        <button class="filter-btn active" onclick="goToFinUpdate()">ไปหน้างบการเงิน</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- FLOATING INFO POPUP -->
 <div id="float-popup" style="display:none;position:fixed;z-index:99999;max-width:280px;background:#1c2333;border:1px solid var(--border);border-radius:10px;padding:14px 16px;font-size:11px;color:var(--text);line-height:1.6;box-shadow:0 8px 32px rgba(0,0,0,.7)">
   <button onclick="document.getElementById('float-popup').style.display='none'" style="position:absolute;top:8px;right:10px;background:none;border:none;color:var(--text2);font-size:14px;cursor:pointer;line-height:1">✕</button>
@@ -2230,6 +2826,7 @@
   </div>
 </div>
 
-<script src="static/dashboard.js?v=20260708a"></script>
+<script src="static/fin_translations.js?v=20260712u"></script>
+<script src="static/dashboard.js?v=20260713g"></script>
 </body>
 </html>
