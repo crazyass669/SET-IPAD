@@ -119,6 +119,13 @@ SNAPSHOTS = [
     ("/api/major-changes?days=90",         "major_changes_90.json",      False),
     ("/api/major-changes?days=180",        "major_changes_180.json",     False),
     ("/api/prices",                        "prices.json",                False),
+    # Yahoo-only growth/PEG/ratio ต่อหุ้น (ไทย+DR) — เวอร์ชันย่อของ /api/financials-analytics
+    # ที่ไม่แตะ Finnomena เลย (financials.db เต็มเป็น local-only ตามกฎ ห้ามขึ้น GitHub)
+    # ใช้ปลุกช่องกรองบางส่วนใน Stock Screener ที่เดิมถูกปิดทั้งหมดบนเว็บมือถือ/ไอแพด
+    ("/api/financials-analytics?source=yahoo", "financials_analytics_yahoo.json", False),
+    # คำอธิบายบริษัท (EN + แปลไทย) หุ้น DR — sync ด้วยปุ่มในเครื่องเป็นระยะ (ดูคู่มือ)
+    # ไฟล์นี้แค่อ่าน cache local (dr_descriptions.json) มา bake ไม่ได้ fetch สดตอน CI รัน
+    ("/api/dr-descriptions",                   "dr_descriptions.json",            False),
 ]
 
 # sync ฐานข้อมูลสะสม SEC filings ก่อน bake (เร็ว ~นาทีเดียวถ้า sync แล้วครั้งก่อน

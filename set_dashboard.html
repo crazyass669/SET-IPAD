@@ -1812,6 +1812,14 @@
         ใช้เวลานานกว่าปุ่ม "ดึงเฉพาะที่ขาด/เก่า" มาก — เหมาะเฉพาะตอนต้องการบังคับรีเฟรชทุกตัวจริงๆ
       </div></span>
     </button>
+    <button class="filter-btn" id="dr-desc-sync-btn" onclick="startDRDescriptionSync()">📖 ดึงคำอธิบายบริษัท DR (local)
+      <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:260px">
+        <strong>Description แปลไทย</strong><br>
+        ดึง Description จากหน้า Profile ของ Yahoo Finance ต่อหุ้น DR ทุกตัว (ไม่รวม ETF) แล้วแปลเป็นไทยอัตโนมัติ เก็บไว้ดูตอนเปิดกราฟหุ้น<br><br>
+        ข้อมูลนี้เปลี่ยนไม่บ่อย — sync ครั้งเดียวอยู่ได้นาน (ข้ามตัวที่เพิ่งดึงไปไม่เกิน 180 วันอัตโนมัติ)<br><br>
+        <span style="color:var(--text2)">ทำครั้งแรก + กดซ้ำได้เรื่อยๆ ทุกๆ 2-3 เดือนเพื่อจับบริษัทที่เพิ่งเพิ่มเข้าลิสต์</span>
+      </div></span>
+    </button>
     <span id="dr-diff-note" style="font-size:11px;color:var(--text2)"></span>
   </div>
   <div id="dr-diff-result" style="display:none;margin-bottom:12px"></div>
@@ -2527,6 +2535,8 @@
       </div>
     </div>
     <div class="cm-metrics" id="cm-metrics"></div>
+    <!-- DR COMPANY DESCRIPTION (Yahoo Finance แปลไทย) -->
+    <div id="cm-desc-box" style="display:none;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px"></div>
     <!-- CHART PANEL -->
     <div id="cm-chart-panel">
       <div style="display:flex;gap:6px;margin-bottom:8px">
@@ -2850,6 +2860,6 @@
 </div>
 
 <script src="static/fin_translations.js?v=20260712u"></script>
-<script src="static/dashboard.js?v=20260713i"></script>
+<script src="static/dashboard.js?v=20260713m"></script>
 </body>
 </html>

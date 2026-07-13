@@ -63,6 +63,7 @@ from sources.dr_universe import _DR_STATIC, is_latest_bar_stable, load_dr_univer
 from sources import sec_store
 from sources import financials_store
 from sources import factor_snapshot
+from sources import dr_descriptions
 
 
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
@@ -816,6 +817,59 @@ def get_dr_history(symbol):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/dr-descriptions")
+def dr_descriptions_route():
+    """คำอธิบายบริษัท (EN + แปลไทย) ของหุ้น DR ทั้งหมด — มาจาก Yahoo Finance
+    (longBusinessSummary) ไม่ใช่ Finnomena ดังนั้น bake เป็น static ให้เว็บมือถือ
+    ได้ตามกฎที่ตกลงกันไว้ (ดู run_static_update.py)"""
+    return jsonify(dr_descriptions.load_all(BASE_DIR))
+
+
+@app.route("/api/dr-description/<symbol>")
+def dr_description_one(symbol):
+    """คำอธิบายบริษัทของหุ้นตัวเดียว แบบ lazy — cache hit (สด ≤180 วัน) ตอบทันทีจาก
+    ไฟล์ local, cache miss/เก่า ดึง+แปลสดตอนนั้นเลย (ตัวเดียวเร็วพอไม่ต้องผ่าน
+    background thread) ครอบคลุมทั้งหุ้น DR ที่ curate ไว้ และหุ้น mirror US/HK ทั่วไป
+    (ระบุ ?market=US หรือ HK ให้ตอน symbol ไม่อยู่ใน DR universe — frontend รู้จาก
+    currency ของงบที่โหลดอยู่แล้ว)"""
+    sym = symbol.upper().strip()
+    market = request.args.get("market")
+    record, err = dr_descriptions.fetch_one(BASE_DIR, sym, market=market)
+    if not record:
+        return jsonify({"sym": sym, "error": err or "ไม่พบข้อมูล"}), 404
+    return jsonify({"sym": sym, **record})
+
+
+@app.route("/api/dr-description-sync", methods=["POST"])
+def start_dr_description_sync():
+    """ดึงคำอธิบายบริษัท DR ทั้งหมดจาก Yahoo Finance + แปลไทย (local-only ปุ่มกด —
+    ผลลัพธ์ dr_descriptions.json ค่อย bake ขึ้น GitHub ทีหลังตอน push ปกติ)
+    ใช้ progress overlay + /api/progress ร่วมกับ job อื่น (กันรันซ้อน)"""
+    force = False
+    if request.is_json:
+        body = request.json or {}
+        force = bool(body.get("force"))
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None, current=0, total=0,
+                      message="กำลังเริ่มดึงคำอธิบายบริษัท DR...")
+
+    def _run():
+        try:
+            def cb(current, total, msg):
+                _update(current=current, total=total, message=msg)
+            result = dr_descriptions.sync_all(BASE_DIR, force=force, callback=cb)
+            _update(running=False, done=True,
+                    message=f"เสร็จแล้ว! ดึงใหม่ {result['ok']} · ข้าม {result['skipped']} (มีอยู่แล้ว ไม่เก่า)"
+                            + (f" · ล้มเหลว {result['fail']}" if result["fail"] else ""))
+        except Exception as e:
+            _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/financials/<symbol>")
 def get_financials(symbol):
     """ดึงงบการเงินรายปี (Income / Balance / CashFlow) — cache 24h"""
@@ -1246,10 +1300,18 @@ def start_financials_sync():
     return jsonify({"ok": True})
 
 
-def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map):
+def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map, yahoo_only=False):
     """คำนวณ growth/PEG/FCF/streak/ratio ของ symbol กลุ่มเดียว (หุ้นไทย หรือ DR)
     แยก percentile ranking กันคนละ universe — ไม่งั้นหุ้นไทยจะถูกเทียบ growth score
-    กับหุ้นเทคยักษ์ใหญ่ระดับโลกที่ปนอยู่ใน DR (และกลับกัน)"""
+    กับหุ้นเทคยักษ์ใหญ่ระดับโลกที่ปนอยู่ใน DR (และกลับกัน)
+
+    yahoo_only=True: ไม่แตะ Finnomena เลย (ใช้ yahoo_q ล้วนสำหรับข้อมูลรายไตรมาส) —
+    ใช้ตอน bake ไฟล์ static สำหรับเว็บมือถือ/ไอแพด ที่ไม่มี financials.db เต็ม
+    ผลต่าง: quarters_available ตื้นกว่ามาก (Yahoo ให้ปกติ ~5 ไตรมาสต่อหุ้น สะสม
+    เพิ่มทีละรอบ sync) ทำให้ signal ที่ต้องมองย้อนหลายไตรมาส (กำไรเร่งตัว/TTM margin
+    delta ซึ่งต้องการ ≥8 ไตรมาส) ไม่มีค่า — ฝั่ง frontend รู้เรื่องนี้อยู่แล้วและปิด
+    ช่องกรองพวกนั้นไว้เฉพาะบนเว็บ (ดู _FIN_STATIC_UNAVAILABLE_IDS ใน dashboard.js)
+    ส่วน PEG จะ fallback ไปใช้ CAGR รายปีแทน TTM เมื่อคำนวณ TTM ไม่ได้"""
     from core.metrics import rank_percentile
     result = {}
     growth_raw = {}
@@ -1261,27 +1323,36 @@ def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map):
         fcf = financials_store.compute_fcf_metrics(payload, mktcap_map.get(sym))
         streaks = financials_store.compute_growth_streaks(payload)
         ratios = financials_store.compute_ratio_trends(payload)
-        # การเติบโตรายไตรมาส (QoQ / YoY-Q / streak / เร่งตัว) จากงบ quarterly — Finnomena
-        # ลึกกว่า Yahoo เสมอเมื่อมี (ตรวจแล้วทุกกรณี ~60-80 ไตรมาส vs ~5-6) จึงเช็คแค่ตัวเดียว
-        # ก่อน ไม่ต้อง get() ทั้งคู่ทุกครั้ง — ก่อนนี้ทำให้ endpoint นี้ช้าลงเพราะ get() แต่ละครั้ง
-        # เปิด/ปิด sqlite connection ใหม่ (สังเกตได้จาก /api/financials-analytics ช้าลงเป็น ~23 วิ
-        # ตอน cache miss จนแข่งกับปุ่ม "งบการเงิน" ในหน้า DR ที่รอ _finAnalyticsData โหลดเสร็จ)
-        q_finn = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr)
-        q_used = q_finn if q_finn else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
-        qg = financials_store.compute_quarterly_growth(q_used)
-        # Finnomena สั้นผิดปกติ (<8 ไตรมาส เช่นหุ้นที่ Finnomena เพิ่งเริ่มเก็บ) — เช็ค yahoo_q
-        # เผื่อลึกกว่า ให้เลือกแหล่งแบบเดียวกับ factor_snapshot (ไม่งั้นสองเมนูต่างกันได้)
-        if q_finn is not None and qg["quarters_available"] < 8:
-            q_yah = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
-            qg_y = financials_store.compute_quarterly_growth(q_yah)
-            if qg_y["quarters_available"] > qg["quarters_available"]:
-                qg, q_used = qg_y, q_yah
+        if yahoo_only:
+            q_used = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
+            qg = financials_store.compute_quarterly_growth(q_used)
+        else:
+            # การเติบโตรายไตรมาส (QoQ / YoY-Q / streak / เร่งตัว) จากงบ quarterly — Finnomena
+            # ลึกกว่า Yahoo เสมอเมื่อมี (ตรวจแล้วทุกกรณี ~60-80 ไตรมาส vs ~5-6) จึงเช็คแค่ตัวเดียว
+            # ก่อน ไม่ต้อง get() ทั้งคู่ทุกครั้ง — ก่อนนี้ทำให้ endpoint นี้ช้าลงเพราะ get() แต่ละครั้ง
+            # เปิด/ปิด sqlite connection ใหม่ (สังเกตได้จาก /api/financials-analytics ช้าลงเป็น ~23 วิ
+            # ตอน cache miss จนแข่งกับปุ่ม "งบการเงิน" ในหน้า DR ที่รอ _finAnalyticsData โหลดเสร็จ)
+            q_finn = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr)
+            q_used = q_finn if q_finn else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
+            qg = financials_store.compute_quarterly_growth(q_used)
+            # Finnomena สั้นผิดปกติ (<8 ไตรมาส เช่นหุ้นที่ Finnomena เพิ่งเริ่มเก็บ) — เช็ค yahoo_q
+            # เผื่อลึกกว่า ให้เลือกแหล่งแบบเดียวกับ factor_snapshot (ไม่งั้นสองเมนูต่างกันได้)
+            if q_finn is not None and qg["quarters_available"] < 8:
+                q_yah = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
+                qg_y = financials_store.compute_quarterly_growth(q_yah)
+                if qg_y["quarters_available"] > qg["quarters_available"]:
+                    qg, q_used = qg_y, q_yah
         pe = pe_map.get(sym)
         # PEG = PE ÷ %โตของ 'กำไร' TTM — นิยามเดียวกับ Screener+ (เดิมใช้ CAGR รายได้
         # หลายปีซึ่งไม่ตรงนิยามสากลและทำให้ค่า PEG สองเมนูไม่ตรงกัน) มีค่าเฉพาะ
         # growth 1-200%: ต่ำกว่านั้น PEG ระเบิด / เกินนั้นเป็น base effect หลอกตา
         tg = financials_store.compute_ttm_growth(q_used)
         g = tg["profit_ttm_yoy"]
+        if yahoo_only and g is None:
+            # Yahoo รายไตรมาสมักมีแค่ ~5 งวด ไม่พอคำนวณ TTM (ต้องการ ≥8) — fallback ไป
+            # กำไรโตเฉลี่ยรายปี (CAGR) แทน ยังมีประโยชน์แต่นิยามไม่เหมือน TTM เป๊ะ
+            # (บอกผู้ใช้ผ่าน tooltip ฝั่ง frontend แล้ว กันเข้าใจผิดว่าตรงกับเวอร์ชันเครื่อง)
+            g = gs.get("profit_cagr")
         peg = (pe / g) if (pe and pe > 0 and g is not None and 1 <= g <= 200) else None
         # P/S = Market Cap / รายได้ปีล่าสุด (Yahoo) — ใช้ได้แม้หุ้นขาดทุนที่ PE คำนวณไม่ได้
         rev_row = payload.get("income", {}).get("Total Revenue", {})
@@ -1305,9 +1376,16 @@ def financials_analytics():
 
     คืนแยก {"set": {...}, "dr": {...}} เพราะ symbol อาจชื่อชนกันข้ามสอง universe
     (เช่น 'META' มีทั้งหุ้นไทย mai และ underlying ของ DR) — merge รวม dict เดียวจะ
-    เขียนทับข้อมูลกันฝั่งใดฝั่งหนึ่งผิด"""
-    cached = _fin_analytics_cache.get("result")
-    if cached and (time.time() - _fin_analytics_cache.get("ts", 0) < _FIN_ANALYTICS_CACHE_TTL):
+    เขียนทับข้อมูลกันฝั่งใดฝั่งหนึ่งผิด
+
+    ?source=yahoo : คำนวณจาก Yahoo ล้วน ไม่แตะ Finnomena เลย (ดู yahoo_only ใน
+    _compute_fin_analytics_for) — ใช้ตอน bake ไฟล์ static สำหรับเว็บมือถือ/ไอแพด
+    cache แยกจากโหมดปกติ (คนละผลลัพธ์กัน)"""
+    yahoo_only = request.args.get("source") == "yahoo"
+    cache_key = "yahoo" if yahoo_only else "default"
+    slot = _fin_analytics_cache.setdefault(cache_key, {})
+    cached = slot.get("result")
+    if cached and (time.time() - slot.get("ts", 0) < _FIN_ANALYTICS_CACHE_TTL):
         return jsonify(cached)
 
     pe_map, mktcap_map = {}, {}
@@ -1323,12 +1401,12 @@ def financials_analytics():
     set_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=False)
     dr_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=True)
     result = {
-        "set": _compute_fin_analytics_for(set_symbols, False, pe_map, mktcap_map),
-        "dr": _compute_fin_analytics_for(dr_symbols, True, pe_map, mktcap_map),
+        "set": _compute_fin_analytics_for(set_symbols, False, pe_map, mktcap_map, yahoo_only=yahoo_only),
+        "dr": _compute_fin_analytics_for(dr_symbols, True, pe_map, mktcap_map, yahoo_only=yahoo_only),
     }
 
-    _fin_analytics_cache["result"] = result
-    _fin_analytics_cache["ts"] = time.time()
+    slot["result"] = result
+    slot["ts"] = time.time()
     return jsonify(result)
 
 

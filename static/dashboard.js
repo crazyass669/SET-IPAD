@@ -49,6 +49,12 @@ if (IS_STATIC) {
     '/api/rotation-alerts':       'data/rotation_alerts.json',
     '/api/stock-valuation-stats': 'data/stock_valuation_stats.json',
     '/api/prices':                'data/prices.json',
+    // เวอร์ชันย่อของ /api/financials-analytics ที่ bake ล่วงหน้าจาก Yahoo ล้วน (ไม่มี
+    // Finnomena — financials.db เต็มเป็น local-only) ปลุกช่องกรองบางส่วนใน Stock
+    // Screener ที่ไม่ได้ต้องพึ่งประวัติไตรมาสยาว (ดู loadFinAnalytics + _FIN_STATIC_UNAVAILABLE_IDS)
+    '/api/financials-analytics':  'data/financials_analytics_yahoo.json',
+    // คำอธิบายบริษัท DR (EN + แปลไทย) จาก Yahoo Finance — bake ล่วงหน้า ไม่ fetch สด
+    '/api/dr-descriptions':       'data/dr_descriptions.json',
   };
 
   function _staticURL(url) {
@@ -3327,13 +3333,21 @@ const _FIN_DEP_INPUT_IDS = [
   'scr-ratio-years-back',
 ];
 
+// เว็บมือถือ/ไอแพด (IS_STATIC) ไม่มี Finnomena (financials.db เต็มเป็น local-only) —
+// ช่องพวกนี้ต้องมองย้อนหลัง ≥8 ไตรมาสถึงจะมีความหมาย (กำไรเร่งตัว = เทียบ YoY-Q
+// หลายจุด, TTM margin delta ต้องการ 8 ไตรมาสเป๊ะ) แต่ Yahoo ให้แค่ ~5 ไตรมาสต่อหุ้น
+// (วัดจริงจาก financials.db: หุ้นไทย 0/498 ตัวมีครบ 8 ไตรมาสบน yahoo_q ล้วน) —
+// ปล่อยเปิดไว้จะได้ค่า 0/None แทบทุกตัว หลอกว่ากรองได้ทั้งที่ไม่มี signal จริง จึงปิดไว้
+// เฉพาะ 3 ช่องนี้บนเว็บ ที่เหลือใน _FIN_DEP_INPUT_IDS เปิดใช้ได้จริงด้วย Yahoo ล้วน
+const _FIN_STATIC_UNAVAILABLE_IDS = ['scr-rev-accel-min', 'scr-profit-accel-min', 'scr-ttm-margin-min'];
+
 async function loadFinAnalytics() {
   const finInputs = _FIN_DEP_INPUT_IDS.map(id => document.getElementById(id));
   if (IS_STATIC) {
-    finInputs.forEach(el => { if (el) el.disabled = true; });
+    // FCF Yield ยังปิดไว้ (ขอบเขตงานนี้ = เฉพาะ Stock Screener) — ที่เหลือไหลต่อไป
+    // fetch ข้างล่างตามปกติ (STATIC_MAP พาไปไฟล์ Yahoo-only ที่ bake ไว้ล่วงหน้า)
     const fcfBtn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'fcfyield'"));
     if (fcfBtn) fcfBtn.style.display = 'none';
-    return;
   }
   try {
     const r = await fetch('/api/financials-analytics');
@@ -3349,6 +3363,14 @@ async function loadFinAnalytics() {
     // ไม่มีข้อมูล ทั้งที่จริงมี — เช็คซ้ำอีกทีให้ปุ่มโผล่โดยไม่ต้องปิดเปิด modal ใหม่
     _refreshCmFinButton();
     finInputs.forEach(el => { if (el) el.disabled = false; });
+    if (IS_STATIC) {
+      // ปิดเฉพาะ 3 ช่องที่ Yahoo ล้วนให้ signal ไม่พอ (ดูคอมเมนต์บน _FIN_STATIC_UNAVAILABLE_IDS)
+      _FIN_STATIC_UNAVAILABLE_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.disabled = true; el.value = ''; }
+      });
+    }
+    _patchFinTooltips();
     // เพดานปีย้อนหลังจริง (ส่วนใหญ่ตอนนี้คือ 3, บางตัวเริ่มมี 4 จากการสะสมข้อมูล) — อัปเดต dropdown ให้ตรงของจริง
     const maxBack = Math.max(0, ...Object.values(d.set || {}).map(v => v.max_years_back || 0),
                                  ...Object.values(d.dr || {}).map(v => v.max_years_back || 0));
@@ -3359,6 +3381,96 @@ async function loadFinAnalytics() {
   } catch (e) {
     // เงียบ — ไม่ใช่ฟีเจอร์หลัก, ไม่มี financials.db sync ไว้ก็ใช้แอปได้ปกติ
   }
+}
+
+// ============================================================
+// TOOLTIP แจ้งแหล่งข้อมูล/ความลึกย้อนหลัง — ต่อท้าย tip box เดิมของแต่ละกลุ่มฟิลด์
+// งบการเงินใน Stock Screener (รันครั้งเดียวหลัง loadFinAnalytics โหลดเสร็จ เพราะ
+// เนื้อหาบางส่วนอ้างอิงตัวเลขจริงจาก d.set ที่เพิ่งโหลด ไม่ใช่ค่าคงที่เดา)
+// เขียนเป็นฟังก์ชันเดียวใช้ร่วมกันทั้ง local/เว็บ — เนื้อหาต่างกันอัตโนมัติตาม IS_STATIC
+// แทนที่จะพิมพ์ tooltip ซ้ำสองชุดในไฟล์ HTML (เสี่ยงข้อมูลสองที่ไม่ตรงกันภายหลัง)
+// ============================================================
+let _finTooltipsPatched = false;
+function _patchFinTooltips() {
+  if (_finTooltipsPatched) return;   // แปะครั้งเดียวพอ (โหลด analytics ซ้ำได้แต่ DOM เดิม)
+  _finTooltipsPatched = true;
+
+  const NOTE = {
+    quarterly: IS_STATIC
+      ? `<div style="margin-top:8px;padding:6px 8px;background:#0d111722;border-left:3px solid var(--yellow);font-size:11px;color:var(--text2)">
+          📡 <b>เว็บมือถือ/ไอแพด:</b> คำนวณจาก Yahoo Finance รายไตรมาสล้วน (ไม่มี Finnomena)
+          — ปกติมีข้อมูล <b>~5 ไตรมาสล่าสุด</b> (~1 ปี) พอสำหรับเทียบ QoQ/YoY เดี่ยว
+          แต่ไม่พอสำหรับสัญญาณที่ต้องมองย้อนหลายไตรมาสต่อเนื่อง (ดู "กำไรเร่งตัว"/"TTM
+          margin" ที่ถูกปิดไว้ในหมวดนี้) — เปิดเวอร์ชันรันบนเครื่องเพื่อได้ Finnomena
+          เสริมย้อนหลังสูงสุด 65 ไตรมาส (16 ปี)
+        </div>`
+      : `<div style="margin-top:8px;padding:6px 8px;background:#0d111722;border-left:3px solid var(--blue);font-size:11px;color:var(--text2)">
+          📡 <b>เวอร์ชันนี้ (รันบนเครื่อง):</b> เลือกแหล่งที่ลึกกว่าอัตโนมัติระหว่าง Yahoo
+          (~5-6 ไตรมาส) กับ Finnomena (สูงสุด 65 ไตรมาส/16 ปี ถ้ามี) — ต้องกด "อัพเดทงบ
+          การเงิน" อย่างน้อยครั้งแรกก่อนจึงจะมีค่าให้กรอง
+        </div>`,
+    quarterly_disabled: `<div style="margin-top:8px;padding:6px 8px;background:#0d111722;border-left:3px solid var(--red);font-size:11px;color:var(--text2)">
+          🚫 <b>ปิดบนเว็บมือถือ/ไอแพด:</b> สัญญาณนี้ต้องมีประวัติต่อเนื่อง ≥8 ไตรมาสถึงจะมี
+          ความหมาย (วัดจริง: หุ้นไทย 0/498 ตัวมี Yahoo รายไตรมาสครบ 8 งวด — ปล่อยเปิดไว้
+          จะได้ค่า 0 เกือบทุกตัว กรองไม่ได้จริง) ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง (มี
+          Finnomena เสริม)
+        </div>`,
+    annual: IS_STATIC
+      ? `<div style="margin-top:8px;padding:6px 8px;background:#0d111722;border-left:3px solid var(--green);font-size:11px;color:var(--text2)">
+          📡 <b>แหล่งข้อมูล:</b> Yahoo Finance งบรายปี ย้อนหลัง ~4-5 ปี — เหมือนกันทั้ง
+          เวอร์ชันรันบนเครื่องและเว็บมือถือ (งบรายปีไม่ต้องพึ่ง Finnomena อยู่แล้ว)
+        </div>`
+      : `<div style="margin-top:8px;padding:6px 8px;background:#0d111722;border-left:3px solid var(--blue);font-size:11px;color:var(--text2)">
+          📡 <b>แหล่งข้อมูล:</b> Yahoo Finance งบรายปี ย้อนหลัง ~4-5 ปี (สะสมเพิ่มทุกครั้ง
+          ที่กดอัพเดทงบการเงิน) — เหมือนกันทั้งเวอร์ชันเครื่องและเว็บมือถือ
+        </div>`,
+    peg: IS_STATIC
+      ? `<div style="margin-top:8px;padding:6px 8px;background:#0d111722;border-left:3px solid var(--yellow);font-size:11px;color:var(--text2)">
+          ⚠ <b>เว็บมือถือ/ไอแพด:</b> ใช้กำไรโตเฉลี่ย<u>รายปี</u> (CAGR ~4 ปี) แทน TTM
+          รายไตรมาส เพราะ Yahoo รายไตรมาสมีแค่ ~5 งวด ไม่พอคำนวณ TTM YoY (ต้องการ ≥8
+          งวด) — ตัวเลขจึงต่างจากเวอร์ชันรันบนเครื่อง/Screener+ ได้ ใช้ดูทิศทางกว้างๆ พอ
+        </div>`
+      : '',
+    stable: `<div style="margin-top:8px;padding:6px 8px;background:#0d111722;border-left:3px solid var(--green);font-size:11px;color:var(--text2)">
+          📡 <b>แหล่งข้อมูล:</b> Yahoo Finance งบรายปี ย้อนหลัง ~4-5 ปี — เหมือนกันทั้ง
+          เวอร์ชันเครื่องและเว็บมือถือ ไม่ต้องพึ่ง Finnomena
+        </div>`,
+  };
+
+  const GROUPS = {
+    quarterly: ['scr-rev-qoq-min', 'scr-profit-qoq-min', 'scr-rev-yoyq-min', 'scr-profit-yoyq-min',
+                'scr-rev-qstreak-min', 'scr-profit-qstreak-min', 'scr-margin-qstreak-min', 'scr-margin-yoyq-min'],
+    quarterly_disabled: ['scr-rev-accel-min', 'scr-profit-accel-min', 'scr-ttm-margin-min'],
+    annual: ['scr-growth-min', 'scr-rev-streak-min', 'scr-profit-streak-min'],
+    peg: ['scr-peg-max'],
+    stable: ['scr-gross-margin-min', 'scr-roe-min', 'scr-net-margin-min',
+             'scr-gross-margin-trend-min', 'scr-roe-trend-min', 'scr-net-margin-trend-min',
+             'scr-de-ratio-max', 'scr-interest-coverage-min',
+             'scr-de-ratio-trend-min', 'scr-interest-coverage-trend-min', 'scr-ps'],
+  };
+
+  // กลุ่มที่เพิ่งเปิดใช้บนเว็บมือถือรอบนี้ — HTML เดิมมีบรรทัด "⚠ ใช้ได้เฉพาะเวอร์ชัน
+  // รันบนเครื่อง" ฝังไว้ท้าย tooltip ทุกช่อง (ตอนเขียนตอนแรกทุกช่องยังปิดบนเว็บหมด)
+  // ตอนนี้ผิดแล้วสำหรับกลุ่มนี้โดยเฉพาะ — ต้องลบทิ้งบนเว็บ ไม่งั้นขัดกับ note ใหม่ที่เติมท้าย
+  const NEWLY_ENABLED = IS_STATIC ? new Set([...GROUPS.quarterly, ...GROUPS.annual, ...GROUPS.stable, ...GROUPS.peg]) : new Set();
+
+  Object.entries(GROUPS).forEach(([group, ids]) => {
+    const html = NOTE[group];
+    ids.forEach(id => {
+      const input = document.getElementById(id);
+      const box = input?.closest('.scr-group')?.querySelector('.scr-tip-box');
+      if (!box) return;
+      if (NEWLY_ENABLED.has(id)) {
+        box.innerHTML = box.innerHTML
+          .replace(/⚠\s*ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง\s*(<br\s*\/?>)?/g, '')
+          .replace(/⚠\s*ต้องกดอัพเดทงบการเงิน[^<]*ก่อน\s*(·|&middot;)?\s*(<br\s*\/?>)?/g, '')
+          .replace(/⚠\s*ต้องดึงงบการเงินทั้งหมดในเครื่อง[^<]*ก่อน\s*(—|-)?\s*/g, '');
+      }
+      if (html && !box.querySelector('.fin-source-note')) {
+        box.insertAdjacentHTML('beforeend', html.replace('<div', '<div class="fin-source-note"'));
+      }
+    });
+  });
 }
 
 // ============================================================
@@ -5593,6 +5705,7 @@ function openDRChartModal(sym) {
   if (drFsLink) drFsLink.style.display = 'none';
   const drSetLink = document.getElementById('cm-set-link');
   if (drSetLink) drSetLink.style.display = 'none';
+  _renderDRDescription(sym);
   setCmMode('chart');
   document.querySelectorAll('#chart-modal .filter-btn').forEach(b => b.classList.remove('active'));
   const tfBtn = document.getElementById('cm-tf-1y');
@@ -5625,6 +5738,112 @@ async function _fetchDRFullHistory(sym) {
     _cmHistoryData = hist;
     if (_cmStock?.symbol === sym) _drawChart(_cmStock, hist);
   } catch(e) { console.error('DR history fetch error:', e); }
+}
+
+// ============================================================
+// DR COMPANY DESCRIPTION — Yahoo Finance longBusinessSummary แปลไทยล่วงหน้า
+// (local sync ผ่านปุ่ม, bake เป็น static ให้เว็บมือถือ/ไอแพดด้วย ดู STATIC_MAP)
+// ============================================================
+let _drDescData = null;
+let _drDescLoading = null;
+
+// เว็บ static (มือถือ/ไอแพด ไม่มี backend): โหลดไฟล์ bake ทั้งก้อนครั้งเดียว
+function _ensureDRDescriptions() {
+  if (_drDescData) return Promise.resolve(_drDescData);
+  if (_drDescLoading) return _drDescLoading;
+  _drDescLoading = fetch('/api/dr-descriptions').then(r => r.json()).then(d => {
+    _drDescData = d || {};
+    return _drDescData;
+  }).catch(() => { _drDescData = {}; return _drDescData; });
+  return _drDescLoading;
+}
+
+// เวอร์ชัน local (มี backend จริง): ดึงทีละตัวแบบ lazy ตอนเปิดดูจริง — cache hit
+// (≤180 วัน) ตอบทันทีจากไฟล์ในเครื่อง, cache miss ดึง+แปลสดตอนนั้นเลย ไม่ต้อง sync
+// ทั้งชุดล่วงหน้า (ต่างจาก _ensureDRDescriptions ที่โหลดทั้งก้อนแบบ static)
+function _fetchOneDRDescription(sym, market) {
+  if (_drDescData && _drDescData[sym]) return Promise.resolve(_drDescData[sym]);
+  // market: 'US'/'HK' — ใช้เดา yfinance ticker เฉพาะตอน sym ไม่อยู่ใน DR universe
+  // ที่ curate ไว้ (หุ้น mirror ทั่วไป) ไม่จำเป็นสำหรับหุ้น DR ที่มี yf ticker แม็บอยู่แล้ว
+  const q = market ? `?market=${encodeURIComponent(market)}` : '';
+  return fetch(`/api/dr-description/${encodeURIComponent(sym)}${q}`).then(r => r.json()).then(d => {
+    if (d.error) return null;
+    _drDescData = _drDescData || {};
+    _drDescData[sym] = d;
+    return d;
+  }).catch(() => null);
+}
+
+function _escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function _drDescHtml(d, textId) {
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+      <div style="font-size:12px;font-weight:600;color:var(--text2)">📖 เกี่ยวกับบริษัท${d.sector ? ' · ' + _escHtml(d.sector) : ''}</div>
+      <button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_toggleDRDescLang(this,'${textId}')" data-lang="th">EN ⇄</button>
+    </div>
+    <div id="${textId}" data-th="${_escHtml(d.th)}" data-en="${_escHtml(d.en)}"
+      style="font-size:12.5px;line-height:1.65;color:var(--text2);max-height:170px;overflow-y:auto;white-space:pre-line">${_escHtml(d.th)}</div>
+    <div style="font-size:10px;color:var(--text2);opacity:0.6;margin-top:6px">
+      แปลอัตโนมัติจาก Yahoo Finance Profile · อัพเดท ${d.fetched_at ? d.fetched_at.slice(0, 10) : '—'}
+    </div>`;
+}
+
+function _renderDRDescription(sym) {
+  const box = document.getElementById('cm-desc-box');
+  if (!box) return;
+  box.style.display = 'none';
+  box.innerHTML = '';
+  const draw = (d) => {
+    if (_cmStock?.symbol !== sym) return;   // modal เปลี่ยนตัวไปแล้วระหว่างรอโหลด
+    if (!d || !d.th) return;                // ไม่มีข้อมูล — ไม่โชว์กล่องเปล่า
+    box.style.display = 'block';
+    box.innerHTML = _drDescHtml(d, 'cm-desc-text');
+  };
+  if (IS_STATIC) {
+    _ensureDRDescriptions().then(data => draw(data[sym]));
+  } else {
+    _fetchOneDRDescription(sym).then(draw);
+  }
+}
+
+function _toggleDRDescLang(btn, textId) {
+  const textEl = document.getElementById(textId || 'cm-desc-text');
+  if (!textEl) return;
+  const cur = btn.dataset.lang;
+  const next = cur === 'th' ? 'en' : 'th';
+  textEl.textContent = next === 'th' ? textEl.dataset.th : textEl.dataset.en;
+  btn.dataset.lang = next;
+  btn.textContent = next === 'th' ? 'EN ⇄' : 'TH ⇄';
+}
+
+// หน้างบการเงินเต็ม (_renderFinancialsFull) — โชว์เฉพาะแท็บ DR เหมือนกัน แต่คนละ
+// ตำแหน่ง/element กับ chart modal เลยแยกฟังก์ชันโหลด (ใช้ store/cache เดียวกัน)
+function _loadFinDescription(sym, market) {
+  const box = document.getElementById('fin-desc-box');
+  if (!box) return;
+  box.style.display = 'none';
+  box.innerHTML = '';
+  const draw = (d) => {
+    if (!d || !d.th) return;
+    box.style.display = 'block';
+    box.innerHTML = _drDescHtml(d, 'fin-desc-text');
+  };
+  if (IS_STATIC) {
+    _ensureDRDescriptions().then(data => draw(data[sym]));
+  } else {
+    _fetchOneDRDescription(sym, market).then(draw);
+  }
+}
+
+function startDRDescriptionSync() {
+  _startJob('/api/dr-description-sync', 'dr-desc-sync-btn', '📖 ดึงคำอธิบายบริษัท DR (local)', null, () => {
+    _drDescData = null;   // บังคับโหลดใหม่รอบถัดไปที่เปิด modal
+  });
 }
 
 function _calcOBV(prices, volumes) {
@@ -5704,6 +5923,8 @@ function openChartModal(symbol) {
   const stocksBtn2 = document.getElementById('cm-mode-stocks');
   if (finBtn)     finBtn.style.display     = '';    // restore if hidden by index modal
   if (stocksBtn2) stocksBtn2.style.display = 'none'; // hide stocks btn for normal stocks
+  const descBox = document.getElementById('cm-desc-box');
+  if (descBox) { descBox.style.display = 'none'; descBox.innerHTML = ''; }  // หุ้นไทยไม่มี Description แปล
   setCmMode('chart');
   document.querySelectorAll('#chart-modal .filter-btn').forEach(b => b.classList.remove('active'));
   const tfBtn = document.getElementById('cm-tf-1y');
@@ -7051,6 +7272,7 @@ function _renderFinancialsFull(d, source) {
       </div>
       <div style="font-size:11px;color:var(--text2);margin-bottom:10px">${srcNote} · ${isQ ? 'ข้อมูลรายไตรมาส (% = เทียบงวดก่อนหน้า QoQ)' : 'ข้อมูลรายปี'}</div>
       ${fyBanner}
+      ${_finTab === 'dr' ? `<div id="fin-desc-box" style="display:none;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px"></div>` : ''}
       ${_finTrendSection(d, source)}
       ${toggleHtml}
       ${_finFullTable('📊 งบกำไรขาดทุน (Income Statement)', cols, colLabels, FIN_YAHOO_GROUPS.income,   null, (key,c) => (inc[key]||{})[c],  isRatio, _finFullShowAll, null, isFinn)}
@@ -7060,6 +7282,10 @@ function _renderFinancialsFull(d, source) {
       ${isFinn ? _finFullTable('💰 มูลค่า / Valuation', valCols, valColLabels, FIN_FINN_VAL_GROUP, null, (key,c) => (val[key]||{})[c], () => false, true, _allPctVal) : ''}
       <div style="font-size:10px;color:var(--text2);margin-top:16px">${disclaimer}</div>
     </div>`;
+    if (_finTab === 'dr') {
+      const descMarket = d.currency === 'USD' ? 'US' : d.currency === 'HKD' ? 'HK' : null;
+      _loadFinDescription(d.sym, descMarket);
+    }
     return;
   }
 

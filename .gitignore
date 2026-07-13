@@ -59,6 +59,11 @@ rotation_state.json
 # DR universe auto-sync overlay (สร้างใหม่ได้เสมอจาก SET API)
 dr_universe_auto.json
 
+# คำอธิบายบริษัท DR ดิบ (local cache ก่อน bake, EN+TH) — เวอร์ชัน bake สำหรับเว็บ
+# อยู่ที่ data/dr_descriptions.json (ไม่ ignore เพราะ !data/** ด้านล่าง — pattern
+# เดียวกับ nvdr_data.json/dr_cache.json ด้านบน)
+dr_descriptions.json
+
 # Logs
 logs/
 
