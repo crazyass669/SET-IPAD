@@ -132,6 +132,22 @@ try:
 except Exception as e:
     log(f"⚠️ sync sec_filings.db ล้ม: {e}")
 
+def _slim_set_data(payload_text):
+    """ลดน้ำหนัก set_data.json เฉพาะเวอร์ชันเว็บ: ตัด price_history เหลือ 260 แท่ง (~1 ปี)
+    เพียงพอกับทุกอย่างที่ frontend ใช้ (ret_1y ต้องการ 260, SMA200 crossover ต้องการ ~202,
+    sparkline/กราฟ popup ใช้เท่าที่มี) — จาก ~12.6MB เหลือ ~7MB ให้มือถือโหลด/parse ไวขึ้น
+    เวอร์ชัน local (Flask) ยังใช้ไฟล์เต็ม 500 แท่งเหมือนเดิม ไม่กระทบ"""
+    d = json.loads(payload_text)
+    for s in d.get("stocks", []):
+        ph = s.get("price_history")
+        if ph and len(ph) > 260:
+            s["price_history"] = ph[-260:]
+        vh = s.get("vol_history")
+        if vh and len(vh) > 260:
+            s["vol_history"] = vh[-260:]
+    return json.dumps(d, ensure_ascii=False, separators=(",", ":"))
+
+
 failures = []
 for url, fname, required in SNAPSHOTS:
     t0 = time.time()
@@ -141,6 +157,8 @@ for url, fname, required in SNAPSHOTS:
             raise RuntimeError(f"HTTP {resp.status_code}")
         payload = resp.get_data(as_text=True)
         json.loads(payload)  # ตรวจว่าเป็น JSON จริง
+        if fname == "set_data.json":
+            payload = _slim_set_data(payload)
         with open(os.path.join(DATA_DIR, fname), "w", encoding="utf-8") as f:
             f.write(payload)
         log(f"✅ {fname} ({len(payload)//1024} KB, {time.time()-t0:.1f}s)")

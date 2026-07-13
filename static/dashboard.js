@@ -28,6 +28,14 @@ const IS_STATIC = location.hostname.endsWith('github.io')
 if (IS_STATIC) {
   document.addEventListener('DOMContentLoaded', () => document.body.classList.add('static-mode'));
 
+  // PWA: ลงทะเบียน service worker เฉพาะเวอร์ชันเว็บ (ติดตั้งเป็นแอป + cache + ออฟไลน์)
+  // ไม่ลงทะเบียนบน local Flask — กัน cache บังโค้ดใหม่ระหว่างพัฒนา (file: ก็ลงไม่ได้อยู่แล้ว)
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
+
   const STATIC_MAP = {
     '/api/data':                  'data/set_data.json',
     '/api/indices':               'data/indices_data.json',
@@ -116,10 +124,15 @@ async function loadData() {
     const _upTime  = DATA.updated_at  || '—';
     const _asOf    = DATA.data_as_of  || '—';
     const _typeIcon = _upType === 'Full Refresh' ? '🔄' : '⚡';
+    // เวอร์ชันเว็บ (static): บอกความสดของข้อมูลให้ชัด — ข้อมูลอัพเดตตามรอบ GitHub
+    // Actions (~06:00 / 13:10 / 18:30 ICT) ไม่ใช่ราคาสด กันตีความผิดตอนเปิดระหว่างวัน
+    const _staticNote = IS_STATIC
+      ? ` <span style="color:var(--text2);font-size:10px">· 🌐 เว็บเวอร์ชันอ่านอย่างเดียว — อัพเดตอัตโนมัติ ~06:00/13:10/18:30 น.</span>`
+      : '';
     document.getElementById("updated-at").innerHTML =
       `<span title="ประเภท: ${_upType}\nดึงข้อมูลเมื่อ: ${_upTime}\nข้อมูลราคาถึงวัน: ${_asOf}" style="cursor:default">` +
       `${_typeIcon} <b>${_asOf}</b> <span style="color:var(--text2);font-size:10px">${_upTime.slice(11,16)}</span>` +
-      `</span>`;
+      `</span>` + _staticNote;
     _populateScrIndustry();
     loadScreenerSettings();
     initScreenerAutosave();
@@ -5019,6 +5032,9 @@ document.addEventListener('mouseover', e => {
   const icon = e.target.closest('.scr-tip-icon');
   if (icon) _tipIconPosition(icon);
 });
+// หมายเหตุ: tap-toggle ของ .scr-tip-icon/.regime-wrap มี delegate กลางอยู่แล้ว
+// (ดู document click listener ท้ายไฟล์) — ห้ามเพิ่ม listener ซ้ำ ไม่งั้น toggle ซ้อน
+// (เปิดแล้วถูกปิดในคลิกเดียวกัน เพราะ stopPropagation ไม่กัน listener บน node เดียวกัน)
 // กันตำแหน่งเพี้ยนถ้า scroll ตารางขณะ tipbox เปิดอยู่ (fixed ไม่ขยับตามไอคอนเอง)
 window.addEventListener('scroll', () => {
   document.querySelectorAll('.scr-tip-icon:hover, .scr-tip-icon.tt-open').forEach(_tipIconPosition);
@@ -5404,6 +5420,36 @@ function exportScreenerCSV() {
 }
 
 // ============================================================
+// WATCHLIST SYNC ข้ามเครื่อง — localStorage แยกต่อเครื่อง จึงให้คัดลอก/วางเป็น
+// ข้อความ (WL:PTT,KBANK,DR:AAPL,...) ส่งผ่าน LINE/โน้ตหาตัวเองได้ ไม่ต้องมี server
+// ============================================================
+function wlExport() {
+  if (!watchlist.length) { alert('Watchlist ยังว่างอยู่'); return; }
+  const code = 'WL:' + watchlist.join(',');
+  const done = () => alert(`คัดลอกแล้ว (${watchlist.length} ตัว) — เอาไปกด "📥 วางจากเครื่องอื่น" บนอีกเครื่องได้เลย
+
+${code}`);
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(code).then(done).catch(() => prompt('คัดลอกข้อความนี้:', code));
+  } else {
+    prompt('คัดลอกข้อความนี้:', code);
+  }
+}
+
+function wlImport() {
+  const raw = prompt('วางข้อความ watchlist ที่คัดลอกมาจากอีกเครื่อง (ขึ้นต้นด้วย WL:)');
+  if (!raw) return;
+  const body = raw.trim().replace(/^WL:/i, '');
+  const syms = body.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+  if (!syms.length) { alert('ไม่พบรายชื่อหุ้นในข้อความ'); return; }
+  const before = watchlist.length;
+  syms.forEach(s => { if (!watchlist.includes(s)) watchlist.push(s); });
+  localStorage.setItem('set_wl', JSON.stringify(watchlist));
+  alert(`นำเข้าแล้ว ${watchlist.length - before} ตัวใหม่ (รวมทั้งหมด ${watchlist.length} ตัว — ตัวที่มีอยู่แล้วไม่ซ้ำ)`);
+  if (document.getElementById('page-watchlist')?.classList.contains('active')) renderWatchlist();
+}
+
+// ============================================================
 // PRICE CHART MODAL
 // ============================================================
 let _cmStock       = null;
@@ -5423,8 +5469,38 @@ async function setCmTf(tf, btn) {
   _drawChart(_cmStock, _cmHistoryData);
 }
 
+// เวอร์ชันเว็บ (static) ไม่มี endpoint ประวัติราคาเต็ม — ป้ายบอกข้อจำกัด (ครั้งเดียวต่อ modal)
+function _cmStaticLimitNote() {
+  const sub = document.getElementById('cm-sub');
+  if (sub && !sub.textContent.includes('🌐')) {
+    sub.textContent += ' · 🌐 เวอร์ชันเว็บ: กราฟย้อนได้ ~1 ปี (หุ้นไทย) / ~100 วัน (DR)';
+  }
+}
+
 async function _fetchLongHistory() {
   if (!_cmStock) return;
+  if (IS_STATIC) {
+    // ใช้ข้อมูลที่ฝังมากับไฟล์แทนการ fetch (เดิมทับกราฟด้วย "กำลังโหลด..." แล้วค้าง
+    // เพราะ endpoint ไม่มีบนเว็บ static): หุ้นไทย = price_history ~260 วัน,
+    // DR = close100 (วันที่ประมาณจากปฏิทินย้อนหลัง)
+    if (!_cmHistoryData) {
+      if (_cmStock._isDR) {
+        const c100 = _cmStock.close100 || [];
+        if (c100.length) {
+          const today = new Date();
+          _cmHistoryData = c100.map((p, i) => {
+            const d = new Date(today);
+            d.setDate(d.getDate() - (c100.length - 1 - i));
+            return [d.toISOString().slice(0, 10), p];
+          });
+        }
+      } else if (_cmStock.price_history?.length) {
+        _cmHistoryData = _cmStock.price_history;
+      }
+    }
+    _cmStaticLimitNote();
+    return;
+  }
   const canvas = document.getElementById('cm-canvas');
   if (canvas) {
     const dpr = window.devicePixelRatio || 1;
@@ -5540,6 +5616,7 @@ function openDRChartModal(sym) {
 }
 
 async function _fetchDRFullHistory(sym) {
+  if (IS_STATIC) { _cmStaticLimitNote(); return; }   // เว็บ static ไม่มี endpoint นี้ — ใช้ preview close100 ที่วาดไว้แล้ว
   try {
     const r = await fetch(`/api/dr-history/${encodeURIComponent(sym)}`);
     const d = await r.json();

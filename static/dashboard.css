@@ -871,3 +871,23 @@ body.static-mode #tbl-breakout   th:nth-child(4),  body.static-mode #tbl-breakou
 body.static-mode #tbl-momentum   th:nth-child(4),  body.static-mode #tbl-momentum   td:nth-child(4) {
   display: none;
 }
+
+/* ============================================================
+   Mobile/touch enhancements (2026-07-13)
+   ============================================================ */
+
+/* จอสัมผัส: คอลัมน์แรก (ชื่อหุ้น) ค้างไว้ตอนเลื่อนตารางแนวนอน — เลื่อนขวาแล้ว
+   ยังรู้ว่าแถวไหนคือหุ้นอะไร · ใช้กับตารางหลักที่กว้างเกินจอ (pointer:coarse =
+   มือถือ/แท็บเล็ตเท่านั้น ไม่กระทบหน้าตาบนเดสก์ท็อป) */
+@media (pointer: coarse) {
+  .tbl th:first-child, .tbl td:first-child,
+  .data-table th:first-child, .data-table td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--card);
+    z-index: 2;
+    box-shadow: 2px 0 4px rgba(0,0,0,.35);
+  }
+  /* มุมซ้ายบนของตารางที่ header ก็ sticky (เช่นตารางผล Screener+) ต้องลอยเหนือทุกชั้น */
+  .tbl thead th:first-child, .data-table thead th:first-child { z-index: 4; }
+}
