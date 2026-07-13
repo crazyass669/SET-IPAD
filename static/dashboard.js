@@ -7715,7 +7715,9 @@ async function checkDRUpdates() {
     const r = await fetch('/api/dr/check-updates');
     const d = await r.json();
     if (d.error) throw new Error(d.error);
-    note.textContent = `SET.or.th มี DR underlying ${d.live_underlying_count} ตัว · ลิสต์เรามี ${d.our_count} ตัว`;
+    const renamedN = (d.renamed_new?.length || 0) + (d.renamed_removed?.length || 0);
+    note.textContent = `SET.or.th มี DR underlying ${d.live_underlying_count} ตัว · ลิสต์เรามี ${d.our_count} ตัว` +
+      (renamedN ? ` · ${renamedN} ตัวชื่อไม่ตรงกันแต่ข้อมูลมีอยู่แล้ว (ไม่ต้องทำอะไร)` : '');
     _renderDRDiff(d);
   } catch (e) {
     note.textContent = '';
@@ -7760,6 +7762,20 @@ function _renderDRDiff(d) {
       </table></div>
     </div>` : '';
 
+  const renamedHtml = (d.renamed_new?.length || d.renamed_removed?.length) ? `
+    <details style="margin-top:14px">
+      <summary style="cursor:pointer;font-size:11.5px;color:var(--text2)">ℹ️ ${(d.renamed_new?.length||0) + (d.renamed_removed?.length||0)} ตัวชื่อไม่ตรงกัน แต่ข้อมูลมีอยู่แล้ว — ไม่ต้องทำอะไร (กดดูรายละเอียด)</summary>
+      <div style="font-size:10.5px;color:var(--text2);margin:8px 0">SET.or.th เปลี่ยนสตริงระบุ underlying ของกองทุน/ตราสารบางตัว (เช่น underlying โค้ด "CAMCSI300" ขณะที่ลิสต์เรา curate ไว้สั้นๆ ว่า "CN") ทำให้เทียบชื่อไม่ตรง ทั้งที่ DR ticker เดียวกันซื้อขายอยู่จริงทั้งคู่ (มีข้อมูลราคาในหน้า DR ปกติ) — เกิดจากตัวเช็คนี้เทียบด้วยชื่อ ไม่ใช่ข้อมูลหายจริง</div>
+      ${d.renamed_new?.length ? `<div style="overflow-x:auto;margin-bottom:8px"><table class="tbl" style="min-width:500px">
+        <thead><tr><th>SET เรียกว่า</th><th>DR Tickers</th><th>เรามีอยู่แล้วในชื่อ</th></tr></thead>
+        <tbody>${d.renamed_new.map(x => `<tr><td>${x.symbol_guess}</td><td style="font-size:11px">${x.dr_tickers.join(', ')}</td><td><strong>${x.already_tracked_as.join(', ')}</strong></td></tr>`).join('')}</tbody>
+      </table></div>` : ''}
+      ${d.renamed_removed?.length ? `<div style="overflow-x:auto"><table class="tbl" style="min-width:500px">
+        <thead><tr><th>เราเรียกว่า</th><th>DR Tickers เดิม</th><th>ยังเทรดอยู่จริง</th></tr></thead>
+        <tbody>${d.renamed_removed.map(x => `<tr><td>${x.symbol}</td><td style="font-size:11px">${(x.drs||[]).join(', ')}</td><td style="font-size:11px"><strong>${x.still_trading_as.join(', ')}</strong></td></tr>`).join('')}</tbody>
+      </table></div>` : ''}
+    </details>` : '';
+
   box.innerHTML = `
   <div class="card" style="padding:14px 16px">
     <div style="font-size:10.5px;color:var(--text2);margin-bottom:12px">
@@ -7767,7 +7783,8 @@ function _renderDRDiff(d) {
     </div>
     ${newHtml}
     ${removedHtml}
-    ${!d.new.length && !d.removed.length ? '<div class="empty" style="padding:8px">ลิสต์ตรงกับ SET.or.th ทั้งหมด ไม่มีอะไรต้องอัปเดต</div>' : ''}
+    ${!d.new.length && !d.removed.length ? '<div class="empty" style="padding:8px">ลิสต์ตรงกับ SET.or.th ทั้งหมด (นับเฉพาะที่ต้องเพิ่ม/ถอดจริง) ไม่มีอะไรต้องอัปเดต</div>' : ''}
+    ${renamedHtml}
   </div>`;
 }
 

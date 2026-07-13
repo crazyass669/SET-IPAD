@@ -223,6 +223,7 @@ _DR_STATIC = [
     {"sym":'HORIZON', "name":'Horizon Robotics, Inc.', "region":'HK', "yf":"9660.HK", "ind":'Automotive AI Chips', "drs":["HORIZON23"]},
     {"sym":'HSHD', "name":'Hang Seng High Dividend ETF', "region":'HK', "yf":"3110.HK", "ind":'HK High Dividend ETF', "drs":["HSHD23"]},
     {"sym":'HUAHONG', "name":'Hua Hong Semiconductor', "region":'HK', "yf":"1347.HK", "ind":'Foundry Services China', "drs":["HUAHONG23"]},
+    {"sym":'HYGON', "name":'Hygon Information Technology Co., Ltd.', "region":'CN', "yf":"688041.SS", "ind":'China CPU/GPU Semiconductors (STAR Market)', "drs":["HYGON80"]},
     {"sym":'ICBC', "name":'Industrial & Commercial Bank', "region":'HK', "yf":"1398.HK", "ind":'State Banking China', "drs":["ICBC06", "ICBC19"]},
     {"sym":'IFLYTEK', "name":'iFLYTEK Co., Ltd.', "region":'HK', "yf":"002230.SZ", "ind":'AI Voice Technology', "drs":["IFLYTEK80"]},
     {"sym":'INDIA', "name":'CSOP India Technology ETF', "region":'HK', "yf":"3404.HK", "ind":'India Technology ETF', "drs":["INDIA01"]},
@@ -359,12 +360,17 @@ def fetch_live_dr_list():
     return d.get("data", [])
 
 
-def check_dr_diff():
-    """เทียบ underlying stock ที่มี DR ซื้อขายอยู่จริงบน SET กับ _DR_STATIC
-    คืน {live_underlying_count, our_count, new: [...], removed: [...]}
-    - new: underlying ที่มี DR ซื้อขายจริงแล้ว แต่ยังไม่มีใน _DR_STATIC
-    - removed: underlying ที่มีใน _DR_STATIC แต่ไม่มี DR ซื้อขายอยู่บน SET แล้ว
-    (มักเกิดจาก DR ตัวสุดท้ายของ underlying นั้นถูกเพิกถอน/ครบอายุ)"""
+def check_dr_diff(base_dir=None):
+    """เทียบ underlying stock ที่มี DR ซื้อขายอยู่จริงบน SET กับลิสต์ของเรา
+    คืน {live_underlying_count, our_count, new: [...], removed: [...], renamed_new: [...], renamed_removed: [...]}
+    - new: underlying ที่มี DR ซื้อขายจริงแล้ว และ DR ticker เหล่านั้นไม่มีใครถืออยู่เลย -> ต้องเพิ่มจริง
+      (เทียบกับ _DR_STATIC + dr_universe_auto.json ถ้าส่ง base_dir มา — ตัวที่ auto-sync
+      เพิ่มไปแล้วจะไม่โผล่เป็น 'new' ซ้ำ ทั้งที่มีข้อมูลราคาใช้งานได้จริงแล้ว)
+    - removed: underlying ในลิสต์เราที่ DR ticker ทุกตัวของมันไม่มีซื้อขายบน SET แล้ว -> ถูกถอดจริง
+    - renamed_new / renamed_removed: กรณี SET เปลี่ยนสตริง underlying identifier ของกองทุน/ตราสาร
+      เดิม (พบมากในกอง DR ต่างประเทศที่ underlying เป็นชื่อยาว เช่น 'CAMCSI300' vs ที่เรา curate
+      ไว้สั้นๆ ว่า 'CN') ทำให้ _normalize_underlying(...) ไม่ตรงกันทั้งที่ DR ticker เดียวกันยังซื้อขาย
+      อยู่จริงทั้งคู่ — ไม่ต้องแก้อะไร แค่โชว์แยกไว้ให้เห็นว่าไม่ใช่ของใหม่/ของหาย"""
     live = fetch_live_dr_list()
 
     live_map = {}
@@ -382,35 +388,51 @@ def check_dr_diff():
             }
         live_map[norm]["dr_tickers"].append(e.get("symbol"))
 
-    ours = {_normalize_underlying(s["sym"]): s for s in _DR_STATIC}
+    full_universe = load_dr_universe(base_dir) if base_dir else _DR_STATIC
+    ours = {_normalize_underlying(s["sym"]): s for s in full_universe}
+    live_drs = {e.get("symbol") for e in live if e.get("symbol")}
 
-    new_items = []
+    new_items, renamed_new = [], []
     for norm, info in live_map.items():
-        if norm not in ours:
-            new_items.append({
-                "symbol_guess": norm,
-                "underlying_raw": info["underlying_raw"],
-                "name": info["name"],
-                "exchange": info["exchange"],
-                "url": info["url"],
-                "dr_tickers": sorted(info["dr_tickers"]),
-            })
+        if norm in ours:
+            continue
+        item = {
+            "symbol_guess": norm,
+            "underlying_raw": info["underlying_raw"],
+            "name": info["name"],
+            "exchange": info["exchange"],
+            "url": info["url"],
+            "dr_tickers": sorted(info["dr_tickers"]),
+        }
+        already_owned = {t: owner for t in item["dr_tickers"]
+                         for owner in ([e["sym"] for e in full_universe if t in e["drs"]] or [None])
+                         if owner}
+        if already_owned:
+            item["already_tracked_as"] = sorted(set(already_owned.values()))
+            renamed_new.append(item)
+        else:
+            new_items.append(item)
 
-    removed_items = []
+    removed_items, renamed_removed = [], []
     for norm, entry in ours.items():
-        if norm not in live_map:
-            removed_items.append({
-                "symbol": entry["sym"],
-                "name": entry.get("name"),
-                "region": entry.get("region"),
-                "drs": entry.get("drs"),
-            })
+        if norm in live_map:
+            continue
+        still_live = sorted(t for t in (entry.get("drs") or []) if t in live_drs)
+        row = {"symbol": entry["sym"], "name": entry.get("name"),
+               "region": entry.get("region"), "drs": entry.get("drs")}
+        if still_live:
+            row["still_trading_as"] = still_live
+            renamed_removed.append(row)
+        else:
+            removed_items.append(row)
 
     return {
         "live_underlying_count": len(live_map),
         "our_count": len(_DR_STATIC),
         "new": sorted(new_items, key=lambda x: x["symbol_guess"]),
         "removed": sorted(removed_items, key=lambda x: x["symbol"]),
+        "renamed_new": sorted(renamed_new, key=lambda x: x["symbol_guess"]),
+        "renamed_removed": sorted(renamed_removed, key=lambda x: x["symbol"]),
     }
 
 

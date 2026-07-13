@@ -611,7 +611,7 @@ def dr_check_updates():
         return jsonify(cached)
     try:
         from sources.dr_universe import check_dr_diff
-        result = check_dr_diff()
+        result = check_dr_diff(BASE_DIR)
         _dr_diff_cache["result"] = result
         _dr_diff_cache["ts"] = time.time()
         return jsonify(result)
