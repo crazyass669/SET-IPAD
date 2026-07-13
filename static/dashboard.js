@@ -7704,6 +7704,15 @@ function startDRFinancialsSync() {
   });
 }
 
+// incremental: ข้ามคู่ (หุ้น, แหล่ง) ที่ดึงไปแล้วไม่เกิน 7 วัน — เร็วกว่าปุ่มดึงเต็มมาก
+// เพราะปุ่มเดิมยิงทุกตัวซ้ำทุกครั้งไม่ว่าจะเพิ่งดึงไปเมื่อไหร่ก็ตาม (ดูกล่องอธิบายในหน้า UI)
+function startDRFinancialsSyncIncremental() {
+  _startJob('/api/financials/sync-all', 'dr-fin-sync-incr-btn', '🔄 ดึงเฉพาะที่ขาด/เก่า (local)',
+    { universe: 'dr', min_age_days: 7 }, () => {
+      loadFinAnalytics();
+    });
+}
+
 async function checkDRUpdates() {
   const btn  = document.getElementById('dr-diff-btn');
   const note = document.getElementById('dr-diff-note');

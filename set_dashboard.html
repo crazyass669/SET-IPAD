@@ -1797,7 +1797,21 @@
   <!-- DR diff-check: เทียบกับ SET.or.th ว่ามี DR ใหม่/ถูกถอดไหม (local-only) -->
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
     <button class="filter-btn" id="dr-diff-btn" onclick="checkDRUpdates()">🔍 เช็คหุ้นใหม่/ถูกถอดจาก SET.or.th</button>
-    <button class="filter-btn" id="dr-fin-sync-btn" onclick="startDRFinancialsSync()">📥 ดึงงบการเงิน DR ทั้งหมดมาเก็บ (local)</button>
+    <button class="filter-btn" id="dr-fin-sync-incr-btn" onclick="startDRFinancialsSyncIncremental()">🔄 ดึงเฉพาะที่ขาด/เก่า (local)
+      <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:260px">
+        <strong>Incremental sync</strong><br>
+        ข้ามคู่ (หุ้น × แหล่งข้อมูล) ที่เคยดึงไปแล้วไม่เกิน 7 วัน — ยิงเฉพาะตัวที่ยังไม่มีข้อมูล หรือข้อมูลเก่าเกิน 7 วัน<br><br>
+        เร็วกว่าปุ่ม "ดึงทั้งหมด" มาก เพราะไม่ต้องรอ Yahoo/Finnomena ตอบของที่เพิ่งดึงไปเมื่อวาน<br><br>
+        <span style="color:var(--text2)">เหมาะใช้ทุกวัน/ทุกครั้งที่เปิดแอป — ใช้ปุ่ม "ดึงทั้งหมด" เฉพาะตอนสงสัยว่าข้อมูลบางตัวเพี้ยน/อยากบังคับรีเฟรชทุกตัว</span>
+      </div></span>
+    </button>
+    <button class="filter-btn" id="dr-fin-sync-btn" onclick="startDRFinancialsSync()">📥 ดึงทั้งหมด (local)
+      <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:250px">
+        <strong>Full sync</strong><br>
+        ยิงดึงข้อมูลใหม่ทุกตัว ทุกแหล่ง เสมอ ไม่ว่าจะเคยดึงไปเมื่อไหร่ก็ตาม (ข้อมูลเก่าไม่หาย — ระบบผสาน/merge งวดใหม่เข้ากับของเดิม)<br><br>
+        ใช้เวลานานกว่าปุ่ม "ดึงเฉพาะที่ขาด/เก่า" มาก — เหมาะเฉพาะตอนต้องการบังคับรีเฟรชทุกตัวจริงๆ
+      </div></span>
+    </button>
     <span id="dr-diff-note" style="font-size:11px;color:var(--text2)"></span>
   </div>
   <div id="dr-diff-result" style="display:none;margin-bottom:12px"></div>

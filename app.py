@@ -1185,7 +1185,7 @@ def financials_coverage():
     return jsonify(coverage)
 
 
-def _run_financials_sync(symbols=None, sources=None, is_dr=False):
+def _run_financials_sync(symbols=None, sources=None, is_dr=False, min_age_days=None):
     try:
         target = symbols if symbols else _financials_universe()
         # yahoo_q = งบรายไตรมาส (สะสมทุกรอบ sync — ใช้กรอง QoQ/YoY-Q ใน Screener)
@@ -1195,10 +1195,13 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False):
         def cb(current, total, msg):
             _update(current=current, total=total, message=msg)
 
-        result = financials_store.sync_all(BASE_DIR, target, sources=srcs, callback=cb, is_dr=is_dr)
+        result = financials_store.sync_all(BASE_DIR, target, sources=srcs, callback=cb,
+                                           is_dr=is_dr, min_age_days=min_age_days)
         _fin_analytics_cache.clear()   # ข้อมูลเปลี่ยน — บังคับคำนวณ growth/PEG/FCF ใหม่รอบถัดไป
+        skipped = result.get("skipped", 0)
         _update(running=False, done=True,
                 message=f"เสร็จแล้ว! สำเร็จ {result['ok']}/{result['total']}"
+                        + (f" · ข้าม {skipped} คู่ (ดึงไปแล้วไม่เกิน {min_age_days} วัน)" if skipped else "")
                         + (f" (ล้มเหลว {result['fail']} — อาจโดนบล็อคชั่วคราวหรือแหล่งข้อมูลไม่มีจริง ลองอีกครั้งได้)" if result["fail"] else ""))
     except Exception as e:
         _update(running=False, done=True, error=str(e),
@@ -1210,6 +1213,7 @@ def start_financials_sync():
     symbols = None
     sources = None
     is_dr = False
+    min_age_days = None
     if request.is_json:
         body = request.json or {}
         if body.get("universe") == "dr":
@@ -1223,13 +1227,22 @@ def start_financials_sync():
         body_sources = body.get("sources")
         if body_sources:
             sources = body_sources
+        # incremental sync: ข้ามคู่ (หุ้น, แหล่ง) ที่ดึงไปแล้วไม่เกิน N วัน — ใช้กับปุ่ม
+        # "ดึงเฉพาะที่ขาด/เก่า" แทนปุ่มดึงเต็มที่ยิงทุกตัวซ้ำทุกครั้ง (ดู sync_all min_age_days)
+        raw_age = body.get("min_age_days")
+        if raw_age is not None:
+            try:
+                min_age_days = max(0, int(raw_age))
+            except (TypeError, ValueError):
+                min_age_days = None
     with _lock:
         if _state["running"]:
             return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
-        label = "กำลังเริ่ม sync งบการเงิน" + (" (หุ้นต่างประเทศ DR)" if is_dr else " (เฉพาะที่ขาด)" if symbols else "") + "..."
+        label = ("กำลังเริ่ม sync งบการเงิน" + (" (หุ้นต่างประเทศ DR)" if is_dr else " (เฉพาะที่ขาด)" if symbols else "")
+                + (f" — ข้ามของที่ดึงไปแล้วไม่เกิน {min_age_days} วัน" if min_age_days is not None else "") + "...")
         _state.update(running=True, done=False, error=None,
                       current=0, total=0, message=label)
-    threading.Thread(target=_run_financials_sync, args=(symbols, sources, is_dr), daemon=True).start()
+    threading.Thread(target=_run_financials_sync, args=(symbols, sources, is_dr, min_age_days), daemon=True).start()
     return jsonify({"ok": True})
 
 

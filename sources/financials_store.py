@@ -246,6 +246,31 @@ def get_synced_symbols(base_dir, source, is_dr=False):
     return {r[0] for r in rows if not r[0].startswith("DR:")}
 
 
+def get_synced_map(base_dir, is_dr=False):
+    """คืน {(symbol, source): synced_at(datetime)} ของ universe ฝั่งนั้น (ไทย หรือ DR)
+    ใช้ทำ incremental sync — ข้ามคู่ (หุ้น, แหล่ง) ที่เพิ่งดึงไปไม่นาน"""
+    if not db_exists(base_dir):
+        return {}
+    con = _connect(base_dir)
+    try:
+        rows = con.execute("SELECT symbol, source, synced_at FROM financials").fetchall()
+    finally:
+        con.close()
+    out = {}
+    for sym, src, ts in rows:
+        if sym.startswith("FINN:"):
+            continue   # mirror ทั้งตลาด — ไม่เกี่ยวกับ sync รายตัว
+        is_dr_row = sym.startswith("DR:")
+        if is_dr_row != is_dr:
+            continue
+        key = sym[3:] if is_dr_row else sym
+        try:
+            out[(key, src)] = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+        except (TypeError, ValueError):
+            pass   # ไม่มี timestamp = ถือว่าเก่ามาก (ไม่ใส่ map -> จะถูกดึงใหม่)
+    return out
+
+
 def get_coverage(base_dir, symbols, sources=("yahoo", "set"), is_dr=False):
     """เทียบ universe ที่ควรมี (symbols) กับที่มีจริงใน DB ต่อ source
     คืน {source: {"covered": n, "total": n, "missing": [...]}}"""
@@ -1087,9 +1112,14 @@ def mirror_finnomena(base_dir, exchanges=("TH", "HK", "US"), limit=None,
 # Bulk sync
 # ============================================================
 
-def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=None, is_dr=False):
+def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=None,
+            is_dr=False, min_age_days=None):
     """ดึงงบการเงินเต็มของทุก symbol × ทุก source มา upsert เข้า DB
-    คืน {"ok": n, "fail": n, "total": n}
+    คืน {"ok": n, "fail": n, "total": n, "skipped": n}
+
+    min_age_days: ถ้าใส่ (เช่น 7) จะข้ามคู่ (symbol, source) ที่ synced_at ใน DB
+    ใหม่กว่า N วันไปแล้ว — ไม่ยิง fetch ซ้ำของที่เพิ่งดึงไปไม่นาน (incremental sync)
+    None = ดึงทุกคู่เสมอเหมือนพฤติกรรมเดิม (full sync)
 
     Yahoo throttle: จาก bulk sync จริง (930 หุ้น) พบว่า ~60% ของหุ้นที่ล้มเหลว
     เป็นเพราะโดน rate-limit ชั่วคราว ไม่ใช่ไม่มีข้อมูลจริง (สุ่มทดสอบซ้ำ 25 ตัวที่
@@ -1106,6 +1136,20 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
     # จะได้ไม่นับเป็น fail ทั้งที่รู้อยู่แล้วว่าไม่มีข้อมูล
     tasks = [(sym, src) for sym in symbols for src in sources
              if not (src == "finnomena_q" and not finnomena_supported(sym, is_dr=is_dr))]
+
+    skipped = 0
+    if min_age_days is not None:
+        synced_map = get_synced_map(base_dir, is_dr=is_dr)
+        cutoff = datetime.now() - timedelta(days=min_age_days)
+        fresh_tasks = []
+        for sym, src in tasks:
+            ts = synced_map.get((sym, src))
+            if ts is not None and ts >= cutoff:
+                skipped += 1
+            else:
+                fresh_tasks.append((sym, src))
+        tasks = fresh_tasks
+
     total = len(tasks)
     done = ok = fail = 0
 
@@ -1166,7 +1210,7 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
                 callback(done, total, f"งบการเงิน {done}/{total} ({sym} · {src})...")
 
     _set_meta(base_dir, "last_full_sync_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    return {"ok": ok, "fail": fail, "total": total}
+    return {"ok": ok, "fail": fail, "total": total, "skipped": skipped}
 
 
 # ============================================================
