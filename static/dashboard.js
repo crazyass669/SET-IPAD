@@ -7206,7 +7206,14 @@ const _PE_BAND_NOTE_HTML = `
   <b>p75</b> = จุดแบ่งช่วง 25% แพงสุด — ถ้าค่าปัจจุบัน <b style="color:#f85149">สูงกว่า p75</b>
   แปลว่านี่คือหนึ่งในช่วงเวลาที่ <b style="color:#f85149">แพงที่สุด 25%</b> ที่เคยเป็นมา<br><br>
   ทำไมไม่ใช้แค่ "ค่าเฉลี่ย"? เพราะถ้ามีงวดไหนราคาพุ่งผิดปกติ ค่าเฉลี่ยจะถูกลากเพี้ยนไปด้วย
-  แต่ p25/p75 สนใจแค่ "ตำแหน่ง" ในแถวเรียง ไม่ถูกกระทบง่ายๆ`;
+  แต่ p25/p75 สนใจแค่ "ตำแหน่ง" ในแถวเรียง ไม่ถูกกระทบง่ายๆ<hr>
+  <b>ต่ำสุด / สูงสุด ที่โชว์ ≠ ค่าสุดขั้วจริงในประวัติศาสตร์</b><br><br>
+  ก่อนคำนวณ ระบบตัดขอบ 1% บนและล่างทิ้งก่อน (เรียกว่า winsorize) กันเดือน/ปีที่ข้อมูล
+  ผิดปกติสุดๆ (เช่น วิกฤตเศรษฐกิจ หรือช่วงกำไรทั้งตลาดใกล้ศูนย์) มาลากแถบทั้งเส้นให้ผิดสัดส่วน
+  จนมองไม่เห็นความต่างของ 99% ที่เหลือ<br><br>
+  เช่น PE mai เคยพุ่งสูงสุดจริงถึง <b>937x</b> (ก.ค. 2546) แต่ตัดขอบ 1% ออกแล้ว "สูงสุด" ที่โชว์
+  จะเหลือแค่ <b>~429x</b> — ไม่ได้ผิด แค่คนละความหมาย: ตัวที่โชว์คือ <b>"ขอบบนของ 99% ของเวลาทั้งหมด"</b>
+  ไม่ใช่ตัวเลขสูงสุดที่เคยเกิดขึ้นจริงตัวเดียว`;
 
 function _svgBand(series, label, lowerIsCheap, idPrefix) {
   const vals = _winsorize(series.map(o => o.v).filter(v => v > 0)).sort((a, b) => a - b);
@@ -7542,12 +7549,17 @@ function _renderFinancialsFull(d, source) {
     // ไม่เจอค่อยเดาจาก currency) กันเดาผิดตอน _drData ยังไม่โหลด (เช่นเข้าหน้างบการเงิน
     // ตรงๆ โดยไม่ผ่านหน้า DR มาก่อน)
     const tvMarket = d.currency === 'USD' ? 'US' : d.currency === 'HKD' ? 'HK' : null;
-    const tvHtml = (_finTab === 'dr' && !IS_STATIC)
-      ? `<a id="fin-tv-link" href="#" target="_blank" rel="noopener" style="display:none;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="เปิดใน TradingView">
-          <svg width="13" height="13" viewBox="0 0 32 32" fill="#2962ff"><path d="M16 2C8.268 2 2 8.268 2 16s6.268 14 14 14 14-6.268 14-14S23.732 2 16 2zm0 2c6.627 0 12 5.373 12 12S22.627 28 16 28 4 22.627 4 16 9.373 4 16 4zm-1 4v9H9l7 7 7-7h-6V8h-2z"/></svg>
-          TradingView
-        </a>`
-      : '';
+    const tvIcon = `<svg width="13" height="13" viewBox="0 0 32 32" fill="#2962ff"><path d="M16 2C8.268 2 2 8.268 2 16s6.268 14 14 14 14-6.268 14-14S23.732 2 16 2zm0 2c6.627 0 12 5.373 12 12S22.627 28 16 28 4 22.627 4 16 9.373 4 16 4zm-1 4v9H9l7 7 7-7h-6V8h-2z"/></svg>`;
+    const tvLinkStyle = `display:none;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer`;
+    let tvHtml = '';
+    if (_finTab === 'dr' && !IS_STATIC) {
+      // หุ้น DR/mirror: sym ไม่ตรงกับ yf ticker เสมอ (เช่น MICRON -> MU) ต้อง resolve
+      // แบบ async ผ่าน /api/resolve-yf ก่อน ถึงจะรู้ symbol ที่ถูกต้องของ TradingView
+      tvHtml = `<a id="fin-tv-link" href="#" target="_blank" rel="noopener" style="${tvLinkStyle}" title="เปิดใน TradingView">${tvIcon}TradingView</a>`;
+    } else if (_finTab === 'set') {
+      // หุ้นไทย: symbol ตรงกับ TradingView namespace "SET:" อยู่แล้ว ไม่ต้อง resolve
+      tvHtml = `<a href="https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(d.sym)}&interval=D" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="เปิดใน TradingView">${tvIcon}TradingView</a>`;
+    }
 
     document.getElementById('fin-result').innerHTML = `
     <div class="card" style="margin-top:12px">
