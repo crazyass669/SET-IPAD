@@ -2155,6 +2155,32 @@
 <div id="page-short" class="page">
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
     <h2 style="margin:0;font-size:16px;color:#e0e6f0">Short Sales</h2>
+    <span class="scr-tip-icon" style="font-size:11px;width:16px;height:16px">?<div class="scr-tip-box" style="width:320px">
+      <strong>Short Sales คืออะไร / มีผลกับราคายังไง</strong><br>
+      คนที่ "short" = ยืมหุ้นมาขายก่อน หวังซื้อคืนถูกกว่าทีหลังคืนเจ้าของ (เดิมพันว่าราคาจะลง)
+      สุดท้ายต้อง "ซื้อคืน" (cover) เสมอ ไม่ว่าราคาจะขึ้นหรือลง<hr>
+
+      <strong>Pos%</strong> = สัดส่วนหุ้นที่ยัง short ค้างอยู่ (ยังไม่ซื้อคืน) เทียบหุ้นชำระแล้วทั้งหมด<br>
+      <span style="color:#e05252">ยิ่งสูง</span> = มีคน bet ว่าหุ้นจะลงเยอะ กด sentiment ลบ
+      แต่ก็เป็น <span style="color:#3ab464">"เชื้อไฟ" ขาขึ้น</span> ถ้าราคาดันกลับขึ้นมา
+      เพราะทุกคนที่ short ไว้ต้องซื้อคืนสักวัน (ยิ่งค้างเยอะ ยิ่งมีแรงซื้อคืนสะสมรอ)<br><br>
+
+      <strong>Position (M)</strong> = จำนวนหุ้นที่ short ค้างอยู่จริง (หน่วยล้านหุ้น) — ตัวเลขดิบของ Pos% ด้านบน<br><br>
+
+      <strong>%Val 6M</strong> = สัดส่วน short ต่อมูลค่าซื้อขายรวม 6 เดือนล่าสุด — วัด
+      "ความคึกคักของการ short ช่วงนี้" ต่างจาก Pos% ที่วัดยอดค้างสะสม
+      ถ้า %Val 6M สูงแต่ Pos% ต่ำ = short เข้า-ออกไว (เปิด-ปิดสถานะเร็ว) ไม่ได้ค้างยาว<br><br>
+
+      <strong>Vol 6M (M)</strong> = ปริมาณหุ้นที่ถูก short รวม 6 เดือน (ตัวเลขดิบของ %Val 6M)<hr>
+
+      <strong style="color:#e3b341">🎯 Squeeze Radar</strong> = จับคู่ "Short Pos สูง (&gt;1%) + Insider ซื้อสะสม"<br>
+      ถ้าราคาเริ่มขึ้นตอน short ค้างเยอะ + คนในซื้อ (รู้ข้อมูลดี) มักเป็นสัญญาณว่า
+      short seller เริ่มเพลี่ยงพล้ำ ต้อง cover เร่ง (short squeeze) → ราคาพุ่งแรงกว่าปกติ
+      เพราะมีทั้งแรงซื้อจริง + แรงซื้อคืนบังคับมาพร้อมกัน<br><br>
+
+      <span style="color:var(--text2)">สรุป: Short เยอะไม่ได้แปลว่าหุ้นจะลงเสมอไป — เป็นดาบสองคม
+      ถ้าตลาด/ปัจจัยพื้นฐานพลิกเป็นบวก ยิ่ง short ค้างเยอะ ยิ่งเด้งแรง</span>
+    </div></span>
     <span id="short-status" style="font-size:11px;color:var(--muted)"></span>
     <input id="short-search" type="text" placeholder="ค้นหาหุ้น..."
       oninput="renderShortTable()"
