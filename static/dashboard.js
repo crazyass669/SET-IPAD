@@ -3350,6 +3350,11 @@ async function loadFinAnalytics() {
     // fetch ข้างล่างตามปกติ (STATIC_MAP พาไปไฟล์ Yahoo-only ที่ bake ไว้ล่วงหน้า)
     const fcfBtn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'fcfyield'"));
     if (fcfBtn) fcfBtn.style.display = 'none';
+    // Fundamental Screener (Screener+) ก็ local-only เหมือนกัน (อ่าน financials.db
+    // ตรงๆ ไม่มี static fallback) — เดิมโชว์เมนูไว้แล้วค่อยเจอข้อความ "ใช้ได้เฉพาะ
+    // เวอร์ชันรันบนเครื่อง" ตอนกดเข้าไป ซ่อนตั้งแต่ nav เลยดีกว่า ไม่ต้องให้กดพลาด
+    const fscreenerBtn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'fscreener'"));
+    if (fscreenerBtn) fscreenerBtn.style.display = 'none';
   }
   try {
     const r = await fetch('/api/financials-analytics');
