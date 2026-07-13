@@ -85,12 +85,15 @@ def fetch_one(base_dir, sym, market=None, force=False, max_age_days=180):
     now = time.time()
     max_age = max_age_days * 86400
 
+    # หา yf ticker เสมอไม่ว่า cache hit/miss — ใช้ต่อฝั่ง frontend สำหรับลิงก์ TradingView
+    # (เช่น MICRON -> MU ที่เดาจาก currency อย่างเดียวไม่ได้ ต้องพึ่ง DR universe)
+    yf_ticker, is_etf = resolve_yf_ticker(base_dir, sym, market=market)
+
     cached = store.get(sym)
     if (not force and cached and cached.get("th")
             and cached.get("fetched_ts") and (now - cached["fetched_ts"]) < max_age):
-        return cached, None
+        return {**cached, "yf": yf_ticker}, None
 
-    yf_ticker, is_etf = resolve_yf_ticker(base_dir, sym, market=market)
     if not yf_ticker:
         return None, "ไม่ทราบตลาดของหุ้นนี้ (ระบุ market=US หรือ HK)"
     if is_etf:
@@ -113,7 +116,7 @@ def fetch_one(base_dir, sym, market=None, force=False, max_age_days=180):
         }
         store[sym] = record
         _save_all(base_dir, store)
-        return record, None
+        return {**record, "yf": yf_ticker}, None
     except Exception as e:
         return None, str(e)
 

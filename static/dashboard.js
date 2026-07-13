@@ -5840,6 +5840,21 @@ function _loadFinDescription(sym, market) {
   }
 }
 
+// ปุ่ม TradingView บนหน้างบการเงิน — resolve yf ticker แบบ async ผ่าน /api/resolve-yf
+// (เช็ค DR universe ก่อน แม่นสุดสำหรับตัวที่ sym ≠ yf ticker จริง เช่น MICRON -> MU)
+function _loadFinTVLink(sym, market) {
+  const a = document.getElementById('fin-tv-link');
+  if (!a) return;
+  const q = market ? `?market=${encodeURIComponent(market)}` : '';
+  fetch(`/api/resolve-yf/${encodeURIComponent(sym)}${q}`).then(r => r.json()).then(d => {
+    if (d.error || !d.yf) return;
+    const tvSym = yfToTVSym(d.yf);
+    if (!tvSym) return;
+    a.href = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSym)}&interval=D`;
+    a.style.display = 'inline-flex';
+  }).catch(() => {});
+}
+
 function startDRDescriptionSync() {
   _startJob('/api/dr-description-sync', 'dr-desc-sync-btn', '📖 ดึงคำอธิบายบริษัท DR (local)', null, () => {
     _drDescData = null;   // บังคับโหลดใหม่รอบถัดไปที่เปิด modal
@@ -7261,6 +7276,18 @@ function _renderFinancialsFull(d, source) {
       if (mk) dispName = _finMirName(mk, d.sym);
     }
 
+    // ปุ่มเปิด TradingView — เฉพาะแท็บ DR (US/HK) แสดง placeholder ก่อนแล้วค่อย resolve
+    // yf ticker จริงแบบ async (/api/resolve-yf — เช็ค DR universe ก่อน เช่น MICRON -> MU,
+    // ไม่เจอค่อยเดาจาก currency) กันเดาผิดตอน _drData ยังไม่โหลด (เช่นเข้าหน้างบการเงิน
+    // ตรงๆ โดยไม่ผ่านหน้า DR มาก่อน)
+    const tvMarket = d.currency === 'USD' ? 'US' : d.currency === 'HKD' ? 'HK' : null;
+    const tvHtml = (_finTab === 'dr' && !IS_STATIC)
+      ? `<a id="fin-tv-link" href="#" target="_blank" rel="noopener" style="display:none;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="เปิดใน TradingView">
+          <svg width="13" height="13" viewBox="0 0 32 32" fill="#2962ff"><path d="M16 2C8.268 2 2 8.268 2 16s6.268 14 14 14 14-6.268 14-14S23.732 2 16 2zm0 2c6.627 0 12 5.373 12 12S22.627 28 16 28 4 22.627 4 16 9.373 4 16 4zm-1 4v9H9l7 7 7-7h-6V8h-2z"/></svg>
+          TradingView
+        </a>`
+      : '';
+
     document.getElementById('fin-result').innerHTML = `
     <div class="card" style="margin-top:12px">
       <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px">
@@ -7268,6 +7295,7 @@ function _renderFinancialsFull(d, source) {
         ${typeLabel}
         ${srcBadge}
         <span style="font-size:13px;color:var(--text2)">${dispName || ''}</span>
+        ${tvHtml}
         <span style="font-size:11px;color:var(--text2);margin-left:auto">สกุลเงิน: <strong>${d.currency || '—'}</strong></span>
       </div>
       <div style="font-size:11px;color:var(--text2);margin-bottom:10px">${srcNote} · ${isQ ? 'ข้อมูลรายไตรมาส (% = เทียบงวดก่อนหน้า QoQ)' : 'ข้อมูลรายปี'}</div>
@@ -7283,8 +7311,8 @@ function _renderFinancialsFull(d, source) {
       <div style="font-size:10px;color:var(--text2);margin-top:16px">${disclaimer}</div>
     </div>`;
     if (_finTab === 'dr') {
-      const descMarket = d.currency === 'USD' ? 'US' : d.currency === 'HKD' ? 'HK' : null;
-      _loadFinDescription(d.sym, descMarket);
+      _loadFinDescription(d.sym, tvMarket);
+      if (!IS_STATIC) _loadFinTVLink(d.sym, tvMarket);
     }
     return;
   }

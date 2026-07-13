@@ -840,6 +840,19 @@ def dr_description_one(symbol):
     return jsonify({"sym": sym, **record})
 
 
+@app.route("/api/resolve-yf/<symbol>")
+def resolve_yf(symbol):
+    """หา yfinance ticker ของ symbol เพื่อสร้างลิงก์ TradingView — เบามาก (ไม่ยิง yfinance/
+    Google Translate) ใช้ logic เดียวกับ dr_descriptions (DR universe ก่อน ไม่เจอเดาจาก
+    market) แยกจาก /api/dr-description เพราะจะได้ไม่ต้องพึ่งผลลัพธ์ description สำเร็จ"""
+    sym = symbol.upper().strip()
+    market = request.args.get("market")
+    yf_ticker, is_etf = dr_descriptions.resolve_yf_ticker(BASE_DIR, sym, market=market)
+    if not yf_ticker:
+        return jsonify({"sym": sym, "error": "ไม่ทราบตลาดของหุ้นนี้"}), 404
+    return jsonify({"sym": sym, "yf": yf_ticker, "is_etf": is_etf})
+
+
 @app.route("/api/dr-description-sync", methods=["POST"])
 def start_dr_description_sync():
     """ดึงคำอธิบายบริษัท DR ทั้งหมดจาก Yahoo Finance + แปลไทย (local-only ปุ่มกด —
