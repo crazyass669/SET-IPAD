@@ -126,6 +126,9 @@ SNAPSHOTS = [
     # คำอธิบายบริษัท (EN + แปลไทย) หุ้น DR — sync ด้วยปุ่มในเครื่องเป็นระยะ (ดูคู่มือ)
     # ไฟล์นี้แค่อ่าน cache local (dr_descriptions.json) มา bake ไม่ได้ fetch สดตอน CI รัน
     ("/api/dr-descriptions",                   "dr_descriptions.json",            False),
+    # P/E-P/BV รายวันตลาด SET/mai (scrape จากหน้า overview ของ SET.or.th ตรงๆ —
+    # ไม่ใช่ Finnomena) รันสดได้ตอน bake เลย ไม่ต้อง cache local ก่อนแบบ dr-descriptions
+    ("/api/set-daily-valuation",               "set_daily_valuation.json",        False),
 ]
 
 # sync ฐานข้อมูลสะสม SEC filings ก่อน bake (เร็ว ~นาทีเดียวถ้า sync แล้วครั้งก่อน

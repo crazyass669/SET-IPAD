@@ -789,7 +789,7 @@
       💡 วิธีใช้ Screener สำหรับมือใหม่
     </span>
     <span onclick="toggleBtNote('scr-bt-note')" style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid #39c5cf;background:#39c5cf22;color:#39c5cf;cursor:pointer;font-weight:600">
-      📊 ผลวิจัย backtest ทั้งสองแบบ
+      📊 ผลวิจัย backtest ไทย + US + DR
     </span>
   </div>
 
@@ -1880,6 +1880,9 @@
   </div>
   <div id="val-data-month" style="font-size:12px;margin:4px 0 2px;color:var(--muted)"></div>
 
+  <!-- P/E-P/BV รายวันจาก SET.or.th โดยตรง (คู่กับค่ารายเดือนจาก Excel ด้านล่าง) -->
+  <div id="val-daily-box" style="display:none;margin-bottom:14px"></div>
+
   <!-- Summary cards -->
   <div id="val-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px"></div>
 
@@ -2371,7 +2374,7 @@
   <div class="page-title">🔬 Fundamental Screener</div>
   <div class="page-sub">กรองหุ้นด้วยงบการเงินย้อนหลังสูงสุด 16 ปี (Finnomena) + งบละเอียด (Yahoo) + เลขทางการ (SET) — เลือก preset แล้วปรับตัวเลขเองได้ทุกช่อง</div>
   <div style="margin:6px 0 10px">
-    <button class="filter-btn" onclick="toggleBtNote('fs-bt-note')" style="font-size:11px">📊 ผลวิจัย backtest ทั้งสองแบบ — กดอ่านสรุป</button>
+    <button class="filter-btn" onclick="toggleBtNote('fs-bt-note')" style="font-size:11px">📊 ผลวิจัย backtest ไทย + US + DR — กดอ่านสรุป</button>
     <div id="fs-bt-note" style="display:none;margin-top:8px;padding:12px;background:#0d1117;border:1px solid var(--border);border-radius:8px"></div>
   </div>
   <div id="fs-gate" class="empty" style="display:none;padding:24px"></div>
@@ -2860,6 +2863,6 @@
 </div>
 
 <script src="static/fin_translations.js?v=20260713a"></script>
-<script src="static/dashboard.js?v=20260713o"></script>
+<script src="static/dashboard.js?v=20260714l"></script>
 </body>
 </html>

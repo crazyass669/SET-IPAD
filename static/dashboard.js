@@ -55,6 +55,8 @@ if (IS_STATIC) {
     '/api/financials-analytics':  'data/financials_analytics_yahoo.json',
     // คำอธิบายบริษัท DR (EN + แปลไทย) จาก Yahoo Finance — bake ล่วงหน้า ไม่ fetch สด
     '/api/dr-descriptions':       'data/dr_descriptions.json',
+    // P/E-P/BV รายวันตลาด SET/mai (scrape จาก SET.or.th) — bake ล่วงหน้า
+    '/api/set-daily-valuation':   'data/set_daily_valuation.json',
   };
 
   function _staticURL(url) {
@@ -4281,7 +4283,9 @@ function _fsOnUniverseChange() {
 // ============================================================
 const _BT_NOTE_HTML = `
 <div style="font-size:12px;line-height:1.7">
-  <div style="font-weight:700;font-size:13px;margin-bottom:6px">📊 สรุปผลวิจัย backtest หุ้นไทย (ทำเมื่อ ก.ค. 2026 จากข้อมูลในเครื่อง)</div>
+  <div style="font-weight:700;font-size:13px;margin-bottom:6px">📊 สรุปผลวิจัย backtest หุ้นไทย + US + DR (ทำเมื่อ ก.ค. 2026 จากข้อมูลในเครื่อง)</div>
+
+  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#1f6feb22;color:#58a6ff;font-weight:600;margin-bottom:8px">🇹🇭 ส่วนที่ 1 — หุ้นไทย</div>
 
   <div style="color:var(--text2);margin-bottom:8px">ทดสอบ 2 แบบเสริมกัน:
   <b>① Event study</b> — หุ้นวิ่งแรง Top-25 ของทุกไตรมาส 2015-2026 (935 ตัวอย่าง) ย้อนดูว่า "ตอนเริ่มวิ่ง" มีสัญญาณอะไร เทียบหุ้นสุ่ม 1,150 ตัววัดแบบเดียวกัน ·
@@ -4327,7 +4331,93 @@ const _BT_NOTE_HTML = `
   2. <b>Momentum + งบดี คือสิ่งที่ทำเงินสม่ำเสมอที่สุด</b> — 💥 Breakout มีของจริง ชนะขาด และ CANSLIM-ish บวกทุกปี 15 ปีติดโดยไม่มีปีแพ้ตลาด<br>
   3. <b>🌊 วอลุ่มจุดชนวนเป็น lottery</b> — เฉลี่ยบวกแต่ชนะแค่ 45% (ตัวถูกไม่กี่ตัวจ่ายให้ตัวผิดหลายตัว) เหมาะเป็น watchlist หา turnaround แล้วคัดต่อเอง ไม่เหมาะซื้อตามทั้งลิสต์</div>
 
-  <div style="color:var(--text2);margin-top:8px;font-size:11px">ข้อจำกัด: price return ไม่รวมปันผล/ค่าคอม · วัดแบบ equal-weight · อดีตไม่การันตีอนาคต — สูตรที่คนใช้กันมากขึ้นผลตอบแทนมักบางลง · หุ้นตปท.ยังไม่ได้ทดสอบ forward (ข้อมูลวอลุ่มย้อนหลังไม่พอ) · preset ที่เกี่ยวข้อง: 💥 Breakout มีของจริง · 🏆/🚀 CANSLIM · 🌊 วอลุ่มจุดชนวน</div>
+  <div style="color:var(--text2);margin-top:8px;font-size:11px">ข้อจำกัด: price return ไม่รวมปันผล/ค่าคอม · วัดแบบ equal-weight · อดีตไม่การันตีอนาคต — สูตรที่คนใช้กันมากขึ้นผลตอบแทนมักบางลง · preset ที่เกี่ยวข้อง: 💥 Breakout มีของจริง · 🏆/🚀 CANSLIM · 🌊 วอลุ่มจุดชนวน</div>
+
+  <hr style="border:none;border-top:1px solid var(--border);margin:14px 0">
+
+  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#3fb95022;color:#3fb950;font-weight:600;margin-bottom:8px">🇺🇸 ส่วนที่ 2 — หุ้น US (S&amp;P 500 เท่านั้น — ไม่ใช่ตลาด US ทั้งหมด)</div>
+
+  <div style="color:var(--text2);margin-bottom:8px">ดึงราคา+วอลุ่มรายวันจาก Yahoo Finance ใหม่ (ของเดิมมีแต่หุ้นไทย) + งบจาก Finnomena mirror ที่มีอยู่แล้ว · <b>497/503</b> ตัวของ S&amp;P 500 ที่มีข้อมูลครบ ·
+  <b>① Event study</b> — Top-25 ทุกไตรมาส 2015-2026 (1,122 ตัวอย่าง) เทียบหุ้นสุ่ม 1,575 ตัว ·
+  <b>② Forward test</b> — ทุกตัวทุกสิ้นเดือน 2012-2026 (80,564 stock-months)</div>
+
+  <div style="font-weight:600;margin:8px 0 4px">① หุ้น US วิ่งแรงเริ่มจากอะไร (เทียบหุ้นสุ่ม)</div>
+  <table style="border-collapse:collapse;font-size:11.5px">
+    <tr style="color:var(--text2)"><td style="padding:1px 12px 1px 0">สัญญาณตอนเริ่มวิ่ง</td><td>หุ้นวิ่งแรง</td><td style="padding:0 10px">หุ้นสุ่ม</td><td>ส่วนต่าง</td></tr>
+    <tr><td>เหนือ/เพิ่งตัดขึ้น EMA200</td><td>66.4%</td><td style="padding:0 10px">58.1%</td><td style="color:var(--green)">+8.3</td></tr>
+    <tr><td>วอลุ่มระเบิด ≥3 เท่า</td><td>18.9%</td><td style="padding:0 10px">12.8%</td><td style="color:var(--green)">+6.1</td></tr>
+    <tr><td>ทำ New High 52wk เร็ว</td><td>19.3%</td><td style="padding:0 10px">13.8%</td><td style="color:var(--green)">+5.5</td></tr>
+    <tr><td>กำไรกำลังเร่งตัว</td><td>38.1%</td><td style="padding:0 10px">36.6%</td><td style="color:var(--green)">+1.5</td></tr>
+    <tr><td><b>กำไรงวดก่อนโต YoY</b></td><td>56.6%</td><td style="padding:0 10px">59.0%</td><td style="color:var(--red)">−2.4</td></tr>
+  </table>
+  <div style="color:var(--text2);margin-top:3px">→ ทิศทางเดียวกับหุ้นไทย (เงินเข้า/เทคนิคนำหน้างบสวย) แต่ <b>ส่วนต่างแคบกว่าหุ้นไทยชัดเจน</b> (EMA200 +8.3 เทียบไทย +14.8)</div>
+
+  <div style="font-weight:600;margin:10px 0 4px">② แต่สูตรไหน "ทำเงินไปข้างหน้า" ได้จริงในหุ้น US</div>
+  <table style="border-collapse:collapse;font-size:11.5px">
+    <tr style="color:var(--text2)"><td style="padding:1px 12px 1px 0">สูตร</td><td>ครั้งที่เกิด</td><td style="padding:0 10px">+1 เดือน</td><td style="padding:0 10px">+3 เดือน</td><td>ชนะ%</td></tr>
+    <tr><td>💥 Breakout มีของจริง</td><td>739</td><td style="padding:0 10px;color:var(--green)">+0.2%</td><td style="padding:0 10px;color:var(--green)">+1.2%</td><td>51%</td></tr>
+    <tr><td>🏆 CANSLIM-ish</td><td>11,115</td><td style="padding:0 10px">+0.0%</td><td style="padding:0 10px;color:var(--green)">+0.3%</td><td>48%</td></tr>
+    <tr><td>ใกล้ high 52wk (≤5%)</td><td>31,107</td><td style="padding:0 10px;color:var(--red)">−0.1%</td><td style="padding:0 10px;color:var(--red)">−0.3%</td><td>47%</td></tr>
+    <tr><td>กำไรโต YoY ≥25% (เดี่ยว)</td><td>27,491</td><td style="padding:0 10px;color:var(--green)">+0.2%</td><td style="padding:0 10px;color:var(--green)">+0.6%</td><td>49%</td></tr>
+    <tr><td>🌊 วอลุ่มจุดชนวน</td><td>438</td><td style="padding:0 10px;color:var(--red)">−0.4%</td><td style="padding:0 10px;color:var(--green)">+0.4%</td><td>47%</td></tr>
+    <tr><td>RVOL ≥3 เดี่ยวๆ</td><td>1,719</td><td style="padding:0 10px;color:var(--red)">−0.1%</td><td style="padding:0 10px;color:var(--green)">+0.2%</td><td>47%</td></tr>
+    <tr><td>Turnaround จุดชนวน</td><td>658</td><td style="padding:0 10px;color:var(--green)">+0.2%</td><td style="padding:0 10px;color:var(--green)">+0.4%</td><td>49%</td></tr>
+  </table>
+  <div style="color:var(--text2);margin-top:3px">→ <b style="color:var(--yellow)">excess return แทบเป็น 0 ทุกสูตร win rate อยู่แถว 47-51% (≈ เดา)</b> — สูตรพวกนี้ใช้ไม่ได้ผลกับ S&amp;P500 ต่างจากหุ้นไทยชัดเจน สอดคล้องทฤษฎีตลาดมีประสิทธิภาพ (หุ้นใหญ่สุดของโลก ถูกจับตาหนาแน่น สัญญาณง่ายๆ ถูก price-in เร็ว)</div>
+
+  <div style="font-weight:600;margin:10px 0 4px">③ รอบวิ่งหุ้น US นานแค่ไหน (จาก 920-516 รอบจริงของ winners)</div>
+  <table style="border-collapse:collapse;font-size:11.5px">
+    <tr style="color:var(--text2)"><td style="padding:1px 12px 1px 0">นิยามหมดรอบ</td><td style="padding:0 10px">ระยะวิ่งมัธยฐาน</td><td>กำไร ณ พีค (มัธยฐาน)</td></tr>
+    <tr><td>ย่อ 15% จากยอด</td><td style="padding:0 10px"><b>124 วันทำการ ≈ 6 เดือน</b></td><td style="color:var(--green)">+64%</td></tr>
+    <tr><td>ย่อ 20% จากยอด</td><td style="padding:0 10px"><b>147 วันทำการ ≈ 7 เดือน</b></td><td style="color:var(--green)">+77%</td></tr>
+    <tr><td>ย่อ 25% จากยอด</td><td style="padding:0 10px"><b>156 วันทำการ ≈ 7.5 เดือน</b></td><td style="color:var(--green)">+83%</td></tr>
+  </table>
+  <div style="margin-top:3px">→ รอบ US <b>ยาวกว่าหุ้นไทยเกือบ 2 เท่า</b> (ไทย ~3-4 เดือน) แต่ %กำไรใกล้เคียงกัน — หุ้นไทยวิ่งเร็ว/แรงกว่าต่อหน่วยเวลา</div>
+
+  <div style="color:var(--text2);margin-top:8px;font-size:11px">ข้อจำกัดเฉพาะส่วนนี้: ขอบเขตแค่ S&amp;P 500 (497 ตัว) ไม่ใช่ตลาด US ทั้งหมด · ใช้ constituent list ปัจจุบันย้อนอดีต → survivorship bias มากกว่าหุ้นไทย (หุ้นที่เคยอยู่ index แล้วหลุดเพราะร่วง/ล้มละลายไม่ถูกนับ) · สมมติ lag รายงานงบ 50 วัน (10-Q จริง ~40-45 วัน) · ยังไม่ทำ statistical significance test (p-value) — เป็น point estimate</div>
+
+  <hr style="border:none;border-top:1px solid var(--border);margin:14px 0">
+
+  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#a371f722;color:#a371f7;font-weight:600;margin-bottom:8px">🌏 ส่วนที่ 3 — หุ้น DR Underlying (293 ตัวที่มี DR เทรดบน SET)</div>
+
+  <div style="color:var(--text2);margin-bottom:8px">หุ้นต่างประเทศที่มี DR/DRx ให้คนไทยซื้อขายบน SET จริง (US/HK/JP/EU/VN/SG/CN ผสมกัน) · <b>165/293</b> ตัวที่มีทั้งราคา+งบครบ (ที่ขาดหลักๆ คือ JP/China A-share ที่ Finnomena ไม่ครอบคลุม) ·
+  <b>① Event study</b> — Top-15 ทุกไตรมาส 2015-2026 (671 ตัวอย่าง) เทียบหุ้นสุ่ม 898 ตัว ·
+  <b>② Forward test</b> — ทุกตัวทุกสิ้นเดือน 2013-2026 (19,911 stock-months)</div>
+
+  <div style="font-weight:600;margin:8px 0 4px">① หุ้น DR วิ่งแรงเริ่มจากอะไร (เทียบหุ้นสุ่ม)</div>
+  <table style="border-collapse:collapse;font-size:11.5px">
+    <tr style="color:var(--text2)"><td style="padding:1px 12px 1px 0">สัญญาณตอนเริ่มวิ่ง</td><td>หุ้นวิ่งแรง</td><td style="padding:0 10px">หุ้นสุ่ม</td><td>ส่วนต่าง</td></tr>
+    <tr><td>วอลุ่มระเบิด ≥3 เท่า</td><td>27.1%</td><td style="padding:0 10px">16.7%</td><td style="color:var(--green)">+10.4</td></tr>
+    <tr><td>เหนือ/เพิ่งตัดขึ้น EMA200</td><td>65.0%</td><td style="padding:0 10px">56.0%</td><td style="color:var(--green)">+9.0</td></tr>
+    <tr><td>ทำ New High 52wk เร็ว</td><td>20.0%</td><td style="padding:0 10px">15.7%</td><td style="color:var(--green)">+4.3</td></tr>
+    <tr><td>กำไรกำลังเร่งตัว</td><td>34.1%</td><td style="padding:0 10px">37.9%</td><td style="color:var(--red)">−3.8</td></tr>
+    <tr><td><b>กำไรงวดก่อนโต YoY</b></td><td>55.9%</td><td style="padding:0 10px">63.3%</td><td style="color:var(--red)">−7.4</td></tr>
+  </table>
+  <div style="color:var(--text2);margin-top:3px">→ แพทเทิร์นเดิม (เทคนิคนำงบ) แต่ <b>ส่วนต่างงบติดลบมากกว่าทั้งไทยและ US</b> — winners กลุ่มนี้เป็น turnaround ชัดกว่าที่อื่น</div>
+
+  <div style="font-weight:600;margin:10px 0 4px">② แต่สูตรไหน "ทำเงินไปข้างหน้า" ได้จริงในหุ้น DR</div>
+  <table style="border-collapse:collapse;font-size:11.5px">
+    <tr style="color:var(--text2)"><td style="padding:1px 12px 1px 0">สูตร</td><td>ครั้งที่เกิด</td><td style="padding:0 10px">+1 เดือน</td><td style="padding:0 10px">+3 เดือน</td><td>ชนะ%</td></tr>
+    <tr><td>💥 Breakout มีของจริง</td><td>196</td><td style="padding:0 10px;color:var(--red)">−0.7%</td><td style="padding:0 10px;color:var(--red)">−1.1%</td><td>47%</td></tr>
+    <tr><td>🏆 CANSLIM-ish</td><td>2,545</td><td style="padding:0 10px">+0.1%</td><td style="padding:0 10px;color:var(--green)">+0.4%</td><td>47%</td></tr>
+    <tr><td>ใกล้ high 52wk (≤5%)</td><td>6,046</td><td style="padding:0 10px;color:var(--red)">−0.1%</td><td style="padding:0 10px;color:var(--red)">−0.8%</td><td>44%</td></tr>
+    <tr><td>กำไรโต YoY ≥25% (เดี่ยว)</td><td>8,045</td><td style="padding:0 10px;color:var(--green)">+0.3%</td><td style="padding:0 10px;color:var(--green)">+0.9%</td><td>46%</td></tr>
+    <tr><td>🌊 วอลุ่มจุดชนวน</td><td>107</td><td style="padding:0 10px;color:var(--red)">−1.1%</td><td style="padding:0 10px;color:var(--red)">−1.5%</td><td>42%</td></tr>
+    <tr><td>RVOL ≥3 เดี่ยวๆ</td><td>409</td><td style="padding:0 10px;color:var(--green)">+1.0%</td><td style="padding:0 10px;color:var(--red)">−1.0%</td><td>41%</td></tr>
+    <tr><td>Turnaround จุดชนวน</td><td>151</td><td style="padding:0 10px;color:var(--green)">+2.7%</td><td style="padding:0 10px;color:var(--red)">−0.1%</td><td>42%</td></tr>
+  </table>
+  <div style="color:var(--text2);margin-top:3px">→ <b style="color:var(--red)">ตรงข้ามหุ้นไทยเลย</b> — 💥 Breakout ที่เด่นสุดในไทย (+5.9%) กลับ<b style="color:var(--red)">ติดลบ</b>ในหุ้น DR (−1.1%) win rate ต่ำกว่าครึ่งแทบทุกสูตร</div>
+
+  <div style="font-weight:600;margin:10px 0 4px">③ รอบวิ่งหุ้น DR นานแค่ไหน (จาก 609-443 รอบจริงของ winners)</div>
+  <table style="border-collapse:collapse;font-size:11.5px">
+    <tr style="color:var(--text2)"><td style="padding:1px 12px 1px 0">นิยามหมดรอบ</td><td style="padding:0 10px">ระยะวิ่งมัธยฐาน</td><td>กำไร ณ พีค (มัธยฐาน)</td></tr>
+    <tr><td>ย่อ 15% จากยอด</td><td style="padding:0 10px"><b>85 วันทำการ ≈ 4 เดือน</b></td><td style="color:var(--green)">+74%</td></tr>
+    <tr><td>ย่อ 20% จากยอด</td><td style="padding:0 10px"><b>114 วันทำการ ≈ 5.5 เดือน</b></td><td style="color:var(--green)">+91%</td></tr>
+    <tr><td>ย่อ 25% จากยอด</td><td style="padding:0 10px"><b>135 วันทำการ ≈ 6.4 เดือน</b></td><td style="color:var(--green)">+104%</td></tr>
+  </table>
+  <div style="margin-top:3px">→ อยู่กึ่งกลางระหว่างไทย (สั้นกว่า) กับ US (ยาวกว่า) ตามคาด — เพราะเป็นหุ้นผสมทั้งขนาดเล็ก (HK/JP) และยักษ์ (US mega-cap)</div>
+
+  <div style="color:var(--text2);margin-top:8px;font-size:11px">⚠ ข้อจำกัดเฉพาะส่วนนี้: universe เล็กแค่ 165 ตัว บางสูตรมีแค่ ~100-200 ครั้งที่เกิด (Breakout/Volume-spark) — <b>ตัวอย่างน้อยเกินจะเชื่อมั่นสูง</b> ระวังตีความเกินจริง · คละหลายตลาด/สกุลเงิน/เวลาเปิดตลาดต่างกัน (US/HK/JP/EU) อาจมี noise จาก timezone lag ปนอยู่ · ใช้ lag รายงานงบ 55 วัน (เผื่อกว้างกว่า US เพราะคละหลายตลาด)</div>
 </div>`;
 
 function toggleBtNote(boxId) {
@@ -5855,6 +5945,64 @@ function _loadFinTVLink(sym, market) {
   }).catch(() => {});
 }
 
+// อัพเดท "มูลค่าเทียบอดีตตัวเอง (PE/PBV band)" ให้ใช้ราคาสดจาก Yahoo แทนงวด
+// Finnomena ล่าสุด (ซึ่งอาจเป็นราคา ณ สิ้นไตรมาสก่อนหน้า ไม่ใช่วันนี้) — คำนวณโดย
+// ย้อนหา EPS/BVPS โดยนัยจาก (ราคาปิดงวดล่าสุด, PE/PBV งวดล่าสุด) แล้วคูณราคาสดเข้าไป
+// (เหมือนแนวคิด PE สดของ Quick Update — ใช้ข้อมูลที่มีอยู่แล้ว ไม่ต้องรู้ EPS ตรงๆ)
+function _loadLiveValuationBand(d, isDr, market) {
+  const peCur = document.getElementById('peband-cur');
+  const pbvCur = document.getElementById('pbvband-cur');
+  if (!peCur && !pbvCur) return;   // bands ไม่ได้ render (ข้อมูลไม่พอ)
+  const q = market ? `?market=${encodeURIComponent(market)}` : '';
+  const sep = isDr ? (q ? '&' : '?') : '';
+  const url = `/api/live-price/${encodeURIComponent(d.sym)}${isDr ? q + sep + 'is_dr=1' : ''}`;
+  fetch(url).then(r => r.json()).then(res => {
+    if (res.error || !res.price) return;
+    const price = res.price;
+    const priceEl = document.getElementById('fin-live-price');
+    if (priceEl) {
+      priceEl.textContent = `· ราคาล่าสุด (Yahoo): ${price.toLocaleString(undefined, {maximumFractionDigits: 2})} ${d.currency || ''}`;
+    }
+    const val = d.valuation || {};
+    const inc = d.income || {};
+    // PE สด: price ÷ TTM EPS จริง (ไม่ใช่เทคนิคย้อนหา EPS โดยนัยจาก field PE ของ
+    // Finnomena เหมือนเดิม — เพราะรู้แล้วว่า field นั้นบางงวดคำนวณผิด ดู _ttmPeSeries)
+    const ttmEps = _ttmEpsLast(inc['Basic EPS']);
+    if (ttmEps) _patchBandValue('peband', price / ttmEps, true);
+    // PBV: ไม่มีปัญหาแบบ PE ใช้เทคนิคย้อนหา BVPS โดยนัยจาก field ของ Finnomena ได้ตามเดิม
+    const closeSeries = _finSeries(val['Close']);
+    _patchBand('pbvband', _finSeries(val['PBV']), closeSeries, price, true);
+  }).catch(() => {});
+}
+
+function _patchBandValue(idPrefix, liveVal, lowerIsCheap) {
+  const curEl = document.getElementById(idPrefix + '-cur');
+  const tickEl = document.getElementById(idPrefix + '-tick');
+  if (!curEl || !tickEl || liveVal == null) return;
+  const wrap = curEl.closest('div[data-lo]');
+  if (!wrap) return;
+  const lo = parseFloat(wrap.dataset.lo), hi = parseFloat(wrap.dataset.hi);
+  const p25 = parseFloat(wrap.dataset.p25), p75 = parseFloat(wrap.dataset.p75);
+  const cheap = lowerIsCheap ? liveVal <= p25 : liveVal >= p75;
+  const rich = lowerIsCheap ? liveVal >= p75 : liveVal <= p25;
+  const col = cheap ? '#3fb950' : rich ? '#f85149' : '#d9932e';
+  const pos = Math.max(0, Math.min(100, (liveVal - lo) / (hi - lo || 1) * 100));
+  curEl.textContent = Math.round(liveVal * 100) / 100;
+  curEl.style.color = col;
+  tickEl.style.left = pos + '%';
+  tickEl.style.background = col;
+  tickEl.style.boxShadow = `0 0 3px ${col}`;
+}
+
+function _patchBand(idPrefix, ratioSeries, closeSeries, livePrice, lowerIsCheap) {
+  if (!ratioSeries.length || !closeSeries.length) return;
+  const lastRatio = ratioSeries[ratioSeries.length - 1].v;
+  const lastClose = closeSeries[closeSeries.length - 1].v;
+  if (!lastClose || !lastRatio) return;
+  const liveVal = livePrice * lastRatio / lastClose;   // = livePrice / BVPS โดยนัย
+  _patchBandValue(idPrefix, liveVal, lowerIsCheap);
+}
+
 function startDRDescriptionSync() {
   _startJob('/api/dr-description-sync', 'dr-desc-sync-btn', '📖 ดึงคำอธิบายบริษัท DR (local)', null, () => {
     _drDescData = null;   // บังคับโหลดใหม่รอบถัดไปที่เปิด modal
@@ -6983,9 +7131,85 @@ function _svgBars(series, opt) {
     <line x1="0" y1="${z.toFixed(1)}" x2="${W}" y2="${z.toFixed(1)}" stroke="var(--border)" stroke-width="0.8"/>${bars}</svg>`;
 }
 
+// PE ที่คำนวณเอง = Close ÷ TTM EPS (ผลรวม Basic EPS ย้อนหลัง 4 ไตรมาสจริง) แทนที่จะ
+// เชื่อ field "PE" สำเร็จรูปของ Finnomena — ดู bands ใน _finTrendSectionImpl สำหรับ
+// เหตุผลเต็ม (เทียบกับเว็บอื่นแล้วตรงกันเกือบเป๊ะเมื่อคำนวณแบบนี้)
+function _ttmPeSeries(epsRow, closeRow) {
+  const epsItems = _finSeries(epsRow);
+  if (epsItems.length < 4) return [];
+  const closeMap = {};
+  Object.entries(closeRow || {}).forEach(([d, v]) => { if (v != null) closeMap[d] = v; });
+  const out = [];
+  for (let i = 3; i < epsItems.length; i++) {
+    const ttmEps = epsItems[i - 3].v + epsItems[i - 2].v + epsItems[i - 1].v + epsItems[i].v;
+    const dt = epsItems[i].d;
+    const close = closeMap[dt];
+    if (close != null && ttmEps > 0) out.push({ d: dt, v: close / ttmEps });
+  }
+  return out;
+}
+
+// TTM EPS ล่าสุด (4 ไตรมาสท้ายสุดที่มีข้อมูลจริง) — ใช้คำนวณ PE สดตอน live-patch
+// (จุด "ปัจจุบัน" ต้องใช้ TTM ล่าสุดเสมอ ไม่ใช่รายปีที่ปิดไปแล้ว ไม่งั้นจะเก่าเกินไป)
+function _ttmEpsLast(epsRow) {
+  const epsItems = _finSeries(epsRow);
+  if (epsItems.length < 4) return null;
+  const sum = epsItems.slice(-4).reduce((a, o) => a + o.v, 0);
+  return sum > 0 ? sum : null;
+}
+
+// PE รายปี = Close ณ งวดสุดท้ายของปี ÷ EPS รวมทั้งปี (เฉพาะปีที่ครบ 4 ไตรมาสจริง) —
+// ทดสอบเทียบกับเว็บอ้างอิงแล้วแม่นกว่า TTM รายไตรมาสแบบ rolling (_ttmPeSeries) เพราะ
+// ตัดความผันผวนของแต่ละไตรมาสเดี่ยวๆ ออกไป เหลือแค่ภาพรวมทั้งปี — ใช้เป็นฐานข้อมูล
+// ย้อนหลังสำหรับ band แทน ส่วนจุด "ปัจจุบัน" ยังใช้ TTM ล่าสุดอยู่ (ดู _ttmEpsLast)
+function _annualPeSeries(epsRow, closeRow) {
+  const epsItems = _finSeries(epsRow);
+  if (epsItems.length < 4) return [];
+  const closeMap = {};
+  Object.entries(closeRow || {}).forEach(([d, v]) => { if (v != null) closeMap[d] = v; });
+  const byYear = {};
+  epsItems.forEach(o => { (byYear[o.d.slice(0, 4)] = byYear[o.d.slice(0, 4)] || []).push(o); });
+  const out = [];
+  Object.keys(byYear).sort().forEach(y => {
+    const items = byYear[y];
+    if (items.length !== 4) return;   // ปีที่ยังไม่ครบ 4 ไตรมาส (เช่นปีปัจจุบัน) ข้าม
+    const annualEps = items.reduce((a, o) => a + o.v, 0);
+    const lastDate = items[items.length - 1].d;   // งวดสุดท้ายของปีนั้น (ปกติ Q4)
+    const close = closeMap[lastDate];
+    if (close != null && annualEps > 0) out.push({ d: lastDate, v: close / annualEps });
+  });
+  return out;
+}
+
 // แถบ valuation band: min | p25 | median | p75 | max + จุดค่าปัจจุบัน
-function _svgBand(series, label, lowerIsCheap) {
-  const vals = series.map(o => o.v).filter(v => v > 0).sort((a, b) => a - b);
+// winsorize: หนีบค่าที่หลุดช่วง p1-p99 เข้ามาที่ขอบเขต (ไม่ทิ้งจุดข้อมูล แค่ลดความ
+// สุดโต่ง) — เก็บไว้เป็นเซฟตี้เน็ตกันจุดโดดเดี่ยวที่เพี้ยนจริงๆ (ไม่ใช่ตัวแก้หลัก
+// ของปัญหา PE Finnomena ที่แก้ด้วย TTM EPS ด้านบนแล้ว) ลาก mean/std/min/max
+// ของทั้งชุดข้อมูลเพี้ยนไปด้วย ถ้าไม่ตัดก่อน (เหมือนหลักการ _sane() ที่ใช้ใน
+// factor_snapshot.py ฝั่ง backend สำหรับ ratio อื่นๆ)
+function _winsorize(vals) {
+  if (vals.length < 8) return vals;
+  const sorted = [...vals].sort((a, b) => a - b);
+  const q = p => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))];
+  const lo = q(0.01), hi = q(0.99);
+  return vals.map(v => Math.min(hi, Math.max(lo, v)));
+}
+
+// คำอธิบาย p25/p75 แบบเข้าใจง่าย — ใช้ร่วมกันทั้งแถบรายหุ้น (หน้างบการเงิน) และ
+// แถบตลาดรวม (หน้า Valuation) เพราะเป็นแนวคิดเดียวกัน
+const _PE_BAND_NOTE_HTML = `
+  <b>p25 / p75 คืออะไร?</b><br><br>
+  เอาค่า (เช่น PE) ทุกงวดย้อนหลังทั้งหมด มาเรียงจาก <b>ถูกสุด → แพงสุด</b> เป็นแถวเดียว
+  แล้วแบ่งแถวนี้ออกเป็น 4 ส่วนเท่าๆ กัน<br><br>
+  <b>p25</b> = จุดแบ่งช่วง 25% ถูกสุด — ถ้าค่าปัจจุบัน <b style="color:#3fb950">ต่ำกว่า p25</b>
+  แปลว่านี่คือหนึ่งในช่วงเวลาที่ <b style="color:#3fb950">ถูกที่สุด 25%</b> ที่เคยเป็นมา (ไม่ใช่แค่รู้สึกว่าถูก)<br><br>
+  <b>p75</b> = จุดแบ่งช่วง 25% แพงสุด — ถ้าค่าปัจจุบัน <b style="color:#f85149">สูงกว่า p75</b>
+  แปลว่านี่คือหนึ่งในช่วงเวลาที่ <b style="color:#f85149">แพงที่สุด 25%</b> ที่เคยเป็นมา<br><br>
+  ทำไมไม่ใช้แค่ "ค่าเฉลี่ย"? เพราะถ้ามีงวดไหนราคาพุ่งผิดปกติ ค่าเฉลี่ยจะถูกลากเพี้ยนไปด้วย
+  แต่ p25/p75 สนใจแค่ "ตำแหน่ง" ในแถวเรียง ไม่ถูกกระทบง่ายๆ`;
+
+function _svgBand(series, label, lowerIsCheap, idPrefix) {
+  const vals = _winsorize(series.map(o => o.v).filter(v => v > 0)).sort((a, b) => a - b);
   if (vals.length < 8) return `<div style="font-size:12px;color:var(--text2)">${label}: ข้อมูลไม่พอ (${vals.length} งวด)</div>`;
   const q = p => vals[Math.min(vals.length - 1, Math.floor(p * (vals.length - 1)))];
   const lo = vals[0], hi = vals[vals.length - 1], med = q(0.5), p25 = q(0.25), p75 = q(0.75);
@@ -6996,16 +7220,46 @@ function _svgBand(series, label, lowerIsCheap) {
   const rich = lowerIsCheap ? cur >= p75 : cur <= p25;
   const col = cheap ? '#3fb950' : rich ? '#f85149' : '#d9932e';
   const f = v => (Math.round(v * 100) / 100);
-  return `<div style="margin:6px 0">
+  // idPrefix: ถ้าให้มา จะใส่ id ไว้ให้ _patchLiveBand แก้เป็นราคาสดจาก Yahoo ทีหลังได้
+  // (ค่า "ปัจจุบัน" เดิมคืองวดสุดท้ายของ Finnomena ซึ่งอาจเป็นราคา ณ สิ้นไตรมาสก่อน ไม่ใช่วันนี้)
+  const curId = idPrefix ? ` id="${idPrefix}-cur"` : '';
+  const tickId = idPrefix ? ` id="${idPrefix}-tick"` : '';
+  return `<div style="margin:6px 0"${idPrefix ? ` data-lo="${lo}" data-hi="${hi}" data-p25="${p25}" data-p75="${p75}" data-lower-cheap="${lowerIsCheap ? 1 : 0}"` : ''}>
     <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2)">
-      <span><b style="color:var(--text)">${label}</b> ปัจจุบัน <b style="color:${col}">${f(cur)}</b></span>
+      <span><b style="color:var(--text)">${label}</b> ปัจจุบัน <b${curId} style="color:${col}">${f(cur)}</b></span>
       <span>มัธยฐาน ${f(med)} · ต่ำสุด ${f(lo)} · สูงสุด ${f(hi)}</span>
     </div>
     <div style="position:relative;height:12px;margin-top:3px;border-radius:6px;background:linear-gradient(90deg,#3fb95055,#d9932e55,#f8514955)">
       <div style="position:absolute;left:${(p25 - lo) / (hi - lo || 1) * 100}%;top:0;bottom:0;width:1px;background:var(--text2)"></div>
       <div style="position:absolute;left:${(p75 - lo) / (hi - lo || 1) * 100}%;top:0;bottom:0;width:1px;background:var(--text2)"></div>
-      <div style="position:absolute;left:${pos}%;top:-2px;width:2px;height:16px;background:${col};box-shadow:0 0 3px ${col}"></div>
+      <div${tickId} style="position:absolute;left:${pos}%;top:-2px;width:2px;height:16px;background:${col};box-shadow:0 0 3px ${col}"></div>
     </div>
+  </div>`;
+}
+
+// แถวค่า mean±nσ ใต้แถบ _svgBand — คำนวณ mean/std เองจาก vals ดิบ (population std
+// เหมือน calc_stats() ฝั่ง backend ที่ใช้กับ Valuation ตลาด) ใช้กับ PE/PBV รายหุ้น
+// ที่ไม่มี server คำนวณ bands ไว้ล่วงหน้าแบบหน้า Valuation ตลาด
+function _sigmaBandHtml(rawVals) {
+  if (!rawVals || rawVals.length < 8) return '';
+  const vals = _winsorize(rawVals);   // กัน mean/std บวมจากไตรมาสข้อมูลเพี้ยน (ดู _winsorize)
+  const n = vals.length;
+  const mean = vals.reduce((a, b) => a + b, 0) / n;
+  const variance = vals.reduce((a, b) => a + (b - mean) * (b - mean), 0) / n;
+  const std = Math.sqrt(variance);
+  const f = v => Math.round(v * 100) / 100;
+  // เรียงถูก(เขียว)→แพง(แดง) ซ้ายไปขวา ให้ตรงทิศทางแถบไล่สีของ _svgBand ด้านบน
+  const items = [
+    ['-3σ', mean - 3 * std, '#2f9e57', 'ถูกมากผิดปกติ'],
+    ['-2σ', mean - 2 * std, '#3ab464', 'ถูกผิดปกติ'],
+    ['-1σ', mean - std,     '#96c850', 'ถูกกว่าค่าเฉลี่ย'],
+    ['+1σ', mean + std,     '#e0d060', 'แพงกว่าค่าเฉลี่ย'],
+    ['+2σ', mean + 2 * std, '#dca032', 'แพงผิดปกติ'],
+    ['+3σ', mean + 3 * std, '#dc503c', 'แพงมากผิดปกติ'],
+  ];
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px 12px;font-size:10px;margin:2px 0 8px">
+    ${items.map(([lbl, val, col, txt]) =>
+      `<span style="color:${col}" title="${txt}"><b>${lbl}</b> ${f(val)} — ${txt}</span>`).join('')}
   </div>`;
 }
 
@@ -7086,7 +7340,14 @@ function _finTrendSectionImpl(d, source) {
   const roe = _finSeries(ratios['ROE']);
   const ocf = _finSeries(cf['Operating Cash Flow']);
   const de  = _finSeries(ratios['Debt To Equity']);
-  const pe = _finSeries(val['PE']), pbv = _finSeries(val['PBV']);
+  // PE (ฐานข้อมูลย้อนหลัง): คำนวณเอง = Close ÷ EPS รวมทั้งปี (รายปี ไม่ใช่ TTM
+  // รายไตรมาส) แทนที่จะใช้ field "PE" ของ Finnomena ตรงๆ — พบว่างวดเก่าหลายตัว
+  // (เช่น BDMS ก่อนกลางปี 2025) Finnomena ดูเหมือนคำนวณ PE จาก EPS ไตรมาสเดียวแทน
+  // TTM ทำให้ PE พุ่งผิดปกติ (เคยเจอ 655x) ลองเทียบทั้งแบบ TTM รายไตรมาส (rolling)
+  // กับรายปี (เฉพาะปีที่ปิดครบ 4 ไตรมาส) แล้วรายปีแม่นกว่า — ตรงกับเว็บอ้างอิงเกือบ
+  // เป๊ะ เพราะตัดความผันผวนของไตรมาสเดี่ยวๆ ออกไป · PBV ไม่มีปัญหานี้ ใช้ field ของ
+  // Finnomena ตรงๆ ได้ตามเดิม
+  const pe = _annualPeSeries(inc['Basic EPS'], val['Close']), pbv = _finSeries(val['PBV']);
   const span = rev.length ? `${rev[0].d.slice(0,7)} – ${rev[rev.length-1].d.slice(0,7)} (${rev.length} ไตรมาส)` : '';
 
   const chart = (title, svg, sub) => svg ? `
@@ -7097,10 +7358,10 @@ function _finTrendSectionImpl(d, source) {
 
   const bands = (pe.length >= 8 || pbv.length >= 8) ? `
     <div style="margin-top:10px">
-      <div style="font-size:11px;color:var(--accent);font-weight:600;margin-bottom:2px">มูลค่าเทียบอดีตตัวเอง (PE/PBV band)</div>
-      ${pe.length ? _svgBand(pe, 'PE', true) : ''}
-      ${pbv.length ? _svgBand(pbv, 'PBV', true) : ''}
-      <div style="font-size:10px;color:var(--text2);margin-top:2px">เขียว = ถูกกว่าอดีต (≤ p25) · แดง = แพงกว่าอดีต (≥ p75) · ขีดคือ p25/p75</div>
+      <div style="font-size:11px;color:var(--accent);font-weight:600;margin-bottom:2px">มูลค่าเทียบอดีตตัวเอง (PE/PBV band)${_tipIconHtml(_PE_BAND_NOTE_HTML)} <span id="fin-live-price" style="font-weight:400;color:var(--text2)"></span></div>
+      ${pe.length ? _svgBand(pe, 'PE', true, 'peband') + _sigmaBandHtml(pe.map(o => o.v).filter(v => v > 0)) : ''}
+      ${pbv.length ? _svgBand(pbv, 'PBV', true, 'pbvband') + _sigmaBandHtml(pbv.map(o => o.v).filter(v => v > 0)) : ''}
+      <div style="font-size:10px;color:var(--text2);margin-top:2px">เขียว = ถูกกว่าอดีต (≤ p25) · แดง = แพงกว่าอดีต (≥ p75) · ขีดคือ p25/p75 · ฐานข้อมูลย้อนหลัง PE คำนวณจาก Close ÷ EPS รวมรายปีเอง (ไม่ใช้ field PE ของ Finnomena ตรงๆ — บางงวดเก่าคำนวณผิดจาก EPS ไตรมาสเดียว) · "ปัจจุบัน" ใช้ TTM ล่าสุด × ราคาสดจาก Yahoo · PBV ใช้ field ของ Finnomena โดยตรง</div>
     </div>` : '';
 
   return `<div class="card" style="margin-top:12px;background:var(--card2)">
@@ -7314,6 +7575,7 @@ function _renderFinancialsFull(d, source) {
       _loadFinDescription(d.sym, tvMarket);
       if (!IS_STATIC) _loadFinTVLink(d.sym, tvMarket);
     }
+    if (isFinn && !IS_STATIC) _loadLiveValuationBand(d, _finTab === 'dr', tvMarket);
     return;
   }
 
@@ -9461,7 +9723,105 @@ async function loadValuationPage() {
       }
     })(),
     renderValSectorTable(),
+    loadValDailyBox(),
   ]);
+}
+
+// กล่อง P/E-P/BV "รายวัน" จาก SET.or.th โดยตรง (คู่กับตัวเลขรายเดือนจาก Excel
+// ด้านล่าง) — scrape จากหน้า overview ของ SET.or.th เอง ไม่ใช่ Finnomena
+async function loadValDailyBox() {
+  const box = document.getElementById('val-daily-box');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/set-daily-valuation?t=' + Date.now());
+    const d = await r.json();
+    if (d.error || !d.SET) { box.style.display = 'none'; return; }
+    const row = (label, key, suffix = '') => `
+      <tr>
+        <td style="padding:4px 10px 4px 0;color:var(--muted)">${label}</td>
+        <td class="r" style="padding:4px 14px">${d.SET[key] != null ? d.SET[key].toLocaleString(undefined,{maximumFractionDigits:2}) + suffix : '—'}</td>
+        <td class="r" style="padding:4px 0">${d.mai[key] != null ? d.mai[key].toLocaleString(undefined,{maximumFractionDigits:2}) + suffix : '—'}</td>
+      </tr>`;
+
+    // "มูลค่าเทียบอดีตตัวเอง" — เอาสถิติรายเดือนย้อนหลัง (Excel, ที่มีอยู่แล้วใน
+    // _valData) มาต่อกับค่ารายวันของวันนี้ (SET.or.th) เป็นจุด "ปัจจุบัน" แทนที่
+    // จะใช้ค่าสิ้นเดือนล่าสุดของ Excel (ค้างได้นานสุด ~1 เดือน) — ใช้ _svgBand
+    // เดียวกับที่ใช้ในหน้างบการเงินรายหุ้น (ดู _loadLiveValuationBand)
+    if (!_valData) {
+      try {
+        const r2 = await fetch('/api/market-stats?t=' + Date.now());
+        if (r2.ok) _valData = await r2.json();
+      } catch (e) { /* ไม่มี Excel ก็แสดงแค่ตารางรายวันด้านบนไป */ }
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const bandSeries = (market, statKey, liveVal) => {
+      const stat = _valData && _valData[statKey];
+      if (!stat || !stat.dates || !stat.series || !stat.series[market]) return [];
+      const series = stat.dates.map((dt, i) => ({ d: dt, v: stat.series[market][i] }))
+        .filter(o => o.v != null);
+      if (liveVal != null) series.push({ d: today, v: liveVal });
+      return series;
+    };
+    // เส้นค่า ±σ (mean ± n×std ของสถิติรายเดือนที่คำนวณไว้แล้วฝั่ง server ใน
+    // calc_stats() — set_market_stats.json) แปะไว้ใต้แถบ percentile band แต่ละอัน
+    // ให้เห็นว่าค่าปัจจุบันอยู่โซนไหนเทียบค่าเฉลี่ย/ส่วนเบี่ยงเบนมาตรฐาน
+    const sigmaRow = (statKey, market) => {
+      const s = _valData && _valData[statKey] && _valData[statKey].stats && _valData[statKey].stats[market];
+      if (!s || !s.bands) return '';
+      // เรียงถูก(เขียว)→แพง(แดง) จากซ้ายไปขวา ให้ตรงกับทิศทางแถบไล่สีด้านบน
+      // (เขียว ซ้าย → แดง ขวา) ไม่ใช่เรียงจาก +3σ ก่อนแบบตัวเลข
+      const items = [
+        ['-3σ', s.bands['-3σ'], '#2f9e57', 'ถูกมากผิดปกติ'],
+        ['-2σ', s.bands['-2σ'], '#3ab464', 'ถูกผิดปกติ'],
+        ['-1σ', s.bands['-1σ'], '#96c850', 'ถูกกว่าค่าเฉลี่ย'],
+        ['+1σ', s.bands['+1σ'], '#e0d060', 'แพงกว่าค่าเฉลี่ย'],
+        ['+2σ', s.bands['+2σ'], '#dca032', 'แพงผิดปกติ'],
+        ['+3σ', s.bands['+3σ'], '#dc503c', 'แพงมากผิดปกติ'],
+      ].filter(([, val]) => val != null);
+      if (!items.length) return '';
+      return `<div style="display:flex;flex-wrap:wrap;gap:6px 12px;font-size:10px;margin:2px 0 8px">
+        ${items.map(([lbl, val, col, txt]) =>
+          `<span style="color:${col}" title="${txt}"><b>${lbl}</b> ${val}x — ${txt}</span>`).join('')}
+      </div>`;
+    };
+    const bandsHtml = (market, label) => {
+      const pe = bandSeries(market, 'pe', d[market] && d[market].pe);
+      const pbv = bandSeries(market, 'pbv', d[market] && d[market].pbv);
+      if (pe.length < 8 && pbv.length < 8) return '';
+      return `
+        <div style="font-size:11px;color:var(--muted);font-weight:600;margin:10px 0 2px">${label}</div>
+        ${pe.length >= 8 ? _svgBand(pe, 'PE', true) + sigmaRow('pe', market) : ''}
+        ${pbv.length >= 8 ? _svgBand(pbv, 'PBV', true) + sigmaRow('pbv', market) : ''}`;
+    };
+    const bandsBlock = bandsHtml('SET', 'SET') + bandsHtml('mai', 'mai');
+
+    box.style.display = 'block';
+    // หมายเหตุ: จงใจไม่ใช้ class="card" ตรงนี้ (แค่ inline style เทียบเท่า) — โค้ด
+    // renderValuation() ด้านล่างมี selector "#page-valuation .card:last-child"
+    // ที่ไปแม็ตช์ div.card ตัวไหนก็ได้ที่เป็นลูกคนสุดท้ายของ parent ตัวเอง ถ้าใช้
+    // class="card" ตรงนี้จะไปชนกับ tooltip injection ของกล่องอื่นโดยไม่ตั้งใจ
+    box.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:14px 16px">
+        <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <div style="font-weight:600;font-size:13px">📅 วันนี้ (รายวัน — จาก SET.or.th โดยตรง)</div>
+          <span style="font-size:11px;color:var(--muted)">ข้อมูล ณ วันที่ ${d.as_of || '—'}</span>
+        </div>
+        <div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:12.5px">
+          <tr style="color:var(--muted)"><td></td><td class="r" style="padding:0 14px">SET</td><td class="r">mai</td></tr>
+          ${row('P/E (เท่า)', 'pe')}
+          ${row('P/BV (เท่า)', 'pbv')}
+          ${row('อัตราปันผล (%)', 'div_yield', '%')}
+          ${row('กำไรสุทธิ/หุ้น', 'eps')}
+        </table></div>
+        <div style="font-size:10px;color:var(--muted);margin-top:6px">ตัวเลขจากตาราง "ผลการดำเนินงาน" บนหน้า SET.or.th โดยตรง — อัพเดทตามรอบของ SET เอง (ปกติวันละครั้งหลังตลาดปิด)</div>
+        ${bandsBlock ? `<hr style="border:none;border-top:1px solid var(--border);margin:12px 0 8px">
+        <div style="font-weight:600;font-size:12.5px">มูลค่าเทียบอดีตตัวเอง (PE/PBV band)${_tipIconHtml(_PE_BAND_NOTE_HTML)}</div>
+        ${bandsBlock}
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">เขียว = ถูกกว่าอดีต (≤ p25) · แดง = แพงกว่าอดีต (≥ p75) · ค่า "ปัจจุบัน" คือตัวเลขรายวันด้านบน เทียบกับสถิติย้อนหลังจาก Excel รายเดือน</div>` : ''}
+      </div>`;
+  } catch (e) {
+    box.style.display = 'none';
+  }
 }
 
 function setValPeriod(p, btn) {

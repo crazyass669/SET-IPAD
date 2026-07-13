@@ -43,6 +43,11 @@ _DR_DIFF_CACHE_TTL = 6 * 3600
 _fin_cache: dict = {}
 _FIN_CACHE_TTL = 24 * 3600
 
+# P/E-P/BV รายวันของตลาด (scrape จากหน้า overview ของ SET.or.th) — cache 3 ชม.
+# พอ (ตัวเลขอัพเดทแค่วันละครั้งหลังตลาดปิดฝั่ง SET เอง กดถี่กว่านั้นก็ได้ค่าเดิม)
+_set_daily_val_cache: dict = {"result": None, "ts": 0}
+_SET_DAILY_VAL_TTL = 3 * 3600
+
 # Financials analytics cache — growth score/PEG/FCF yield ทั้งตลาด (bulk)
 # event-invalidate ตอน sync งบการเงินเสร็จ + TTL 24h กันค้างข้าม restart
 _fin_analytics_cache: dict = {}
@@ -851,6 +856,32 @@ def resolve_yf(symbol):
     if not yf_ticker:
         return jsonify({"sym": sym, "error": "ไม่ทราบตลาดของหุ้นนี้"}), 404
     return jsonify({"sym": sym, "yf": yf_ticker, "is_etf": is_etf})
+
+
+@app.route("/api/live-price/<symbol>")
+def live_price(symbol):
+    """ราคาล่าสุดจาก Yahoo Finance แบบเบา (fast_info — ไม่โหลด history เต็ม) ใช้คำนวณ
+    PE/PBV band แบบสด ("มูลค่าเทียบอดีตตัวเอง") ในหน้างบการเงิน — งวด Finnomena
+    ล่าสุดอาจเป็นราคา ณ สิ้นไตรมาสที่ผ่านมาแล้ว ไม่ใช่ราคาวันนี้"""
+    import yfinance as yf
+    sym = symbol.upper().strip()
+    is_dr = request.args.get("is_dr") == "1"
+    market = request.args.get("market")
+    if is_dr:
+        yf_ticker, is_etf = dr_descriptions.resolve_yf_ticker(BASE_DIR, sym, market=market)
+        if not yf_ticker:
+            return jsonify({"sym": sym, "error": "ไม่ทราบตลาดของหุ้นนี้"}), 404
+    else:
+        yf_ticker = sym + ".BK"
+    try:
+        fi = yf.Ticker(yf_ticker).fast_info
+        price = getattr(fi, "last_price", None)
+        if price is None:
+            return jsonify({"sym": sym, "error": "ไม่พบราคา"}), 404
+        return jsonify({"sym": sym, "yf": yf_ticker, "price": float(price),
+                        "currency": getattr(fi, "currency", None)})
+    except Exception as e:
+        return jsonify({"sym": sym, "error": str(e)}), 500
 
 
 @app.route("/api/dr-description-sync", methods=["POST"])
@@ -2011,6 +2042,25 @@ def market_stats_meta():
     pe_latest = (data.get("pe", {}).get("dates") or [None])[-1]
     pbv_latest = (data.get("pbv", {}).get("dates") or [None])[-1]
     return jsonify({"updated_at": pe_latest, "pe_date": pe_latest, "pbv_date": pbv_latest})
+
+
+@app.route("/api/set-daily-valuation")
+def set_daily_valuation():
+    """P/E, P/BV, Div Yield, EPS รายวันของตลาด SET/mai — scrape จากหน้า overview
+    ของ SET.or.th โดยตรง (server-rendered, ไม่ใช่ Finnomena) เสริมข้างๆ ค่าจาก
+    Table_PE.xls/Table_PBV.xls ที่เป็นรายเดือน (ดู sources/set_daily_valuation.py)"""
+    now = time.time()
+    cached = _set_daily_val_cache.get("result")
+    if cached and (now - _set_daily_val_cache.get("ts", 0) < _SET_DAILY_VAL_TTL):
+        return jsonify(cached)
+    from sources import set_daily_valuation as sdv
+    result = sdv.fetch()
+    if not result:
+        if cached:
+            return jsonify(cached)   # ดึงใหม่ล้มเหลว — ใช้ค่าเก่าไปก่อนดีกว่าไม่มีเลย
+        return jsonify({"error": "ดึงข้อมูลจาก SET.or.th ไม่สำเร็จ (โครงสร้างหน้าเว็บอาจเปลี่ยน)"}), 502
+    _set_daily_val_cache.update(result=result, ts=now)
+    return jsonify(result)
 
 
 @app.route("/api/refresh-market-stats", methods=["POST"])
