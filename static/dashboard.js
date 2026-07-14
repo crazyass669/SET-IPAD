@@ -3925,6 +3925,8 @@ async function runScreener() {
   const ratioYearsBack      = parseInt(document.getElementById('scr-ratio-years-back').value) || 1;
   const rvolMin     = parseFloat(document.getElementById('scr-rvol').value);
   const rvolDays    = parseInt(document.getElementById('scr-rvol-days').value) || 20;
+  const atrMax      = parseFloat(document.getElementById('scr-atr-max')?.value);
+  const seasMin     = parseFloat(document.getElementById('scr-seas-min')?.value);
   const ret1w     = parseFloat(document.getElementById('scr-1w').value);
   const ret6m     = parseFloat(document.getElementById('scr-6m').value);
   const ret1y     = parseFloat(document.getElementById('scr-1y').value);
@@ -3976,6 +3978,10 @@ async function runScreener() {
     if (!isNaN(capMin)   && capMin > 0 && (!s.mkt_cap || s.mkt_cap < capMin)) return false;
     if (!isNaN(priceMin) && (s.price ?? 0) < priceMin)                return false;
     if (!isNaN(priceMax) && priceMax > 0 && (s.price ?? 0) > priceMax) return false;
+    // ATR% ≤ เพดาน: คัดหุ้นผันผวนต่ำ (ไม่มีค่า ATR = ไม่ผ่าน เพราะกรองความผันผวนไม่ได้)
+    if (!isNaN(atrMax) && atrMax > 0 && (s.atr14_pct == null || s.atr14_pct > atrMax)) return false;
+    // ฤดูกาลเดือนนี้ ≥ : หุ้นที่เดือนปฏิทินปัจจุบันมักขึ้น (ไม่มีสถิติ = ไม่ผ่าน)
+    if (!isNaN(seasMin) && (s.seas_ret == null || s.seas_ret < seasMin)) return false;
     if (!isNaN(fromHighMax) && fromHighMax >= 0) {
       const fh = s.high_52w > 0 ? (s.price - s.high_52w) / s.high_52w * 100 : null;
       if (fh == null || fh < -fromHighMax) return false;
@@ -5463,7 +5469,7 @@ function renderMomentum() {
 const _SCR_LS = 'set_scr_v1';
 const _SCR_FIELDS = ['scr-rs-min','scr-1m','scr-3m','scr-1d','scr-ytd','scr-cap',
                      'scr-price-min','scr-price-max','scr-from-high','scr-ath-dist','scr-from-low',
-                     'scr-pe','scr-pbv','scr-ps','scr-dy','scr-rvol','scr-1w','scr-6m','scr-1y',
+                     'scr-pe','scr-pbv','scr-ps','scr-dy','scr-rvol','scr-atr-max','scr-seas-min','scr-1w','scr-6m','scr-1y',
                      'scr-growth-min','scr-peg-max','scr-rev-streak-min','scr-profit-streak-min',
                      'scr-rev-qoq-min','scr-profit-qoq-min','scr-rev-yoyq-min','scr-profit-yoyq-min',
                      'scr-rev-qstreak-min','scr-profit-qstreak-min','scr-margin-qstreak-min',

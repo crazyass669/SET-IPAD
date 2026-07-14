@@ -194,3 +194,42 @@ def build_for_symbol(base_dir, ticker, min_years=5):
     if not ohlc:
         return None
     return analyze(ohlc, min_years=min_years)
+
+
+def current_month_seasonality(ohlc, month, min_years=5):
+    """สถิติฤดูกาลของ "เดือนปฏิทินที่กำหนด" (1-12) สำหรับหุ้นตัวเดียว — ใช้ทำ screener
+    คืน {'seas_ret': ผลตอบแทนเฉลี่ยเดือนนั้น%, 'seas_hit': % ปีที่เดือนนั้นบวก, 'seas_n': จำนวนปี}
+    หรือ None ถ้าข้อมูลไม่พอ (< min_years) — ผลตอบแทนใช้ adj close (fallback close)"""
+    if not ohlc or not ohlc.get("dates"):
+        return None
+    dates, values, _ = _clean_adj_series(ohlc)
+    if len(dates) < 250:
+        return None
+    seas = monthly_seasonality(dates, values, min_years=min_years)
+    if not seas.get("enough_data"):
+        return None
+    m = next((x for x in seas["months"] if x["month"] == month), None)
+    if not m or m["avg_return_pct"] is None or m["n"] < min_years:
+        return None
+    return {"seas_ret": m["avg_return_pct"], "seas_hit": m["hit_rate_pct"], "seas_n": m["n"]}
+
+
+def annotate_seasonality(base_dir, stocks, month=None):
+    """เติม field seas_ret / seas_hit (ฤดูกาลของ 'เดือนปัจจุบัน') ให้ทุกหุ้นใน list
+    — mutate stocks in place · ใช้ในไปป์ไลน์ refresh หลัง build stocks เสร็จ
+    หุ้นที่ข้อมูลไม่พอจะไม่มี field (screener ถือว่า 'ไม่ผ่าน' ตัวกรองฤดูกาล)"""
+    from datetime import date as _d
+    from core import store
+    if month is None:
+        month = _d.today().month
+    for s in stocks:
+        tick = s.get("ticker")
+        if not tick:
+            continue
+        ohlc = store.get_ohlc_series(base_dir, tick)
+        cm = current_month_seasonality(ohlc, month) if ohlc else None
+        if cm:
+            s["seas_ret"] = cm["seas_ret"]
+            s["seas_hit"] = cm["seas_hit"]
+            s["seas_n"] = cm["seas_n"]
+    return stocks

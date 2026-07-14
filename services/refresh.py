@@ -122,7 +122,8 @@ def run_with_progress(callback, base_dir=None, period="max"):
         d    = all_data.get(tick)
         if d is None:
             continue
-        result = process_stock(info_dict, d["close"], d["volume"])
+        result = process_stock(info_dict, d["close"], d["volume"],
+                               high=d.get("high"), low=d.get("low"))
         if result:
             stocks.append(result)
         if i % 100 == 0:
@@ -159,6 +160,13 @@ def run_with_progress(callback, base_dir=None, period="max"):
     callback(total, total, f"ตรวจสอบคุณภาพข้อมูล + คำนวณ RS Rank ({len(stocks)} หุ้น)...")
     dq_summary = validate_stocks(stocks, data_as_of)
     stocks     = rank_rs(stocks)
+
+    # เติมสถิติฤดูกาล "เดือนปัจจุบัน" (seas_ret/seas_hit) สำหรับ screener — non-critical
+    try:
+        from sources.price_analytics import annotate_seasonality
+        annotate_seasonality(base_dir, stocks)
+    except Exception as e:
+        print(f"[Seasonality] ข้าม: {e}")
 
     industries = summarize_groups(stocks, "industry")
     sectors    = summarize_groups(stocks, "sector")
@@ -250,9 +258,12 @@ def run_quick_update(callback, base_dir=None):
             dates  = pd.to_datetime(hist_data["dates"])
             close  = pd.Series(hist_data["closes"],  index=dates, dtype=float)
             volume = pd.Series(hist_data["volumes"], index=dates, dtype=float)
+            # highs/lows มาจาก iter_all_series (additive) — คำนวณ ATR จริง; None ถ้าไม่มี
+            high = pd.Series(hist_data["highs"], index=dates, dtype=float) if hist_data.get("highs") else None
+            low  = pd.Series(hist_data["lows"],  index=dates, dtype=float) if hist_data.get("lows") else None
         except Exception:
             continue
-        result = process_stock(info_dict, close, volume)
+        result = process_stock(info_dict, close, volume, high=high, low=low)
         if result:
             stocks.append(result)
         done += 1
@@ -279,6 +290,11 @@ def run_quick_update(callback, base_dir=None):
     callback(total, total, "ตรวจสอบคุณภาพข้อมูล + คำนวณ RS Rank...")
     dq_summary = validate_stocks(stocks, data_as_of)
     stocks     = rank_rs(stocks)
+    try:
+        from sources.price_analytics import annotate_seasonality
+        annotate_seasonality(base_dir, stocks)
+    except Exception as e:
+        print(f"[Seasonality] ข้าม: {e}")
     industries = summarize_groups(stocks, "industry")
     sectors    = summarize_groups(stocks, "sector")
     _update_rotation_safe(base_dir, data_as_of, sectors, industries)

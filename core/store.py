@@ -131,22 +131,23 @@ def get_last_dates(base_dir):
 
 
 def iter_all_series(base_dir):
-    """generator: yield (ticker, {'dates','closes','volumes'}) เรียงตาม ticker
-    ผู้เรียกต้อง consume จนจบ (connection ปิดเมื่อ generator จบ/ถูกทิ้ง)"""
+    """generator: yield (ticker, {'dates','closes','volumes','highs','lows'}) เรียงตาม ticker
+    highs/lows เพิ่มมาแบบ additive (ไว้คำนวณ ATR จริง) — consumer เก่าที่อ่านแค่
+    dates/closes/volumes ไม่กระทบ · ผู้เรียกต้อง consume จนจบ (connection ปิดเมื่อ generator จบ)"""
     if db_exists(base_dir):
         con = _connect(base_dir)
         try:
             cur = con.execute(
-                "SELECT ticker, date, close, volume FROM prices ORDER BY ticker, date")
-            cur_t, d, c, v = None, [], [], []
-            for t, dt, cl, vol in cur:
+                "SELECT ticker, date, close, volume, high, low FROM prices ORDER BY ticker, date")
+            cur_t, d, c, v, h, lo = None, [], [], [], [], []
+            for t, dt, cl, vol, hi, low in cur:
                 if t != cur_t:
                     if cur_t is not None:
-                        yield cur_t, {"dates": d, "closes": c, "volumes": v}
-                    cur_t, d, c, v = t, [], [], []
-                d.append(dt); c.append(cl); v.append(vol)
+                        yield cur_t, {"dates": d, "closes": c, "volumes": v, "highs": h, "lows": lo}
+                    cur_t, d, c, v, h, lo = t, [], [], [], [], []
+                d.append(dt); c.append(cl); v.append(vol); h.append(hi); lo.append(low)
             if cur_t is not None:
-                yield cur_t, {"dates": d, "closes": c, "volumes": v}
+                yield cur_t, {"dates": d, "closes": c, "volumes": v, "highs": h, "lows": lo}
         finally:
             con.close()
         return

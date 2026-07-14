@@ -197,8 +197,9 @@ def _is_reit(symbol: str) -> bool:
 # 2. คำนวณ metrics จาก Series ที่ดาวน์โหลดมาแล้ว
 # ============================================================
 
-def process_stock(info_dict, close, volume):
-    """คำนวณ metrics จาก close/volume Series — ไม่ดึงข้อมูลเพิ่ม"""
+def process_stock(info_dict, close, volume, high=None, low=None):
+    """คำนวณ metrics จาก close/volume Series — ไม่ดึงข้อมูลเพิ่ม
+    high/low (optional): ถ้าให้มา คำนวณ ATR จริงจาก true range แทน close-only approximation"""
     try:
         if close is None or len(close) < 5:
             return None
@@ -248,9 +249,20 @@ def process_stock(info_dict, close, volume):
             if ema200_past and ema200_past > 0:
                 ema200_slope_pct = round((ema200 - ema200_past) / ema200_past * 100, 3)
 
-        # ATR14 (close-only approximation): avg daily move % ช่วง 14 วัน
+        # ATR14: ถ้ามี OHLC ใช้ true range จริง (max ของ high-low, |high-prevClose|, |low-prevClose|)
+        # — จับ gap + ช่วงแกว่งระหว่างวันที่ close-to-close มองไม่เห็น · ถ้าไม่มี OHLC fallback
+        # เป็น approximation เดิม (avg |%เปลี่ยนรายวัน|)
         atr14_pct = None
-        if len(close) >= 15:
+        _has_ohlc = (high is not None and low is not None
+                     and len(high) == len(close) and high.notna().any() and low.notna().any())
+        if _has_ohlc and len(close) >= 15:
+            prev_c = close.shift(1)
+            tr = pd.concat([(high - low), (high - prev_c).abs(), (low - prev_c).abs()],
+                           axis=1).max(axis=1)
+            atr = tr.tail(14).mean()
+            if atr == atr and price > 0:   # ไม่ใช่ NaN
+                atr14_pct = round(float(atr / price * 100), 3)
+        elif len(close) >= 15:
             daily_moves = close.pct_change().abs().tail(14).dropna()
             if len(daily_moves) >= 10:
                 atr14_pct = round(float(daily_moves.mean()) * 100, 3)
