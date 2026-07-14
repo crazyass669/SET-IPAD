@@ -149,23 +149,37 @@ def query_major_changes(base_dir, days):
 
 
 def _fetch_and_parse_insider(date_from, date_to):
-    """คืน list[dict] ของแบบ 59 ในช่วง date_from..date_to (ใช้ sec_fetch_chunked)"""
+    """คืน list[dict] ของแบบ 59 ในช่วง date_from..date_to
+
+    เดิมยิงหน้า r59 (POST form) ที่คืนแค่ preview ~100 แถวแรก แล้วพึ่ง sec_fetch_chunked
+    แบ่งครึ่งช่วงซ้ำๆ จนแต่ละก้อน <cap ถึงจะได้ครบ — เปลืองหลาย request และเปราะ
+    (ถ้าวันเดียวมี >cap แถว + แบ่งจนลึกเกิน max_depth จะตกหล่น) เปลี่ยนมายิง endpoint
+    ViewMore/r59-2 (GET) ที่คืนผลครบทั้งช่วงในคำขอเดียว (ทดสอบ 180 วัน = 4408 แถวครบ)
+    รูปแบบ/ลำดับคอลัมน์เหมือนหน้า preview เดิม (0..7) parser ด้านล่างจึงใช้ได้เลย"""
     import re as _re
-    from sources.sec import sec_fetch_chunked, _thai_date
+    import io as _io
+    import ssl as _ssl
+    import urllib.request as _ur
+    import pandas as _pd
 
     UA  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
-    URL = "https://market.sec.or.th/public/idisc/th/r59"
+    url = ("https://market.sec.or.th/public/idisc/th/ViewMore/r59-2"
+           "?DateType=2"
+           f"&DateFrom={date_from.strftime('%Y%m%d')}&DateTo={date_to.strftime('%Y%m%d')}")
 
-    def _build_payload(d_from, d_to, vs, vsg, ev):
-        return {
-            "__VIEWSTATE": vs, "__VIEWSTATEGENERATOR": vsg, "__EVENTVALIDATION": ev,
-            "ctl00$CPH$rblDateType": "T",
-            "ctl00$CPH$BSDateFrom": _thai_date(d_from),
-            "ctl00$CPH$BSDateTo":   _thai_date(d_to),
-            "ctl00$CPH$btSearch":   "Search",
-            "ctl00$CPH$ddlCompany": "",
-        }
-    df = sec_fetch_chunked(URL, UA, date_from, date_to, _build_payload)
+    ctx = _ssl._create_unverified_context()
+    req = _ur.Request(url, headers={"User-Agent": UA})
+    try:
+        with _ur.urlopen(req, context=ctx, timeout=120) as r:
+            html = r.read().decode("utf-8", "ignore")
+        tables = _pd.read_html(_io.StringIO(html))
+    except ValueError:
+        return []   # ไม่มี <table> เลย = ช่วงนั้นไม่มีรายการ
+    except Exception:
+        return []
+    if not tables:
+        return []
+    df = tables[0]
 
     records = []
     for _, row in df.iterrows():
@@ -202,29 +216,49 @@ def _fetch_and_parse_insider(date_from, date_to):
 
 
 def _fetch_and_parse_major(date_from, date_to):
-    """คืน list[dict] ของแบบ 246-2 ในช่วง date_from..date_to (ใช้ sec_fetch_chunked)"""
+    """คืน list[dict] ของแบบ 246-2 ในช่วง date_from..date_to
+
+    หน้า r246 ปกติ (POST form) คืนแค่ "preview 10 แถวแรก" + ลิงก์ "ดูทั้งหมด" —
+    เดิมโค้ดดึงจากหน้านั้นเลยได้แค่ ≤10 แถว/ช่วง และ sec_fetch_chunked ก็ไม่ช่วย
+    เพราะ 10 < cap(95) มันเลยไม่แบ่งช่วงต่อ (พลาด ~74% ของรายการ) — เปลี่ยนมายิง
+    endpoint ViewMore/r246-2 ตรงๆ (GET) ที่คืน "ผลครบทั้งช่วง" ในคำขอเดียว
+    (DateType=2 = วันที่รับข้อมูล ครอบคลุมรายการยื่นช้าที่ transaction อยู่ก่อนช่วง)"""
     import re as _re
-    from sources.sec import sec_fetch_chunked, _thai_date
+    import io as _io
+    import ssl as _ssl
+    import urllib.request as _ur
+    import pandas as _pd
 
     UA  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
-    URL = "https://market.sec.or.th/public/idisc/th/r246"
+    url = ("https://market.sec.or.th/public/idisc/th/ViewMore/r246-2"
+           "?ListedType=listed&DateType=2"
+           f"&DateFrom={date_from.strftime('%Y%m%d')}&DateTo={date_to.strftime('%Y%m%d')}")
 
-    def _build_payload(d_from, d_to, vs, vsg, ev):
-        return {
-            "__VIEWSTATE": vs, "__VIEWSTATEGENERATOR": vsg, "__EVENTVALIDATION": ev,
-            "ctl00$CPH$BsCompany": "", "ctl00$CPH$BsCompany_t": "", "ctl00$CPH$BsCompany_v": "",
-            "ctl00$CPH$txtSearchPerson": "",
-            "ctl00$CPH$rblDateType": "T",
-            "ctl00$CPH$BSDateFrom": _thai_date(d_from),
-            "ctl00$CPH$BSDateTo":   _thai_date(d_to),
-            "ctl00$CPH$btSearch":   "Search",
-        }
-    df = sec_fetch_chunked(URL, UA, date_from, date_to, _build_payload)
+    ctx = _ssl._create_unverified_context()
+    req = _ur.Request(url, headers={"User-Agent": UA})
+    try:
+        with _ur.urlopen(req, context=ctx, timeout=60) as r:
+            html = r.read().decode("utf-8", "ignore")
+        tables = _pd.read_html(_io.StringIO(html))
+    except ValueError:
+        return []   # ไม่มี <table> เลย = ช่วงนั้นไม่มีรายการ
+    except Exception:
+        return []
+    if not tables:
+        return []
+    df = tables[0]
+
+    def _num(v):
+        try:
+            f = float(str(v).replace(",", ""))
+            return None if f != f else f   # กัน NaN (อยู่ใน PK — nan != nan ทำ dedup พัง)
+        except (ValueError, TypeError):
+            return None
 
     records = []
     for _, row in df.iterrows():
         vals = row.tolist()
-        if len(vals) < 5:
+        if len(vals) < 8:
             continue
         sym = str(vals[0]).strip().upper()
         if not sym or sym == "NAN" or sym == "หลักทรัพย์":
@@ -235,14 +269,7 @@ def _fetch_and_parse_major(date_from, date_to):
         method = str(vals[2])
         action = "buy" if "ได้มา" in method else "sell" if "จำหน่าย" in method else "other"
 
-        try:    pct_before = float(str(vals[4]).replace(",", ""))
-        except: pct_before = None
-        try:    pct_change = float(str(vals[5]).replace(",", ""))
-        except: pct_change = None
-        try:    pct_after  = float(str(vals[6]).replace(",", ""))
-        except: pct_after  = None
-
-        raw_date = str(vals[7]) if len(vals) > 7 else ""
+        raw_date = str(vals[7])
         trade_date = ""
         m = _re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", raw_date)
         if m:
@@ -251,8 +278,8 @@ def _fetch_and_parse_major(date_from, date_to):
 
         records.append({
             "symbol": sym_clean, "holder": holder, "method": method,
-            "sec_type": str(vals[3]) if len(vals) > 3 else "",
-            "pct_before": pct_before, "pct_change": pct_change, "pct_after": pct_after,
+            "sec_type": str(vals[3]),
+            "pct_before": _num(vals[4]), "pct_change": _num(vals[5]), "pct_after": _num(vals[6]),
             "trade_date": trade_date, "action": action,
         })
     return records
