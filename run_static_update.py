@@ -160,6 +160,20 @@ def _slim_set_data(payload_text):
     return json.dumps(d, ensure_ascii=False, separators=(",", ":"))
 
 
+def _is_empty_payload(obj):
+    """payload ที่ 'สำเร็จแต่ว่างเปล่า' — เกิดกับ endpoint ที่ต้องพึ่ง DB ที่ไม่มีบน CI
+    (เช่น financials-analytics ต้องใช้ financials.db ซึ่งเป็น local-only) ถ้าเขียนทับ
+    ไฟล์ที่ commit ไว้ด้วยของว่าง จะทำให้ช่องกรองบนเว็บมือถือหาหุ้นไม่เจอเลย"""
+    if isinstance(obj, dict):
+        if not obj:
+            return True
+        # ทุก value เป็น dict/list ว่าง = ไม่มีข้อมูลจริง (เช่น {"set":{},"dr":{}})
+        vals = [v for k, v in obj.items() if k not in ("updated_at", "generated_at", "as_of", "count")]
+        if vals and all(isinstance(v, (dict, list)) and not v for v in vals):
+            return True
+    return False
+
+
 failures = []
 for url, fname, required in SNAPSHOTS:
     t0 = time.time()
@@ -168,10 +182,15 @@ for url, fname, required in SNAPSHOTS:
         if resp.status_code != 200:
             raise RuntimeError(f"HTTP {resp.status_code}")
         payload = resp.get_data(as_text=True)
-        json.loads(payload)  # ตรวจว่าเป็น JSON จริง
+        parsed = json.loads(payload)  # ตรวจว่าเป็น JSON จริง
+        # กันเขียนทับไฟล์ที่มีข้อมูลอยู่แล้ว ด้วย payload ว่าง (source DB ไม่มีบน CI)
+        dest = os.path.join(DATA_DIR, fname)
+        if _is_empty_payload(parsed) and os.path.exists(dest) and os.path.getsize(dest) > 200:
+            log(f"⏭️ {fname}: payload ว่าง (ไม่มี source DB บน CI) — คงไฟล์เดิมที่ commit ไว้")
+            continue
         if fname == "set_data.json":
             payload = _slim_set_data(payload)
-        with open(os.path.join(DATA_DIR, fname), "w", encoding="utf-8") as f:
+        with open(dest, "w", encoding="utf-8") as f:
             f.write(payload)
         log(f"✅ {fname} ({len(payload)//1024} KB, {time.time()-t0:.1f}s)")
     except Exception as e:

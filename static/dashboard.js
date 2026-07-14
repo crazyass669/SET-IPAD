@@ -3367,6 +3367,11 @@ async function loadFinAnalytics() {
     const r = await fetch('/api/financials-analytics');
     const d = await r.json();
     if (!d || d.error) throw new Error(d?.error || 'no data');
+    // "สำเร็จแต่ว่างเปล่า" ({"set":{},"dr":{}}) ก็ถือว่าไม่มีข้อมูล — ถ้าปล่อยผ่าน ช่องกรอง
+    // จะเปิดให้กรอกได้แต่หุ้นทุกตัวไม่มีค่า -> กดค้นหาแล้วเจอ 0 แถวโดยไม่บอกสาเหตุ
+    if (!Object.keys(d.set || {}).length && !Object.keys(d.dr || {}).length) {
+      throw new Error('empty');
+    }
     _finAnalyticsData = d;
     _mergeFinAnalyticsInto(DATA.stocks, s => s.symbol, 'set');
     if (_drData) _mergeFinAnalyticsInto(_drData, s => s.sym, 'dr');
@@ -6202,63 +6207,90 @@ const _PRICE_ANALYTICS_NOTE_HTML = `
 
 function _priceAnalyticsHtml(d) {
   const dd = d.drawdown || {}, r = d.returns || {}, seas = d.seasonality || {};
+  const GREEN = '#3fb950', RED = '#f85149', YELLOW = '#e3b341';
   const pct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%');
-  const col = v => v == null ? 'var(--text2)' : v >= 0 ? '#3fb950' : '#f85149';
+  const col = v => v == null ? 'var(--text2)' : v >= 0 ? GREEN : RED;
   const yr = s => s ? s.slice(0, 4) : '—';
 
-  // การ์ดผลตอบแทน/ความเสี่ยง
-  const stat = (label, val, c) =>
-    `<div style="text-align:center;min-width:60px"><div style="font-size:14px;font-weight:700;color:${c||'var(--text)'}">${val}</div><div style="font-size:10px;color:var(--text2)">${label}</div></div>`;
-
-  const retRow = r.cagr_pct != null ? `
-    <div style="display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;margin-bottom:10px">
-      ${stat(`CAGR (${r.span_years}ปี)`, pct(r.cagr_pct), col(r.cagr_pct))}
-      ${stat('1 ปี', pct(r.ret_1y_pct), col(r.ret_1y_pct))}
-      ${stat('5 ปี', pct(r.ret_5y_pct), col(r.ret_5y_pct))}
-      ${stat('10 ปี', pct(r.ret_10y_pct), col(r.ret_10y_pct))}
-      ${stat(`ดีสุด ${yr(r.best_year)}`, pct(r.best_year_pct), col(r.best_year_pct))}
-      ${stat(`แย่สุด ${yr(r.worst_year)}`, pct(r.worst_year_pct), col(r.worst_year_pct))}
-    </div>` : '';
-
-  // แถบ drawdown: ATH -> now, และ max DD ในอดีต
-  const ddRow = `
-    <div style="display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;margin-bottom:6px;font-size:11px">
-      ${stat('ATH', dd.ath_price != null ? dd.ath_price : '—', 'var(--text2)')}
-      ${stat(`ปัจจุบันจาก ATH`, pct(dd.current_drawdown_pct), col(dd.current_drawdown_pct))}
-      ${stat('ตกหนักสุดในอดีต', pct(dd.max_drawdown_pct), col(dd.max_drawdown_pct))}
-    </div>
-    <div style="font-size:10px;color:var(--text2);margin-bottom:10px">
-      ATH ${dd.ath_date || '—'} · ตกหนักสุด ${dd.max_dd_peak_date || '—'} → ${dd.max_dd_trough_date || '—'}
-      ${dd.recovered ? ' · <span style="color:#3fb950">ฟื้นตัวแล้ว</span>' : ' · <span style="color:#e3b341">ยังไม่ฟื้นเท่าเดิม</span>'}
+  // เลขเด่น (CAGR) ใหญ่กว่าเลขรอง (1/5/10 ปี, ดีสุด/แย่สุด) — ทุก tile ใช้ grid ให้ระยะห่างเท่ากันเสมอ
+  const tile = (label, val, c, big) => `
+    <div style="flex:1 1 ${big ? '92px' : '68px'};min-width:${big ? '92px' : '68px'};text-align:center;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:${big ? '9px 6px 8px' : '7px 4px'}">
+      <div style="font-size:${big ? '17px' : '13px'};font-weight:700;color:${c || 'var(--text)'};white-space:nowrap">${val}</div>
+      <div style="font-size:9.5px;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-top:3px;white-space:nowrap">${label}</div>
     </div>`;
 
-  // seasonality bar (12 เดือน)
+  const retRow = r.cagr_pct != null ? `
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">
+      ${tile(`CAGR ${r.span_years}ปี`, pct(r.cagr_pct), col(r.cagr_pct), true)}
+      ${tile('1 ปี', pct(r.ret_1y_pct), col(r.ret_1y_pct))}
+      ${tile('5 ปี', pct(r.ret_5y_pct), col(r.ret_5y_pct))}
+      ${tile('10 ปี', pct(r.ret_10y_pct), col(r.ret_10y_pct))}
+      ${tile(`ดีสุด ${yr(r.best_year)}`, pct(r.best_year_pct), col(r.best_year_pct))}
+      ${tile(`แย่สุด ${yr(r.worst_year)}`, pct(r.worst_year_pct), col(r.worst_year_pct))}
+    </div>` : '';
+
+  // เกจแสดง drawdown: แถบเทียบระยะร่วงปัจจุบันกับจุดร่วงหนักสุดในอดีต บนสเกลเดียวกัน (มองปุ๊บรู้ปั๊บ ไม่ต้องอ่านตัวเลข)
+  const maxDDAbs = Math.abs(dd.max_drawdown_pct ?? 0);
+  const curDDAbs = Math.abs(dd.current_drawdown_pct ?? 0);
+  const domain = Math.max(20, maxDDAbs * 1.12, curDDAbs * 1.12);
+  const maxDDWidthPct = domain ? Math.min(100, maxDDAbs / domain * 100) : 0;
+  const curDDLeftPct = domain ? Math.min(100, curDDAbs / domain * 100) : 0;
+  const curColor = dd.current_drawdown_pct == null ? 'var(--text2)' : dd.current_drawdown_pct >= -5 ? GREEN : dd.current_drawdown_pct >= -20 ? YELLOW : RED;
+
+  const ddGauge = dd.max_drawdown_pct != null ? `
+    <div style="position:relative;height:14px;background:var(--card2);border:1px solid var(--border);border-radius:7px;margin:2px 0 5px;overflow:visible">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:${maxDDWidthPct}%;background:${RED}20;border-right:2px solid ${RED}88;border-radius:7px 0 0 7px"></div>
+      <div title="ปัจจุบันต่ำกว่า ATH ${pct(dd.current_drawdown_pct)}"
+        style="position:absolute;left:${curDDLeftPct}%;top:-3px;bottom:-3px;width:3px;background:${curColor};border-radius:2px;transform:translateX(-1.5px);box-shadow:0 0 0 2px var(--card2)"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text2);margin-bottom:8px">
+      <span>ATH · 0%</span><span>ตกหนักสุดในอดีต · ${pct(-maxDDAbs)}</span>
+    </div>` : '';
+
+  const ddRow = `
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">
+      ${tile('ATH', dd.ath_price != null ? dd.ath_price : '—', 'var(--text2)')}
+      ${tile('ปัจจุบันจาก ATH', pct(dd.current_drawdown_pct), col(dd.current_drawdown_pct))}
+      ${tile('ตกหนักสุดในอดีต', pct(dd.max_drawdown_pct), col(dd.max_drawdown_pct))}
+    </div>
+    ${ddGauge}
+    <div style="font-size:10px;color:var(--text2);margin-bottom:12px">
+      ATH ${dd.ath_date || '—'} · ตกหนักสุด ${dd.max_dd_peak_date || '—'} → ${dd.max_dd_trough_date || '—'}
+      ${dd.recovered ? ` · <span style="color:${GREEN}">✓ ฟื้นตัวแล้ว</span>` : ` · <span style="color:${YELLOW}">ยังไม่ฟื้นเท่าเดิม</span>`}
+    </div>`;
+
+  // seasonality bar (12 เดือน) — เส้นฐาน 0 กลาง, แท่งปัดปลายมน, ช่องไฟระหว่างแท่งคงที่
   let seasHtml = '';
   if (seas.enough_data && seas.months) {
     const vals = seas.months.map(m => m.avg_return_pct).filter(v => v != null);
     const maxAbs = Math.max(0.1, ...vals.map(Math.abs));
+    const barMax = 26;
     const bars = seas.months.map(m => {
       const v = m.avg_return_pct;
-      if (v == null) return `<div style="flex:1;text-align:center"><div style="height:44px"></div><div style="font-size:9px;color:var(--text2)">${_TH_MONTHS[m.month-1]}</div></div>`;
-      const h = Math.round(Math.abs(v) / maxAbs * 20);
+      const label = `<div style="font-size:9px;color:${v==null?'var(--text2)':v>=0?GREEN:RED};margin-top:3px;font-weight:600">${_TH_MONTHS[m.month-1]}</div>`;
+      if (v == null) return `<div style="flex:1;text-align:center"><div style="height:${barMax*2}px"></div>${label}</div>`;
+      const h = Math.max(2, Math.round(Math.abs(v) / maxAbs * barMax));
       const up = v >= 0;
       const bar = `<div title="${_TH_MONTHS[m.month-1]}: เฉลี่ย ${pct(v)} · ขึ้น ${m.hit_rate_pct}% ของปี (${m.n} ปี)"
-        style="display:flex;flex-direction:column;justify-content:center;height:44px;cursor:default">
-        <div style="height:22px;display:flex;align-items:flex-end">${up?`<div style="width:100%;height:${h}px;background:#3fb950;border-radius:2px 2px 0 0"></div>`:''}</div>
-        <div style="height:22px;display:flex;align-items:flex-start">${!up?`<div style="width:100%;height:${h}px;background:#f85149;border-radius:0 0 2px 2px"></div>`:''}</div>
+        style="display:flex;flex-direction:column;justify-content:center;height:${barMax*2}px;cursor:default;padding:0 1.5px">
+        <div style="height:${barMax}px;display:flex;align-items:flex-end;border-bottom:1px solid var(--border)">${up?`<div style="width:100%;height:${h}px;background:${GREEN};border-radius:4px 4px 0 0"></div>`:''}</div>
+        <div style="height:${barMax}px;display:flex;align-items:flex-start">${!up?`<div style="width:100%;height:${h}px;background:${RED};border-radius:0 0 4px 4px"></div>`:''}</div>
       </div>`;
-      return `<div style="flex:1;text-align:center">${bar}<div style="font-size:9px;color:${up?'#3fb950':'#f85149'}">${_TH_MONTHS[m.month-1]}</div></div>`;
+      return `<div style="flex:1;text-align:center">${bar}${label}</div>`;
     }).join('');
     seasHtml = `
-      <div style="font-size:11px;font-weight:600;color:var(--text2);margin:4px 0 2px">📅 ฤดูกาลรายเดือน <span style="font-weight:400;opacity:0.7">(ผลตอบแทนเฉลี่ย/เดือน ย้อน ${seas.years_span} ปี · รวมปันผล)</span></div>
-      <div style="display:flex;align-items:center;gap:1px">${bars}</div>`;
+      <div style="font-size:11px;font-weight:600;color:var(--text2);margin:2px 0 4px">📅 ฤดูกาลรายเดือน <span style="font-weight:400;opacity:0.7">(ผลตอบแทนเฉลี่ย/เดือน ย้อน ${seas.years_span} ปี · รวมปันผล)</span></div>
+      <div style="display:flex;align-items:center;gap:1px;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:8px 6px 6px">${bars}</div>`;
   }
 
   const srcNote = d.source === 'close'
-    ? '<span style="color:#e3b341">· ใช้ราคาปิดดิบ (ไม่มี adj)</span>' : '';
+    ? `<span style="color:${YELLOW}">· ใช้ราคาปิดดิบ (ไม่มี adj)</span>` : '';
   return `
-    <div style="border:1px solid var(--border);background:var(--card2);border-radius:8px;padding:10px 12px">
-      <div style="font-size:12px;font-weight:600;margin-bottom:8px">📊 สถิติระยะยาว${_tipIconHtml(_PRICE_ANALYTICS_NOTE_HTML)} <span style="font-weight:400;font-size:10px;color:var(--text2)">(ราคาย้อนหลังจริง · CAGR/return รวมปันผล) ${srcNote}</span></div>
+    <div style="border:1px solid var(--border);background:var(--card);border-radius:10px;padding:12px 14px">
+      <div style="font-size:12px;font-weight:600;margin-bottom:10px;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
+        <span>📊 สถิติระยะยาว</span>${_tipIconHtml(_PRICE_ANALYTICS_NOTE_HTML)}
+        <span style="font-weight:400;font-size:10px;color:var(--text2)">(ราคาย้อนหลังจริง · CAGR/return รวมปันผล) ${srcNote}</span>
+      </div>
       ${retRow}
       ${ddRow}
       ${seasHtml}
@@ -11145,6 +11177,9 @@ async function loadShortPage() {
   const upd  = data.last_api_update ? `อัพเดท API ${data.last_api_update}` : 'ยังไม่มี daily update';
   document.getElementById('short-status').textContent =
     `ข้อมูล ${data.period_from} ถึง ${data.period_to} · ${upd}`;
+  // Squeeze Radar ต้องใช้ _insAccum (insider) ด้วย — เดิมต้องเข้าหน้า Insider ก่อนถึงจะมีข้อมูล
+  // โหลดให้อัตโนมัติตรงนี้เลย ไม่ต้องพึ่งลำดับที่ผู้ใช้กดหน้าไหนก่อน
+  if (!_insData) await fetchInsiderData();
   renderShortSummary();
   renderShortSqueeze();
   renderShortTable();

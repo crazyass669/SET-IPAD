@@ -7,7 +7,10 @@
    - ไฟล์ข้อมูล data/*.json: network-first — เอาของสดก่อนเสมอ ถ้าเน็ตล่ม/ช้าเกิน
      ค่อย fallback ไป cache ล่าสุด ( off-line ยังเปิดดูชุดล่าสุดได้)
    หมายเหตุ: ลงทะเบียนเฉพาะบน github.io (ดู dashboard.js) — เวอร์ชัน local Flask ไม่ใช้ */
-const CACHE = 'set-dash-v1';
+// bump เลขนี้ทุกครั้งที่ปล่อยของใหม่แล้วอยากล้าง cache เก่าทิ้งทั้งหมด —
+// activate() ด้านล่างลบ cache ที่ชื่อไม่ตรงกับค่านี้ ทำให้เครื่องที่ค้างของเก่า
+// (โดยเฉพาะแอปที่ติดตั้งเป็น PWA) ดึงไฟล์ใหม่ทั้งชุดในการเปิดครั้งถัดไป
+const CACHE = 'set-dash-v2';
 const PRECACHE = [
   './',
   'set_dashboard.html',
