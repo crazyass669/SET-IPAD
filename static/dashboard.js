@@ -57,6 +57,8 @@ if (IS_STATIC) {
     '/api/dr-descriptions':       'data/dr_descriptions.json',
     // P/E-P/BV รายวันตลาด SET/mai (scrape จาก SET.or.th) — bake ล่วงหน้า
     '/api/set-daily-valuation':   'data/set_daily_valuation.json',
+    // สัญญาณเงินทุนรวม (insider+short+NVDR) — ข้อมูลสาธารณะ bake ได้ ใช้บนมือถือได้จริง
+    '/api/flow-signals':          'data/flow_signals.json',
   };
 
   function _staticURL(url) {

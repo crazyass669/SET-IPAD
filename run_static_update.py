@@ -129,6 +129,8 @@ SNAPSHOTS = [
     # P/E-P/BV รายวันตลาด SET/mai (scrape จากหน้า overview ของ SET.or.th ตรงๆ —
     # ไม่ใช่ Finnomena) รันสดได้ตอน bake เลย ไม่ต้อง cache local ก่อนแบบ dr-descriptions
     ("/api/set-daily-valuation",               "set_daily_valuation.json",        False),
+    # สัญญาณเงินทุนรวม insider+short+NVDR (สาธารณะ) — bake ให้หน้า "สัญญาณรวม" ใช้บนมือถือได้
+    ("/api/flow-signals",                      "flow_signals.json",               False),
 ]
 
 # sync ฐานข้อมูลสะสม SEC filings ก่อน bake (เร็ว ~นาทีเดียวถ้า sync แล้วครั้งก่อน
