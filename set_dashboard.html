@@ -56,6 +56,7 @@
   <button class="nav-btn" onclick="showPage('insider',this)">Insider</button>
   <button class="nav-btn" onclick="showPage('flow',this)" title="Capital Flow — net buy/sell สถาบัน/ต่างชาติ/รายย่อย">Capital Flow</button>
   <button class="nav-btn" onclick="showPage('short',this)" title="Short Sales — ข้อมูลการขายชอร์ตรายหุ้น, Squeeze Radar">Short</button>
+  <button class="nav-btn" onclick="showPage('confluence',this)" title="สัญญาณเงินทุนรวม — insider + short + NVDR ที่ตรงกันหลายชั้น">🎯 สัญญาณรวม</button>
   <button class="nav-btn" onclick="showPage('financials',this)">งบการเงิน</button>
   <div class="nav-right">
     <!-- Market Regime Light — % หุ้นเหนือ EMA200 (3 โซนจากผล backtest) -->
@@ -2221,6 +2222,30 @@
   </div>
 </div>
 
+<!-- PAGE: FLOW CONFLUENCE (insider + short + NVDR รวมสัญญาณ) -->
+<div id="page-confluence" class="page">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+    <h2 style="margin:0;font-size:16px;color:#e0e6f0">🎯 สัญญาณเงินทุนรวม (Flow Confluence)</h2>
+    <span class="scr-tip-icon" style="font-size:11px;width:16px;height:16px">?<div class="scr-tip-box" style="width:340px">
+      <strong>รวม 3 สัญญาณ "เงินฉลาด" ที่กระจายอยู่คนละหน้า มาไว้ที่เดียว</strong><br>
+      แต่ละสัญญาณให้ทิศทาง <span style="color:#3ab464">ขึ้น (+1)</span> / <span style="color:#e05252">ลง (−1)</span> / กลาง (0):<hr>
+      <strong>Insider</strong> — ผู้บริหารซื้อสุทธิ 90 วัน = <span style="color:#3ab464">บวก</span> · ขายสุทธิ = <span style="color:#e05252">ลบ</span><br>
+      <strong>Short</strong> — สถานะ short ลดลง (คลุม) = <span style="color:#3ab464">บวก</span> · เพิ่มขึ้น = <span style="color:#e05252">ลบ</span><br>
+      <strong>NVDR</strong> — สัดส่วนต่างชาติเพิ่ม = <span style="color:#3ab464">บวก</span> · ลด = <span style="color:#e05252">ลบ</span><hr>
+      <strong>Score</strong> = ผลรวมทิศทาง · หุ้นที่ตรงกันทั้ง 3 ชั้น (score +3 หรือ −3) = สัญญาณหนักแน่นสุด<br>
+      <span style="color:#8899aa">ข้อมูลสาธารณะจาก SET (short/NVDR) + ก.ล.ต. (insider) — ใช้ประกอบ ไม่ใช่คำแนะนำซื้อขาย</span>
+    </div></span>
+    <span id="confluence-meta" style="font-size:11px;color:#8899aa;margin-left:auto"></span>
+  </div>
+  <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap" id="confluence-filters">
+    <button class="filter-btn active" onclick="setConfluenceFilter('all',this)">ทั้งหมด</button>
+    <button class="filter-btn" onclick="setConfluenceFilter('bull',this)">🟢 Bullish (score ≥ +2)</button>
+    <button class="filter-btn" onclick="setConfluenceFilter('bear',this)">🔴 Bearish (score ≤ −2)</button>
+    <button class="filter-btn" onclick="setConfluenceFilter('triple',this)">⭐ ครบ 3 สัญญาณ</button>
+  </div>
+  <div id="confluence-body"><div class="empty" style="padding:24px">กำลังโหลด...</div></div>
+</div>
+
 <!-- PAGE: CAPITAL FLOW -->
 <div id="page-flow" class="page">
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
@@ -2564,6 +2589,8 @@
       </div>
     </div>
     <div class="cm-metrics" id="cm-metrics"></div>
+    <!-- FLOW CONFLUENCE summary (insider + short + NVDR รวม 1 บรรทัด) -->
+    <div id="cm-flow-summary" style="display:none;margin-bottom:10px"></div>
     <!-- DR COMPANY DESCRIPTION (Yahoo Finance แปลไทย) -->
     <div id="cm-desc-box" style="display:none;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px"></div>
     <!-- CHART PANEL -->
@@ -2597,6 +2624,8 @@
           <span>VOL avg20</span>
         </div>
       </div>
+      <!-- LONG-TERM STATS (seasonality / drawdown / CAGR — lazy load /api/price-analytics) -->
+      <div id="cm-lts" style="margin-top:12px"></div>
     </div>
     <!-- FIN PANEL -->
     <div id="cm-fin-panel" style="display:none;max-height:60vh;overflow-y:auto">
@@ -2889,6 +2918,6 @@
 </div>
 
 <script src="static/fin_translations.js?v=20260713a"></script>
-<script src="static/dashboard.js?v=20260714o"></script>
+<script src="static/dashboard.js?v=20260714r"></script>
 </body>
 </html>

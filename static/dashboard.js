@@ -2760,6 +2760,7 @@ function showPage(id, btn) {
   if (id === "valuation")    loadValuationPage();
   if (id === "insider")      loadInsiderPage();
   if (id === "short")        loadShortPage();
+  if (id === "confluence")   loadConfluencePage();
   if (id === "flow")         loadFlowPage();
   if (id === "indices")      loadIndicesPage();
   if (id === "stage")        renderStage();
@@ -6118,6 +6119,12 @@ function openChartModal(symbol) {
   document.getElementById('chart-modal').classList.add('open');
   document.body.style.overflow = 'hidden';
   requestAnimationFrame(() => _drawChart(s, null));
+  // สถิติระยะยาว (seasonality/drawdown/CAGR) — lazy load จาก set_prices.db (หุ้นไทยเท่านั้น)
+  _loadPriceAnalytics(s.symbol);
+  // สรุปสัญญาณเงินทุนรวม (insider + short + NVDR) 1 บรรทัด
+  const flowBox = document.getElementById('cm-flow-summary');
+  if (flowBox) { flowBox.style.display = 'none'; flowBox.innerHTML = ''; }
+  _loadFlowSummary(s.symbol);
   // reset insider section
   const insWrap = document.getElementById('popup-insider-section');
   const insToggle = document.getElementById('popup-insider-toggle');
@@ -6138,6 +6145,104 @@ function openChartModal(symbol) {
 
 let _cmParentIdx = null; // index sym to return to after closing a stock chart opened from stocks panel
 let _insiderPopupSym = null;
+
+// ── สถิติราคาระยะยาว (seasonality / drawdown / CAGR) จาก set_prices.db ย้อนถึง 1983 ──
+const _TH_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+
+function _loadPriceAnalytics(symbol) {
+  const box = document.getElementById('cm-lts');
+  if (!box) return;
+  box.innerHTML = '';
+  box.style.display = 'none';
+  fetch(`/api/price-analytics/${encodeURIComponent(symbol)}`).then(r => r.json()).then(d => {
+    if (_cmStock?.symbol !== symbol) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
+    if (d.error || !d.drawdown) return;
+    box.innerHTML = _priceAnalyticsHtml(d);
+    box.style.display = 'block';
+  }).catch(() => {});
+}
+
+// คำอธิบายสถิติระยะยาว — ภาษาบ้านๆ สำหรับคนที่ไม่คุ้นศัพท์ (ผูกกับหัวข้อด้วย _tipIconHtml)
+const _PRICE_ANALYTICS_NOTE_HTML = `
+  <b>สถิติระยะยาว อ่านยังไง?</b><br><br>
+  คำนวณจาก<b>ราคาย้อนหลังจริง</b>ของหุ้นตัวนี้ (บางตัวลึกถึง 40 ปี) — 2 ฐานราคาต่างกัน:<br>
+  • <b>ผลตอบแทน/ฤดูกาล</b> ใช้ <b>Adj Close</b> = ราคาที่ปรับ<b>รวมเงินปันผล</b>แล้ว (ผลตอบแทนจริงที่ผู้ถือได้)<br>
+  • <b>ATH/drawdown</b> ใช้<b>ราคาปิดจริง</b> (ระดับราคาบนกระดานที่คนเห็น) <hr>
+  <b>CAGR</b> = ผลตอบแทนทบต้นเฉลี่ย<b>ต่อปี</b> ตลอดช่วง (เช่น 15% = โตเฉลี่ยปีละ 15% แบบทบต้น)<br>
+  <b>1/5/10 ปี</b> = ผลตอบแทนรวมย้อนหลังช่วงนั้น · <b>ดีสุด/แย่สุด</b> = ปีปฏิทินที่ให้ผลตอบแทนสูง/ต่ำสุด<hr>
+  <b>📅 ฤดูกาลรายเดือน</b> = เอาผลตอบแทน "เดือน ม.ค. ทุกปี" มาเฉลี่ยกัน, "ก.พ. ทุกปี" เฉลี่ยกัน ... จนครบ 12 เดือน<br>
+  แท่ง<b style="color:#3fb950">เขียวขึ้น</b>/<b style="color:#f85149">แดงลง</b> = เดือนนั้นมัก<b>ขึ้น/ลง</b> · เลื่อนเมาส์ดู <b>hit rate</b> = กี่ % ของปีที่เดือนนั้นบวกจริง
+  (เช่น "ขึ้น 66% ของปี" = แม่นกว่าเดือนที่ขึ้นแค่ 50%) — ใช้จับจังหวะฤดูกาลแบบ "Sell in May"<hr>
+  <b>ATH</b> = ราคาสูงสุดตลอดกาล · <b>ปัจจุบันจาก ATH</b> = ตอนนี้ต่ำกว่ายอดกี่ %<br>
+  <b>ตกหนักสุดในอดีต (max drawdown)</b> = เคยร่วงจากยอดถึงก้นลึกสุดกี่ % (วัดความเจ็บที่เคยเกิด) ·
+  <b style="color:#3fb950">ฟื้นตัวแล้ว</b> = ปัจจุบันตื้นกว่าก้นที่เคยลึกสุด<hr>
+  <b style="color:#e3b341">⚠ อดีตไม่การันตีอนาคต</b> — ใช้ดูนิสัย/บริบทของหุ้น ไม่ใช่คำแนะนำซื้อขาย ·
+  ข้อมูลเป็นหุ้นที่ยังเทรดอยู่ (หุ้น delist หายไป = survivorship bias)`;
+
+function _priceAnalyticsHtml(d) {
+  const dd = d.drawdown || {}, r = d.returns || {}, seas = d.seasonality || {};
+  const pct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%');
+  const col = v => v == null ? 'var(--text2)' : v >= 0 ? '#3fb950' : '#f85149';
+  const yr = s => s ? s.slice(0, 4) : '—';
+
+  // การ์ดผลตอบแทน/ความเสี่ยง
+  const stat = (label, val, c) =>
+    `<div style="text-align:center;min-width:60px"><div style="font-size:14px;font-weight:700;color:${c||'var(--text)'}">${val}</div><div style="font-size:10px;color:var(--text2)">${label}</div></div>`;
+
+  const retRow = r.cagr_pct != null ? `
+    <div style="display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;margin-bottom:10px">
+      ${stat(`CAGR (${r.span_years}ปี)`, pct(r.cagr_pct), col(r.cagr_pct))}
+      ${stat('1 ปี', pct(r.ret_1y_pct), col(r.ret_1y_pct))}
+      ${stat('5 ปี', pct(r.ret_5y_pct), col(r.ret_5y_pct))}
+      ${stat('10 ปี', pct(r.ret_10y_pct), col(r.ret_10y_pct))}
+      ${stat(`ดีสุด ${yr(r.best_year)}`, pct(r.best_year_pct), col(r.best_year_pct))}
+      ${stat(`แย่สุด ${yr(r.worst_year)}`, pct(r.worst_year_pct), col(r.worst_year_pct))}
+    </div>` : '';
+
+  // แถบ drawdown: ATH -> now, และ max DD ในอดีต
+  const ddRow = `
+    <div style="display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;margin-bottom:6px;font-size:11px">
+      ${stat('ATH', dd.ath_price != null ? dd.ath_price : '—', 'var(--text2)')}
+      ${stat(`ปัจจุบันจาก ATH`, pct(dd.current_drawdown_pct), col(dd.current_drawdown_pct))}
+      ${stat('ตกหนักสุดในอดีต', pct(dd.max_drawdown_pct), col(dd.max_drawdown_pct))}
+    </div>
+    <div style="font-size:10px;color:var(--text2);margin-bottom:10px">
+      ATH ${dd.ath_date || '—'} · ตกหนักสุด ${dd.max_dd_peak_date || '—'} → ${dd.max_dd_trough_date || '—'}
+      ${dd.recovered ? ' · <span style="color:#3fb950">ฟื้นตัวแล้ว</span>' : ' · <span style="color:#e3b341">ยังไม่ฟื้นเท่าเดิม</span>'}
+    </div>`;
+
+  // seasonality bar (12 เดือน)
+  let seasHtml = '';
+  if (seas.enough_data && seas.months) {
+    const vals = seas.months.map(m => m.avg_return_pct).filter(v => v != null);
+    const maxAbs = Math.max(0.1, ...vals.map(Math.abs));
+    const bars = seas.months.map(m => {
+      const v = m.avg_return_pct;
+      if (v == null) return `<div style="flex:1;text-align:center"><div style="height:44px"></div><div style="font-size:9px;color:var(--text2)">${_TH_MONTHS[m.month-1]}</div></div>`;
+      const h = Math.round(Math.abs(v) / maxAbs * 20);
+      const up = v >= 0;
+      const bar = `<div title="${_TH_MONTHS[m.month-1]}: เฉลี่ย ${pct(v)} · ขึ้น ${m.hit_rate_pct}% ของปี (${m.n} ปี)"
+        style="display:flex;flex-direction:column;justify-content:center;height:44px;cursor:default">
+        <div style="height:22px;display:flex;align-items:flex-end">${up?`<div style="width:100%;height:${h}px;background:#3fb950;border-radius:2px 2px 0 0"></div>`:''}</div>
+        <div style="height:22px;display:flex;align-items:flex-start">${!up?`<div style="width:100%;height:${h}px;background:#f85149;border-radius:0 0 2px 2px"></div>`:''}</div>
+      </div>`;
+      return `<div style="flex:1;text-align:center">${bar}<div style="font-size:9px;color:${up?'#3fb950':'#f85149'}">${_TH_MONTHS[m.month-1]}</div></div>`;
+    }).join('');
+    seasHtml = `
+      <div style="font-size:11px;font-weight:600;color:var(--text2);margin:4px 0 2px">📅 ฤดูกาลรายเดือน <span style="font-weight:400;opacity:0.7">(ผลตอบแทนเฉลี่ย/เดือน ย้อน ${seas.years_span} ปี · รวมปันผล)</span></div>
+      <div style="display:flex;align-items:center;gap:1px">${bars}</div>`;
+  }
+
+  const srcNote = d.source === 'close'
+    ? '<span style="color:#e3b341">· ใช้ราคาปิดดิบ (ไม่มี adj)</span>' : '';
+  return `
+    <div style="border:1px solid var(--border);background:var(--card2);border-radius:8px;padding:10px 12px">
+      <div style="font-size:12px;font-weight:600;margin-bottom:8px">📊 สถิติระยะยาว${_tipIconHtml(_PRICE_ANALYTICS_NOTE_HTML)} <span style="font-weight:400;font-size:10px;color:var(--text2)">(ราคาย้อนหลังจริง · CAGR/return รวมปันผล) ${srcNote}</span></div>
+      ${retRow}
+      ${ddRow}
+      ${seasHtml}
+    </div>`;
+}
 
 function toggleNvdrWrap() {
   const el  = document.getElementById('popup-nvdr-section');
@@ -7585,6 +7690,16 @@ function _renderFinancialsFull(d, source) {
       // หุ้นไทย: symbol ตรงกับ TradingView namespace "SET:" อยู่แล้ว ไม่ต้อง resolve
       tvHtml = `<a href="https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(d.sym)}&interval=D" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="เปิดใน TradingView">${tvIcon}TradingView</a>`;
     }
+    // ปุ่ม Factsheet / SET — เฉพาะหุ้นไทย ลิงก์ตรงไปหน้า SET.or.th ของหุ้นนั้น
+    // (URL เดียวกับที่ chart modal ใช้อยู่แล้ว — ดู openChartModal ด้านบน)
+    let fsSetHtml = '';
+    if (_finTab === 'set') {
+      const fsUrl = `https://www.set.or.th/th/market/product/stock/quote/${encodeURIComponent(d.sym.toLowerCase())}/factsheet`;
+      const setUrl = `https://www.set.or.th/th/market/product/stock/quote/${encodeURIComponent(d.sym)}/financial-statement/company-highlights`;
+      fsSetHtml = `
+        <a href="${fsUrl}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="ดู Factsheet บน SET">📄 Factsheet</a>
+        <a href="${setUrl}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="ดูหน้าหุ้นบน SET.or.th">🌐 SET</a>`;
+    }
 
     document.getElementById('fin-result').innerHTML = `
     <div class="card" style="margin-top:12px">
@@ -7594,6 +7709,7 @@ function _renderFinancialsFull(d, source) {
         ${srcBadge}
         <span style="font-size:13px;color:var(--text2)">${dispName || ''}</span>
         ${tvHtml}
+        ${fsSetHtml}
         <span style="font-size:11px;color:var(--text2);margin-left:auto">สกุลเงิน: <strong>${d.currency || '—'}</strong></span>
       </div>
       <div style="font-size:11px;color:var(--text2);margin-bottom:10px">${srcNote} · ${isQ ? 'ข้อมูลรายไตรมาส (% = เทียบงวดก่อนหน้า QoQ)' : 'ข้อมูลรายปี'}</div>
@@ -10611,6 +10727,124 @@ function renderNvdrPopup(sym) {
     ${v.daily_count > 0
       ? `<div style="font-size:10px;color:var(--muted);margin-top:6px" title="เพิ่มทุกครั้งที่กด Quick Update">มี ${v.daily_count} snapshots · กด Quick Update เพื่อดู trend</div>`
       : `<div style="font-size:10px;color:var(--muted);margin-top:6px">กด Quick Update เพื่อเริ่มเก็บ daily trend</div>`}`;
+}
+
+// ══════════════════════════════════════════════════════════
+// FLOW CONFLUENCE — รวมสัญญาณ insider + short + NVDR
+// ══════════════════════════════════════════════════════════
+let _flowSigData = null;         // {stocks:[...], count, generated_at}
+let _confluenceFilter = 'all';
+
+async function loadFlowSignals() {
+  if (_flowSigData) return _flowSigData;
+  try {
+    const r = await fetch('/api/flow-signals');
+    if (!r.ok) return null;
+    _flowSigData = await r.json();
+    return _flowSigData;
+  } catch { return null; }
+}
+
+function setConfluenceFilter(f, btn) {
+  _confluenceFilter = f;
+  document.querySelectorAll('#confluence-filters .filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  _renderConfluenceTable();
+}
+
+async function loadConfluencePage() {
+  const body = document.getElementById('confluence-body');
+  if (!body) return;
+  const d = await loadFlowSignals();
+  const meta = document.getElementById('confluence-meta');
+  if (!d || !d.stocks) {
+    body.innerHTML = '<div class="empty" style="padding:24px">ไม่มีข้อมูล (ต้องมี short/NVDR/insider sync ก่อน)</div>';
+    return;
+  }
+  if (meta) meta.textContent = `${d.count} หุ้นมีสัญญาณ · อัพเดท ${d.generated_at || '—'}`;
+  _renderConfluenceTable();
+}
+
+// ไอคอนทิศทางต่อสัญญาณ (▲ เขียว / ▼ แดง / – เทา)
+function _dirIcon(dir, tip) {
+  const t = tip ? ` title="${tip}"` : '';
+  if (dir > 0) return `<span style="color:#3ab464;font-weight:700"${t}>▲</span>`;
+  if (dir < 0) return `<span style="color:#e05252;font-weight:700"${t}>▼</span>`;
+  return `<span style="color:#5a6472"${t}>–</span>`;
+}
+
+function _renderConfluenceTable() {
+  const body = document.getElementById('confluence-body');
+  if (!body || !_flowSigData) return;
+  let rows = _flowSigData.stocks;
+  if (_confluenceFilter === 'bull')   rows = rows.filter(r => r.score >= 2);
+  else if (_confluenceFilter === 'bear')   rows = rows.filter(r => r.score <= -2);
+  else if (_confluenceFilter === 'triple') rows = rows.filter(r => r.n_signals === 3);
+
+  if (!rows.length) {
+    body.innerHTML = '<div class="empty" style="padding:24px">ไม่มีหุ้นตรงเงื่อนไขนี้</div>';
+    return;
+  }
+
+  const scoreCell = s => {
+    const col = s >= 2 ? '#3ab464' : s <= -2 ? '#e05252' : s > 0 ? '#7fae7f' : s < 0 ? '#c98787' : '#8899aa';
+    return `<span style="font-weight:700;color:${col};font-size:14px">${s > 0 ? '+' : ''}${s}</span>`;
+  };
+  const mb = v => (v == null ? '' : (v >= 0 ? '+' : '') + v + ' ลบ.');
+
+  const trs = rows.map(r => {
+    const ins = r.insider || {}, sh = r.short || {}, nv = r.nvdr || {};
+    const insTip = ins.dir ? `ผู้บริหารซื้อ ${ins.n_buy||0} / ขาย ${ins.n_sell||0} ครั้ง · สุทธิ ${mb(ins.net_value_mbaht)}` : 'ไม่มีรายการ insider 90 วัน';
+    const shTip = sh.dir ? `Short pos ${sh.short_pos_pct ?? '—'}% · เทรนด์ ${sh.trend_pp>0?'+':''}${sh.trend_pp} pp` : 'ไม่มีข้อมูล/เทรนด์ short';
+    const nvTip = nv.dir ? `NVDR ${nv.nvdr_pct ?? '—'}% · เทรนด์ ${nv.trend_pp>0?'+':''}${nv.trend_pp} pp` : 'ไม่มีข้อมูล/เทรนด์ NVDR';
+    const star = r.n_signals === 3 ? ' <span title="ครบ 3 สัญญาณ" style="color:#e3b341">⭐</span>' : '';
+    return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer" onclick="openChartModal('${r.symbol}')">
+      <td style="padding:6px 8px;font-weight:600;color:#58a6ff">${r.symbol}${star}</td>
+      <td style="padding:6px 8px;text-align:center">${scoreCell(r.score)}</td>
+      <td style="padding:6px 8px;text-align:center">${_dirIcon(ins.dir, insTip)}</td>
+      <td style="padding:6px 8px;text-align:center">${_dirIcon(sh.dir, shTip)}</td>
+      <td style="padding:6px 8px;text-align:center">${_dirIcon(nv.dir, nvTip)}</td>
+      <td style="padding:6px 8px;text-align:right;font-size:11px;color:#8899aa">${ins.net_value_mbaht != null ? mb(ins.net_value_mbaht) : '—'}</td>
+      <td style="padding:6px 8px;text-align:right;font-size:11px;color:#8899aa">${sh.short_pos_pct != null ? sh.short_pos_pct + '%' : '—'}</td>
+      <td style="padding:6px 8px;text-align:right;font-size:11px;color:#8899aa">${nv.nvdr_pct != null ? nv.nvdr_pct + '%' : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  body.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%;min-width:640px;border-collapse:collapse">
+    <thead><tr style="border-bottom:1px solid rgba(255,255,255,0.12);color:#8899aa;font-size:11px;text-align:center">
+      <th style="padding:6px 8px;text-align:left">หุ้น</th>
+      <th style="padding:6px 8px">Score</th>
+      <th style="padding:6px 8px" title="ผู้บริหารซื้อ/ขายสุทธิ 90 วัน">Insider</th>
+      <th style="padding:6px 8px" title="เทรนด์สถานะ short">Short</th>
+      <th style="padding:6px 8px" title="เทรนด์สัดส่วนต่างชาติ NVDR">NVDR</th>
+      <th style="padding:6px 8px;text-align:right">Insider สุทธิ</th>
+      <th style="padding:6px 8px;text-align:right">Short pos</th>
+      <th style="padding:6px 8px;text-align:right">NVDR%</th>
+    </tr></thead><tbody>${trs}</tbody></table></div>`;
+}
+
+// สรุป flow confluence 1 บรรทัดในกราฟ modal (ใช้ข้อมูลชุดเดียวกับหน้า scanner)
+function _loadFlowSummary(symbol) {
+  const box = document.getElementById('cm-flow-summary');
+  if (!box) return;
+  box.innerHTML = '';
+  box.style.display = 'none';
+  loadFlowSignals().then(d => {
+    if (_cmStock?.symbol !== symbol) return;   // เปลี่ยนหุ้นไปแล้ว
+    if (!d || !d.stocks) return;
+    const r = d.stocks.find(x => x.symbol === symbol);
+    if (!r) return;
+    const ins = r.insider || {}, sh = r.short || {}, nv = r.nvdr || {};
+    const label = r.score >= 2 ? '<span style="color:#3ab464">เงินฉลาดไหลเข้า</span>'
+                : r.score <= -2 ? '<span style="color:#e05252">เงินฉลาดไหลออก</span>'
+                : r.score > 0 ? '<span style="color:#7fae7f">เอียงบวก</span>'
+                : r.score < 0 ? '<span style="color:#c98787">เอียงลบ</span>' : 'ก้ำกึ่ง';
+    box.innerHTML = `<div style="border:1px solid var(--border);background:var(--card2);border-radius:8px;padding:8px 12px;font-size:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span style="font-weight:600">🎯 สัญญาณเงินทุน: ${label} <span style="color:var(--text2);font-weight:400">(${r.score>0?'+':''}${r.score})</span></span>
+      <span style="color:var(--text2);font-size:11px">Insider ${_dirIcon(ins.dir)} · Short ${_dirIcon(sh.dir)} · NVDR ${_dirIcon(nv.dir)}</span>
+    </div>`;
+    box.style.display = 'block';
+  }).catch(() => {});
 }
 
 // ══════════════════════════════════════════════════════════

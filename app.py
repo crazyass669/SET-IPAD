@@ -274,6 +274,26 @@ def get_history(symbol):
     return jsonify(data)
 
 
+_price_analytics_cache: dict = {}   # symbol -> (ts, result)
+_PRICE_ANALYTICS_TTL = 6 * 3600     # ราคาไม่เปลี่ยนระหว่างวันมากพอจะต้องคำนวณใหม่ถี่
+
+
+@app.route("/api/price-analytics/<symbol>")
+def price_analytics_endpoint(symbol):
+    """วิเคราะห์ราคาระยะยาว (seasonality/drawdown/CAGR) จาก set_prices.db ย้อนถึง 1983
+    — ใช้ Adj Close (return) + close ดิบ (drawdown/ATH) cache 6 ชม. ต่อหุ้น"""
+    from sources import price_analytics
+    sym = symbol.upper().strip()
+    cached = _price_analytics_cache.get(sym)
+    if cached and (time.time() - cached[0] < _PRICE_ANALYTICS_TTL):
+        return jsonify(cached[1])
+    result = price_analytics.build_for_symbol(BASE_DIR, sym + ".BK")
+    if not result:
+        return jsonify({"error": f"ข้อมูลราคาไม่พอวิเคราะห์ {symbol} (ต้องมีอย่างน้อย ~1 ปี)"}), 404
+    _price_analytics_cache[sym] = (time.time(), result)
+    return jsonify(result)
+
+
 @app.route("/api/quick-update", methods=["POST"])
 def start_quick_update():
     with _lock:
@@ -3069,6 +3089,27 @@ def get_prices():
     if not prices:
         return jsonify({"error": "no data"}), 404
     return jsonify({"prices": prices, "updated_at": updated_at})
+
+
+_flow_signals_cache: dict = {"result": None, "ts": 0}
+_FLOW_SIGNALS_TTL = 3600   # ข้อมูล short/nvdr/insider อัพเดตวันละครั้ง
+
+
+@app.route("/api/flow-signals")
+def flow_signals_endpoint():
+    """รวมสัญญาณเงินทุน 3 ชั้น (insider + short + NVDR) ต่อหุ้น เรียงตาม confluence score
+    — ข้อมูลสาธารณะ (SET + SEC) cache 1 ชม."""
+    from sources import flow_signals
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    now = time.time()
+    if _flow_signals_cache["result"] and (now - _flow_signals_cache["ts"] < _FLOW_SIGNALS_TTL):
+        return jsonify(_flow_signals_cache["result"])
+    rows = flow_signals.build_flow_signals(BASE_DIR)
+    result = {"stocks": rows, "count": len(rows),
+              "generated_at": _dt.now(_tz(_td(hours=7))).strftime("%Y-%m-%d %H:%M")}
+    _flow_signals_cache["result"] = result
+    _flow_signals_cache["ts"] = now
+    return jsonify(result)
 
 
 @app.route("/api/nvdr")
