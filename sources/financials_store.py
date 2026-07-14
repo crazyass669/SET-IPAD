@@ -1731,6 +1731,29 @@ def compute_ps(payload_finn_q, min_points=12):
     return {"value": round(latest, 2), "percentile": pct, "median": round(med, 2), "n": len(series)}
 
 
+def _ttm_pe_series(payload_finn_q):
+    """PE รายไตรมาสแบบ TTM (Close ÷ ผลรวม Basic EPS 4 ไตรมาสท้าย) — เหมือน
+    _ttmPeSeries ฝั่ง static/dashboard.js ที่ใช้แก้บัค field 'PE' ดิบของ Finnomena
+    (หารด้วย EPS ไตรมาสเดียวสำหรับงวดที่ไม่ใช่ Q4 ทำให้ PE พองผิดปกติ 50-655x
+    เทียบ Q4 ปกติ 17-42x วัดจริงจาก BDMS) ใช้แทน val['PE'] ใน percentile ด้านล่าง
+    เพื่อให้ Screener+/PEG ไม่ให้คะแนนหุ้นผิดจากบัคเดียวกัน"""
+    inc = (payload_finn_q or {}).get("income", {})
+    val = (payload_finn_q or {}).get("valuation", {})
+    eps_row = inc.get("Basic EPS", {}) or {}
+    close_row = val.get("Close", {}) or {}
+    eps_items = sorted((d, v) for d, v in eps_row.items() if v is not None)
+    if len(eps_items) < 4:
+        return []
+    out = []
+    for i in range(3, len(eps_items)):
+        ttm_eps = sum(v for _, v in eps_items[i - 3:i + 1])
+        dt = eps_items[i][0]
+        close = close_row.get(dt)
+        if close is not None and ttm_eps > 0:
+            out.append((dt, close / ttm_eps))
+    return out
+
+
 def compute_valuation_percentile(payload_finn_q, min_points=12):
     """เทียบ valuation งวดล่าสุด กับประวัติตัวเอง (จาก Finnomena valuation รายไตรมาส):
     คืนต่อ metric (pe/pbv/ev_ebitda/div_yield) = {value ล่าสุด, percentile (0-100),
@@ -1759,10 +1782,21 @@ def compute_valuation_percentile(payload_finn_q, min_points=12):
             return False
 
     field_map = {"pe": "PE", "pbv": "PBV", "ev_ebitda": "EV To EBITDA", "div_yield": "Dividend Yield"}
+    ttm_pe = None   # lazy: คำนวณครั้งเดียวถ้ามีการเรียกถึง short == "pe"
     out = {}
     for short, name in field_map.items():
-        series = val.get(name, {})
-        pts = sorted((d, v) for d, v in series.items() if v is not None and v > 0)
+        if short == "pe":
+            # ใช้ TTM PE ที่คำนวณเองจาก Basic EPS แทน field 'PE' ดิบของ Finnomena
+            # (หารด้วย EPS ไตรมาสเดียวสำหรับงวดที่ไม่ใช่ Q4 — ดู _ttm_pe_series)
+            if ttm_pe is None:
+                ttm_pe = _ttm_pe_series(payload_finn_q)
+            pts = sorted((d, v) for d, v in ttm_pe if v is not None and v > 0)
+            if not pts:   # ไม่มี Basic EPS พอคำนวณ TTM — fallback field ดิบ (ดีกว่าไม่มีเลย)
+                series = val.get(name, {})
+                pts = sorted((d, v) for d, v in series.items() if v is not None and v > 0)
+        else:
+            series = val.get(name, {})
+            pts = sorted((d, v) for d, v in series.items() if v is not None and v > 0)
         if pts and _stale(pts[-1][0]):
             out[short] = {"value": None, "percentile": None, "median": None,
                           "n": len(pts), "stale": True}

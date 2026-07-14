@@ -476,9 +476,26 @@ def _load_auto(base_dir):
         return {"new_entries": [], "extra_drs": {}, "unmapped": []}
 
 
+_dr_universe_cache = {}   # base_dir -> (mtime ของ dr_universe_auto.json หรือ None, result)
+
+
 def load_dr_universe(base_dir):
     """_DR_STATIC + overlay จาก dr_universe_auto.json — ทุก entry มี field 'etf'
-    (static ตรวจจากคำว่า ETF ในชื่อ/อุตสาหกรรม, auto ตรวจจาก underlyingClassName)"""
+    (static ตรวจจากคำว่า ETF ในชื่อ/อุตสาหกรรม, auto ตรวจจาก underlyingClassName)
+
+    cache ในหน่วยความจำต่อ base_dir คีย์ด้วย mtime ของไฟล์ auto — เดิมฟังก์ชันนี้
+    เปิด+parse dr_universe_auto.json ใหม่ทุกครั้งที่เรียก (ถูกเรียกซ้ำหลายจุดต่อ
+    1 request จาก app.py/dr_descriptions.py/financials_store.py) แคชไว้ตัด I/O
+    ซ้ำ แต่ยัง invalidate อัตโนมัติถ้าไฟล์ auto เปลี่ยน (เช่นหลังปุ่ม sync)"""
+    path = _auto_path(base_dir)
+    try:
+        mtime = _os.path.getmtime(path)
+    except OSError:
+        mtime = None
+    cached = _dr_universe_cache.get(base_dir)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
     auto = _load_auto(base_dir)
     extra = auto.get("extra_drs", {})
     out = []
@@ -496,6 +513,7 @@ def load_dr_universe(base_dir):
         e = dict(e)
         e.setdefault("etf", False)
         out.append(e)
+    _dr_universe_cache[base_dir] = (mtime, out)
     return out
 
 

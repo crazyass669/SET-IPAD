@@ -47,24 +47,26 @@ def fetch():
     except Exception:
         return None
 
-    idx = html.find("P/E (เท่า)")
-    if idx < 0:
-        return None
-    chunk = html[max(0, idx - 1500):idx + 1500]
-
+    # เดิม anchor ด้วย html.find(label) ตัวแรกที่เจอ แล้วตัดหน้าต่าง ±1500 ตัวอักษร —
+    # เปราะ: หน้า Nuxt.js SSR อาจฝัง label เดียวกันซ้ำในก้อน state/JSON ก่อนตาราง
+    # จริง ทำให้ anchor ผิดตำแหน่งได้ เปลี่ยนมา scan ทั้งหน้าหา <td>×3 ที่ label ตรงกับ
+    # _LABEL_MAP โดยตรงแทน — ทนต่อ label ซ้ำที่ไหนก็ได้ในหน้า เพราะกรองด้วยโครงสร้าง td จริง
     pattern = r"<td[^>]*>\s*([^<]+?)\s*</td>\s*<td[^>]*>\s*([^<]+?)\s*</td>\s*<td[^>]*>\s*([^<]+?)\s*</td>"
-    rows = re.findall(pattern, chunk, re.DOTALL)
     out = {"SET": {}, "mai": {}}
-    for label, set_v, mai_v in rows:
+    pe_pos = None
+    for m in re.finditer(pattern, html, re.DOTALL):
+        label, set_v, mai_v = m.groups()
         key = _LABEL_MAP.get(label.strip())
         if not key:
             continue
         out["SET"][key] = _num(set_v)
         out["mai"][key] = _num(mai_v)
+        if key == "pe" and pe_pos is None:
+            pe_pos = m.start()
 
     if not out["SET"].get("pe"):
         return None   # parse ล้มเหลว — โครงสร้างหน้าเว็บอาจเปลี่ยนไปแล้ว
 
-    m = re.search(r"ข้อมูล ณ วันที่\s*([^<]+)", html[max(0, idx - 6000):idx + 500])
+    m = re.search(r"ข้อมูล ณ วันที่\s*([^<]+)", html[max(0, pe_pos - 6000):pe_pos + 500])
     out["as_of"] = m.group(1).strip() if m else None
     return out

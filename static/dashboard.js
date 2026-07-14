@@ -3356,6 +3356,10 @@ async function loadFinAnalytics() {
     const fscreenerBtn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'fscreener'"));
     if (fscreenerBtn) fscreenerBtn.style.display = 'none';
   }
+  // fail-closed ไว้ก่อนเสมอ: ปิดช่องกรองที่พึ่ง financials.db จนกว่าจะรู้ว่า fetch
+  // สำเร็จจริง กัน static site ที่ data/financials_analytics_yahoo.json หาย/พัง
+  // แล้วปล่อยให้ผู้ใช้กรอกค่าที่ไม่มีข้อมูลจริงรองรับแบบเงียบๆ
+  finInputs.forEach(el => { if (el) el.disabled = true; });
   try {
     const r = await fetch('/api/financials-analytics');
     const d = await r.json();
@@ -3469,7 +3473,10 @@ function _patchFinTooltips() {
       if (!box) return;
       if (NEWLY_ENABLED.has(id)) {
         box.innerHTML = box.innerHTML
-          .replace(/⚠\s*ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง\s*(<br\s*\/?>)?/g, '')
+          // ⚠ ตัวหน้าอาจใช้ร่วมกับคำเตือนอื่นในบรรทัดเดียว (เช่น "⚠ ต้องกดอัพเดท...ก่อน ·
+          // ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง") ⚠ จึงไม่ได้อยู่ติดวลีนี้เสมอไป — ทำให้ optional
+          // กันเหลือข้อความ "ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง" ค้างแบบไม่มี ⚠ นำหน้า
+          .replace(/(⚠\s*)?ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง\s*(<br\s*\/?>)?/g, '')
           .replace(/⚠\s*ต้องกดอัพเดทงบการเงิน[^<]*ก่อน\s*(·|&middot;)?\s*(<br\s*\/?>)?/g, '')
           .replace(/⚠\s*ต้องดึงงบการเงินทั้งหมดในเครื่อง[^<]*ก่อน\s*(—|-)?\s*/g, '');
       }
@@ -5924,6 +5931,7 @@ function _loadFinDescription(sym, market) {
   box.style.display = 'none';
   box.innerHTML = '';
   const draw = (d) => {
+    if (_finData?.sym !== sym) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
     if (!d || !d.th) return;
     box.style.display = 'block';
     box.innerHTML = _drDescHtml(d, 'fin-desc-text');
@@ -5942,6 +5950,7 @@ function _loadFinTVLink(sym, market) {
   if (!a) return;
   const q = market ? `?market=${encodeURIComponent(market)}` : '';
   fetch(`/api/resolve-yf/${encodeURIComponent(sym)}${q}`).then(r => r.json()).then(d => {
+    if (_finData?.sym !== sym) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
     if (d.error || !d.yf) return;
     const tvSym = yfToTVSym(d.yf);
     if (!tvSym) return;
@@ -5958,10 +5967,12 @@ function _loadLiveValuationBand(d, isDr, market) {
   const peCur = document.getElementById('peband-cur');
   const pbvCur = document.getElementById('pbvband-cur');
   if (!peCur && !pbvCur) return;   // bands ไม่ได้ render (ข้อมูลไม่พอ)
+  const sym = d.sym;
   const q = market ? `?market=${encodeURIComponent(market)}` : '';
   const sep = isDr ? (q ? '&' : '?') : '';
   const url = `/api/live-price/${encodeURIComponent(d.sym)}${isDr ? q + sep + 'is_dr=1' : ''}`;
   fetch(url).then(r => r.json()).then(res => {
+    if (_finData?.sym !== sym) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
     if (res.error || !res.price) return;
     const price = res.price;
     const priceEl = document.getElementById('fin-live-price');
@@ -6001,8 +6012,15 @@ function _patchBandValue(idPrefix, liveVal, lowerIsCheap) {
 
 function _patchBand(idPrefix, ratioSeries, closeSeries, livePrice, lowerIsCheap) {
   if (!ratioSeries.length || !closeSeries.length) return;
-  const lastRatio = ratioSeries[ratioSeries.length - 1].v;
-  const lastClose = closeSeries[closeSeries.length - 1].v;
+  // ratioSeries/closeSeries กรอง null แยกฟิลด์กันมาจาก _finSeries — งวดล่าสุดของแต่ละ
+  // ชุดอาจเป็นคนละวันที่กัน (เช่น มี Close แต่ PBV งวดนั้นยังไม่ออก) ต้องหาวันที่ล่าสุด
+  // ที่ "มีทั้งคู่" ก่อน ไม่งั้น BVPS โดยนัยจะเอาราคาปิดงวดหนึ่งไปหารตัวคูณอีกงวดหนึ่ง
+  const closeByDate = new Map(closeSeries.map(o => [o.d, o.v]));
+  let lastRatio = null, lastClose = null;
+  for (let i = ratioSeries.length - 1; i >= 0; i--) {
+    const o = ratioSeries[i];
+    if (closeByDate.has(o.d)) { lastRatio = o.v; lastClose = closeByDate.get(o.d); break; }
+  }
   if (!lastClose || !lastRatio) return;
   const liveVal = livePrice * lastRatio / lastClose;   // = livePrice / BVPS โดยนัย
   _patchBandValue(idPrefix, liveVal, lowerIsCheap);
@@ -7225,7 +7243,9 @@ function _svgBand(series, label, lowerIsCheap, idPrefix) {
   if (vals.length < 8) return `<div style="font-size:12px;color:var(--text2)">${label}: ข้อมูลไม่พอ (${vals.length} งวด)</div>`;
   const q = p => vals[Math.min(vals.length - 1, Math.floor(p * (vals.length - 1)))];
   const lo = vals[0], hi = vals[vals.length - 1], med = q(0.5), p25 = q(0.25), p75 = q(0.75);
-  const cur = series[series.length - 1].v;
+  // งวดล่าสุดก็ต้อง winsorize ด้วยขอบเดียวกับ lo/hi ไม่งั้น "ปัจจุบัน" อาจโชว์เกิน
+  // "สูงสุด" ที่ตัดขอบไปแล้ว (ขัดกับคำอธิบาย _PE_BAND_NOTE_HTML ด้านบน)
+  const cur = Math.min(hi, Math.max(lo, series[series.length - 1].v));
   const pos = Math.max(0, Math.min(100, (cur - lo) / (hi - lo || 1) * 100));
   // สีจุด: ถูก=เขียว แพง=แดง (สำหรับ PE/PBV ที่ต่ำ=ถูก)
   const cheap = lowerIsCheap ? cur <= p25 : cur >= p75;
