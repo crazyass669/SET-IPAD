@@ -54,6 +54,12 @@ def init_db(base_dir):
             ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
         """)
+        # migration: เพิ่ม OHLC + adj_close (nullable) ให้ตารางเดิม — แถวเก่าจะเป็น
+        # NULL จนกว่าจะรัน Full Refresh เติมให้ครบ (close/volume ยังใช้งานได้ปกติ)
+        cols = {r[1] for r in con.execute("PRAGMA table_info(prices)")}
+        for c in ("open", "high", "low", "adj_close"):
+            if c not in cols:
+                con.execute(f"ALTER TABLE prices ADD COLUMN {c} REAL")
         con.commit()
     finally:
         con.close()
@@ -87,6 +93,27 @@ def get_series(base_dir, ticker):
         return {"dates": list(d), "closes": list(c), "volumes": list(v)}
     hist = load_history(base_dir)
     return (hist or {}).get("stocks", {}).get(ticker)
+
+
+def get_ohlc_series(base_dir, ticker):
+    """คืน {'dates','opens','highs','lows','closes','adj_closes','volumes'} ของหุ้นตัวเดียว
+    สำหรับ analytics ที่ต้องใช้ OHLC/Adj Close (seasonality/drawdown/candlestick/ATR)
+    — คอลัมน์ open/high/low/adj_close อาจเป็น None สำหรับแท่งเก่าที่ยังไม่ได้ Full Refresh
+    คืน None ถ้าไม่มี DB หรือไม่พบหุ้น"""
+    if not db_exists(base_dir):
+        return None
+    con = _connect(base_dir)
+    try:
+        rows = con.execute(
+            "SELECT date, open, high, low, close, adj_close, volume "
+            "FROM prices WHERE ticker=? ORDER BY date", (ticker,)).fetchall()
+    finally:
+        con.close()
+    if not rows:
+        return None
+    d, o, h, l, c, a, v = zip(*rows)
+    return {"dates": list(d), "opens": list(o), "highs": list(h), "lows": list(l),
+            "closes": list(c), "adj_closes": list(a), "volumes": list(v)}
 
 
 def get_last_dates(base_dir):
@@ -128,18 +155,44 @@ def iter_all_series(base_dir):
         yield t, data
 
 
+def _r4(x):
+    """float ปัด 4 ตำแหน่ง หรือ None ถ้าเป็น NaN/None (สำหรับคอลัมน์ OHLC/adj ที่ nullable)"""
+    if x is None:
+        return None
+    try:
+        f = float(x)
+    except (TypeError, ValueError):
+        return None
+    return None if f != f else round(f, 4)   # f != f => NaN
+
+
 def upsert_bars(base_dir, all_data_map):
     """เขียนแท่งราคาลง SQLite (INSERT OR REPLACE) ใน transaction เดียว
-    all_data_map: {ticker -> {'close': pd.Series, 'volume': pd.Series}}"""
+    all_data_map: {ticker -> {'close','volume'[,'open','high','low','adj_close']: pd.Series}}
+    ทุก series ควร align index เดียวกับ close (ดู _extract_ohlcav ใน sources/yahoo.py)
+    — open/high/low/adj_close เป็น optional; ถ้าไม่มีจะเขียน NULL (แถวเก่าก่อนเพิ่ม OHLC)"""
     init_db(base_dir)
     con = _connect(base_dir)
     try:
         def rows():
             for ticker, data in all_data_map.items():
-                for dt, cl, vol in zip(data["close"].index, data["close"], data["volume"]):
-                    yield (ticker, dt.strftime("%Y-%m-%d"),
-                           round(float(cl), 4), int(vol))
-        con.executemany("INSERT OR REPLACE INTO prices VALUES (?,?,?,?)", rows())
+                close = data["close"]; vol = data["volume"]
+                op = data.get("open"); hi = data.get("high")
+                lo = data.get("low"); adj = data.get("adj_close")
+                idx = close.index
+                for i in range(len(idx)):
+                    ds = idx[i].strftime("%Y-%m-%d")
+                    yield (ticker, ds,
+                           _r4(op.iloc[i]) if op is not None else None,
+                           _r4(hi.iloc[i]) if hi is not None else None,
+                           _r4(lo.iloc[i]) if lo is not None else None,
+                           round(float(close.iloc[i]), 4),
+                           _r4(adj.iloc[i]) if adj is not None else None,
+                           int(vol.iloc[i]) if vol.iloc[i] == vol.iloc[i] else 0)
+        con.executemany(
+            "INSERT OR REPLACE INTO prices"
+            "(ticker,date,open,high,low,close,adj_close,volume) VALUES (?,?,?,?,?,?,?,?)",
+            rows())
         con.execute("INSERT OR REPLACE INTO meta VALUES ('updated_at', ?)",
                     (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
         con.commit()
@@ -157,7 +210,9 @@ def upsert_history_dict(base_dir, history):
             for ticker, v in history.get("stocks", {}).items():
                 for dt, cl, vol in zip(v["dates"], v["closes"], v["volumes"]):
                     yield (ticker, dt, float(cl), int(vol))
-        con.executemany("INSERT OR REPLACE INTO prices VALUES (?,?,?,?)", rows())
+        con.executemany(
+            "INSERT OR REPLACE INTO prices(ticker,date,close,volume) VALUES (?,?,?,?)",
+            rows())
         con.execute("INSERT OR REPLACE INTO meta VALUES ('updated_at', ?)",
                     (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
         con.commit()

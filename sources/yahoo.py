@@ -12,10 +12,39 @@ import yfinance as yf
 BATCH_SIZE = 100
 
 
+def _extract_ohlcav(df, min_bars=5):
+    """แกะ OHLC + Adj Close + Volume จาก DataFrame ของหุ้นตัวเดียว (yf.download,
+    auto_adjust=False) — จัดทุก series ให้ align กับ index ของ Close ที่ไม่เป็น null
+    เพื่อให้ upsert zip ตามตำแหน่งได้ตรงกัน คืน None ถ้าแท่งน้อยกว่า min_bars
+
+    เก็บทั้ง close (ราคาจริง — งาน PE/valuation เดิมใช้) และ adj_close (ปรับ
+    split+ปันผล — ใช้คำนวณผลตอบแทน/CAGR/seasonality/drawdown ระยะยาวให้ถูก)"""
+    if df is None or df.empty or "Close" not in df:
+        return None
+    close = df["Close"].dropna()
+    if len(close) < min_bars:
+        return None
+    idx = close.index
+
+    def _col(name):
+        return df[name].reindex(idx) if name in df else None
+
+    vol = df["Volume"].reindex(idx) if "Volume" in df else None
+    return {
+        "open":      _col("Open"),
+        "high":      _col("High"),
+        "low":       _col("Low"),
+        "close":     close,
+        "adj_close": _col("Adj Close"),
+        "volume":    vol.fillna(0) if vol is not None else close * 0,
+    }
+
+
 def fetch_all_batch(tickers, callback=None, period="max"):
     """
     ดาวน์โหลดราคาทุกตัวด้วย yf.download() แบบ batch
-    คืนค่า dict: ticker -> {'close': pd.Series, 'volume': pd.Series}
+    คืนค่า dict: ticker -> {'open','high','low','close','adj_close','volume': pd.Series}
+    (ทุก series align index เดียวกับ close — ดู _extract_ohlcav)
     """
     chunks = [tickers[i:i + BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
     n_chunks = len(chunks)
@@ -33,11 +62,9 @@ def fetch_all_batch(tickers, callback=None, period="max"):
                     chunk[0], period=period, auto_adjust=False,
                     progress=False, threads=False,
                 )
-                if not raw.empty and len(raw) >= 5:
-                    close  = raw["Close"].dropna()
-                    volume = raw["Volume"].dropna()
-                    if len(close) >= 5:
-                        all_data[chunk[0]] = {"close": close, "volume": volume}
+                rec = _extract_ohlcav(raw, min_bars=5)
+                if rec is not None:
+                    all_data[chunk[0]] = rec
             else:
                 raw = yf.download(
                     chunk, period=period, auto_adjust=False,
@@ -45,10 +72,9 @@ def fetch_all_batch(tickers, callback=None, period="max"):
                 )
                 for tick in chunk:
                     try:
-                        close  = raw[tick]["Close"].dropna()
-                        volume = raw[tick]["Volume"].dropna()
-                        if len(close) >= 5:
-                            all_data[tick] = {"close": close, "volume": volume}
+                        rec = _extract_ohlcav(raw[tick], min_bars=5)
+                        if rec is not None:
+                            all_data[tick] = rec
                     except Exception:
                         pass
         except Exception as e:
@@ -62,7 +88,7 @@ def fetch_all_batch(tickers, callback=None, period="max"):
 def fetch_gap_batch(tickers, start_date, callback=None):
     """
     ดาวน์โหลดเฉพาะวันใหม่ตั้งแต่ start_date (สำหรับ Quick Update)
-    คืนค่า dict: ticker -> {'close': pd.Series, 'volume': pd.Series}
+    คืนค่า dict: ticker -> {'open','high','low','close','adj_close','volume': pd.Series}
     """
     chunks = [tickers[i:i + BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
     n_chunks = len(chunks)
@@ -80,11 +106,9 @@ def fetch_gap_batch(tickers, start_date, callback=None):
                     chunk[0], start=start_date, auto_adjust=False,
                     progress=False, threads=False,
                 )
-                if not raw.empty:
-                    close  = raw["Close"].dropna()
-                    volume = raw["Volume"].dropna()
-                    if len(close) >= 1:
-                        all_data[chunk[0]] = {"close": close, "volume": volume}
+                rec = _extract_ohlcav(raw, min_bars=1)
+                if rec is not None:
+                    all_data[chunk[0]] = rec
             else:
                 raw = yf.download(
                     chunk, start=start_date, auto_adjust=False,
@@ -92,10 +116,9 @@ def fetch_gap_batch(tickers, start_date, callback=None):
                 )
                 for tick in chunk:
                     try:
-                        close  = raw[tick]["Close"].dropna()
-                        volume = raw[tick]["Volume"].dropna()
-                        if len(close) >= 1:
-                            all_data[tick] = {"close": close, "volume": volume}
+                        rec = _extract_ohlcav(raw[tick], min_bars=1)
+                        if rec is not None:
+                            all_data[tick] = rec
                     except Exception:
                         pass
         except Exception as e:
