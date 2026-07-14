@@ -26,7 +26,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 sys.stdout.reconfigure(encoding="utf-8")
 
-from core.store import iter_all_series
+import sqlite3
 
 REB_BARS    = 21
 TOP_N       = 10
@@ -38,16 +38,35 @@ START_YEAR  = int(sys.argv[1]) if len(sys.argv) > 1 else 2016
 
 
 def load_frames():
-    closes, vols = {}, {}
-    for tick, d in iter_all_series(BASE):
-        if len(d["dates"]) < 300:
-            continue
-        idx = pd.to_datetime(d["dates"])
-        closes[tick] = pd.Series(d["closes"], index=idx, dtype="float32")
-        vols[tick]   = pd.Series(d["volumes"], index=idx, dtype="float32")
-    close = pd.DataFrame(closes).sort_index()
-    vol   = pd.DataFrame(vols).sort_index()
-    return close, vol
+    """คืน (close_adj, close_raw, vol)
+      close_adj = Adj Close (ปรับ split+ปันผล) -> ใช้คำนวณ signal RS + ผลตอบแทน entry/exit
+      close_raw = ราคาปิดจริง            -> ใช้ filter ราคา (>=1 บาท) + สภาพคล่อง (close×vol)
+    แยกสองฐานให้ถูกหลัก: total return ต้องรวมปันผล แต่มูลค่าซื้อขาย/ราคาต้องเป็นราคาจริง
+    (adj_close เป็น NULL สำหรับหุ้น delisted บางตัว -> fallback ใช้ close ดิบ)"""
+    con = sqlite3.connect(os.path.join(BASE, "set_prices.db"))
+    adjs, raws, vols = {}, {}, {}
+    cur_t, dts, ca, cr, vv = None, [], [], [], []
+
+    def _flush():
+        if cur_t is not None and len(dts) >= 300:
+            idx = pd.to_datetime(dts)
+            adjs[cur_t] = pd.Series(ca, index=idx, dtype="float32")
+            raws[cur_t] = pd.Series(cr, index=idx, dtype="float32")
+            vols[cur_t] = pd.Series(vv, index=idx, dtype="float32")
+
+    for t, d, c, a, v in con.execute(
+            "SELECT ticker,date,close,adj_close,volume FROM prices ORDER BY ticker,date"):
+        if t != cur_t:
+            _flush()
+            cur_t, dts, ca, cr, vv = t, [], [], [], []
+        dts.append(d); cr.append(c); ca.append(a if a is not None else c); vv.append(v)
+    _flush()
+    con.close()
+
+    close_adj = pd.DataFrame(adjs).sort_index()
+    close_raw = pd.DataFrame(raws).sort_index()
+    vol       = pd.DataFrame(vols).sort_index()
+    return close_adj, close_raw, vol
 
 
 def sector_map():
@@ -70,10 +89,12 @@ def breadth_pct200(close):
     return (close > ema200).sum(axis=1) / close.notna().sum(axis=1) * 100
 
 
-def run(close, vol, sec_of, use_rrg=True, regime=None, regime_min=None):
+def run(close, close_raw, vol, sec_of, use_rrg=True, regime=None, regime_min=None):
     """คืน (dates, equity_curve, stats_dict)
+    close = Adj Close (signal RS + ผลตอบแทน total return รวมปันผล)
+    close_raw = ราคาจริง (filter ราคา >=1 บาท + สภาพคล่อง close×vol)
     regime/regime_min: ถ้า breadth ณ วัน rebalance < regime_min -> ถือเงินสดงวดนั้น"""
-    # ---- สัญญาณ (คำนวณจาก close ทั้ง DataFrame แบบ vectorized) ----
+    # ---- สัญญาณ (คำนวณจาก adj close — โมเมนตัม/RS รวมผลปันผลถูกต้อง) ----
     r21  = close.pct_change(21,  fill_method=None)
     r63  = close.pct_change(63,  fill_method=None)
     r126 = close.pct_change(126, fill_method=None)
@@ -81,7 +102,8 @@ def run(close, vol, sec_of, use_rrg=True, regime=None, regime_min=None):
     rs_raw = (2 * r21 + r63 + r126 + r250) / 5 * 100          # ต้องครบทั้ง 4 ช่วง
     rs_pct = rs_raw.rank(axis=1, pct=True) * 99               # percentile 0-99 ต่อวัน
 
-    value20 = (close * vol).rolling(20).mean()
+    # สภาพคล่อง = ราคาจริง × ปริมาณ (มูลค่าซื้อขายจริงเป็นบาท ไม่ใช่ adj)
+    value20 = (close_raw * vol).rolling(20).mean()
 
     # sector 1M momentum (equal-weight ของสมาชิก) -> RRG filter
     sec_ser = pd.Series({t: sec_of.get(t) for t in close.columns})
@@ -106,7 +128,8 @@ def run(close, vol, sec_of, use_rrg=True, regime=None, regime_min=None):
             n_cash += 1
         else:
             row_rs, row_pct = rs_raw.iloc[t], rs_pct.iloc[t]
-            ok = (row_pct >= RS_MIN) & (close.iloc[t] >= PRICE_MIN) & (value20.iloc[t] >= VALUE_MIN)
+            # ราคาขั้นต่ำใช้ราคาจริง (raw) ไม่ใช่ adj (หุ้นเก่าปันผลเยอะ adj อาจต่ำกว่า 1 บาททั้งที่ราคาจริงสูง)
+            ok = (row_pct >= RS_MIN) & (close_raw.iloc[t] >= PRICE_MIN) & (value20.iloc[t] >= VALUE_MIN)
             if use_rrg:
                 mom = sec_mom.iloc[t]
                 ok &= sec_ser.map(lambda s: bool(mom.get(s, np.nan) > 0)).values
@@ -154,20 +177,20 @@ def run(close, vol, sec_of, use_rrg=True, regime=None, regime_min=None):
 
 def main():
     print(f"โหลดข้อมูลจาก SQLite... (backtest ตั้งแต่ {START_YEAR})")
-    close, vol = load_frames()
+    close, close_raw, vol = load_frames()   # close = adj_close (total return)
     print(f"  {close.shape[1]} หุ้น × {close.shape[0]} วันทำการ "
-          f"({close.index[0].date()} → {close.index[-1].date()})")
+          f"({close.index[0].date()} → {close.index[-1].date()}) · ผลตอบแทน=Adj Close (รวมปันผล)")
     sec_of = sector_map()
 
     print("คำนวณ breadth %>EMA200 สำหรับ regime filter ...")
-    pct200 = breadth_pct200(close)
+    pct200 = breadth_pct200(close_raw)   # breadth = แนวโน้มราคาจริง
 
     print("รัน strategy RS>=90 + RRG sector filter ...")
-    eq_rrg, s_rrg = run(close, vol, sec_of, use_rrg=True)
+    eq_rrg, s_rrg = run(close, close_raw, vol, sec_of, use_rrg=True)
     print("รัน variant RS-only (ไม่มี RRG filter) ...")
-    eq_rs, s_rs = run(close, vol, sec_of, use_rrg=False)
+    eq_rs, s_rs = run(close, close_raw, vol, sec_of, use_rrg=False)
     print("รัน variant RS+RRG + Regime (ถือเงินสดเมื่อ %>EMA200 < 30) ...")
-    eq_rg, s_rg = run(close, vol, sec_of, use_rrg=True, regime=pct200, regime_min=30)
+    eq_rg, s_rg = run(close, close_raw, vol, sec_of, use_rrg=True, regime=pct200, regime_min=30)
 
     # ---- benchmarks ----
     win = eq_rrg.index
@@ -176,7 +199,7 @@ def main():
     if set_idx is not None:
         s = set_idx.reindex(win, method="ffill").dropna()
         bench["SET Index"] = s / s.iloc[0]
-    # equal-weight universe (rebalance รายเดือนเท่ากันทุกตัวที่มีราคา)
+    # equal-weight universe (ใช้ adj close ให้เทียบกับ strategy อย่างเป็นธรรม — รวมปันผลทั้งคู่)
     monthly = close.ffill().reindex(win)
     uni_ret = (monthly.pct_change(fill_method=None)).mean(axis=1).fillna(0)
     bench["Universe EW"] = (1 + uni_ret).cumprod()
@@ -202,7 +225,7 @@ def main():
     # sensitivity ของ regime threshold — ดูความทนทาน ไม่ใช่หาค่าที่สวยสุด
     print("\nSensitivity ของ regime threshold (RS+RRG + ถือเงินสดเมื่อ breadth < X):")
     for th in (25, 35, 40, 50):
-        e, s = run(close, vol, sec_of, use_rrg=True, regime=pct200, regime_min=th)
+        e, s = run(close, close_raw, vol, sec_of, use_rrg=True, regime=pct200, regime_min=th)
         print(f"  X={th:>2}: {fmt(e, s)} | เงินสด {s['n_cash']} งวด")
 
     # รายปี
