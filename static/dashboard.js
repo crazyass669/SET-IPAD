@@ -6157,17 +6157,30 @@ let _insiderPopupSym = null;
 // ── สถิติราคาระยะยาว (seasonality / drawdown / CAGR) จาก set_prices.db ย้อนถึง 1983 ──
 const _TH_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
 
-function _loadPriceAnalytics(symbol) {
-  const box = document.getElementById('cm-lts');
+/** โหลด+วาดสถิติระยะยาวลงกล่องที่ระบุ — ใช้ได้ทั้งกราฟ modal (cm-lts) และหน้างบการเงิน (fin-lts)
+ *  boxId: id ของกล่องปลายทาง · stillCurrent: ฟังก์ชันเช็คว่ายังอยู่ที่หุ้นตัวเดิม (กัน
+ *  response เก่ามาทับตอนผู้ใช้เปลี่ยนหุ้นระหว่างรอโหลด) */
+function _loadPriceAnalytics(symbol, boxId = 'cm-lts',
+                             stillCurrent = () => _cmStock?.symbol === symbol) {
+  const box = document.getElementById(boxId);
   if (!box) return;
   box.innerHTML = '';
   box.style.display = 'none';
   fetch(`/api/price-analytics/${encodeURIComponent(symbol)}`).then(r => r.json()).then(d => {
-    if (_cmStock?.symbol !== symbol) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
+    if (!stillCurrent()) return;               // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
     if (d.error || !d.drawdown) return;
     box.innerHTML = _priceAnalyticsHtml(d);
     box.style.display = 'block';
   }).catch(() => {});
+}
+
+// หน้า "งบการเงิน" เต็ม (fin-lts) — หุ้นไทยเท่านั้น (API ต่อท้าย .BK ให้เอง)
+// ใช้ _loadPriceAnalytics ตัวเดียวกับกราฟ modal แค่เปลี่ยนกล่องปลายทาง + guard
+// (_finLtsSym จำ symbol ที่ยิง request ไป — กัน response เก่ามาทับตอนเปลี่ยนหุ้น)
+let _finLtsSym = null;
+function _loadPriceAnalyticsFin(symbol) {
+  _finLtsSym = symbol;
+  _loadPriceAnalytics(symbol, 'fin-lts', () => _finLtsSym === symbol);
 }
 
 // คำอธิบายสถิติระยะยาว — ภาษาบ้านๆ สำหรับคนที่ไม่คุ้นศัพท์ (ผูกกับหัวข้อด้วย _tipIconHtml)
@@ -7723,6 +7736,7 @@ function _renderFinancialsFull(d, source) {
       <div style="font-size:11px;color:var(--text2);margin-bottom:10px">${srcNote} · ${isQ ? 'ข้อมูลรายไตรมาส (% = เทียบงวดก่อนหน้า QoQ)' : 'ข้อมูลรายปี'}</div>
       ${fyBanner}
       ${_finTab === 'dr' ? `<div id="fin-desc-box" style="display:none;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px"></div>` : ''}
+      ${_finTab === 'set' ? `<div id="fin-lts" style="display:none;margin-bottom:10px"></div>` : ''}
       ${_finTrendSection(d, source)}
       ${toggleHtml}
       ${_finFullTable('📊 งบกำไรขาดทุน (Income Statement)', cols, colLabels, FIN_YAHOO_GROUPS.income,   null, (key,c) => (inc[key]||{})[c],  isRatio, _finFullShowAll, null, isFinn)}
@@ -7736,6 +7750,7 @@ function _renderFinancialsFull(d, source) {
       _loadFinDescription(d.sym, tvMarket);
       if (!IS_STATIC) _loadFinTVLink(d.sym, tvMarket);
     }
+    if (_finTab === 'set') _loadPriceAnalyticsFin(d.sym);
     if (isFinn && !IS_STATIC) _loadLiveValuationBand(d, _finTab === 'dr', tvMarket);
     return;
   }
@@ -7764,8 +7779,10 @@ function _renderFinancialsFull(d, source) {
     </div>
     <div style="font-size:11px;color:var(--text2);margin-bottom:6px">company-highlight API · หน่วยที่แปลงแล้ว: บาทเต็ม (API ส่งมาเป็นพันบาท)</div>
     ${hasPartial ? `<div style="font-size:10px;color:var(--text2);margin-bottom:10px">⚠ ปีที่มี <b>*</b> ต่อท้าย = ยังไม่ปิดงบเต็มปี มีแค่ไตรมาสล่าสุดที่บริษัทรายงานเข้ามาเท่านั้น ไม่ใช่ยอดสะสมทั้งปี — อย่าเทียบตรงๆ กับปีอื่นที่เป็นงบเต็มปี</div>` : ''}
+    <div id="fin-lts" style="display:none;margin-bottom:10px"></div>
     ${_finFullTable('🧾 งบการเงิน (Company Highlight)', cols, colLabels, FIN_SET_GROUPS, null, getVal, isRatio, true, noPctCols)}
   </div>`;
+  _loadPriceAnalyticsFin(d.sym);
 }
 
 function _renderFinancials(d) {

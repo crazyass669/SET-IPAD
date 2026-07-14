@@ -6,6 +6,11 @@ on:
     - cron: '10 6 * * 1-5'    # 13:10 ICT (06:10 UTC) จันทร์–ศุกร์ หลังตลาดปิดช่วงเช้า
     - cron: '0 23 * * *'      # 06:00 ICT ทุกวัน (23:00 UTC คืนก่อน)
   workflow_dispatch:            # กดรันมือได้จาก GitHub UI
+    inputs:
+      full_refresh:
+        description: 'Full Refresh — ดึงราคา 10 ปีใหม่ทั้งหมด (backfill OHLC/Adj Close เข้า cache) ช้า ~30-60 นาที · ไม่ติ๊ก = Quick Update ปกติ'
+        type: boolean
+        default: false
 
 concurrency:
   group: update-set-data
@@ -43,6 +48,15 @@ jobs:
             rotation_state.json
           key: set-prices-${{ github.run_id }}
           restore-keys: set-prices-
+
+      # ติ๊ก full_refresh = ลบ price DB ที่ restore มาจาก cache -> run_static_update.py
+      # จะไม่เจอ set_prices.db เลย Full Refresh 10 ปีใหม่ทั้งหมด (ดึง OHLC + Adj Close
+      # เข้ามาครบ) แล้ว cache รอบนี้จะเก็บ DB ตัวใหม่ไว้ให้รอบถัดๆ ไป quick update ต่อ
+      - name: Force Full Refresh (ล้าง price DB ที่ restore มา)
+        if: ${{ inputs.full_refresh }}
+        run: |
+          echo "full_refresh = true -> ลบ set_prices.db เพื่อบังคับ Full Refresh"
+          rm -f set_prices.db
 
       - name: Run static update
         run: python run_static_update.py
