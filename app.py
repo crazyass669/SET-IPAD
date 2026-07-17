@@ -64,7 +64,7 @@ from core.metrics import calc_rs_raw
 
 # HTTP clients / static universe — แยกไว้ที่ sources/ (Phase 2 refactor)
 from sources.tradingview import INDEX_INFO, _yf_to_tv, _fetch_tv_bars
-from sources.dr_universe import _DR_STATIC, is_latest_bar_stable, load_dr_universe, sync_dr_universe
+from sources.dr_universe import _DR_STATIC, is_latest_bar_stable, region_today_date, load_dr_universe, sync_dr_universe
 from sources import sec_store
 from sources import financials_store
 from sources import factor_snapshot
@@ -294,6 +294,39 @@ def price_analytics_endpoint(symbol):
     return jsonify(result)
 
 
+@app.route("/api/price-analytics-yf/<yf_ticker>")
+def price_analytics_yf_endpoint(yf_ticker):
+    """เหมือน /api/price-analytics แต่สำหรับหุ้น DR — ไม่มี set_prices.db ของหุ้นต่างประเทศ
+    เก็บไว้ในเครื่อง เลยดึงราคาย้อนหลังสดจาก yfinance (ตัวเดียวกับที่ /api/dr-history ใช้
+    วาดกราฟ Max อยู่แล้ว) แล้วป้อนเข้า price_analytics.analyze() ตัวเดียวกับหุ้นไทย —
+    cache 6 ชม. ต่อ ticker กันยิง yfinance ซ้ำถี่ๆ"""
+    from sources import price_analytics
+    yft = yf_ticker.upper().strip()
+    cache_key = f"YF:{yft}"
+    cached = _price_analytics_cache.get(cache_key)
+    if cached and (time.time() - cached[0] < _PRICE_ANALYTICS_TTL):
+        return jsonify(cached[1])
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(yft).history(period="max", auto_adjust=False)
+        if hist.empty:
+            return jsonify({"error": f"ไม่พบข้อมูลราคา {yft}"}), 404
+        nz = lambda v: round(float(v), 6) if v == v else None   # v==v -> False เฉพาะ NaN
+        adj_col = hist["Adj Close"] if "Adj Close" in hist.columns else hist["Close"]
+        ohlc = {
+            "dates": [str(d)[:10] for d in hist.index],
+            "closes": [nz(c) for c in hist["Close"]],
+            "adj_closes": [nz(c) for c in adj_col],
+        }
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    result = price_analytics.analyze(ohlc)
+    if not result:
+        return jsonify({"error": f"ข้อมูลราคาไม่พอวิเคราะห์ {yft} (ต้องมีอย่างน้อย ~1 ปี)"}), 404
+    _price_analytics_cache[cache_key] = (time.time(), result)
+    return jsonify(result)
+
+
 @app.route("/api/quick-update", methods=["POST"])
 def start_quick_update():
     with _lock:
@@ -511,19 +544,33 @@ def _dr_do_rebuild():
 
             # ตลาดยังไม่ปิดจริง/ยังอยู่ pre-market-after-hours -> แท่งล่าสุดยังไม่นิ่ง
             # (Yahoo เอาราคาที่กำลังไหลไปทับ Close ของแท่งนี้เรื่อยๆ) ตัดทิ้งไปใช้
-            # แท่งก่อนหน้าที่ freeze แล้วแทน ให้ตรงกับ "ราคาปิด" จริงๆ
-            if not is_latest_bar_stable(stock["region"]):
-                close  = close.iloc[:-1]
-                if len(open_s): open_s = open_s.iloc[:-1]
-                if len(high_s): high_s = high_s.iloc[:-1]
-                if len(low_s):  low_s  = low_s.iloc[:-1]
-                if len(vol_s):  vol_s  = vol_s.iloc[:-1]
-                if len(close) < 2:
-                    continue
+            # แท่งก่อนหน้าที่ freeze แล้วแทน ให้ตรงกับ "ราคาปิด" จริงๆ — แต่เก็บค่าที่ยัง
+            # ไม่นิ่งไว้แยกเป็น live_price/live_chg ก่อนตัด เพื่อโชว์เป็น "ราคาล่าสุด
+            # (ไม่นิ่ง)" คู่กับราคาปิดที่นิ่งแทนที่จะบังคับเลือกออกันข้าง (ผู้ใช้ขอ)
+            #
+            # ตัดเฉพาะตอนแท่งล่าสุดเป็นของ "วันนี้จริง" ในตลาดนั้นเท่านั้น — ยืนยันบั๊กจริง:
+            # หุ้น/ETF ปริมาณเบามาก (เช่น 3422.HK, FUEKIVND.VN) บางวันไม่มีเทรดเลยจนตลาด
+            # ปิด แท่งล่าสุดที่ Yahoo มีให้จึงเป็นของ "เมื่อวาน" (ปิดแล้วจริง ไม่ใช่ราคาไหล)
+            # ถ้าตัดทิ้งแบบเดิม (เช็คแค่ตลาดกำลังเปิดอยู่ไหม ไม่เช็ควันที่ของแท่ง) จะเผลอ
+            # ตัดราคาปิดจริงทิ้ง เหลือ <2 แท่ง แล้ว skip ทั้งตัว ทำให้ราคาค้างไม่อัพเดทถาวร
+            live_price = None
+            if not is_latest_bar_stable(stock["region"]) and len(close):
+                last_bar_date  = close.index[-1].date()
+                today_in_region = region_today_date(stock["region"])
+                if today_in_region is not None and last_bar_date == today_in_region:
+                    live_price = float(close.iloc[-1])
+                    close  = close.iloc[:-1]
+                    if len(open_s): open_s = open_s.iloc[:-1]
+                    if len(high_s): high_s = high_s.iloc[:-1]
+                    if len(low_s):  low_s  = low_s.iloc[:-1]
+                    if len(vol_s):  vol_s  = vol_s.iloc[:-1]
+                    if len(close) < 2:
+                        continue
 
             price = float(close.iloc[-1])
             prev  = float(close.iloc[-2])
             chg   = (price - prev) / prev * 100
+            live_chg = round((live_price - price) / price * 100, 2) if live_price and price else None
 
             close100 = [round(float(x), 4) for x in close.tail(100).tolist()]
 
@@ -589,6 +636,8 @@ def _dr_do_rebuild():
                 "yf":       stock["yf"],
                 "price":    round(price, 2),
                 "chg":      round(chg, 2),
+                "live_price": round(live_price, 2) if live_price is not None else None,
+                "live_chg":   live_chg,
                 "ret_1w":   ret_1w,
                 "ret_1m":   ret_1m,
                 "ret_3m":   ret_3m,
@@ -703,23 +752,44 @@ def dr_quick_update():
 
                     # แท่งล่าสุดยังไม่นิ่ง (pre-market/after-hours) -> ตัดทิ้ง
                     # กันดันค่าที่ยังไหลอยู่เข้า history ถาวร (รอบถัดไปค่อยดึงใหม่)
-                    if not is_latest_bar_stable(st["region"]):
-                        close  = close.iloc[:-1]
-                        if len(open_s): open_s = open_s.iloc[:-1]
-                        if len(high_s): high_s = high_s.iloc[:-1]
-                        if len(low_s):  low_s  = low_s.iloc[:-1]
-                        if len(vol_s):  vol_s  = vol_s.iloc[:-1]
-                        if len(close) < 2:
-                            continue
+                    # แต่เก็บไว้แยกเป็น live_price/live_chg ก่อนตัด — โชว์เป็น "ราคาล่าสุด
+                    # (ไม่นิ่ง)" คู่กับราคาปิดที่นิ่งแทนการบังคับเลือกอย่างใดอย่างหนึ่ง
+                    #
+                    # ตัดเฉพาะตอนแท่งล่าสุดเป็นของ "วันนี้จริง" เท่านั้น — ยืนยันบั๊กจริง:
+                    # หุ้น/ETF ปริมาณเบามาก (3422.HK, FUEKIVND.VN) บางวันไม่มีเทรดเลย
+                    # แท่งล่าสุดที่ได้จึงเป็นของ "เมื่อวาน" (ปิดแล้วจริง) เดิมเช็คแค่ตลาด
+                    # กำลังเปิดอยู่ไหม ไม่เช็ควันที่ของแท่ง เลยตัดราคาปิดจริงทิ้งจนเหลือ
+                    # <2 แท่ง แล้ว skip ทั้งตัว → ราคาค้างไม่อัพเดทถาวรทุกรอบ (นี่คือสาเหตุ
+                    # ที่ผู้ใช้รายงานว่าบางหุ้นไม่อัพเดทราคาเลย)
+                    live_price = None
+                    if not is_latest_bar_stable(st["region"]) and len(close):
+                        last_bar_date   = close.index[-1].date()
+                        today_in_region = region_today_date(st["region"])
+                        if today_in_region is not None and last_bar_date == today_in_region:
+                            live_price = float(close.iloc[-1])
+                            close  = close.iloc[:-1]
+                            if len(open_s): open_s = open_s.iloc[:-1]
+                            if len(high_s): high_s = high_s.iloc[:-1]
+                            if len(low_s):  low_s  = low_s.iloc[:-1]
+                            if len(vol_s):  vol_s  = vol_s.iloc[:-1]
+                            if len(close) < 2:
+                                continue
 
                     price = float(close.iloc[-1])
                     prev  = float(close.iloc[-2])
                     chg   = round((price - prev) / prev * 100, 2) if prev else 0
+                    live_chg = round((live_price - price) / price * 100, 2) if live_price and price else None
 
                     entry = stock_map.get(sym)
                     if entry:
                         entry["price"] = round(price, 2)
                         entry["chg"]   = chg
+                        if live_price is not None:
+                            entry["live_price"] = round(live_price, 2)
+                            entry["live_chg"]   = live_chg
+                        else:
+                            entry.pop("live_price", None)
+                            entry.pop("live_chg", None)
                         new_closes_raw = [round(float(c), 4) for c in close.tolist()]
                         new_dates_raw  = [str(d)[:10] for d in close.index.tolist()]
                         # อัปเดต close100
@@ -1305,6 +1375,21 @@ def financials_coverage():
 
 def _run_financials_sync(symbols=None, sources=None, is_dr=False, min_age_days=None):
     try:
+        if is_dr and not symbols:
+            # เช็ค SET.or.th ก่อนดึงงบ — DR ออกใหม่ถูกเพิ่มเข้า universe อัตโนมัติ
+            # ไม่งั้นปุ่ม "ดึงเฉพาะที่ขาด/เก่า" มองไม่เห็นหุ้นใหม่จนกว่าหน้า DR
+            # จะ rebuild ราคา (sync ล้มเหลวก็ใช้ลิสต์เดิมไปก่อน ไม่ให้งานล่ม)
+            _update(message="เช็คหุ้น DR ใหม่จาก SET.or.th ก่อนดึงงบ...")
+            try:
+                st = sync_dr_universe(BASE_DIR)
+                if st.get("added") or st.get("appended"):
+                    _dr_diff_cache.clear()   # ลิสต์เปลี่ยน — ผลเช็คหุ้นใหม่เดิมไม่ตรงแล้ว
+                    _dr_cache.clear()        # ล้าง cache ราคา — เปิดหน้า DR รอบหน้า rebuild เห็นหุ้นใหม่เลย
+                    print(f"[DR-sync] ก่อนดึงงบ: underlying ใหม่ {st.get('added', 0)}, "
+                          f"series ใหม่ {st.get('appended', 0)}, ยัง map ไม่ได้ {st.get('unmapped', 0)}")
+            except Exception as e:
+                print(f"[DR-sync] ข้าม (sync ล้มเหลว ใช้ลิสต์เดิม): {e}")
+            symbols = _dr_financials_universe()
         target = symbols if symbols else _financials_universe()
         # yahoo_q = งบรายไตรมาส (สะสมทุกรอบ sync — ใช้กรอง QoQ/YoY-Q ใน Screener)
         # finnomena_q = งบไตรมาสย้อนยาว ~20 ปี (backfill ครั้งเดียวได้ streak/เร่งตัว/TTM เต็มสูตร)
@@ -1335,7 +1420,8 @@ def start_financials_sync():
     if request.is_json:
         body = request.json or {}
         if body.get("universe") == "dr":
-            symbols = _dr_financials_universe()
+            # ไม่ resolve รายชื่อที่นี่ — _run_financials_sync จะ sync ลิสต์กับ
+            # SET.or.th ก่อนแล้วค่อยสร้างรายชื่อ (เห็นหุ้น DR ออกใหม่ทันที)
             sources = ["yahoo", "yahoo_q", "finnomena_q"]   # DR ไม่มี SET.or.th; finnomena ครอบ US/HK
             is_dr = True
         else:
@@ -2840,14 +2926,16 @@ def _fetch_flow_set_official():
     คืน row เดียว หรือ None ถ้าวันนั้นตลาดยังไม่ปิด (ตัวเลขระหว่างวันยังไหลอยู่)"""
     from sources.set_api import _bootstrap_headers, _get_json
     from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZoneInfo
     ctx, hdr = _bootstrap_headers()
     d = _get_json(ctx, hdr, "/api/set/market/SET/investor-type?lang=th")
     as_of = (d.get("asOfDate") or "")[:10]
     inv = {x.get("type"): x.get("netValue") for x in (d.get("investors") or [])}
     if not as_of or not inv:
         return None
-    # ตลาดยังไม่ปิดของวันนั้น -> ข้าม (เก็บเฉพาะยอดสิ้นวันที่นิ่งแล้ว)
-    now = _dt.now()
+    # ตลาดยังไม่ปิดของวันนั้น -> ข้าม (เก็บเฉพาะยอดสิ้นวันที่นิ่งแล้ว) — ใช้เวลาไทยเสมอ
+    # ไม่ใช่เวลาเครื่อง เพราะ GitHub Actions รันด้วย UTC (เดิมใช้ _dt.now() เพี้ยนบน CI)
+    now = _dt.now(_ZoneInfo("Asia/Bangkok"))
     if as_of == now.strftime("%Y-%m-%d") and (now.hour, now.minute) < (17, 45):
         return None
 
@@ -2926,6 +3014,176 @@ def market_flow():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+
+# ── S50 Futures flow (TFEX) ───────────────────────────────────────────────
+# แหล่ง: หน้า tfex.co.th/en/market-data/historical-data/trading-by-investor-types
+# (Nuxt SSR — ข้อมูลฝังอยู่ใน window.__NUXT__) ให้แค่ "วันล่าสุดวันเดียว" ต่อครั้ง
+# (ไม่มี API ประวัติแบบเปิด — /api/set/tfex/... โดน Incapsula บล็อค) จึงต้องดึงทุกวัน
+# แล้วสะสมเก็บเองในไฟล์ (เหมือน market_flow_data.json ของ SET)
+_flow_s50_cache: dict = {}
+_S50_FLOW_FILE = os.path.join(BASE_DIR, "s50_flow_data.json")
+
+
+def _fetch_flow_tfex_today():
+    """ดึง+parse หน้า TFEX investor-type — คืน row เดียว {date, fund, foreign, retail}
+    (หน่วย: สัญญา ไม่ใช่ล้านบาท) หรือ None ถ้าหาข้อมูลไม่เจอ"""
+    import urllib.request as _ur, ssl as _ssl, re as _re
+    ctx = _ssl._create_unverified_context()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    req = _ur.Request(
+        "https://www.tfex.co.th/en/market-data/historical-data/trading-by-investor-types",
+        headers=headers)
+    with _ur.urlopen(req, context=ctx, timeout=20) as r:
+        html = r.read().decode("utf-8", "ignore")
+
+    m = _re.search(r'stockName:"Equity Index Futures",'
+                    r'institutionalInvestorBuy:(-?[\d.]+|[a-zA-Z_$]+),'
+                    r'institutionalInvestorSell:(-?[\d.]+|[a-zA-Z_$]+),'
+                    r'institutionalInvestorNet:(-?[\d.]+|[a-zA-Z_$]+),'
+                    r'foreignInvestorBuy:(-?[\d.]+|[a-zA-Z_$]+),'
+                    r'foreignInvestorSell:(-?[\d.]+|[a-zA-Z_$]+),'
+                    r'foreignInvestorNet:(-?[\d.]+|[a-zA-Z_$]+),'
+                    r'localIndividualBuy:(-?[\d.]+|[a-zA-Z_$]+),'
+                    r'localIndividualSell:(-?[\d.]+|[a-zA-Z_$]+),'
+                    r'localIndividualNet:(-?[\d.]+|[a-zA-Z_$]+)', html)
+    if not m:
+        raise ValueError("ไม่พบ Equity Index Futures ในหน้า TFEX")
+
+    def num(s):
+        try:
+            return float(s)
+        except ValueError:
+            return None   # ตัวแปรอ้างค่า null ของ nuxt (a/b/... ไม่ใช่ตัวเลข)
+
+    inst_net, for_net, loc_net = num(m.group(3)), num(m.group(6)), num(m.group(9))
+
+    dm = _re.search(r'As of (\d{1,2} \w{3} \d{4})', html)
+    if not dm:
+        raise ValueError("ไม่พบวันที่ (As of) ในหน้า TFEX")
+    from datetime import datetime as _dt
+    date = _dt.strptime(dm.group(1), "%d %b %Y").strftime("%Y-%m-%d")
+
+    return {"date": date, "fund": inst_net, "foreign": for_net, "retail": loc_net}
+
+
+def _fetch_flow_s50_data():
+    """รวมข้อมูล S50 Futures flow จากไฟล์สะสม + TFEX (วันล่าสุด) — เหมือน SET flow"""
+    rows_by_date = {}
+    try:
+        with open(_S50_FLOW_FILE, encoding="utf-8") as f:
+            for r0 in (json.load(f).get("rows") or []):
+                if r0.get("date"):
+                    rows_by_date[r0["date"]] = r0
+    except Exception:
+        pass
+
+    sources = []
+    try:
+        row = _fetch_flow_tfex_today()
+        rows_by_date[row["date"]] = row
+        sources.append("tfex.co.th")
+    except Exception as e:
+        print(f"[S50 Flow] TFEX ไม่ได้ ({e})")
+
+    if not rows_by_date:
+        raise RuntimeError("ไม่มีข้อมูล S50 Futures flow (TFEX ไม่ได้ + ไม่มีไฟล์สะสม)")
+
+    rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
+    result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
+              "sources": sources or ["ไฟล์สะสม (ดึงใหม่ไม่สำเร็จ)"]}
+    if sources:
+        _atomic_write_json(_S50_FLOW_FILE, {"rows": rows, "updated_at": result["fetched_at"]})
+    _flow_s50_cache["data"] = result
+    _flow_s50_cache["ts"] = time.time()
+    return result
+
+
+@app.route("/api/market-flow-s50")
+def market_flow_s50():
+    """ดึงข้อมูล net position รายวัน (สัญญา) จาก TFEX — สถาบัน/ต่างชาติ/ในประเทศ"""
+    now = time.time()
+    if _flow_s50_cache.get("data") and now - _flow_s50_cache.get("ts", 0) < _FLOW_CACHE_TTL:
+        return jsonify(_flow_s50_cache["data"])
+    try:
+        return jsonify(_fetch_flow_s50_data())
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+# ── Thai Bond flow (ThaiBMA) ──────────────────────────────────────────────
+# แหล่ง: thaibma.or.th/nrdaily/GetNR/ — JSON เปิด ไม่ต้อง auth คืนประวัติเต็ม
+# (ต่างจาก SET/S50 ที่ต้องสะสมเอง) หน่วย: ล้านบาท
+_flow_bond_cache: dict = {}
+_BOND_FLOW_FILE = os.path.join(BASE_DIR, "bond_flow_data.json")
+
+
+def _fetch_flow_bond_data():
+    """รวมข้อมูล Thai Bond flow จากไฟล์สะสม + ThaiBMA (merge by date เหมือน SET/S50 flow —
+    เดิมเขียนทับไฟล์ทั้งไฟล์ด้วยผลลัพธ์ ThaiBMA ตรงๆ ถ้าวันไหน ThaiBMA ส่งประวัติสั้นลง
+    (เช่นเหลือแค่ YTD) ข้อมูลย้อนหลังที่สะสมไว้จะหายถาวร — ตอนนี้ merge เข้าไฟล์เดิมแทน)"""
+    import urllib.request as _ur, ssl as _ssl
+    ctx = _ssl._create_unverified_context()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": "https://www.thaibma.or.th/EN/Market/NR/NRDaily.aspx",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    rows_by_date = {}
+    try:
+        with open(_BOND_FLOW_FILE, encoding="utf-8") as f:
+            for r0 in (json.load(f).get("rows") or []):
+                if r0.get("date"):
+                    rows_by_date[r0["date"]] = r0
+    except Exception:
+        pass
+
+    sources = []
+    try:
+        req = _ur.Request("https://www.thaibma.or.th/nrdaily/GetNR/", headers=headers)
+        with _ur.urlopen(req, context=ctx, timeout=20) as r:
+            raw = json.loads(r.read().decode("utf-8", "ignore"))
+        for item in raw:
+            date = str(item.get("Asof") or "")[:10]
+            net = item.get("NetFlow")
+            if date and net is not None:
+                rows_by_date[date] = {"date": date, "foreign": round(float(net), 2)}
+        sources.append("thaibma.or.th")
+    except Exception as e:
+        print(f"[Bond Flow] ThaiBMA ไม่ได้ ({e}) — ใช้ไฟล์สะสม")
+
+    if not rows_by_date:
+        raise RuntimeError("ไม่มีข้อมูล Thai Bond flow (ThaiBMA ไม่ได้ + ไม่มีไฟล์สะสม)")
+
+    rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
+    result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
+              "sources": sources or ["ไฟล์สะสม (ดึงใหม่ไม่สำเร็จ)"]}
+    if sources:
+        _atomic_write_json(_BOND_FLOW_FILE, {"rows": rows, "updated_at": result["fetched_at"]})
+    _flow_bond_cache["data"] = result
+    _flow_bond_cache["ts"] = time.time()
+    return result
+
+
+@app.route("/api/market-flow-bond")
+def market_flow_bond():
+    """ดึงข้อมูล net buy/sell รายวัน (ล้านบาท) ของต่างชาติ (NR) ในตลาดตราสารหนี้ไทย จาก ThaiBMA"""
+    now = time.time()
+    if _flow_bond_cache.get("data") and now - _flow_bond_cache.get("ts", 0) < _FLOW_CACHE_TTL:
+        return jsonify(_flow_bond_cache["data"])
+    try:
+        return jsonify(_fetch_flow_bond_data())
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/api/short-sales")
 def short_sales():
     data = _load_short_data()
@@ -2945,6 +3203,11 @@ def short_sales():
             "daily_count":      len(daily),
             "last_snap":        daily[-1] if daily else None,
             "prev_snap":        daily[-2] if len(daily) >= 2 else None,
+            # 21 snapshots ล่าสุดแบบ compact [date, short_pos, short_pos_pct] —
+            # ให้เวอร์ชันเว็บ (ที่ไม่มี endpoint /api/short-sales/<sym>) วาด trend
+            # chart ใน detail panel ได้ (pattern เดียวกับ /api/nvdr daily_tail)
+            "daily_tail":       [[d.get("date"), d.get("short_pos"), d.get("short_pos_pct")]
+                                 for d in daily[-21:]],
         }
 
     return jsonify({

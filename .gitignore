@@ -11,14 +11,22 @@ set_data.json
 set_dr_data.json
 set_history.json
 dr_cache.json
-nvdr_data.json
 set_market_stats.json
 *.json.tmp
 
-# indices_cache.json, short_sales_data.json: ไม่ ignore แล้ว (commit เข้า repo
-# ตรงๆ) — เดิม gitignore ไว้ทำให้ CI (fresh checkout ทุกรอบ) ไม่มีไฟล์นี้เลย
-# /api/indices และ /api/short-sales อ่านจากไฟล์นี้อย่างเดียว ไม่ fetch สดเอง
-# เลย 404 ทุกรอบ auto-update เงียบๆ มาตลอด (required=False เลยไม่มีใครสังเกต)
+# indices_cache.json, short_sales_data.json, nvdr_data.json: ไม่ ignore แล้ว
+# (commit เข้า repo ตรงๆ) — เดิม gitignore ไว้ทำให้ CI (fresh checkout ทุกรอบ)
+# ไม่มีไฟล์นี้เลย /api/indices และ /api/short-sales อ่านจากไฟล์นี้อย่างเดียว
+# ไม่ fetch สดเอง เลย 404 ทุกรอบ auto-update เงียบๆ มาตลอด (required=False
+# เลยไม่มีใครสังเกต) — nvdr_data.json ก็เจอบัคแบบเดียวกัน: ประวัติ daily ไม่สะสม
+# บน CI ทำให้ NVDR Δ ranking + สัญญาณ NVDR ใน Flow Confluence เป็น 0 หมด
+# บนเวอร์ชันเว็บ (แก้ 2026-07-17)
+
+# ไฟล์ข้อมูลดิบต้นทาง (local-only) — ดึงเข้า set_prices.db/s50_flow_data.json ไปแล้วผ่าน
+# import_delisted_stocks.py / import_s50_futures_xlsx.py — ตัว zip ใหญ่เกิน GitHub limit อยู่แล้ว
+set-archive_EOD_1970-LAST.zip
+set-archive_EOD_1970-LAST/
+S50 Futures Data.xlsx
 
 # Backup / test
 *.bak
@@ -37,10 +45,12 @@ listedCompanies_en_US.xlsx
 # Claude Code local settings
 .claude/settings.local.json
 
-# SQLite price store
+# SQLite price store + สำเนาสำรอง (local only)
 set_prices.db
 set_prices.db-wal
 set_prices.db-shm
+set_prices.db.bak*
+backups/
 
 # SQLite SEC filings store (insider trades / major shareholder changes)
 sec_filings.db

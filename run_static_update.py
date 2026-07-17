@@ -67,7 +67,7 @@ if os.path.exists(os.path.join(BASE_DIR, "Table_PE.xls")):
 
 # ── 3. Snapshot ทุก API endpoint ลง data/*.json ─────────────
 log("=== Snapshot API endpoints -> data/ ===")
-from app import app, _fetch_indices_tv, _load_indices_existing, short_sales_daily_update  # noqa: E402
+from app import app, _fetch_indices_tv, _load_indices_existing, short_sales_daily_update, nvdr_daily_update  # noqa: E402
 
 client = app.test_client()
 
@@ -88,6 +88,14 @@ try:
     log("✅ Short Sales รีเฟรชเสร็จ")
 except Exception as e:
     log(f"⚠️ Short Sales รีเฟรชล้ม: {e}")
+# NVDR ก็ต้องสะสม daily snapshot บน CI เหมือน short sales — เดิมไม่ได้เรียก
+# (และไฟล์โดน gitignore) ทำให้ NVDR Δ + สัญญาณ NVDR ใน Flow Confluence
+# เป็น 0 หมดบนเวอร์ชันเว็บมาตลอด
+try:
+    nvdr_daily_update()
+    log("✅ NVDR รีเฟรชเสร็จ")
+except Exception as e:
+    log(f"⚠️ NVDR รีเฟรชล้ม: {e}")
 
 # (endpoint, ไฟล์ปลายทาง, จำเป็นไหม)  จำเป็น=True ถ้าล้มให้ exit 1
 SNAPSHOTS = [
@@ -105,6 +113,8 @@ SNAPSHOTS = [
     ("/api/market-stats",                  "market_stats.json",          False),
     ("/api/market-stats-meta",             "market_stats_meta.json",     False),
     ("/api/market-flow",                   "market_flow.json",           False),
+    ("/api/market-flow-s50",               "market_flow_s50.json",       False),
+    ("/api/market-flow-bond",              "market_flow_bond.json",      False),
     ("/api/market-internals",              "market_internals.json",      False),
     ("/api/rotation-alerts",               "rotation_alerts.json",       False),
     ("/api/stock-valuation-stats",         "stock_valuation_stats.json", False),

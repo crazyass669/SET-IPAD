@@ -25,9 +25,17 @@ def _load_json(path):
 
 
 # ── สัญญาณย่อย ───────────────────────────────────────────────
+MIN_INSIDER_NET_BAHT = 1e6   # สุทธิขั้นต่ำ 1 ล้านบาท ถึงนับเป็นทิศทาง
+
+
 def insider_signal(rows):
     """rows: list ของ insider_trades (dict มี action, qty, price) ในหน้าต่างเวลา
-    คืน (dir, detail) — dir +1/-1/0 จากมูลค่าซื้อ-ขายสุทธิ"""
+    คืน (dir, detail) — dir +1/-1/0 จากมูลค่าซื้อ-ขายสุทธิ
+
+    เกณฑ์นับทิศทาง (ต้องผ่านทั้งสองข้อ):
+      1. สุทธิ >10% ของมูลค่ารวม (ไม่ก้ำกึ่ง)
+      2. สุทธิ >= 1 ล้านบาท (เดิมไม่มีขั้นต่ำ — ซื้อ 2,500 บาทก็ได้ dir=+1
+         น้ำหนักเท่าซื้อ 100 ล้าน ทำให้ score confluence เฟ้อจากรายการจิ๋ว)"""
     buy_val = sell_val = 0.0
     n_buy = n_sell = 0
     for r in rows:
@@ -42,9 +50,8 @@ def insider_signal(rows):
         return 0, None
     net = buy_val - sell_val
     total = buy_val + sell_val
-    # ต้องมีน้ำหนักพอ (สุทธิ >10% ของมูลค่ารวม) ถึงนับเป็นทิศทาง
     d = 0
-    if total > 0:
+    if total > 0 and abs(net) >= MIN_INSIDER_NET_BAHT:
         if net > 0.1 * total:
             d = 1
         elif net < -0.1 * total:

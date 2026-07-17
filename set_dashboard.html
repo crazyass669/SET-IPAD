@@ -324,7 +324,7 @@
   <div class="grid-4" id="rs-stat-cards" style="margin-bottom:16px"></div>
 
   <!-- Tab bar -->
-  <div class="filter-row" style="margin-bottom:12px">
+  <div class="filter-row" id="rs-tab-row" style="margin-bottom:12px">
     <button class="filter-btn active" id="rs-tab-leaders" onclick="setRsTab('leaders',this)">🏆 RS 80+ Leaders</button>
     <button class="filter-btn" id="rs-tab-emerging" onclick="setRsTab('emerging',this)">⚡ Emerging Leaders</button>
   </div>
@@ -370,10 +370,10 @@
   <!-- Stage guide -->
   <div class="card" style="margin-bottom:12px;padding:14px 16px">
     <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:12px">
-      <div><span style="color:#58a6ff;font-weight:700">Stage 1 — Basing</span><br><span style="color:var(--text2)">ราคาใต้/ใกล้ EMA200, slope flat<br>ซื้อได้เมื่อ EMA200 เริ่ม slope ขึ้น</span></div>
-      <div><span style="color:#3fb950;font-weight:700">Stage 2 — Advancing ✅</span><br><span style="color:var(--text2)">ราคาเหนือ EMA200, EMA200 slope ขึ้น<br><strong>โซนซื้อที่ดีที่สุด</strong></span></div>
-      <div><span style="color:#e3b341;font-weight:700">Stage 3 — Topping</span><br><span style="color:var(--text2)">ราคาเหนือ EMA200, EMA200 slope ชะลอ/flat<br>ระวัง — อาจกำลังแจก</span></div>
-      <div><span style="color:#f85149;font-weight:700">Stage 4 — Declining</span><br><span style="color:var(--text2)">ราคาใต้ EMA200, EMA200 slope ลง<br><strong>หลีกเลี่ยง</strong></span></div>
+      <div><span style="color:#58a6ff;font-weight:700">Stage 1 — Basing</span><br><span style="color:var(--text2)">ราคาใต้ EMA200, slope ยังไม่ลงแรง (≥ -1.5%)<br>ซื้อได้เมื่อราคาตัดขึ้น EMA200 (เข้า Stage 2)</span></div>
+      <div><span style="color:#3fb950;font-weight:700">Stage 2 — Advancing ✅</span><br><span style="color:var(--text2)">ราคาเหนือ EMA200, EMA200 slope ≥ 0<br><strong>โซนซื้อที่ดีที่สุด</strong></span></div>
+      <div><span style="color:#e3b341;font-weight:700">Stage 3 — Topping</span><br><span style="color:var(--text2)">ราคาเหนือ EMA200, แต่ EMA200 slope กลับเป็นลบแล้ว<br>ระวัง — อาจกำลังแจก</span></div>
+      <div><span style="color:#f85149;font-weight:700">Stage 4 — Declining</span><br><span style="color:var(--text2)">ราคาใต้ EMA200, EMA200 slope ลงแรง (&lt; -1.5%)<br><strong>หลีกเลี่ยง</strong></span></div>
     </div>
   </div>
 
@@ -412,8 +412,8 @@
 
   <div class="filter-row">
     <span id="sector-view-btns">
-      <button class="filter-btn active" onclick="setSectorView('sector',this)">Sector (28)</button>
-      <button class="filter-btn" onclick="setSectorView('industry',this)">Industry Group (9)</button>
+      <button class="filter-btn active" onclick="setSectorView('sector',this)">Sector <span id="sector-count-sector"></span></button>
+      <button class="filter-btn" onclick="setSectorView('industry',this)">Industry Group <span id="sector-count-industry"></span></button>
     </span>
     <span style="width:1px;background:var(--border);height:18px;display:inline-block;margin:0 6px;vertical-align:middle"></span>
     <span id="sector-mode-btns">
@@ -469,7 +469,7 @@
         <th class="r sortable" onclick="sortSectors('ret_3m')">3M% <span class="scr-tip-icon" style="margin-left:1px">?<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 3 เดือน (เฉลี่ยทั้งกลุ่ม)</div></span></th>
         <th class="r sortable" onclick="sortSectors('ret_1y')">1Y% <span class="scr-tip-icon" style="margin-left:1px">?<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 ปี (เฉลี่ยทั้งกลุ่ม)</div></span></th>
         <th class="r sortable" onclick="sortSectors('avg_rs')">Avg RS <span class="scr-tip-icon" style="margin-left:1px">?<div class="scr-tip-box">ค่าเฉลี่ย RS Score ของหุ้นทุกตัวในกลุ่ม — ใช้เทียบความแข็งแกร่งระหว่างกลุ่ม</div></span></th>
-        <th class="r">% &gt;EMA50 <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:220px">
+        <th class="r sortable" onclick="sortSectors('pct_above_ema50')">% &gt;EMA50 <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:220px">
           <strong>% หุ้นที่อยู่เหนือ EMA50</strong><br>
           สัดส่วนหุ้นใน Sector ที่ราคาปิดสูงกว่า EMA 50 วัน<br><br>
           <span style="color:#3fb950">≥ 70%</span> = Sector แข็งแกร่ง<br>
@@ -500,7 +500,7 @@
     <button onclick="setDqOnlyFilter(false)" style="background:none;border:none;color:inherit;cursor:pointer;font-size:12px;padding:0;line-height:1">✕</button>
   </span>
 
-  <input class="search-box" id="stock-search" placeholder="ค้นหา Symbol เช่น EA, KBANK, AOT..." oninput="filterStocks()">
+  <input class="search-box" id="stock-search" placeholder="ค้นหา Symbol หรือชื่อบริษัท เช่น EA, KBANK, AIRPORT..." oninput="filterStocks()">
 
   <div style="font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Industry</div>
   <div class="filter-row" id="industry-filter-btns"></div>
@@ -515,9 +515,9 @@
       <button class="filter-btn" onclick="setStocksStageFilter(1,this)" style="color:#58a6ff">Stage 1 — Basing</button>
       <div class="btn-note" style="width:220px">
         <b style="color:#58a6ff">Stage 1 — Basing (สะสม)</b><br>
-        ราคาใต้หรือใกล้ EMA200<br>
-        EMA200 slope แบน/เริ่มหัน<br>
-        <span style="color:#8b949e">⏳ รอสัญญาณก่อนซื้อ</span>
+        ราคาใต้ EMA200<br>
+        slope ยังไม่ลงแรง (≥ -1.5%)<br>
+        <span style="color:#8b949e">⏳ รอราคาตัดขึ้น EMA200 ก่อนซื้อ</span>
       </div>
     </div>
     <div class="btn-wrap">
@@ -525,7 +525,7 @@
       <div class="btn-note" style="width:220px">
         <b style="color:#3fb950">Stage 2 — Advancing (ขาขึ้น)</b><br>
         ราคาเหนือ EMA200<br>
-        EMA200 slope ขึ้นต่อเนื่อง<br>
+        EMA200 slope ≥ 0<br>
         <span style="color:#3fb950">✅ โซนซื้อที่ดีที่สุด</span>
       </div>
     </div>
@@ -534,7 +534,7 @@
       <div class="btn-note" style="width:220px">
         <b style="color:#d29922">Stage 3 — Topping (แจก)</b><br>
         ราคาเหนือ EMA200<br>
-        EMA200 slope ชะลอหรือแบน<br>
+        แต่ EMA200 slope กลับเป็นลบแล้ว<br>
         <span style="color:#d29922">⚠️ ระวัง อาจกำลังแจกของ</span>
       </div>
     </div>
@@ -543,7 +543,7 @@
       <div class="btn-note" style="width:220px">
         <b style="color:#f85149">Stage 4 — Declining (ขาลง)</b><br>
         ราคาต่ำกว่า EMA200<br>
-        EMA200 slope ลง<br>
+        EMA200 slope ลงแรง (&lt; -1.5%)<br>
         <span style="color:#f85149">🚫 หลีกเลี่ยง ยังไม่ใช่เวลาซื้อ</span>
       </div>
     </div>
@@ -604,27 +604,30 @@
 <div id="page-band" class="page">
   <div class="page-title">Valuation Band</div>
   <div class="page-sub">PE Band · PBV Band — ตำแหน่ง Valuation เทียบกับค่าเฉลี่ยในอดีต (ข้อมูลจาก mrlikestock.com)</div>
-  <div class="band-search-row">
-    <input class="band-input" id="band-input" placeholder="พิมพ์ Symbol เช่น PTT, KBANK, AOT..." onkeydown="if(event.key==='Enter')searchBand()">
-    <button class="btn-primary" onclick="searchBand()" style="padding:10px 20px">ค้นหา</button>
-  </div>
-  <div id="band-loading" style="display:none;text-align:center;padding:40px;color:var(--text2);font-size:14px">⏳ กำลังโหลดข้อมูลจาก mrlikestock.com...</div>
-  <div id="band-error"   style="display:none;color:var(--red);padding:12px 0;font-size:13px"></div>
-  <div id="band-result"  style="display:none">
-    <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:16px">
-      <div style="font-size:20px;font-weight:700" id="band-sym-title"></div>
-      <div id="band-cache-tag" style="display:none;font-size:11px;color:var(--text2)"></div>
+  <div id="band-gate" class="empty" style="display:none;padding:24px"></div>
+  <div id="band-body">
+    <div class="band-search-row">
+      <input class="band-input" id="band-input" placeholder="พิมพ์ Symbol เช่น PTT, KBANK, AOT..." onkeydown="if(event.key==='Enter')searchBand()">
+      <button class="btn-primary" onclick="searchBand()" style="padding:10px 20px">ค้นหา</button>
     </div>
-    <div class="grid-2" style="gap:16px">
-      <div class="card" id="band-pe-card">
-        <div class="band-card-label">PE Band</div>
-        <div class="band-metrics-row" id="band-pe-metrics"></div>
-        <canvas id="band-pe-canvas" style="width:100%;display:block;border-radius:6px;background:#0d1117"></canvas>
+    <div id="band-loading" style="display:none;text-align:center;padding:40px;color:var(--text2);font-size:14px">⏳ กำลังโหลดข้อมูลจาก mrlikestock.com...</div>
+    <div id="band-error"   style="display:none;color:var(--red);padding:12px 0;font-size:13px"></div>
+    <div id="band-result"  style="display:none">
+      <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:16px">
+        <div style="font-size:20px;font-weight:700" id="band-sym-title"></div>
+        <div id="band-cache-tag" style="display:none;font-size:11px;color:var(--text2)"></div>
       </div>
-      <div class="card" id="band-pbv-card">
-        <div class="band-card-label">PBV Band</div>
-        <div class="band-metrics-row" id="band-pbv-metrics"></div>
-        <canvas id="band-pbv-canvas" style="width:100%;display:block;border-radius:6px;background:#0d1117"></canvas>
+      <div class="grid-2" style="gap:16px">
+        <div class="card" id="band-pe-card">
+          <div class="band-card-label">PE Band</div>
+          <div class="band-metrics-row" id="band-pe-metrics"></div>
+          <canvas id="band-pe-canvas" style="width:100%;display:block;border-radius:6px;background:#0d1117"></canvas>
+        </div>
+        <div class="card" id="band-pbv-card">
+          <div class="band-card-label">PBV Band</div>
+          <div class="band-metrics-row" id="band-pbv-metrics"></div>
+          <canvas id="band-pbv-canvas" style="width:100%;display:block;border-radius:6px;background:#0d1117"></canvas>
+        </div>
       </div>
     </div>
   </div>
@@ -1649,13 +1652,14 @@
         <label class="scr-check"><input type="checkbox" id="scr-include-dr"> 🌏 รวมหุ้นต่างประเทศ (DR)
           <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:290px">
             <strong>รวมหุ้นต่างประเทศ (DR Underlying) เข้าผลลัพธ์ด้วย</strong><br>
-            เพิ่มหุ้นต้นทาง 267 ตัวที่มี DR เทรดบน SET (AAPL, TSLA, NVDA ฯลฯ) เข้าไปในผลการกรอง<br><br>
+            เพิ่มหุ้นต้นทางทุกตัวที่มี DR เทรดบน SET (AAPL, TSLA, NVDA ฯลฯ) เข้าไปในผลการกรอง<br><br>
             <span style="color:var(--text2)">
             ⚠ P/E, P/BV, Div Yield, RS Score, EMA ไม่มีข้อมูล (ไม่ได้ดึงจาก SET.or.th) — ถ้าตั้ง filter พวกนี้ หุ้น DR จะถูกกรองออกอัตโนมัติ<br><br>
+            ⚠ ช่อง "ตลาด" ต้องเป็น "ทั้งหมด" — ถ้าเลือก SET หรือ mai หุ้น DR จะถูกกรองออกทั้งหมด (DR ไม่ใช่ทั้งสองตลาดนั้น)<br><br>
             ✅ Growth Score, PEG, FCF Yield, รายได้/กำไรโตต่อเนื่อง ใช้ได้ปกติ (คำนวณจากงบการเงินเหมือนกัน)<br><br>
             ราคา/มูลค่าตลาดเป็นสกุลเงินของหุ้นต้นทาง ไม่ใช่บาท — อย่าเทียบตรงๆ กับหุ้นไทยในตารางเดียวกัน
             </span><br><br>
-            โหลดครั้งแรกอาจใช้เวลา 1-2 นาที (ดึงราคาสด 267 ตัว) — ครั้งถัดไปเร็วขึ้นเพราะ cache ไว้แล้ว
+            โหลดครั้งแรกอาจใช้เวลา 1-2 นาที (ดึงราคาสดทุกตัว) — ครั้งถัดไปเร็วขึ้นเพราะ cache ไว้แล้ว
           </div></span>
         </label>
 
@@ -1788,7 +1792,7 @@
     ความต่างระหว่างสองภาพนี้คือข้อมูลที่หาไม่ได้จากการดูกราฟดัชนีอย่างเดียว
   </div>
 
-  <div class="filter-row" style="margin-bottom:12px">
+  <div class="filter-row" id="ema-breadth-view-btns" style="margin-bottom:12px">
     <button class="filter-btn active" onclick="setEMABreadthView('sector',this)">Sector</button>
     <button class="filter-btn" onclick="setEMABreadthView('industry',this)">Industry Group</button>
   </div>
@@ -1821,11 +1825,27 @@
 
   <!-- DR diff-check: เทียบกับ SET.or.th ว่ามี DR ใหม่/ถูกถอดไหม (local-only) -->
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-    <button class="filter-btn" id="dr-diff-btn" onclick="checkDRUpdates()">🔍 เช็คหุ้นใหม่/ถูกถอดจาก SET.or.th</button>
+    <button class="filter-btn" id="dr-diff-btn" onclick="checkDRUpdates()">🔍 เช็คหุ้นใหม่/ถูกถอดจาก SET.or.th
+      <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:320px;text-align:left">
+        <strong>💡 วิธีเพิ่มหุ้น DR ออกใหม่ (ทีละขั้น)</strong><br><br>
+        <strong>1.</strong> กดปุ่มนี้ (🔍) เพื่อเช็คกับ SET.or.th ว่ามี DR ใหม่ที่ยังไม่อยู่ในลิสต์ไหม
+        — ปุ่มนี้<span style="color:var(--yellow)">รายงานอย่างเดียว ไม่เพิ่มหุ้นเข้าโปรแกรม</span><br><br>
+        <strong>2.</strong> กด "🔄 ดึงเฉพาะที่ขาด/เก่า (local)" — ระบบจะเช็ค SET.or.th
+        แล้ว<span style="color:var(--green)">เพิ่มหุ้นใหม่เข้าลิสต์ให้อัตโนมัติ</span>
+        จากนั้นดึงงบการเงินเฉพาะตัวที่ยังไม่มีข้อมูล (ตัวเก่าที่เพิ่งดึงไปถูกข้าม เร็ว)<br><br>
+        <strong>3.</strong> พอข้อ 2 เจอหุ้นใหม่ ระบบล้าง cache ราคาให้เอง —
+        รอดึงงบเสร็จแล้วรีโหลดหน้า DR อีกครั้ง ตารางจะดึงราคาชุดใหม่พร้อมหุ้นใหม่
+        (โหลดรอบแรกใช้เวลา ~1–2 นาที)<br><br>
+        <strong>4.</strong> กด "📖 ดึงคำอธิบายบริษัท DR" เพื่อเติมคำอธิบายแปลไทยของบริษัทใหม่<br><br>
+        <span style="color:var(--text2)">ตัวที่ระบบเพิ่มเองไม่ได้ (เช่นอยู่ตลาดที่ไม่รองรับ อาทิ Shanghai)
+        จะยังค้างโชว์ในผลเช็คข้อ 1 พร้อมเหตุผล — ต้องเพิ่มมือใน dr_universe.py</span>
+      </div></span>
+    </button>
     <button class="filter-btn" id="dr-fin-sync-incr-btn" onclick="startDRFinancialsSyncIncremental()">🔄 ดึงเฉพาะที่ขาด/เก่า (local)
       <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:260px">
         <strong>Incremental sync</strong><br>
-        ข้ามคู่ (หุ้น × แหล่งข้อมูล) ที่เคยดึงไปแล้วไม่เกิน 7 วัน — ยิงเฉพาะตัวที่ยังไม่มีข้อมูล หรือข้อมูลเก่าเกิน 7 วัน<br><br>
+        เช็คหุ้น DR ออกใหม่จาก SET.or.th แล้วเพิ่มเข้าลิสต์ให้อัตโนมัติก่อน จากนั้นดึงงบการเงิน
+        โดยข้ามคู่ (หุ้น × แหล่งข้อมูล) ที่เคยดึงไปแล้วไม่เกิน 7 วัน — ยิงเฉพาะตัวใหม่ ตัวที่ยังไม่มีข้อมูล หรือข้อมูลเก่าเกิน 7 วัน<br><br>
         เร็วกว่าปุ่ม "ดึงทั้งหมด" มาก เพราะไม่ต้องรอ Yahoo/Finnomena ตอบของที่เพิ่งดึงไปเมื่อวาน<br><br>
         <span style="color:var(--text2)">เหมาะใช้ทุกวัน/ทุกครั้งที่เปิดแอป — ใช้ปุ่ม "ดึงทั้งหมด" เฉพาะตอนสงสัยว่าข้อมูลบางตัวเพี้ยน/อยากบังคับรีเฟรชทุกตัว</span>
       </div></span>
@@ -1845,40 +1865,63 @@
         <span style="color:var(--text2)">ทำครั้งแรก + กดซ้ำได้เรื่อยๆ ทุกๆ 2-3 เดือนเพื่อจับบริษัทที่เพิ่งเพิ่มเข้าลิสต์</span>
       </div></span>
     </button>
+    <button class="filter-btn" id="dr-quick-btn" onclick="drQuickUpdate()">⚡ อัปเดตราคา
+      <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:250px">
+        <strong>อัปเดตราคาล่าสุด (เร็ว)</strong><br>
+        ดึงเฉพาะราคาช่วงไม่กี่วันล่าสุดของหุ้น DR ทุกตัว (ไม่ใช่ประวัติทั้งชุด) มาต่อกับข้อมูลเดิมที่ cache ไว้ — เร็วมาก ไม่ต้องรอ 1-2 นาทีเหมือนโหลดครั้งแรก<br><br>
+        ใช้เวลาต้องการราคาสดระหว่างวัน ไม่ต้องรอ cache 4 ชั่วโมงหมดอายุ<br><br>
+        <span style="color:var(--text2)">⚠ กดตอนเพิ่งเจอหุ้น DR ใหม่จากปุ่ม "ดึงเฉพาะที่ขาด/เก่า" ไม่ได้ — ตัวใหม่ยังไม่มีราคาใน cache ให้ต่อยอด กรณีนี้ให้รีโหลดหน้า DR แทน (คลิกไปหน้าอื่นแล้วกลับมา หรือ F5)</span>
+      </div></span>
+    </button>
     <span id="dr-diff-note" style="font-size:11px;color:var(--text2)"></span>
   </div>
   <div id="dr-diff-result" style="display:none;margin-bottom:12px"></div>
 
   <!-- Region filter -->
   <div class="filter-row" id="dr-region-btns" style="margin-bottom:8px">
-    <button class="filter-btn active" onclick="setDRRegion('ALL',this)">ทั้งหมด <span class="dr-region-count-badge" data-region="ALL"></span></button>
-    <button class="filter-btn" onclick="setDRRegion('US',this)">🇺🇸 USA <span class="dr-region-count-badge" data-region="US"></span></button>
-    <button class="filter-btn" onclick="setDRRegion('HK',this)">🇭🇰 HK/CN <span class="dr-region-count-badge" data-region="HK"></span></button>
-    <button class="filter-btn" onclick="setDRRegion('JP',this)">🇯🇵 Japan <span class="dr-region-count-badge" data-region="JP"></span></button>
-    <button class="filter-btn" onclick="setDRRegion('EU',this)">🇪🇺 Europe <span class="dr-region-count-badge" data-region="EU"></span></button>
-    <button class="filter-btn" onclick="setDRRegion('SG',this)">🇸🇬 Singapore <span class="dr-region-count-badge" data-region="SG"></span></button>
-    <button class="filter-btn" onclick="setDRRegion('VN',this)">🇻🇳 Vietnam <span class="dr-region-count-badge" data-region="VN"></span></button>
-    <button class="filter-btn" onclick="setDRRegion('TW',this)">🇹🇼 Taiwan <span class="dr-region-count-badge" data-region="TW"></span></button>
+    <button class="filter-btn active" onclick="setDRRegion('ALL',this)" title="แสดงหุ้นต่างประเทศทุกตัวที่มี DR/DRx ซื้อขายบน SET">ทั้งหมด <span class="dr-region-count-badge" data-region="ALL"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('US',this)" title="หุ้นสหรัฐฯ — Nasdaq / NYSE">🇺🇸 USA <span class="dr-region-count-badge" data-region="US"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('HK',this)" title="หุ้นฮ่องกง (HKEX) รวมหุ้นจีน A-share ที่เทรดบน Shanghai/Shenzhen (curate มือ เพราะ Yahoo suffix ต่างกัน)">🇭🇰 HK/CN <span class="dr-region-count-badge" data-region="HK"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('JP',this)" title="หุ้นญี่ปุ่น — Tokyo Stock Exchange">🇯🇵 Japan <span class="dr-region-count-badge" data-region="JP"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('EU',this)" title="หุ้นยุโรป — Xetra/Deutsche, Paris/Euronext, Amsterdam, Milan, London">🇪🇺 Europe <span class="dr-region-count-badge" data-region="EU"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('SG',this)" title="หุ้นสิงคโปร์ — Singapore Exchange (SGX)">🇸🇬 Singapore <span class="dr-region-count-badge" data-region="SG"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('VN',this)" title="หุ้นเวียดนาม — Ho Chi Minh / Hanoi Stock Exchange">🇻🇳 Vietnam <span class="dr-region-count-badge" data-region="VN"></span></button>
+    <button class="filter-btn" onclick="setDRRegion('TW',this)" title="หุ้นไต้หวัน — Taiwan Stock Exchange (TWSE)">🇹🇼 Taiwan <span class="dr-region-count-badge" data-region="TW"></span></button>
   </div>
 
   <!-- Sort -->
   <div class="filter-row" id="dr-sort-btns" style="margin-bottom:8px">
     <span style="font-size:11px;color:var(--text2);align-self:center">เรียงโดย:</span>
-    <button class="filter-btn active" onclick="setDRSort('rs_desc',this)">RS ↑</button>
-    <button class="filter-btn" onclick="setDRSort('chg_desc',this)">CHG% ↑</button>
-    <button class="filter-btn" onclick="setDRSort('chg_asc',this)">CHG% ↓</button>
-    <button class="filter-btn" onclick="setDRSort('ret_1m_desc',this)">1M% ↑</button>
-    <button class="filter-btn" onclick="setDRSort('ret_1y_desc',this)">1Y% ↑</button>
-    <button class="filter-btn" onclick="setDRSort('mkt_cap',this)">MKT CAP</button>
-    <button class="filter-btn" onclick="setDRSort('sym',this)">A–Z</button>
+    <button class="filter-btn active" onclick="setDRSort('rs_desc',this)" title="เรียงจาก RS Score สูงสุดไปต่ำสุด — หุ้นที่แข็งแกร่งที่สุดขึ้นก่อน">RS ↑</button>
+    <button class="filter-btn" onclick="setDRSort('chg_desc',this)" title="เรียงจาก % เปลี่ยนแปลงวันนี้มากไปน้อย — บวกสุดขึ้นก่อน">CHG% ↑</button>
+    <button class="filter-btn" onclick="setDRSort('chg_asc',this)" title="เรียงจาก % เปลี่ยนแปลงวันนี้น้อยไปมาก — ลบสุด (ร่วงแรง) ขึ้นก่อน">CHG% ↓</button>
+    <button class="filter-btn" onclick="setDRSort('ret_1m_desc',this)" title="เรียงจากผลตอบแทนย้อนหลัง 1 เดือนมากไปน้อย">1M% ↑</button>
+    <button class="filter-btn" onclick="setDRSort('ret_1y_desc',this)" title="เรียงจากผลตอบแทนย้อนหลัง 1 ปีมากไปน้อย">1Y% ↑</button>
+    <button class="filter-btn" onclick="setDRSort('mkt_cap',this)" title="เรียงจากมูลค่าตลาด (market cap) สูงสุดไปต่ำสุด">MKT CAP</button>
+    <button class="filter-btn" onclick="setDRSort('sym',this)" title="เรียงตามตัวอักษร A ถึง Z">A–Z</button>
     <div class="dr-view-toggle">
-      <button class="dr-view-btn active" id="dr-view-table" onclick="setDRView('table',this)">☰ Table</button>
-      <button class="dr-view-btn" id="dr-view-cards" onclick="setDRView('cards',this)">⊞ Cards</button>
+      <button class="dr-view-btn active" id="dr-view-table" onclick="setDRView('table',this)" title="มุมมองตาราง — เห็นทุกคอลัมน์ (RS, ผลตอบแทน, กราฟ, DR tickers) พร้อมกันหลายแถว">☰ Table</button>
+      <button class="dr-view-btn" id="dr-view-cards" onclick="setDRView('cards',this)" title="มุมมองการ์ด — เห็นโลโก้และกราฟใหญ่กว่า เหมาะดูทีละตัว/หน้าจอเล็ก">⊞ Cards</button>
+      <button class="dr-view-btn" id="dr-view-heatmap" onclick="setDRView('heatmap',this)" title="มุมมอง Heatmap — เห็นภาพรวมทุกตัวพร้อมกัน สีบอกค่า metric ที่เลือก (เฉพาะหุ้น underlying ไม่รวม ETF)">▦ Heatmap</button>
     </div>
   </div>
 
+  <!-- Heatmap metric selector — โผล่เฉพาะตอนเลือกมุมมอง Heatmap -->
+  <div class="filter-row" id="dr-hm-period-row" style="display:none;margin-bottom:8px">
+    <span style="font-size:11px;color:var(--text2);align-self:center">สี:</span>
+    <button class="filter-btn active" onclick="setDrHmPeriod('chg',this)" title="สีแสดง % เปลี่ยนแปลงราคาวันนี้">CHG%</button>
+    <button class="filter-btn" onclick="setDrHmPeriod('ret_1w',this)" title="สีแสดง % เปลี่ยนแปลง 1 สัปดาห์">1W%</button>
+    <button class="filter-btn" onclick="setDrHmPeriod('ret_1m',this)" title="สีแสดง % เปลี่ยนแปลง 1 เดือน">1M%</button>
+    <button class="filter-btn" onclick="setDrHmPeriod('ret_3m',this)" title="สีแสดง % เปลี่ยนแปลง 3 เดือน">3M%</button>
+    <button class="filter-btn" onclick="setDrHmPeriod('ret_6m',this)" title="สีแสดง % เปลี่ยนแปลง 6 เดือน">6M%</button>
+    <button class="filter-btn" onclick="setDrHmPeriod('ret_1y',this)" title="สีแสดง % เปลี่ยนแปลง 1 ปี">1Y%</button>
+    <button class="filter-btn" onclick="setDrHmPeriod('rs_score',this)" title="สีแสดง RS Score (0–99) — เขียว = แข็งแกร่ง / แดง = อ่อนแอ (จัดอันดับภายในกลุ่ม DR ด้วยกัน)">RS Score</button>
+    <button class="filter-btn" onclick="setDrHmPeriod('ath_dist',this)" title="สีแสดง % ห่างจาก All-Time High — เขียว = ใกล้ ATH / แดง = ห่าง ATH มาก">ATH Distance</button>
+  </div>
+  <div id="dr-hm-hint" style="display:none;font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
+
   <!-- Search -->
-  <input class="search-box" id="dr-search" placeholder="ค้นหา Symbol หรือ DR เช่น NVDA, TSLA, TENCENT01X..." oninput="filterDR()" style="margin-bottom:12px">
+  <input class="search-box" id="dr-search" placeholder="ค้นหา Symbol หรือ DR เช่น NVDA, TSLA, TENCENT01X..." title="ค้นหาได้จาก Symbol underlying, ชื่อบริษัท, หมวดธุรกิจ (Industry) หรือเลข DR ticker บน SET" oninput="filterDR()" style="margin-bottom:12px">
 
   <div class="card">
     <div id="dr-status" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
@@ -2115,17 +2158,7 @@
   <div id="fcfyield-count" style="font-size:12px;color:var(--text2);margin-bottom:8px"></div>
   <div style="overflow-x:auto">
     <table class="tbl" id="tbl-fcfyield">
-      <thead>
-        <tr>
-          <th onclick="sortFcf('symbol')" style="cursor:pointer">หุ้น ↕</th>
-          <th style="cursor:default">ชื่อ</th>
-          <th style="cursor:default">อุตสาหกรรม</th>
-          <th class="r" onclick="sortFcf('mkt_cap')" style="cursor:pointer">Market Cap ↕</th>
-          <th class="r" onclick="sortFcf('fcf')" style="cursor:pointer">FCF ↕</th>
-          <th class="r" onclick="sortFcf('fcf_yield')" style="cursor:pointer">FCF Yield % ↕</th>
-          <th class="r" onclick="sortFcf('dividend_coverage')" style="cursor:pointer">Div Coverage ↕</th>
-        </tr>
-      </thead>
+      <thead id="fcfyield-thead"></thead>
       <tbody id="fcfyield-tbody"></tbody>
     </table>
   </div>
@@ -2149,6 +2182,11 @@
   <div id="ins-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
 
   <!-- Accumulated Signal -->
+  <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+    <input id="ins-accum-search" type="text" placeholder="ค้นหาหุ้นในสะสม..." oninput="renderInsAccumTable()"
+      style="background:var(--bg-card2);border:1px solid var(--border);border-radius:6px;
+             padding:5px 10px;font-size:12px;color:#c8d0dc;width:160px">
+  </div>
   <div id="ins-accum-wrap"></div>
 
   <!-- Filter row -->
@@ -2253,7 +2291,7 @@
     <span class="scr-tip-icon" style="font-size:11px;width:16px;height:16px">?<div class="scr-tip-box" style="width:340px">
       <strong>รวม 3 สัญญาณ "เงินฉลาด" ที่กระจายอยู่คนละหน้า มาไว้ที่เดียว</strong><br>
       แต่ละสัญญาณให้ทิศทาง <span style="color:#3ab464">ขึ้น (+1)</span> / <span style="color:#e05252">ลง (−1)</span> / กลาง (0):<hr>
-      <strong>Insider</strong> — ผู้บริหารซื้อสุทธิ 90 วัน = <span style="color:#3ab464">บวก</span> · ขายสุทธิ = <span style="color:#e05252">ลบ</span><br>
+      <strong>Insider</strong> — ผู้บริหารซื้อสุทธิ 90 วัน (≥1 ล้านบาท) = <span style="color:#3ab464">บวก</span> · ขายสุทธิ = <span style="color:#e05252">ลบ</span><br>
       <strong>Short</strong> — สถานะ short ลดลง (คลุม) = <span style="color:#3ab464">บวก</span> · เพิ่มขึ้น = <span style="color:#e05252">ลบ</span><br>
       <strong>NVDR</strong> — สัดส่วนต่างชาติเพิ่ม = <span style="color:#3ab464">บวก</span> · ลด = <span style="color:#e05252">ลบ</span><hr>
       <strong>Score</strong> = ผลรวมทิศทาง · หุ้นที่ตรงกันทั้ง 3 ชั้น (score +3 หรือ −3) = สัญญาณหนักแน่นสุด<br>
@@ -2261,34 +2299,178 @@
     </div></span>
     <span id="confluence-meta" style="font-size:11px;color:#8899aa;margin-left:auto"></span>
   </div>
-  <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap" id="confluence-filters">
+  <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;align-items:center" id="confluence-filters">
     <button class="filter-btn active" onclick="setConfluenceFilter('all',this)">ทั้งหมด</button>
     <button class="filter-btn" onclick="setConfluenceFilter('bull',this)">🟢 Bullish (score ≥ +2)</button>
     <button class="filter-btn" onclick="setConfluenceFilter('bear',this)">🔴 Bearish (score ≤ −2)</button>
     <button class="filter-btn" onclick="setConfluenceFilter('triple',this)">⭐ ครบ 3 สัญญาณ</button>
+    <input id="confluence-search" type="text" placeholder="ค้นหาหุ้น..." oninput="_renderConfluenceTable()"
+           style="margin-left:auto;padding:5px 10px;background:var(--bg2);border:1px solid var(--border);
+                  border-radius:6px;color:var(--fg);font-size:12px;width:140px">
   </div>
   <div id="confluence-body"><div class="empty" style="padding:24px">กำลังโหลด...</div></div>
 </div>
 
 <!-- PAGE: CAPITAL FLOW -->
 <div id="page-flow" class="page">
-  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
     <h2 style="margin:0;font-size:16px;color:#e0e6f0">Capital Flow</h2>
-    <span id="flow-status" style="font-size:11px;color:var(--muted)"></span>
-    <div style="display:flex;gap:6px;margin-left:8px">
-      <button class="filter-btn active" id="flow-p-3"  onclick="setFlowPeriod(3,this)">3M</button>
-      <button class="filter-btn"        id="flow-p-6"  onclick="setFlowPeriod(6,this)">6M</button>
-      <button class="filter-btn"        id="flow-p-12" onclick="setFlowPeriod(12,this)">1Y</button>
-      <button class="filter-btn"        id="flow-p-36" onclick="setFlowPeriod(36,this)">3Y</button>
+    <span class="scr-tip-icon" style="margin-left:-4px" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box" style="width:260px">
+      แสดง net buy/sell (ซื้อ-ขายสุทธิ) ของนักลงทุนแต่ละกลุ่มใน 3 ตลาด: SET / S50 Futures / Thai Bond<br><br>
+      ตัวเลข <span style="color:var(--green)">เขียว (+)</span> = ซื้อสุทธิ (เงินไหลเข้า),
+      <span style="color:var(--red)">แดง (−)</span> = ขายสุทธิ (เงินไหลออก)<br><br>
+      การ์ดด้านบน = สะสม 20 วันล่าสุดของแต่ละตลาด (ดูรายละเอียดแต่ละการ์ดได้ที่ไอคอน ℹ) ส่วนกราฟ/ตารางด้านล่างสลับตลาด+ช่วงเวลาได้เอง
+    </div></span>
+    <span onclick="toggleFlowGuide()" style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid #1f6feb;background:#1f6feb22;color:#58a6ff;cursor:pointer;font-weight:600">
+      💡 ความสัมพันธ์ SET / S50 Futures / Thai Bond
+    </span>
+  </div>
+
+  <!-- GUIDE BOX: ความสัมพันธ์ 3 ตลาด -->
+  <div id="flow-guide-box" style="display:none;margin:0 0 14px;padding:16px 18px;background:#161b22;border:1px solid #1f6feb55;border-radius:10px;font-size:12px;line-height:1.8;color:var(--fg)">
+    <div style="font-size:13px;font-weight:700;color:#58a6ff;margin-bottom:10px">🔗 ความสัมพันธ์ของ 3 ตลาดนี้กับ SET</div>
+
+    <div style="margin-bottom:14px">
+      <b>1) ธรรมชาติของแต่ละตลาดต่างกัน</b>
+      <table style="width:100%;margin-top:8px;font-size:11.5px;border-collapse:collapse">
+        <tr style="color:var(--text2)"><td style="padding:4px 8px;font-weight:700">ตลาด</td><td style="padding:4px 8px;font-weight:700">คืออะไร</td><td style="padding:4px 8px;font-weight:700">หน่วย</td><td style="padding:4px 8px;font-weight:700">ความหมาย</td></tr>
+        <tr><td style="padding:4px 8px;font-weight:700">SET (cash)</td><td style="padding:4px 8px;color:var(--text2)">ซื้อขายหุ้นจริง</td><td style="padding:4px 8px;color:var(--text2)">ล้านบาท</td><td style="padding:4px 8px;color:var(--text2)">เงินจริงไหลเข้า/ออกตลาดหุ้น — ผลต่อราคาโดยตรง</td></tr>
+        <tr><td style="padding:4px 8px;font-weight:700">S50 Futures</td><td style="padding:4px 8px;color:var(--text2)">อนุพันธ์อ้างอิงดัชนี SET50 (หุ้นใหญ่ 50 ตัว ~80% ของ market cap)</td><td style="padding:4px 8px;color:var(--text2)"><b>สัญญา</b> (ไม่ใช่บาท)</td><td style="padding:4px 8px;color:var(--text2)">โพซิชั่น/มุมมองทิศทาง — ไม่ใช่เงินไหลเข้าจริงเสมอไป</td></tr>
+        <tr><td style="padding:4px 8px;font-weight:700">Thai Bond</td><td style="padding:4px 8px;color:var(--text2)">ตราสารหนี้รัฐบาล/เอกชน</td><td style="padding:4px 8px;color:var(--text2)">ล้านบาท</td><td style="padding:4px 8px;color:var(--text2)">เงินจริงไหลเข้า/ออกตลาดตราสารหนี้ — สะท้อนมุมมองดอกเบี้ย/ค่าเงินบาทมากกว่าหุ้น</td></tr>
+      </table>
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+        <b>จุดสำคัญ:</b> S50 Futures ไม่ใช่เงินไหลเข้าจริงแบบ SET/Bond — เป็นสัญญาที่ใช้ได้ทั้ง (ก) เก็งกำไรทิศทาง (ข) hedge พอร์ตหุ้นที่ถืออยู่ (ขาย futures ป้องกันขาลง โดยไม่ต้องขายหุ้นจริง) (ค) arbitrage ระหว่างราคา cash SET50 กับราคา futures ดังนั้นต่างชาติ net long S50 เพิ่ม ไม่ได้แปลว่ามีเงินไหลเข้าตลาดหุ้นเพิ่มเสมอไป
+      </div>
     </div>
-    <div style="margin-left:auto;display:flex;gap:6px">
-      <button class="filter-btn"        id="flow-v-net"  onclick="setFlowView('net',this)">Net รายวัน</button>
-      <button class="filter-btn active" id="flow-v-cum"  onclick="setFlowView('cum',this)">Cumulative</button>
+
+    <div style="margin-bottom:14px">
+      <b>2) พฤติกรรม 3 กลุ่มนักลงทุน — ต่างชาติ / สถาบัน / รายย่อย</b><br>
+      <span style="color:var(--text2)">คอลัมน์ "ต่างชาติ/กองทุน+โบรก(สถาบัน)/รายย่อย" ในการ์ด SET กับ S50 ด้านบน แต่ละกลุ่มมีบทบาทต่างกัน:</span>
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+        <b style="color:#04D215">ต่างชาติ (Foreign)</b> — <span style="color:var(--text2)">มีอิทธิพลต่อทิศทาง SET มากที่สุด มักเป็น "ตัวชี้วัดหลัก" ของ fund flow ถ้าซื้อสุทธิในหุ้น SET พร้อมเปิด net long ใน S50 Futures ควบคู่กัน มักเป็นสัญญาณบวกที่แข็งแกร่งที่สุด และมักสัมพันธ์กับ flow ที่เข้า/ออก Thai Bond ด้วยเช่นกัน (เงินก้อนเดียวกันเคลื่อนข้ามสินทรัพย์)</span>
+      </div>
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+        <b style="color:#FCD202">สถาบัน/กองทุน (Institutions)</b> — <span style="color:var(--text2)">มักใช้ S50 Futures เพื่อ hedge พอร์ตหุ้นระยะยาวที่ถืออยู่ (ไม่ใช่เก็งกำไรทิศทางตรงๆ) ถ้าถือหุ้นไทยสัดส่วนสูงอยู่แล้ว มักเปิด net short ใน S50 สวนไว้เพื่อลดความผันผวน — เห็น net short เพิ่มจึงไม่ใช่มุมมองลบเสมอไป และมักเป็นกลุ่มที่ปรับสัดส่วน (asset allocation) ระหว่างหุ้นกับ Thai Bond เอง</span>
+      </div>
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+        <b style="color:#f85149">รายย่อย (Retail)</b> — <span style="color:var(--text2)">มักมีพฤติกรรมสวนแนวโน้ม/ตามรอบระยะสั้น (counter-cyclical) เมื่อตลาดขึ้นแรงและต่างชาติเทขาย รายย่อยมักเข้าเป็นฝั่งรับซื้อสวนทาง — ใช้เป็นสัญญาณ contrarian ได้บ้าง แต่ไม่ควรใช้เดี่ยวๆ</span>
+      </div>
+    </div>
+
+    <div style="margin-bottom:14px">
+      <b>3) กลไกที่เชื่อมโยงกัน</b><br>
+      <span style="color:var(--text2)">
+      <b>S50 Futures ↔ SET cash:</b> ต่างชาติมักเทรด futures ก่อน cash เพราะเร็วกว่า/ต้นทุนต่ำกว่า (ไม่ต้องโอนเงินข้ามประเทศทันที) ดังนั้น net position ของ S50 บ่อยครั้ง "นำ" ทิศทางของ flow ใน cash SET ไป 1-2 วัน หรือเกิดพร้อมกัน (มีบทบาท price discovery ระยะสั้น)<br><br>
+      <b>Thai Bond ↔ ค่าเงินบาท ↔ SET:</b> ต่างชาติซื้อพันธบัตรไทย ต้องแลกดอลลาร์เป็นบาท → บาทแข็งขึ้น ซึ่งกระทบหุ้นกลุ่มส่งออก/นำเข้าทางอ้อม และมักเป็นสัญญาณ risk-on ต่อประเทศไทยโดยรวม — เป็นคนละ driver จากหุ้น (ที่ขึ้นกับ earnings/valuation รายตัว) แต่บ่อยครั้งเคลื่อนไหวสอดคล้องกันเพราะกองทุนเดียวกันจัดพอร์ต multi-asset ในไทยพร้อมกัน
+      </span>
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+        <b>ลำดับ fund flow แบบทั่วไป (waterfall):</b>
+        <span style="color:var(--text2)"> FX → Thai Bond → หุ้นใหญ่ (SET50) → SET Index → หุ้นกลาง/เล็ก<br>
+        เงินต่างชาติมักเข้าตลาดบอนด์/ค่าเงินก่อน ตามด้วยหุ้นใหญ่ผ่าน S50 Futures/SET50 แล้วค่อยไหลลงมาสู่หุ้นกลาง-เล็กทีหลังสุด — ถ้าเห็นบอนด์+S50 ขยับก่อน มักเป็นสัญญาณเตือนล่วงหน้าว่า SET Index กำลังจะตาม</span>
+      </div>
+    </div>
+
+    <div style="margin-bottom:14px">
+      <b>4) เสริม: อ่านสถานะคงค้าง (Open Interest) ของ S50 Futures</b><br>
+      <span style="color:var(--text2)">Open Interest (OI) = จำนวนสัญญาที่ยังเปิดค้างอยู่ (ไม่รวมที่ปิดสถานะแล้ว) ใช้ดูคู่กับราคา futures เพื่อเช็คว่า "แรงจริง" หรือแค่ปิดสถานะเดิม — <i>หมายเหตุ: dashboard นี้ยังไม่ได้ดึงข้อมูล OI มาแสดง เป็นแนวคิดเสริมสำหรับดูจากแหล่งอื่นประกอบ</i></span>
+      <table style="width:100%;margin-top:8px;font-size:11.5px;border-collapse:collapse">
+        <tr><td style="padding:3px 8px;color:var(--text2)">ราคาขึ้น + OI เพิ่ม</td><td style="padding:3px 8px" class="green">แนวโน้มแข็งแรง (มีเงินใหม่เข้ามา long จริง)</td></tr>
+        <tr><td style="padding:3px 8px;color:var(--text2)">ราคาขึ้น + OI ลด</td><td style="padding:3px 8px" class="yellow">Short Covering (แค่ปิดสถานะช็อตเดิม ไม่ใช่แรงซื้อใหม่)</td></tr>
+        <tr><td style="padding:3px 8px;color:var(--text2)">ราคาลง + OI เพิ่ม</td><td style="padding:3px 8px" class="red">เปิด Short ใหม่ (แรงขายจริง)</td></tr>
+        <tr><td style="padding:3px 8px;color:var(--text2)">ราคาลง + OI ลด</td><td style="padding:3px 8px" class="yellow">Long Liquidation (แค่ปิดสถานะซื้อเดิม ไม่ใช่แรงขายใหม่)</td></tr>
+      </table>
+    </div>
+
+    <div style="margin-bottom:6px">
+      <b>5) กรอบการอ่านสัญญาณ (confluence vs divergence)</b>
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+        <b class="green">สอดคล้องกันทั้ง 3 ตลาด = สัญญาณแรงสุด</b><br>
+        <span style="color:var(--text2)">
+        • ซื้อ SET (+) + long S50 (+) + ซื้อพันธบัตร (+) → risk-on ไทยเต็มรูปแบบ เงินไหลเข้าจริงทุกสินทรัพย์<br>
+        • ขาย SET (−) + short S50 (−) + ขายพันธบัตร (−) → risk-off ไทย เงินไหลออกทุกสินทรัพย์ (มักมาพร้อมบาทอ่อน)
+        </span>
+      </div>
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+        <b class="yellow">ไม่สอดคล้องกัน = ต้องตีความเพิ่ม ไม่ใช่แปลตรงตัว</b><br>
+        <span style="color:var(--text2)">
+        • ขาย SET cash แต่ long S50 เพิ่ม → อาจเป็นการ <b>cover/ลด hedge</b> (เคยชอร์ต futures ป้องกันขาลง ตอนนี้เริ่มคลายความกังวล) ไม่ใช่ว่าซื้อหุ้นเพิ่มจริง<br>
+        • ซื้อ SET แต่ short S50 เพิ่ม → อาจเป็นการ <b>เปิด hedge</b> ป้องกันกำไรที่มีอยู่ ไม่ใช่สัญญาณลบต่อตลาด<br>
+        • ขายพันธบัตรแต่ซื้อหุ้น → มุมมองดอกเบี้ยขาขึ้น (บอนด์ราคาตก) แต่ยังเชื่อมั่นหุ้น/earnings — เป็น rotation ระหว่างสินทรัพย์ ไม่ใช่เงินไหลออกประเทศ
+        </span>
+      </div>
+    </div>
+
+    <div>
+      <b>6) ตัวอย่างจริง (20 วันสะสม)</b><br>
+      <span style="color:var(--text2)">
+      • SET: ต่างชาติ <b class="green">+36,366</b> ล้านบาท (ซื้อสุทธิแรง)<br>
+      • S50 Futures: ต่างชาติ <b class="green">+24,582</b> สัญญา (long เพิ่ม — สอดคล้องทิศทางเดียวกับ SET)<br>
+      • Thai Bond: ต่างชาติ <b class="red">−9,095</b> ล้านบาท (ขายพันธบัตรสุทธิ)
+      </span>
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+        <span style="color:var(--text2)">อ่านได้ว่า: ต่างชาติกำลัง <b>โยกเงินจากบอนด์เข้าหุ้น</b> พร้อมเปิด long เพิ่มใน futures หนุนทิศทางเดียวกัน — เป็นภาพ "risk-on เฉพาะฝั่งหุ้น" ไม่ใช่ risk-on ทั้งประเทศแบบเต็มรูป (เพราะบอนด์ยังไหลออก) มักตีความได้ว่าต่างชาติมองผลตอบแทนหุ้นน่าสนใจกว่า fixed income ช่วงนี้ (อาจเพราะมุมมองดอกเบี้ย หรือ valuation หุ้นถูกกว่า) มากกว่าเป็นการเปลี่ยนมุมมองต่อเศรษฐกิจไทยโดยรวม</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Summary cards: SET / S50 Futures / Thai Bond -->
+  <div id="flow-summary-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px">
+    <div class="card" style="padding:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span><b style="font-size:14px;color:#e0e6f0">SET</b><span id="fsum-set-tip"></span></span>
+        <span id="fsum-set-date" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <canvas id="fsum-set-spark" height="70" style="width:100%;display:block"></canvas>
+      <div id="fsum-set-legend" style="font-size:11px;margin-top:8px;display:flex;flex-wrap:wrap;gap:8px"></div>
+      <div style="font-size:10px;color:var(--muted);margin-top:6px">สะสมสุทธิ 20 วัน · ล้านบาท</div>
+    </div>
+    <div class="card" style="padding:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span><b style="font-size:14px;color:#e0e6f0">S50 Futures</b><span id="fsum-s50-tip"></span></span>
+        <span id="fsum-s50-date" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <canvas id="fsum-s50-spark" height="70" style="width:100%;display:block"></canvas>
+      <div id="fsum-s50-legend" style="font-size:11px;margin-top:8px;display:flex;flex-wrap:wrap;gap:8px"></div>
+      <div style="font-size:10px;color:var(--muted);margin-top:6px">สะสมสุทธิ 20 วัน · สัญญา</div>
+    </div>
+    <div class="card" style="padding:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span><b style="font-size:14px;color:#e0e6f0">Thai Bond</b><span id="fsum-bond-tip"></span></span>
+        <span id="fsum-bond-date" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <canvas id="fsum-bond-spark" height="70" style="width:100%;display:block"></canvas>
+      <div id="fsum-bond-legend" style="font-size:11px;margin-top:8px;display:flex;flex-wrap:wrap;gap:8px"></div>
+      <div style="font-size:10px;color:var(--muted);margin-top:6px">สะสมสุทธิ 20 วัน · ล้านบาท</div>
+    </div>
+  </div>
+
+  <!-- Detail: market tabs + period/view -->
+  <div class="card" style="padding:0;overflow:hidden;margin-bottom:0">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 14px 0">
+      <div style="display:flex;gap:6px">
+        <button class="filter-btn active" id="flow-m-set"  onclick="setFlowMarket('set',this)">SET</button>
+        <button class="filter-btn"        id="flow-m-s50"  onclick="setFlowMarket('s50',this)">S50 Futures</button>
+        <button class="filter-btn"        id="flow-m-bond" onclick="setFlowMarket('bond',this)">Thai Bond</button>
+      </div>
+      <span id="flow-market-tip"></span>
+      <span id="flow-status" style="font-size:11px;color:var(--muted)"></span>
+      <div style="display:flex;gap:6px;margin-left:8px">
+        <button class="filter-btn active" id="flow-p-3"  onclick="setFlowPeriod(3,this)">3M</button>
+        <button class="filter-btn"        id="flow-p-6"  onclick="setFlowPeriod(6,this)">6M</button>
+        <button class="filter-btn"        id="flow-p-12" onclick="setFlowPeriod(12,this)">1Y</button>
+        <button class="filter-btn"        id="flow-p-36" onclick="setFlowPeriod(36,this)">3Y</button>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:6px">
+        <button class="filter-btn"        id="flow-v-net"  onclick="setFlowView('net',this)">Net รายวัน</button>
+        <button class="filter-btn active" id="flow-v-cum"  onclick="setFlowView('cum',this)">Cumulative</button>
+        <button class="filter-btn" onclick="exportFlowCSV()" title="ดาวน์โหลดตาราง Capital Flow เป็น CSV">⬇ CSV</button>
+      </div>
     </div>
   </div>
 
   <!-- Cumulative chart -->
-  <div class="card" style="padding:14px;margin-bottom:14px">
+  <div class="card" style="padding:14px;margin:14px 0">
     <canvas id="flow-chart" height="180" style="width:100%;display:block"></canvas>
   </div>
 
@@ -2297,13 +2479,13 @@
     <div style="overflow-x:auto;max-height:55vh;overflow-y:auto">
       <table id="flow-table" style="width:100%;border-collapse:collapse;font-size:12px">
         <thead>
-          <tr style="position:sticky;top:0;z-index:1;background:var(--bg2)">
+          <tr id="flow-thead-row" style="position:sticky;top:0;z-index:1;background:var(--bg2)">
             <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;white-space:nowrap">วันที่</th>
-            <th style="padding:8px 10px;text-align:right;color:#FCD202;font-weight:600;white-space:nowrap">กองทุน+โบรก<br><span style="font-size:10px;font-weight:400">(ล้านบาท)</span></th>
-            <th style="padding:8px 10px;text-align:right;color:#04D215;font-weight:600;white-space:nowrap">ต่างชาติ<br><span style="font-size:10px;font-weight:400">(ล้านบาท)</span></th>
-            <th style="padding:8px 10px;text-align:right;color:#f85149;font-weight:600;white-space:nowrap">รายย่อย<br><span style="font-size:10px;font-weight:400">(ล้านบาท)</span></th>
-            <th style="padding:8px 10px;text-align:right;color:var(--text2);font-weight:600;white-space:nowrap">SET</th>
-            <th style="padding:8px 10px;text-align:right;color:var(--text2);font-weight:600;white-space:nowrap">Chg</th>
+            <th style="padding:8px 10px;text-align:right;color:#FCD202;font-weight:600;white-space:nowrap" id="flow-th-fund">กองทุน+โบรก<br><span style="font-size:10px;font-weight:400">(ล้านบาท)</span></th>
+            <th style="padding:8px 10px;text-align:right;color:#04D215;font-weight:600;white-space:nowrap" id="flow-th-foreign">ต่างชาติ<br><span style="font-size:10px;font-weight:400">(ล้านบาท)</span></th>
+            <th style="padding:8px 10px;text-align:right;color:#f85149;font-weight:600;white-space:nowrap" id="flow-th-retail">รายย่อย<br><span style="font-size:10px;font-weight:400">(ล้านบาท)</span></th>
+            <th style="padding:8px 10px;text-align:right;color:var(--text2);font-weight:600;white-space:nowrap" id="flow-th-set">SET</th>
+            <th style="padding:8px 10px;text-align:right;color:var(--text2);font-weight:600;white-space:nowrap" id="flow-th-chg">Chg</th>
           </tr>
         </thead>
         <tbody id="flow-tbody">
@@ -2312,7 +2494,7 @@
       </table>
     </div>
   </div>
-  <div style="font-size:10px;color:var(--muted);margin-top:8px">แหล่งข้อมูล: siamchart.com · กองทุน+โบรก = สถาบัน + บัญชีบล. รวมกัน</div>
+  <div id="flow-source-note" style="font-size:10px;color:var(--muted);margin-top:8px">แหล่งข้อมูล: siamchart.com · กองทุน+โบรก = สถาบัน + บัญชีบล. รวมกัน</div>
 
   <!-- NVDR RANKING — ต่างชาติถือ/เข้า/ออก รายหุ้น (ธีมเดียวกับ Capital Flow) -->
   <div style="display:flex;align-items:center;gap:10px;margin:20px 0 10px;flex-wrap:wrap">
@@ -2421,7 +2603,7 @@
 <!-- PAGE: DR ROTATION -->
 <div id="page-dr-rotation" class="page">
   <div class="page-title">🔄 DR Rotation</div>
-  <div class="page-sub">RRG ของหุ้นต่างประเทศ (DR underlying) แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของ DR ทั้งกลุ่ม</b> (ราคาท้องถิ่น ไม่แปลงค่าเงิน) · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
+  <div class="page-sub" id="drrot-subtitle">RRG ของหุ้นต่างประเทศ (DR underlying) แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของ DR ทั้งกลุ่ม</b> (ราคาท้องถิ่น ไม่แปลงค่าเงิน) · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
   <div id="drrot-gate" class="empty" style="display:none;padding:24px"></div>
   <div id="drrot-body" style="display:none">
     <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
@@ -2461,8 +2643,8 @@
           <option value="all">ทั้งหมด (ไทย + DR)</option>
           <option value="th" selected>หุ้นไทย (SET/mai)</option>
           <option value="dr">DR (หุ้นต่างประเทศในพอร์ต)</option>
-          <option value="us">🇺🇸 หุ้น US ทั้งหมด (Finnomena ~4.4k)</option>
-          <option value="hk">🇭🇰 หุ้น HK ทั้งหมด (Finnomena ~1.2k)</option>
+          <option value="us">🇺🇸 หุ้น US ทั้งหมด (Finnomena)</option>
+          <option value="hk">🇭🇰 หุ้น HK ทั้งหมด (Finnomena)</option>
         </select>
         <span id="fs-meta" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
       </div>
@@ -2594,6 +2776,7 @@
       <div style="display:flex;align-items:center;gap:8px">
         <div style="display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden">
           <button id="cm-mode-chart"  onclick="setCmMode('chart')"  style="background:var(--accent);color:#fff;border:none;font-size:12px;padding:5px 12px;cursor:pointer">📈 กราฟ</button>
+          <button id="cm-mode-tv" onclick="setCmMode('tv')" style="background:var(--card2);color:var(--text2);border:none;border-left:1px solid var(--border);font-size:12px;padding:5px 12px;cursor:pointer" title="กราฟสด ฝัง widget จริงจาก TradingView.com — อินดิเคเตอร์/วาดเส้นได้เต็มรูปแบบ ⚠ ใช้ได้เต็มเฉพาะหุ้น US, หุ้นไทย/ตลาดอื่นอาจไม่มีข้อมูล">📉 TradingView</button>
           <button id="cm-mode-stocks" onclick="setCmMode('stocks')" style="display:none;background:var(--card2);color:var(--text2);border:none;border-left:1px solid var(--border);font-size:12px;padding:5px 12px;cursor:pointer">📋 หุ้นในกลุ่ม</button>
           <button id="cm-mode-fin"    onclick="setCmMode('fin')"    style="background:var(--card2);color:var(--text2);border:none;border-left:1px solid var(--border);font-size:12px;padding:5px 12px;cursor:pointer">🧾 งบการเงิน</button>
           <a id="cm-factsheet-link" href="#" target="_blank" rel="noopener"
@@ -2651,10 +2834,25 @@
       <!-- LONG-TERM STATS (seasonality / drawdown / CAGR — lazy load /api/price-analytics) -->
       <div id="cm-lts" style="margin-top:12px"></div>
     </div>
+    <!-- TRADINGVIEW LIVE WIDGET PANEL — ฝัง widget จริงจาก tradingview.com (ไม่ใช่กราฟวาดเอง)
+         สลับ symbol ตามหุ้น/ดัชนี/DR ที่กำลังเปิดอยู่ในโมดัลนี้
+         ⚠ ทดสอบแล้วพบว่า widget ฟรีของ TradingView ไม่มีสิทธิ์ข้อมูลตลาดนอกสหรัฐฯ
+         ส่วนใหญ่ (ลองแล้วทั้ง SET และ HKEX ขึ้น "only available on tradingview.com")
+         ใช้ได้จริงเฉพาะหุ้น US (NASDAQ/NYSE) — เตือนไว้ให้ผู้ใช้รู้ตัวก่อนสงสัยว่าพัง -->
+    <div id="cm-tv-panel" style="display:none">
+      <div style="font-size:11px;color:#e3b341;background:rgba(227,179,65,0.1);border:1px solid rgba(227,179,65,0.3);border-radius:6px;padding:8px 12px;margin-bottom:8px">
+        ⚠ ข้อจำกัดของ TradingView (ไม่ใช่บั๊กแอปนี้): widget ฟรีแบบนี้มีข้อมูลครบเฉพาะหุ้น <b>US (NASDAQ/NYSE)</b> —
+        หุ้นไทย (SET) และตลาดอื่นนอกสหรัฐฯ ส่วนใหญ่จะขึ้น "only available on tradingview.com" แทนกราฟจริง
+        ถ้าเจอแบบนั้น ใช้ปุ่ม <b>↗ TradingView</b> มุมขวาบนเพื่อเปิดกราฟเต็มบนเว็บจริงแทน
+      </div>
+      <div id="cm-tv-widget" style="height:560px;border-radius:6px;overflow:hidden;background:#131722"></div>
+      <div style="font-size:10px;color:var(--text2);margin-top:6px">กราฟสดจาก TradingView.com — อินดิเคเตอร์/เครื่องมือวาดเส้นใช้ได้เต็มรูปแบบเหมือนเปิดเว็บ TradingView ตรงๆ (เฉพาะตลาดที่มีข้อมูล)</div>
+    </div>
     <!-- FIN PANEL -->
     <div id="cm-fin-panel" style="display:none;max-height:60vh;overflow-y:auto">
       <div id="cm-fin-loading" style="text-align:center;padding:32px;color:var(--text2);font-size:13px">กำลังโหลดงบการเงิน...</div>
       <div id="cm-fin-body"></div>
+      <div id="cm-fin-band" style="margin-top:12px"></div>
     </div>
     <!-- STOCKS IN SECTOR PANEL -->
     <div id="cm-stocks-panel" style="display:none;max-height:62vh;overflow-y:auto;padding-top:4px"></div>

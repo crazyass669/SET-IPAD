@@ -65,7 +65,8 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/ indices_cache.json short_sales_data.json market_flow_data.json
+          git add data/ indices_cache.json short_sales_data.json market_flow_data.json \
+                  s50_flow_data.json bond_flow_data.json nvdr_data.json
           if git diff --cached --quiet; then
             echo "ไม่มีข้อมูลใหม่ — ข้าม commit"
             exit 0
