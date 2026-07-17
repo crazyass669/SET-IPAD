@@ -1544,6 +1544,54 @@ def compute_quality_streaks(payload_finn_q, roe_min=15.0):
             "nm_hold_streak_q": nm_streak if len(nm) >= 2 else None}
 
 
+def compute_positive_streaks(payload_finn_q):
+    """จำนวนไตรมาสติดกัน (จากงวดล่าสุดย้อนหลัง) ที่รายได้/กำไร/EBITDA/OCF เป็นบวก
+    + เช็คว่างวดล่าสุด OCF > กำไรสุทธิไหม (คุณภาพกำไร ณ จุดเดียว ต่างจาก ocf_ni_ratio
+    ที่เป็น TTM) — ใช้ Finnomena รายไตรมาสล้วน (ไม่พึ่ง Yahoo) ครอบคลุมหุ้นไทย/DR/mirror
+    US-HK ทั้งหมดเหมือน compute_quality_streaks
+
+    EBITDA ไม่มี field ตรงจาก Finnomena รายไตรมาส (มีแต่ EV/EBITDA ซึ่งเป็น ratio) —
+    ประมาณจาก กำไรสุทธิ + ค่าเสื่อมราคา/ตัดจำหน่าย (ไม่รวมดอกเบี้ย+ภาษีเพิ่มกลับตาม
+    นิยามเต็ม เพราะ Finnomena ไม่ให้ทั้งสองอย่างรายไตรมาส) — พอบอกเครื่องหมายบวก/ลบได้
+    แม่นพอสมควร เพราะยิ่งเพิ่มดอกเบี้ย+ภาษีกลับเข้าไปยิ่งดันให้เป็นบวกมากขึ้น ไม่ใช่น้อยลง"""
+    inc = (payload_finn_q or {}).get("income", {})
+    cf = (payload_finn_q or {}).get("cashflow", {})
+
+    def _pos_streak(row):
+        vals = sorted((d, v) for d, v in (row or {}).items() if v is not None)
+        if not vals:
+            return None
+        n = 0
+        for _, v in reversed(vals):
+            if v is None or v <= 0:
+                break
+            n += 1
+        return n
+
+    rev = inc.get("Total Revenue", {})
+    ni = inc.get("Net Income", {})
+    ocf = cf.get("Operating Cash Flow", {})
+    da = cf.get("Depreciation And Amortization", {})
+
+    ebitda = {d: ni[d] + da[d] for d in (set(ni) & set(da))
+              if ni.get(d) is not None and da.get(d) is not None}
+
+    common = sorted(set(ni) & set(ocf))
+    ocf_gt_ni_latest = None
+    if common:
+        d = common[-1]
+        if ni.get(d) is not None and ocf.get(d) is not None:
+            ocf_gt_ni_latest = ocf[d] > ni[d]
+
+    return {
+        "rev_pos_streak_q": _pos_streak(rev),
+        "profit_pos_streak_q": _pos_streak(ni),
+        "ebitda_pos_streak_q": _pos_streak(ebitda) if ebitda else None,
+        "ocf_pos_streak_q": _pos_streak(ocf),
+        "ocf_gt_ni_latest": ocf_gt_ni_latest,
+    }
+
+
 def compute_seasonality(payload_q, field="Total Revenue", min_years=3):
     """หา 'ฤดูกาล' จากงบไตรมาสย้อนหลัง — seasonal index = ค่าไตรมาสนั้น ÷ เฉลี่ยทั้งปี
     เฉลี่ยข้ามปี (ใช้เฉพาะปีที่ครบ 4 ไตรมาส) : >1 = ไฮซีซั่น, <1 = โลว์ซีซั่น

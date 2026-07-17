@@ -9,6 +9,7 @@
 _REGION_TZ = {
     "US": ("America/New_York", 9 * 60 + 30, 16 * 60, 5 * 60, 4 * 60),
     "HK": ("Asia/Hong_Kong",   9 * 60 + 30, 16 * 60,       0,      0),
+    "CN": ("Asia/Shanghai",    9 * 60 + 30, 15 * 60,       0,      0),
     "EU": ("Europe/Paris",     9 * 60,      17 * 60 + 30,  0,      0),
     "JP": ("Asia/Tokyo",       9 * 60,      15 * 60,       0,      0),
     "SG": ("Asia/Singapore",   9 * 60,      17 * 60,       0,      0),
@@ -37,6 +38,21 @@ def is_latest_bar_stable(region):
     now = datetime.now(ZoneInfo(tz))
     now_min = now.hour * 60 + now.minute
     return not (open_min - pre_buf <= now_min <= close_min + post_buf)
+
+
+def region_today_date(region):
+    """คืนวันที่ปัจจุบัน (date) ตาม timezone ของตลาดนั้น — คืน None ถ้าไม่รู้จัก region
+    หรือไม่มี zoneinfo ใช้คู่กับ is_latest_bar_stable เพื่อเช็คว่าแท่งราคาล่าสุดที่ดึงมา
+    เป็นของ "วันนี้จริง" ก่อนตัดทิ้งเพราะไม่นิ่ง (ดูคอมเมนต์ตรงจุดเรียกใช้ใน app.py)"""
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        return None
+    cfg = _REGION_TZ.get(region)
+    if not cfg:
+        return None
+    return datetime.now(ZoneInfo(cfg[0])).date()
 
 
 # DR / DRx static mapping — underlying foreign stock → Thai SET DR tickers
@@ -454,6 +470,7 @@ _EXCHANGE_MAP = [
     ("nasdaq", "US", ""), ("new york", "US", ""), ("archipelago", "US", ""),
     ("cboe", "US", ""), ("bats", "US", ""),
     ("hong kong", "HK", ".HK"),
+    ("shanghai", "CN", ".SS"), ("shenzhen", "CN", ".SZ"),
     ("tokyo", "JP", ".T"), ("japan", "JP", ".T"),
     ("hochiminh", "VN", ".VN"), ("ho chi minh", "VN", ".VN"), ("hanoi", "VN", ".VN"),
     ("singapore", "SG", ".SI"),
@@ -567,11 +584,16 @@ def sync_dr_universe(base_dir, validate=True):
     missing = sorted(s for s in live_map if s not in known_drs)
     auto = _load_auto(base_dir)
     if not missing:
-        # อัปเดตเวลาเช็คไว้ แม้ไม่มีของใหม่ — ให้รู้ว่าระบบยังทำงานอยู่
+        # อัปเดตเวลาเช็คไว้ แม้ไม่มีของใหม่ — ให้รู้ว่าระบบยังทำงานอยู่ · ยังต้องเคลียร์
+        # unmapped ที่ถูก curate มือเข้า _DR_STATIC ไปแล้วออก (ไม่งั้นค้างแจ้งเตือนตลอดไป
+        # เพราะ underlying ตัวนั้นมี DR อยู่ใน known_drs แล้ว จึงไม่เข้าเงื่อนไข missing อีก)
+        mapped_now = {e["sym"] for e in universe}
+        auto["unmapped"] = [m for m in auto.get("unmapped", [])
+                            if _normalize_underlying(m.get("underlying") or "") not in mapped_now]
         auto["last_synced"] = _time.strftime("%Y-%m-%d %H:%M")
         from core.store import _atomic_write_json
         _atomic_write_json(_auto_path(base_dir), auto)
-        return {"appended": 0, "added": 0, "unmapped": len(auto.get("unmapped", []))}
+        return {"appended": 0, "added": 0, "unmapped": len(auto["unmapped"])}
 
     # map: live underlying -> sym ของ entry เราที่มี DR ของ underlying นั้นอยู่แล้ว
     dr_owner = {t: e["sym"] for e in universe for t in e["drs"]}
@@ -629,8 +651,10 @@ def sync_dr_universe(base_dir, validate=True):
     old_un = {m.get("underlying"): m for m in auto.get("unmapped", [])}
     for m in unmapped:
         old_un[m["underlying"]] = m
-    # ตัด unmapped ที่ derive สำเร็จไปแล้วออก
-    mapped_now = {e["sym"] for e in auto.get("new_entries", [])}
+    # ตัด unmapped ที่ derive สำเร็จไปแล้ว หรือถูก curate เพิ่มมือเข้า _DR_STATIC ทีหลังออก
+    # (universe ที่ load ไว้ตอนต้นฟังก์ชันครอบทั้ง _DR_STATIC + auto entries รอบก่อนๆ อยู่แล้ว)
+    mapped_now = ({e["sym"] for e in auto.get("new_entries", [])}
+                 | {e["sym"] for e in universe})
     auto["unmapped"] = [m for m in old_un.values()
                         if _normalize_underlying(m.get("underlying") or "") not in mapped_now]
     auto["last_synced"] = _time.strftime("%Y-%m-%d %H:%M")

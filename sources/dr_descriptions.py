@@ -54,14 +54,19 @@ def _translate_th(text):
 
 
 def resolve_yf_ticker(base_dir, sym, market=None):
-    """หา yfinance ticker ของ symbol — เช็ค DR universe (มี field 'yf' ตรงๆ) ก่อน
-    ถ้าไม่เจอ (หุ้น mirror US/HK ที่ไม่ได้อยู่ใน DR universe ที่คนคีวรอบคอบไว้)
-    เดาจาก market ที่ frontend ส่งมา (อิง currency ของงบที่โหลดอยู่แล้ว):
+    """หา yfinance ticker ของ symbol
+      TH/SET -> symbol + '.BK' ตรงๆ เสมอ (หุ้นไทยไม่มีทางชนกับ DR universe — เช็คก่อนเลย
+                กัน edge case ที่ symbol ไทยบังเอิญพ้องกับ sym ใน DR universe)
+      อื่นๆ  -> เช็ค DR universe (มี field 'yf' ตรงๆ) ก่อน ถ้าไม่เจอ (หุ้น mirror US/HK
+                ที่ไม่ได้อยู่ใน DR universe ที่คนคีวรอบคอบไว้) เดาจาก market ที่ frontend ส่งมา
+                (อิง currency ของงบที่โหลดอยู่แล้ว):
       US -> symbol ตรงๆ (mirror US ใช้ ticker เดียวกับ Yahoo อยู่แล้ว)
       HK -> zero-pad เป็น 4 หลัก + '.HK' (ธรรมเนียม Yahoo สำหรับหุ้น HK)
     คืน None ถ้าหาไม่ได้เลย"""
-    from sources.dr_universe import load_dr_universe
     sym = sym.upper().strip()
+    if market in ("TH", "SET"):
+        return sym + ".BK", False
+    from sources.dr_universe import load_dr_universe
     entry = next((s for s in load_dr_universe(base_dir) if s["sym"] == sym), None)
     if entry:
         return entry["yf"], entry.get("etf", False)

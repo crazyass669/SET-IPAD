@@ -209,7 +209,17 @@ def run_quick_update(callback, base_dir=None):
     if not last_map:
         raise ValueError("ไม่พบข้อมูลราคา (set_prices.db) — กรุณา Full Refresh ก่อน")
 
-    min_last  = min(last_map.values())
+    # ตัดหุ้นค้างนาน (พักเทรด/เพิกถอน เช่น ACAP ค้างเป็นเดือน) ออกจากการหา
+    # start_date — ไม่งั้นตัวเดียวลากให้ดาวน์โหลดย้อนหลังหลายเดือนทั้งกระดานทุกรอบ
+    # หุ้นพวกนี้ไม่มีแท่งใหม่อยู่แล้ว การเริ่มดึงจากวันใหม่ไม่ทำให้ข้อมูลมันเสีย
+    max_last   = pd.to_datetime(max(last_map.values()))
+    stale_cut  = max_last - pd.Timedelta(days=14)
+    active     = [d for d in last_map.values() if pd.to_datetime(d) >= stale_cut]
+    stale_n    = len(last_map) - len(active)
+    if stale_n:
+        print(f"[QuickUpdate] ข้ามหุ้นค้างนาน {stale_n} ตัว (วันล่าสุดเก่ากว่า {stale_cut.date()})")
+
+    min_last  = min(active)
     start_dt  = pd.to_datetime(min_last)  # re-fetch วันล่าสุดเสมอ เผื่อดึงก่อนตลาดปิด
     today     = pd.Timestamp.now().normalize()
 

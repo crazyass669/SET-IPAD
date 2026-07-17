@@ -19,8 +19,9 @@ OUT_FILE     = "set_data.json"
 HISTORY_FILE = "set_history.json"
 DB_FILE      = "set_prices.db"
 
-# เขียน set_history.json ควบคู่กับ SQLite (ปิดเมื่อมั่นใจว่า DB นิ่งแล้ว)
-DUAL_WRITE_JSON = True
+# เขียน set_history.json ควบคู่กับ SQLite (ปิดแล้ว 2026-07-16 — DB นิ่ง,
+# มีสำเนาสำรองใน backups/ · ถอยกลับ: ตั้ง True แล้ว Full Refresh หนึ่งรอบ)
+DUAL_WRITE_JSON = False
 
 
 # ============================================================

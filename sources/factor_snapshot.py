@@ -75,6 +75,7 @@ def _factors_for(base_dir, sym, is_dr):
     qs = fs.compute_quality_streaks(fq)   # ROE>=15 ต่อเนื่อง / NM ไม่ลด (Finnomena 65 งวด)
     tg = fs.compute_ttm_growth(fq if qg is qg_f else yq)   # growth TTM (เรียบกว่า YoY งวดเดียว)
     dg = fs.compute_dividend_growth(fq)   # ปันผลโตติดกันกี่ปี (DPS = yield x close)
+    pq = fs.compute_positive_streaks(fq)  # รายได้/กำไร/EBITDA/OCF เป็นบวกติดกันกี่ไตรมาส
 
     # interest coverage ปีล่าสุด (มาจาก ratio trends แล้ว) + rule of 40
     rule40 = None
@@ -108,6 +109,9 @@ def _factors_for(base_dir, sym, is_dr):
         "margin_qoq_streak": qg["margin_qoq_streak"],
         "rev_accel_streak": qg["rev_accel_streak"], "profit_accel_streak": qg["profit_accel_streak"],
         "margin_yoyq_delta": qg["margin_yoyq_delta"], "ttm_margin_delta": qg["ttm_margin_delta"],
+        "rev_pos_streak_q": pq["rev_pos_streak_q"], "profit_pos_streak_q": pq["profit_pos_streak_q"],
+        "ebitda_pos_streak_q": pq["ebitda_pos_streak_q"], "ocf_pos_streak_q": pq["ocf_pos_streak_q"],
+        "ocf_gt_ni_latest": pq["ocf_gt_ni_latest"],
         # --- FCF (fcf_yield/dividend เว้น mkt_cap -> overlay) ---
         "fcf": fcf["fcf"], "dividend_coverage": fcf["dividend_coverage"],
         "ocf_ni_ratio": eq["ocf_ni_ratio"],   # คุณภาพกำไร TTM (จับหุ้นแต่งบัญชี)
@@ -253,10 +257,14 @@ def _factors_from_finn(fq):
     qs = fs.compute_quality_streaks(fq)
     tg = fs.compute_ttm_growth(fq)
     dg = fs.compute_dividend_growth(fq)
+    pq = fs.compute_positive_streaks(fq)
     valp_pe = valp["pe"]["value"]
     rat = (fq or {}).get("ratios", {})
     return {
         "roe15_streak_q": qs["roe15_streak_q"], "nm_hold_streak_q": qs["nm_hold_streak_q"],
+        "rev_pos_streak_q": pq["rev_pos_streak_q"], "profit_pos_streak_q": pq["profit_pos_streak_q"],
+        "ebitda_pos_streak_q": pq["ebitda_pos_streak_q"], "ocf_pos_streak_q": pq["ocf_pos_streak_q"],
+        "ocf_gt_ni_latest": pq["ocf_gt_ni_latest"],
         "rev_ttm_yoy": tg["rev_ttm_yoy"], "profit_ttm_yoy": tg["profit_ttm_yoy"],
         "peg": _calc_peg(valp_pe, tg["profit_ttm_yoy"]),
         "div_growth_streak_y": dg["div_growth_streak_y"],
