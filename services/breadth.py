@@ -16,7 +16,7 @@ Performance: คำนวณครั้งเดียว ~วินาที�
 import numpy as np
 import pandas as pd
 
-from core.store import iter_all_series
+from core.store import iter_all_series, iter_recent_series
 
 DISPLAY_DAYS = 252   # ~1 ปีซื้อขาย (ค่า default เมื่อไม่ระบุ days)
 WARMUP_EXTRA = 550   # buffer เพิ่มจาก days ที่แสดง: 252 rolling 52W + ~300 EMA warmup
@@ -29,8 +29,13 @@ def compute_breadth(base_dir, days=DISPLAY_DAYS):
     """days=None → ใช้ข้อมูลทั้งหมดที่มี (ไม่ตัด warmup ต่อหุ้น)"""
     warmup = None if days is None else days + WARMUP_EXTRA
 
+    # days=None (range "all") ต้อง full history; ถ้ามี warmup จำกัดแล้ว ใช้
+    # iter_recent_series ที่ query ทีละหุ้นด้วย LIMIT — เร็วกว่า full-scan มาก
+    # เมื่อตาราง prices โตขึ้น (วัดจริง ~2 วิ เทียบกับ ~35 วิ)
+    src = iter_all_series(base_dir) if warmup is None else iter_recent_series(base_dir, warmup)
+
     series = {}
-    for tick, d in iter_all_series(base_dir):
+    for tick, d in src:
         if len(d["dates"]) < 60:          # ข้อมูลน้อยเกินกว่าจะมีความหมาย
             continue
         dates  = d["dates"][-warmup:]  if warmup else d["dates"]
