@@ -1,0 +1,191 @@
+==========================================================================
+หมายเหตุ: ไฟล์นี้รวม prompt สำหรับโมเดล FABLE 2 งาน
+  PROMPT 1 = รีวิวงานที่ทำไปทั้งหมดในเซสชันนี้ (bug fix + ฟีเจอร์ใหม่)
+  PROMPT 2 = เพิ่ม preset หาหุ้นดี US/HK ใน Screener+ (งานถัดไป ยังไม่ได้ทำ)
+  ส่งทีละ PROMPT ให้ FABLE ทำตามลำดับ หรือจะให้รีวิวก่อนแล้วค่อยสั่งทำ PROMPT 2 ก็ได้
+==========================================================================
+
+
+############################################################
+PROMPT 1 — รีวิวงานที่ทำไปทั้งหมดวันนี้ (bug fix + ฟีเจอร์ใหม่)
+############################################################
+
+รีวิวโค้ดที่แก้/เพิ่มในโปรเจกต์ SET Dashboard (Flask + static JS) ช่วงเซสชันนี้ทั้งหมด
+เป้าหมาย: หาบัค, จุดที่สูตรคำนวณผิด, edge case ที่ยังไม่ครอบคลุม, และจุดที่ควรปรับปรุงคุณภาพโค้ด
+โดยไม่ต้องรื้อสถาปัตยกรรมเดิม
+
+== ไฟล์หลักที่ควรตรวจ ==
+- sources/financials_store.py — engine ข้อมูลการเงิน (LOCAL-ONLY, ห้าม push GitHub)
+- sources/factor_snapshot.py — ตาราง factor สำเร็จรูปสำหรับ screener (LOCAL-ONLY)
+- app.py — endpoint /api/factor-screener, /api/financials-full, /api/mirror-*
+- static/dashboard.js — หน้า Fundamental Screener (page-fscreener), หน้างบการเงิน,
+  หน้า DR Rotation
+- static/fin_translations.js — คำแปลไทย + จัดกลุ่ม field งบ Yahoo/SET/Finnomena
+
+== รายการงานที่ทำไปแล้ว ให้ตรวจความถูกต้อง/บัคที่หลงเหลือ ==
+
+1) แก้ DR underlying names ไม่อัปเดตบนมือถือ/ไอแพด
+   - สาเหตุเดิม: GitHub Actions workflow รันบน branch main แต่โค้ด/ข้อมูลใหม่อยู่ master
+   - cherry-pick ไป main + trigger workflow ด้วยตนเอง
+   - ตรวจ: มีทางที่ค่าจะ desync ระหว่าง master/main อีกไหมในอนาคต
+
+2) เพิ่มระบบ Fundamental Screener (Screener+) จากข้อมูล Finnomena
+   - สูตรที่ implement: net_margin, roe, de_ratio, net_cash, cash_cycle (Yahoo), rule_of_40,
+     ocf_ni_ratio, pe_percentile/pbv_percentile, growth_percentile, profit_yoy_q,
+     profit_accel_streak, rev_cagr, interest_coverage, dividend_coverage, buyback,
+     goodwill_ratio, ocf_neg_years, season_swing, entering_high_season
+   - ตรวจว่าสูตรทุกตัวตรงนิยามมาตรฐาน (เช่น ROE ควรใช้ equity เฉลี่ยหรือปลายงวด, net_margin
+     ใช้ TTM หรือรายไตรมาสเดี่ยว, ocf_ni_ratio หน่วยถูกไหม)
+   - ตรวจ compute_seasonality: median ของไตรมาสสมบูรณ์เท่านั้น, all-positive quarters,
+     swing cap 150 คืน None — มี edge case ปีข้อมูลไม่ครบ 4 ไตรมาสหรือไม่
+
+3) เพิ่ม P/S Ratio (Price to Sales) ทั้ง Stock Screener และ Fundamental Screener
+   - compute_ps(payload_finn_q, min_points=12): TTM revenue = ผลรวม 4 ไตรมาสล่าสุด,
+     ผูกกับ market cap ของวันที่ล่าสุดที่มีราคา (ใช้ bisect หาช่วง TTM ที่ตรงกับวัน mkt cap)
+   - เคยพบบัค: เดิมผูกวันที่ของ TTM revenue (เก่ากว่า) แทนวันที่ market cap ล่าสุด ทำให้ P/S
+     เพี้ยน (ตัวอย่าง PTT 0.36 ควรเป็น 0.40) — แก้แล้ว ให้ตรวจว่า fix ถูกต้องและไม่มี
+     off-by-one ในการ bisect
+   - spot-check แล้ว 10 US-DR + 10 SET stocks ตรงกับค่าที่คำนวณมือ (2 ตัวต่างกัน <2% เป็นเรื่อง
+     rounding ของหุ้นข้อมูลบาง/เพิ่ง IPO ไม่ใช่บัค) — ให้ยืนยันซ้ำอีกรอบเป็นอิสระ
+
+4) เพิ่ม US/HK mirror stocks (หุ้นในตลาด US/HK ที่มีเฉพาะข้อมูล Finnomena ไม่มี Yahoo)
+   - _finn_mirror_keys(symbol, is_dr): resolve ไปยัง key FINN:US:{ticker} / FINN:HK:{ticker}
+   - get(): มี fallback เมื่อ direct key ไม่เจอ ให้ลอง mirror FINN keys, ข้าม marker ว่างเปล่า
+   - _factors_from_finn(fq) ใน factor_snapshot.py: สร้าง factor เฉพาะจาก Finnomena, factor
+     ที่พึ่ง Yahoo ต้องเป็น None ไม่ใช่คำนวณผิดแล้วโชว์เลขมั่ว — เคยพบบัค cash_cycle ของ mirror
+     ใช้ค่า Cash Cycle ของ Finnomena เอง (ไม่น่าเชื่อถือ) แก้เป็น None แล้ว ให้ตรวจว่ามี field
+     อื่นที่หลุดแบบเดียวกันอีกไหม (ดู FS_YAHOO_ONLY ใน dashboard.js ว่าครบกับที่ backend คืน None จริง)
+   - build_mirror_snapshot(min_quarters=12, min_pe=4): กรอง OTC ทิ้ง (US ticker 5 ตัวอักษร
+     ลงท้าย F/Y) — ตรวจว่า filter นี้ยังจำเป็น/แม่นยำอยู่ไหม มี false positive/negative ไหม
+   - พบว่า HK PE/PBV/PS percentile coverage = 0/1199 (Finnomena ให้ประวัติ PE ของ HK สั้นเกิน
+     min_points) — ตรวจว่ามีทางทำให้ HK มี percentile ได้บ้างไหม (เช่นลด min_points เฉพาะ HK)
+     หรือควรคงเป็นค่าสัมบูรณ์แทนถาวร
+
+5) แก้บัค UI/UX ที่พบระหว่างทาง
+   - tooltip ถูกพื้นหลังทับอ่านไม่ออก: root cause คือ opacity บน parent element ไหลลงไป
+     กระทบ child tooltip box ที่ควรทึบ — แก้เป็นปรับสี label แทนการใช้ opacity บน group,
+     ตรวจว่ามีจุดอื่นในโค้ดที่ใช้ opacity แบบเดียวกันแล้วเสี่ยงบัคเดิมซ้ำไหม
+   - sticky first column ในตาราง #fin-result ทับ tooltip: แก้ด้วย z-index:20 เฉพาะตอน
+     tr:hover td:first-child — ตรวจว่า stacking context อื่นในตารางเดียวกัน (เช่น sticky
+     header) มีปัญหาเดียวกันไหม
+   - หัวกลุ่มลอยไม่มีข้อมูล (เช่น "สรุปเงินสด" ว่างเปล่า): แก้ด้วยกรอง dataRows ก่อนตัดสินใจ
+     แสดงหัวกลุ่ม — ตรวจว่า logic นี้ยัง edge case ตกหล่นไหม (เช่นกลุ่มที่มี 1 แถวข้อมูลแต่
+     เป็นแถวเดียวในกลุ่มใหญ่ที่ควรมีหัวกลุ่ม)
+   - กราฟ seasonality ทับกับ title: ปรับความสูง bar จาก 100→80px, container 110→126px —
+     ตรวจว่า responsive ที่จอเล็ก (มือถือ) ยังโอเคไหม
+   - ตาราง Ratios/Valuation ของ Finnomena เคยมีคอลัมน์ขวาสุดว่างเปล่า (ดูเหมือน "ไม่มีตัวเลข")
+     สาเหตุคือรวมคอลัมน์กับ valuation ที่มีวันที่ล้ำอนาคตกว่างบจริง 1-2 ไตรมาส — แก้แยกชุด
+     คอลัมน์ของตารางงบ (income/balance/cashflow/ratios) ออกจากตาราง valuation แล้ว ตรวจว่า
+     การแยกนี้ใช้ได้กับทุก source (finnomena_q, finnomena_y) ไม่ใช่แค่ที่ทดสอบ (PTT)
+   - หัวกลุ่มย่อยในตารางงบ Finnomena (income/balance/cashflow) ซ้ำซ้อนกับ title ตาราง เพราะ
+     Finnomena มี field ต่อกลุ่มน้อยมาก (income ~5 แถว, cashflow ~4 แถว) — ซ่อนหัวกลุ่มย่อย
+     เฉพาะโหมด Finnomena (พารามิเตอร์ hideGroupHdr) แต่คงไว้ในโหมด Yahoo/SET — ตรวจว่า
+     ทุก source ที่ isFinn=true ได้ผลถูกต้องครบ ไม่กระทบโหมด Yahoo
+
+6) DR Rotation page — RRG (Relative Rotation Graph) เทียบ DR ในกลุ่มเดียวกัน ด้วยราคา local
+   - relative returns (stock - group avg) สำหรับ ret_3m/1m/1w/6m/1y
+   - เคยพบบัค tooltip โชว์ "0 หุ้น / Avg RS —" เพราะใช้โค้ด render ร่วมกับ sector scatter เดิม
+     ที่ field ไม่ตรงกัน — แก้ด้วยการทำ Avg RS/count line เป็น conditional — ตรวจว่ากรณี
+     กลุ่ม DR ที่มีหุ้นเดียวหรือข้อมูลไม่ครบยังพังไหม
+
+7) Percentile tooltip เพิ่มคำอธิบาย "วิธีใช้" (สเปกตรัม 50/25/10 สำหรับ valuation, 80/90
+   สำหรับ growth) — ตรวจว่าตัวเลขที่อธิบายในคำอธิบายตรงกับ threshold จริงที่ backend ใช้คำนวณ
+
+== ให้ทำ ==
+- Static review เชิงลึก (ไม่ต้องรัน) หาบัค + edge case ที่ยังไม่ครอบคลุม
+- ระบุจุดที่ formula ผิดหลักการเงิน/สถิติ ถ้ามี (พร้อมอธิบายว่าควรเป็นอย่างไร)
+- ระบุจุดที่ error handling ไม่ครบ (None payload, หุ้นแบงก์/ที่ไม่มีงบมาตรฐาน, ETF,
+  symbol ไม่ถูกต้อง)
+- แยกลำดับความสำคัญ: critical bug (ข้อมูลผิด) / UX bug (แสดงผลผิดแต่ข้อมูลถูก) / cleanup
+- ห้ามแก้โค้ดเอง เขียนเป็นรายงานพร้อมตำแหน่งไฟล์:บรรทัด และข้อเสนอแนะการแก้
+
+== ข้อกำหนด ==
+- financials.db, financials_backups/, mirror_names.json เป็น LOCAL-ONLY ห้าม push GitHub
+  (ไม่เกี่ยวกับ review นี้แต่ห้ามแนะนำให้เอาไฟล์เหล่านี้ commit เข้า repo)
+
+
+############################################################
+PROMPT 2 — เพิ่ม preset หาหุ้นดี US/HK ใน Screener+ (งานถัดไป)
+############################################################
+
+เพิ่ม preset "หาหุ้นดี US/HK" ในหน้า Screener+ (Fundamental Screener) ของโปรเจกต์ SET Dashboard นี้ ให้กดปุ่มเดียวหาหุ้นคุณภาพราคาถูกในตลาด US และ HK ได้เลย
+
+== บริบท ==
+- หน้า Screener+ = page-fscreener · โค้ดอยู่ static/dashboard.js (config-driven)
+  * FS_FILTERS = นิยาม filter (key/label/unit/cmp gte|lte|bool/tip)
+  * FS_PRESETS = สูตรสำเร็จ (โครงเดิม: { name, color, desc, set:{key:value}, bool:[key] })
+  * applyFsPreset(i) = เคลียร์แล้วเติมค่า preset ลง input แล้วค้นหา
+  * universe selector id=fs-universe (ค่า: all/th/dr/us/hk) · US/HK กรองฝั่ง server
+    (/api/factor-screener?universe=us|hk) ส่งกลับ ≤500 · _fsApplyUniverseUI() ปิด
+    (ทำจาง+disable) ฟิลด์กลุ่ม FS_YAHOO_ONLY อัตโนมัติเมื่อเลือก US/HK
+- ข้อมูล US/HK มาจากตาราง factor_snapshot_mirror (Finnomena 16 ปี, ~4,371 US + 1,199 HK)
+
+== ผลที่ยืนยันแล้วจากข้อมูลจริง (สำคัญ — อย่าเปลี่ยน logic นี้) ==
+- Factor ที่ US/HK "มี" (Finnomena): roe, roa, net_margin, gross_margin, ocf_ni_ratio,
+  profit_yoy_q, rev_yoy_q, profit_accel_streak, qoq/margin streak, ttm_margin_delta,
+  pe_value, pbv_value, ps_value, div_yield, season_swing, entering_high_season, quarters_available
+- Factor ที่ US/HK "ไม่มี" (Yahoo-only = None): rev_cagr, growth_percentile, profit_streak,
+  rule_of_40, cash_cycle, net_cash_positive, buyback, goodwill_ratio, ocf_neg_years,
+  interest_coverage, dividend_coverage  (มี FS_YAHOO_ONLY ครอบอยู่แล้ว)
+- **US มี pe/pbv/ps percentile (ใช้ได้)** แต่ **HK มี percentile = 0 ตัว** (Finnomena ให้
+  PE ของ HK ย้อนสั้น <12 งวด คำนวณ percentile ไม่ได้) → **HK ต้องใช้ค่าสัมบูรณ์ (pe_value/pbv_value)
+  แทน percentile** ห้ามใช้ pe_percentile กับ preset HK (จะได้ 0 ผลลัพธ์)
+- ทดลองสกรีน HK 4 แนวเทียบกันแล้ว (Quality ล้วน / Quality+ปันผล / ต่ำกว่า Book / GARP 2 ชั้น):
+  * Quality ล้วนไม่กรอง valuation → ได้หุ้นแพง + ติด net_margin เพี้ยน (เคยเจอ 6089%)
+  * Dividend yield สูงมาก (20-45%) มักเป็นปันผลพิเศษครั้งเดียว ไม่ยั่งยืน
+  * PBV ต่ำมากอย่างเดียว (<0.2) เป็น value trap ชัด (กลุ่มหุ้นการศึกษาจีนที่โดนกฎเกณฑ์รัฐกระทบ)
+  * **GARP 2 ชั้น (PE ต่ำ + PBV ต่ำ พร้อมกัน + ROE/กำไรโต) ให้ผลสะอาดสุด** — สองด่านหักล้าง
+    จุดอ่อนกันเอง (PE เดี่ยวโดนกำไรพิเศษหลอกได้, PBV เดี่ยวเจอ value trap ได้)
+  * ข้อมูล Finnomena HK มี outlier จริง (net_margin, div_yield เคยเจอค่าเพี้ยนหลักพัน/หลักสิบเปอร์เซ็นต์)
+    ต้อง cap ทั้งขอบบนและล่างของ roe/net_margin ไม่ใช่แค่ ≥ อย่างเดียว
+
+== สิ่งที่ต้องทำ ==
+
+1) เพิ่มความสามารถ "filter แบบช่วง (min–max)" ให้ FS_FILTERS
+   ตอนนี้ filter รองรับทิศทางเดียว (≥ หรือ ≤) ต้องขยายให้ filter บางตัวมีได้ทั้งขอบบนและล่าง
+   พร้อมกัน (เช่น roe ระหว่าง 15-80, net_margin ระหว่าง 5-60) โดยไม่กระทบ filter เดิมที่ใช้
+   ทิศทางเดียวอยู่ (ต้อง backward-compatible กับ preset เก่าทั้งหมด)
+
+2) เพิ่ม 2 preset ใน FS_PRESETS (static/dashboard.js):
+
+   preset A — ชื่อ "🇺🇸 US หุ้นดีราคาถูก" (color '#58a6ff', universe:'us')
+     desc: "คุณภาพ+เติบโต+ถูกเทียบอดีต (US)"
+     set: { roe:15, net_margin:10, ocf_ni_ratio:0.8, profit_yoy_q:15,
+            profit_accel_streak:1, pe_percentile:50, quarters_available:20 }
+     (ทุกตัวเป็น ≥ เดี่ยว ยกเว้น pe_percentile ที่เป็น ≤)
+
+   preset B — ชื่อ "🇭🇰 HK หุ้นดีราคาถูก" (color '#e3b341', universe:'hk')
+     desc: "GARP 2 ชั้น — PE&PBV ต่ำคู่กัน + คุณภาพ (HK percentile ใช้ไม่ได้)"
+     set: {
+       pe_value: {min:3, max:12},
+       pbv_value: {min:0.3, max:1.5},
+       roe: {min:15, max:80},
+       net_margin: {min:5, max:60},
+       ocf_ni_ratio: 1,        // >= เดี่ยว
+       profit_yoy_q: 10,       // >= เดี่ยว
+       quarters_available: 16  // >= เดี่ยว
+     }
+     (โครง set ด้านบนเป็นตัวอย่างเจตนา — ปรับให้ตรงกับรูปแบบ min-max ที่ทำจริงในข้อ 1 ได้)
+
+3) ทำให้ preset สลับ universe อัตโนมัติ (UX): เพิ่ม field `universe` ในโครง preset (A -> 'us',
+   B -> 'hk') แล้วแก้ applyFsPreset ให้ ถ้ามี p.universe: set ค่า dropdown fs-universe =
+   p.universe ก่อน แล้วเรียก _fsApplyUniverseUI() (ปิดฟิลด์ Yahoo-only) ก่อน runFscreener()
+   เพื่อให้กดปุ่มเดียวสลับตลาด+กรองครบ (preset เดิมที่ไม่มี universe ต้องทำงานเหมือนเดิม)
+
+4) เพิ่ม tip/หมายเหตุสั้นๆ ใน preset B ว่าใช้ PE/PBV ค่าสัมบูรณ์เพราะ percentile ของ HK ใช้ไม่ได้
+
+== ตรวจ/ยืนยัน ==
+- ไม่ต้อง rebuild snapshot (ข้อมูลมีแล้ว) · endpoint อ่าน DB สด
+- ทดสอบด้วยการจำลอง filter ฝั่ง Python บน factor_snapshot_mirror ว่า preset A (US) และ B (HK)
+  คืนผลลัพธ์ > 0 และเป็นหุ้นคุณภาพจริง (เทียบชื่อจาก mirror_names.json)
+  ค่าอ้างอิงที่เคยได้: US ~135 ตัว (AMZN/Boston Scientific/ICE/Equifax/...),
+  HK แนว GARP ~75 ตัว (China Taiping Insurance, New China Life, Zhong Ao Home Group, ...)
+- bump cache version ของ dashboard.js ใน set_dashboard.html
+- ตรวจ backtick/วงเล็บ JS สมดุล (brace/paren count ต้องเท่ากันก่อน-หลัง)
+- อย่าแก้ FS_YAHOO_ONLY / _fsApplyUniverseUI logic เดิม
+- ตรวจว่า preset เก่าทุกอันยังทำงานถูกต้องหลังเพิ่ม min-max support (regression check)
+
+== ข้อกำหนด ==
+- อย่าแตะ backend/snapshot (เป็นแค่การเพิ่ม preset + filter capability ฝั่ง frontend)
+- financials.db และข้อมูลงบเป็น LOCAL-ONLY ห้าม push ขึ้น GitHub
+- รายงานผลทดสอบ (จำนวนหุ้นที่ preset แต่ละอันหาเจอ + ตัวอย่างชื่อ) ตอนจบ
