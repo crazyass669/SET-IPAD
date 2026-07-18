@@ -321,12 +321,16 @@ def _df_to_dict_full(df):
     return out
 
 
-def fetch_yahoo_full(symbol, is_dr=False):
+def fetch_yahoo_full(symbol, is_dr=False, market=None):
     """ดึงงบการเงินเต็มทุก field จาก Yahoo Finance — คืน dict พร้อมเก็บลง DB
 
     is_dr=True บอกชัดเจนว่า symbol นี้มาจาก universe หุ้นต่างประเทศ (DR) — ต้องระบุ
     มาจาก caller เท่านั้น ห้าม auto-detect จาก _DR_STATIC เฉยๆ เพราะบาง symbol ชื่อ
-    ชนกับหุ้นไทย (เช่น 'META' มีทั้งหุ้นไทย mai และ underlying ของ DR)"""
+    ชนกับหุ้นไทย (เช่น 'META' มีทั้งหุ้นไทย mai และ underlying ของ DR)
+
+    market: ใช้เดา yf ticker เฉพาะตอน is_dr=True แต่ symbol ไม่อยู่ใน DR universe ที่
+    curate ไว้ (หุ้น mirror US/HK ทั่วไป) — ไม่งั้นจะพลาดไปดึงเป็นหุ้นไทย .BK (ดู
+    resolve_yf_ticker ใน dr_descriptions.py ที่ใช้ logic เดียวกัน)"""
     import yfinance as yf
 
     sym = symbol.upper().strip()
@@ -335,6 +339,10 @@ def fetch_yahoo_full(symbol, is_dr=False):
     dr_entry = next((s for s in load_dr_universe(_PROJECT_ROOT) if s["sym"] == sym), None) if is_dr else None
     if dr_entry:
         yf_ticker, stock_type, stock_name = dr_entry["yf"], "dr", dr_entry["name"]
+    elif is_dr and market == "US":
+        yf_ticker, stock_type, stock_name = sym, "dr", sym
+    elif is_dr and market == "HK":
+        yf_ticker, stock_type, stock_name = sym.zfill(4) + ".HK", "dr", sym
     else:
         yf_ticker, stock_type, stock_name = sym + ".BK", "set", sym
 
@@ -373,17 +381,23 @@ def fetch_yahoo_full(symbol, is_dr=False):
     }
 
 
-def fetch_yahoo_quarterly(symbol, is_dr=False):
+def fetch_yahoo_quarterly(symbol, is_dr=False, market=None):
     """ดึงงบการเงิน 'รายไตรมาส' เต็มทุก field จาก Yahoo — โครงสร้างเดียวกับ fetch_yahoo_full
     (section -> field -> {วันสิ้นงวด: ค่า}) เก็บใต้ source 'yahoo_q' และ merge สะสม
     ได้ด้วยกลไกเดิม — Yahoo ให้ครั้งละ ~5-6 ไตรมาส สะสมทุกรอบ sync ประวัติจะยาวขึ้นเอง
-    หมายเหตุ: HK/EU รายงานครึ่งปีตามกฎตลาด, JP มักได้ไม่ครบ — ได้เท่าที่ตลาดนั้นมีจริง"""
+    หมายเหตุ: HK/EU รายงานครึ่งปีตามกฎตลาด, JP มักได้ไม่ครบ — ได้เท่าที่ตลาดนั้นมีจริง
+
+    market: ดูคอมเมนต์ใน fetch_yahoo_full — เดา yf ticker ตอนไม่อยู่ใน DR universe"""
     import yfinance as yf
 
     sym = symbol.upper().strip()
     dr_entry = next((s for s in load_dr_universe(_PROJECT_ROOT) if s["sym"] == sym), None) if is_dr else None
     if dr_entry:
         yf_ticker, stock_type, stock_name = dr_entry["yf"], "dr", dr_entry["name"]
+    elif is_dr and market == "US":
+        yf_ticker, stock_type, stock_name = sym, "dr", sym
+    elif is_dr and market == "HK":
+        yf_ticker, stock_type, stock_name = sym.zfill(4) + ".HK", "dr", sym
     else:
         yf_ticker, stock_type, stock_name = sym + ".BK", "set", sym
 
@@ -1101,9 +1115,12 @@ def mirror_finnomena(base_dir, exchanges=("TH", "HK", "US"), limit=None,
     except KeyboardInterrupt:
         print(f"[FinnMirror] หยุดโดยผู้ใช้ — เก็บไปแล้วรอบนี้ {ok + empty} ตัว รันใหม่จะต่อจากเดิม")
 
+    # total/force เก็บเพิ่มไว้ให้ /api/data-health ตรวจจับสัญญาณ "Finnomena อาจเปลี่ยน API"
+    # ได้ (force run ที่ ok=0 ทั้งที่ total เยอะ = ผิดปกติมาก ปกติต้องได้งวดใหม่บ้าง)
     _set_meta(base_dir, "finnomena_mirror_last",
               json.dumps({"at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                          "ok": ok, "empty": empty, "fail": fail}, ensure_ascii=False))
+                          "ok": ok, "empty": empty, "fail": fail,
+                          "total": total, "force": force}, ensure_ascii=False))
     print(f"[FinnMirror] จบรอบ: มีงบ {ok} | ไม่มีงบ (บันทึก marker) {empty} | พลาด {fail}")
     return {"ok": ok, "empty": empty, "fail": fail, "total": total}
 
@@ -1113,13 +1130,17 @@ def mirror_finnomena(base_dir, exchanges=("TH", "HK", "US"), limit=None,
 # ============================================================
 
 def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=None,
-            is_dr=False, min_age_days=None):
+            is_dr=False, min_age_days=None, market=None):
     """ดึงงบการเงินเต็มของทุก symbol × ทุก source มา upsert เข้า DB
     คืน {"ok": n, "fail": n, "total": n, "skipped": n}
 
     min_age_days: ถ้าใส่ (เช่น 7) จะข้ามคู่ (symbol, source) ที่ synced_at ใน DB
     ใหม่กว่า N วันไปแล้ว — ไม่ยิง fetch ซ้ำของที่เพิ่งดึงไปไม่นาน (incremental sync)
     None = ดึงทุกคู่เสมอเหมือนพฤติกรรมเดิม (full sync)
+
+    market: ส่งต่อให้ fetch_yahoo_full/fetch_yahoo_quarterly เดา yf ticker ตอน symbol
+    ไม่อยู่ใน DR universe ที่ curate ไว้ (หุ้น mirror US/HK ทั่วไปนอกพอร์ต) — ไม่งั้นจะ
+    พลาดไปดึงเป็นหุ้นไทย .BK (ดูคอมเมนต์ fetch_yahoo_full)
 
     Yahoo throttle: จาก bulk sync จริง (930 หุ้น) พบว่า ~60% ของหุ้นที่ล้มเหลว
     เป็นเพราะโดน rate-limit ชั่วคราว ไม่ใช่ไม่มีข้อมูลจริง (สุ่มทดสอบซ้ำ 25 ตัวที่
@@ -1174,10 +1195,10 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
             fetch = fetch_yahoo_full if src == "yahoo" else fetch_yahoo_quarterly
             with _yahoo_gate:
                 try:
-                    payload = fetch(sym, is_dr=is_dr)
+                    payload = fetch(sym, is_dr=is_dr, market=market)
                 except Exception:
                     time.sleep(1.0)          # เผื่อโดน rate-limit ชั่วคราว — พักแล้วลองอีกครั้ง
-                    payload = fetch(sym, is_dr=is_dr)
+                    payload = fetch(sym, is_dr=is_dr, market=market)
                 finally:
                     time.sleep(0.3)           # throttle เบาๆ กัน Yahoo บล็อก IP ตอน sync รวด
         elif src == "finnomena_q":

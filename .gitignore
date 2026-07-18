@@ -66,6 +66,11 @@ financials_backups/
 # Rotation quadrant alert state
 rotation_state.json
 
+# Log หุ้นที่ตรวจพบว่า delisted/แขวนถาวร (core/delisted_log.py) — local-only
+# เหมือน rotation_state.json/dr_universe_auto.json ด้านล่าง, regenerate ได้จาก
+# universe filter เดิมถ้าไฟล์หาย (แค่เสียประวัติวันที่ตรวจพบครั้งแรก)
+delisted_log.json
+
 # DR universe auto-sync overlay (สร้างใหม่ได้เสมอจาก SET API)
 dr_universe_auto.json
 
@@ -89,3 +94,10 @@ mirror.log
 mirror_run.log
 server_run.log
 server_5011.log
+
+# โฟลเดอร์เก็บไฟล์ที่ตรวจสอบแล้วว่าไม่มีโค้ดไหนเรียกใช้ (สคริปต์ one-time ที่ทำ
+# เสร็จแล้ว, log ชั่วคราว, backup เก่า) — .py ที่ track อยู่แล้วก่อนกฎนี้ยังอยู่ปกติ
+# (gitignore ไม่ถอด track ของเดิม) กันแค่ของใหม่ที่ทิ้งเข้ามาไม่ให้หลุดเข้า commit
+ไฟล์ไม่ได้ใช้/*.db
+ไฟล์ไม่ได้ใช้/*.log
+ไฟล์ไม่ได้ใช้/*.zip

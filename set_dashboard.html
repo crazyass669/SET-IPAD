@@ -58,6 +58,9 @@
   <button class="nav-btn" onclick="showPage('short',this)" title="Short Sales — ข้อมูลการขายชอร์ตรายหุ้น, Squeeze Radar">Short</button>
   <button class="nav-btn" onclick="showPage('confluence',this)" title="สัญญาณเงินทุนรวม — insider + short + NVDR ที่ตรงกันหลายชั้น">🎯 สัญญาณรวม</button>
   <button class="nav-btn" onclick="showPage('financials',this)">งบการเงิน</button>
+  <button class="nav-btn" onclick="showPage('us-heatmap',this)" title="Heatmap S&amp;P 500 / Dow Jones / Nasdaq 100 (หุ้น US) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้ · คนละหน้ากับ &quot;Heatmap&quot; ของหุ้นไทยด้านซ้าย">🗺️ Heatmap US</button>
+  <button class="nav-btn" onclick="showPage('stock-news',this)" title="ข่าวรายหุ้น — รวมประกาศ SET.or.th + Yahoo Finance + Google News ในหน้าเดียว แค่พิมพ์ชื่อย่อหุ้น">📰 ข่าวหุ้น</button>
+  <button class="nav-btn" onclick="showPage('data-health',this)" title="Data Health — ความสดของทุกไฟล์/DB ที่ dashboard ใช้ในจอเดียว + ปิงแหล่งข้อมูลภายนอก (local-only)">🩺 Data Health<span id="dh-nav-badge" class="dh-nav-badge" style="display:none"></span></button>
   <div class="nav-right">
     <!-- Market Regime Light — % หุ้นเหนือ EMA200 (3 โซนจากผล backtest) -->
     <span class="regime-wrap" id="regime-wrap" style="display:none">
@@ -100,6 +103,10 @@
 
 <!-- Data Quality banner — แสดงเมื่อข้อมูล stale หรือมีหุ้นถูกกันออกจากการคำนวณ -->
 <div id="dq-banner" style="display:none"></div>
+
+<!-- Run-failure banner — แสดงเมื่อ Quick Update/Full Refresh/สคริปต์อัพเดทงบ รอบล่าสุดล้มเหลว
+     (local-only — อ่านจาก logs/update_status.json ที่เขียนโดย core/run_log.py) -->
+<div id="run-fail-banner" style="display:none"></div>
 
 <!-- PAGE: OVERVIEW -->
 <div id="page-overview" class="page active">
@@ -2691,12 +2698,49 @@
         title="งบทางการจาก SET.or.th (หุ้นไทยเท่านั้น)">🇹🇭 SET.or.th</button>
     </div>
     <span id="fin-meta-note" style="font-size:11px;color:var(--text2)"></span>
-    <button class="filter-btn" style="margin-left:auto;font-size:12px" id="fin-coverage-btn" onclick="checkFinCoverage()">🔍 ตรวจสอบความครบถ้วน</button>
+    <button class="filter-btn" style="margin-left:auto;font-size:12px" id="fin-compare-btn" onclick="toggleFinCompare()">⚖️ เทียบหุ้น 2 ตัว</button>
+    <button class="filter-btn" style="font-size:12px" id="fin-coverage-btn" onclick="checkFinCoverage()">🔍 ตรวจสอบความครบถ้วน</button>
     <button class="filter-btn" style="font-size:12px" id="fin-sync-btn" onclick="startFinancialsSync()">🔄 อัพเดทงบการเงินทั้งหมด (local)</button>
   </div>
 
   <!-- Coverage result -->
   <div id="fin-coverage-result" style="display:none;margin-bottom:12px"></div>
+
+  <!-- เทียบหุ้น 2 ตัว — ใช้งบไตรมาส Finnomena 16 ปี เทียบรายได้/margin/ROE แบบ overlay -->
+  <div id="fin-compare-panel" class="card" style="padding:14px 16px;margin-bottom:12px;display:none">
+    <div style="font-size:12px;color:var(--text2);margin-bottom:8px">เทียบงบการเงิน 2 หุ้น (ไทยหรือต่างประเทศ ผสมกันได้) — ใช้งบไตรมาส Finnomena ย้อน 16 ปี
+      <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px;text-align:left">
+        เลือกป้าย 🇹🇭/🌏 ก่อนพิมพ์ — รายชื่อ autocomplete และแหล่งข้อมูลที่ดึงจะอิงตามป้ายที่เลือกเสมอ
+        (ป้องกัน symbol ชนกัน เช่น <b>META</b> = ทั้ง Meta Platforms สหรัฐฯ และ META Corporation หุ้นไทย mai)
+      </div></span>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <input id="fin-cmp-a" class="scr-input" style="width:170px;font-size:13px" placeholder="หุ้น A เช่น PTT"
+          onkeydown="if(event.key==='Enter') runFinCompare()">
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn active" id="fin-cmp-a-set" onclick="setFinCmpMarket('a','set')" style="font-size:10px;padding:2px 8px;border-radius:5px 0 0 5px">🇹🇭 ไทย</button>
+          <button class="filter-btn" id="fin-cmp-a-dr" onclick="setFinCmpMarket('a','dr')" style="font-size:10px;padding:2px 8px;border-radius:0 5px 5px 0">🌏 ต่างประเทศ</button>
+        </div>
+      </div>
+      <span style="color:var(--text2);font-size:12px">เทียบกับ</span>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <input id="fin-cmp-b" class="scr-input" style="width:170px;font-size:13px" placeholder="หุ้น B เช่น NVDA"
+          onkeydown="if(event.key==='Enter') runFinCompare()">
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn" id="fin-cmp-b-set" onclick="setFinCmpMarket('b','set')" style="font-size:10px;padding:2px 8px;border-radius:5px 0 0 5px">🇹🇭 ไทย</button>
+          <button class="filter-btn active" id="fin-cmp-b-dr" onclick="setFinCmpMarket('b','dr')" style="font-size:10px;padding:2px 8px;border-radius:0 5px 5px 0">🌏 ต่างประเทศ</button>
+        </div>
+      </div>
+      <button class="btn-primary" onclick="runFinCompare()">⚖️ เทียบ</button>
+      <button class="filter-btn" onclick="resetFinCompare()" title="ล้างช่องกรอกและผลเทียบ">↺ รีเซ็ต</button>
+      <span id="fin-cmp-hint" style="font-size:11px;color:var(--text2)"></span>
+    </div>
+    <div id="fin-cmp-result" style="margin-top:14px"></div>
+  </div>
+
+  <!-- ประวัติหุ้นที่เพิ่งดู (localStorage) — คลิกเพื่อค้นซ้ำ ไม่ต้องพิมพ์ใหม่ -->
+  <div id="fin-recent" style="display:none;margin-bottom:10px;font-size:12px"></div>
 
   <!-- Search SET -->
   <div id="fin-search-set" class="card" style="padding:14px 16px">
@@ -2734,6 +2778,38 @@
         <input id="fin-mir-filter" class="scr-input" style="width:170px;font-size:12px" placeholder="กรองรหัส เช่น NV, 07" oninput="_finMirRender()">
         <span id="fin-mir-count" style="font-size:11px;color:var(--text2)"></span>
       </div>
+      <!-- กรองตามดัชนี US — เฉพาะแท็บ US (ซ่อนเมื่อดู HK) -->
+      <div id="fin-mir-idx-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+        <span style="font-size:12px;color:var(--text2)">ดัชนี:</span>
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn active" id="fin-mir-idx-all"   onclick="_finMirSetIndex('ALL',this)"   style="border-radius:6px 0 0 6px;font-size:12px;padding:4px 12px">ทั้งหมด</button>
+          <button class="filter-btn" id="fin-mir-idx-sp500" onclick="_finMirSetIndex('SP500',this)" style="font-size:12px;padding:4px 12px" title="S&P 500">S&amp;P 500</button>
+          <button class="filter-btn" id="fin-mir-idx-dow"   onclick="_finMirSetIndex('DOW',this)"   style="font-size:12px;padding:4px 12px">Dow Jones</button>
+          <button class="filter-btn" id="fin-mir-idx-ndx"   onclick="_finMirSetIndex('NDX',this)"   style="border-radius:0 6px 6px 0;font-size:12px;padding:4px 12px">Nasdaq 100</button>
+        </div>
+        <span id="fin-mir-idx-note" style="font-size:11px;color:var(--text2)"></span>
+      </div>
+      <!-- Auto-check/sync ดัชนี US กับ Wikipedia — คู่กับปุ่มเช็ค DR ในหน้า DR/DRx -->
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <button class="filter-btn" id="us-idx-diff-btn" onclick="checkUSIndexUpdates()">🔍 เช็คหุ้นใหม่/ถูกถอดจากดัชนี
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:300px;text-align:left">
+            <strong>💡 เช็คการเปลี่ยนแปลงดัชนี S&P 500 / Dow Jones / Nasdaq 100</strong><br><br>
+            เทียบรายชื่อ constituents สดจาก Wikipedia กับไฟล์ local ที่ปุ่มกรองดัชนีใช้อยู่
+            — ปุ่มนี้<span style="color:var(--yellow)">รายงานอย่างเดียว ไม่แก้ไฟล์ให้</span><br><br>
+            กด "🔄 ดึงเฉพาะที่ขาด/เก่า" ต่อเพื่ออัพเดทไฟล์ + ดึงงบของตัวใหม่ให้อัตโนมัติ
+          </div></span>
+        </button>
+        <button class="filter-btn" id="us-idx-sync-btn" onclick="startUSIndexSync()">🔄 ดึงเฉพาะที่ขาด/เก่า (local)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Sync ดัชนี US</strong><br>
+            ดึงรายชื่อ constituents ล่าสุดจาก Wikipedia มาแทนไฟล์ local ก่อน แล้วดึงงบการเงิน
+            (ผ่าน Yahoo Finance) เฉพาะ ticker ในดัชนีที่ยังไม่มีข้อมูลในระบบ หรือข้อมูลเก่าเกิน 7 วัน<br><br>
+            <span style="color:var(--text2)">ใช้เป็นระยะเพื่อให้ปุ่มกรอง S&P 500 / Dow Jones / Nasdaq 100 ครบตามจำนวนจริงเสมอ (ตัวเลขดัชนีเปลี่ยนได้เรื่อยๆ)</span>
+          </div></span>
+        </button>
+        <span id="us-idx-diff-note" style="font-size:11px;color:var(--text2)"></span>
+      </div>
+      <div id="us-idx-diff-result" style="display:none;margin-bottom:12px"></div>
       <div id="fin-mir-list" style="display:flex;flex-wrap:wrap;gap:6px;max-height:230px;overflow-y:auto;padding:2px"></div>
     </div>
   </div>
@@ -2742,7 +2818,148 @@
   <div id="fin-result"></div>
 </div>
 
+<!-- PAGE: US INDEX HEATMAP — คนละหน้ากับ "Heatmap" เดิม (id="page-heatmap") ที่เป็น Market
+     Heatmap ของหุ้นไทยจัดกลุ่มตาม Sector — ห้ามใช้ id/route "heatmap" ซ้ำกับหน้านั้นเด็ดขาด
+     (getElementById จะเจอหน้าไทยก่อนเสมอเพราะอยู่ก่อนใน DOM ทำให้หน้านี้ไม่มีทางแสดงได้เลย) -->
+<div id="page-us-heatmap" class="page">
+  <div class="page-title">Heatmap ดัชนี US</div>
+  <div class="page-sub">ขนาดกล่อง = มูลค่าตลาด (Market Cap) · สี = % เปลี่ยนแปลง — ข้อมูลจาก Yahoo Finance สด</div>
 
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+    <div class="filter-row" style="gap:0;margin:0">
+      <button class="filter-btn active" id="hm-idx-sp500" onclick="setHeatmapIndex('SP500',this)" style="border-radius:6px 0 0 6px;min-width:100px">S&amp;P 500</button>
+      <button class="filter-btn" id="hm-idx-dow" onclick="setHeatmapIndex('DOW',this)" style="min-width:100px">Dow Jones</button>
+      <button class="filter-btn" id="hm-idx-ndx" onclick="setHeatmapIndex('NDX',this)" style="border-radius:0 6px 6px 0;min-width:100px">Nasdaq 100</button>
+    </div>
+    <div class="filter-row" style="gap:0;margin:0">
+      <button class="filter-btn active" id="hm-period-1d" onclick="setHeatmapPeriod('chg_1d',this)" style="border-radius:6px 0 0 6px;min-width:56px" title="% เปลี่ยนแปลงวันนี้">1D</button>
+      <button class="filter-btn" id="hm-period-1w" onclick="setHeatmapPeriod('chg_1w',this)" style="border-radius:0 6px 6px 0;min-width:56px" title="% เปลี่ยนแปลง 5 วันทำการล่าสุด">1W</button>
+    </div>
+    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer;user-select:none">
+      <input type="checkbox" id="hm-sector-toggle" checked onchange="_renderHeatmap(_hmData[_hmIndex])"> จัดกลุ่มตาม Sector
+    </label>
+    <input id="hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderHeatmap(_hmData[_hmIndex])">
+    <button class="filter-btn" id="hm-refresh-btn" onclick="loadHeatmapPage(true)" title="บังคับดึงราคา/มูลค่าตลาดสดจาก Yahoo Finance ใหม่ทั้งชุด (ข้าม cache 15 นาทีของ server) — ปกติไม่ต้องกด เพราะ cache หมดอายุแล้วโหลดหน้าใหม่จะได้สดอัตโนมัติ">⚡ อัพเดทราคา</button>
+    <span id="hm-note" style="font-size:11px;color:var(--text2)"></span>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:11px;color:var(--text2)">
+    <span>-3%</span>
+    <div style="width:180px;height:10px;border-radius:4px;background:linear-gradient(to right, rgb(248,81,73), rgb(33,38,45), rgb(63,185,80))"></div>
+    <span>+3%</span>
+    <span style="margin-left:4px">(สีเข้มขึ้นตามขนาด % คลิปที่ ±3%)</span>
+  </div>
+
+  <div id="hm-box" style="position:relative;width:100%;height:640px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+    <div id="hm-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">กำลังโหลด heatmap (ครั้งแรกอาจใช้เวลา ~30-60 วิ)...</div>
+  </div>
+</div>
+
+<!-- PAGE: STOCK NEWS — ข่าวรายหุ้นรวม 3 แหล่ง (SET.or.th + Yahoo + Google News) -->
+<div id="page-stock-news" class="page">
+  <div class="page-title">📰 ข่าวหุ้น</div>
+  <div class="page-sub">รวมข่าวจากทุกแหล่งในหน้าเดียว — ประกาศทางการ SET.or.th · Yahoo Finance · Google News (สื่อไทย/สากล) แค่พิมพ์ชื่อย่อหุ้น</div>
+
+  <div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn active" id="news-tab-set" onclick="setNewsTab('set',this)" style="border-radius:6px 0 0 6px;min-width:120px">🇹🇭 หุ้นไทย</button>
+        <button class="filter-btn" id="news-tab-dr" onclick="setNewsTab('dr',this)" style="border-radius:0 6px 6px 0;min-width:120px">🌏 ต่างประเทศ</button>
+      </div>
+      <input id="news-sym" list="news-datalist" class="scr-input" style="width:200px;font-size:13px"
+        placeholder="เช่น PTT, NVDA, AOT" onkeydown="if(event.key==='Enter') searchStockNews()">
+      <datalist id="news-datalist"></datalist>
+      <button class="btn-primary" onclick="searchStockNews()">🔍 ดูข่าว</button>
+      <span id="news-hint" style="font-size:11px;color:var(--text2)"></span>
+    </div>
+    <!-- ชิปหุ้นที่เพิ่งดูข่าว + ตัวกรองแหล่ง (โผล่เมื่อมีผลลัพธ์) -->
+    <div id="news-recent" style="display:none;margin-top:10px;font-size:12px"></div>
+    <div id="news-src-filter" style="display:none;margin-top:10px;gap:6px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:12px;color:var(--text2)">แหล่ง:</span>
+      <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn active" id="news-src-all"    onclick="setNewsSource('all',this)"    style="border-radius:6px 0 0 6px;font-size:12px;padding:4px 12px">ทั้งหมด</button>
+        <button class="filter-btn" id="news-src-set"    onclick="setNewsSource('set',this)"    style="font-size:12px;padding:4px 12px">🏛️ SET.or.th</button>
+        <button class="filter-btn" id="news-src-yahoo"  onclick="setNewsSource('yahoo',this)"  style="font-size:12px;padding:4px 12px">🟣 Yahoo</button>
+        <button class="filter-btn" id="news-src-google" onclick="setNewsSource('google',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:4px 12px">🌐 Google News</button>
+      </div>
+      <span id="news-count" style="font-size:11px;color:var(--text2)"></span>
+    </div>
+  </div>
+
+  <div id="news-result"></div>
+</div>
+
+<!-- PAGE: DATA HEALTH — ความสดของทุกไฟล์/DB ที่ dashboard ใช้ + ปิงแหล่งข้อมูลภายนอก
+     (local-only — ต้องรันผ่าน Flask ไม่มีบน GitHub Pages เพราะไม่มี backend ให้เช็ค) -->
+<div id="page-data-health" class="page">
+  <div class="page-title">🩺 Data Health</div>
+  <div class="page-sub">ความสดของไฟล์/ฐานข้อมูลหลักทุกตัวในจอเดียว — เขียว = สด, เหลือง = เริ่มค้าง, แดง = ต้องอัพเดท/ไม่พบข้อมูล</div>
+
+  <div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button class="btn-primary" onclick="loadDataHealth()">🔄 เช็คใหม่</button>
+      <button class="btn-primary" id="dh-ping-btn" style="background:var(--card2);border:1px solid var(--border)" onclick="pingDataSources()">📡 ปิงแหล่งข้อมูลภายนอก</button>
+      <span id="dh-checked-at" style="font-size:11px;color:var(--text2)"></span>
+      <span id="dh-summary" style="font-size:12px;font-weight:600;margin-left:auto"></span>
+    </div>
+    <div id="dh-ping-result" style="margin-top:10px;display:none"></div>
+  </div>
+
+  <div id="dh-table-wrap"></div>
+
+  <div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">📦 สำรองข้อมูลนอกเครื่อง — รายไฟล์</div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:8px">financials.db / set_prices.db / sec_filings.db / delisted_log.json — สแกนโฟลเดอร์ปลายทางจริง (เขียว ≤35 วัน, เหลือง 35-60 วัน, แดง &gt;60 วันหรือไม่พบ)</div>
+    <div id="dh-backup-files-wrap"></div>
+  </div>
+
+  <div class="card" style="padding:14px 16px;margin-top:12px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:10px">🔍 เช็คหุ้นเข้าใหม่/ถูกถอด (รวมทุก universe)</div>
+
+    <!-- หุ้นไทย -->
+    <div style="padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <strong style="font-size:12.5px;min-width:110px">🇹🇭 หุ้นไทย (SET/mai)</strong>
+        <button class="filter-btn" id="dh-th-diff-btn" onclick="checkSetUniverseUpdates()">เช็คกับ SET.or.th</button>
+        <span id="dh-th-diff-note" style="font-size:11px;color:var(--text2)"></span>
+      </div>
+      <div id="dh-th-diff-result" style="display:none;margin-top:8px"></div>
+    </div>
+
+    <!-- Mirror US/HK -->
+    <div style="padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <strong style="font-size:12.5px;min-width:110px">🌏 Mirror US/HK</strong>
+        <button class="filter-btn" id="dh-mirror-diff-btn" onclick="checkMirrorUpdates()">เช็คกับ Finnomena</button>
+        <button class="filter-btn" id="dh-mirror-sync-btn" style="display:none" onclick="startMirrorSyncNew()">📥 ดึงเฉพาะตัวใหม่ (local)</button>
+        <span id="dh-mirror-diff-note" style="font-size:11px;color:var(--text2)"></span>
+      </div>
+      <div id="dh-mirror-diff-result" style="display:none;margin-top:8px"></div>
+    </div>
+
+    <!-- ดัชนี US -->
+    <div style="padding:10px 0 0">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <strong style="font-size:12.5px;min-width:110px">📈 ดัชนี US (S&amp;P500/DOW/NDX)</strong>
+        <span style="font-size:11px;color:var(--text2)">มีปุ่มเช็คอยู่แล้วในหน้า "🗺️ Heatmap US"</span>
+        <button class="filter-btn" onclick="showPage('us-heatmap', [...document.querySelectorAll('.nav-btn')].find(b=>b.getAttribute('onclick')?.includes(`'us-heatmap'`)))">ไปหน้า Heatmap US</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- HEATMAP CELL TOOLTIP/POPUP -->
+<div id="hm-popup" style="display:none;position:fixed;z-index:8500;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;width:220px;box-shadow:0 8px 32px rgba(0,0,0,.6)">
+  <div id="hm-popup-sym" style="font-size:15px;font-weight:700"></div>
+  <div id="hm-popup-name" style="font-size:11px;color:var(--text2);margin-top:2px;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+  <div id="hm-popup-sector" style="font-size:10px;color:var(--text2);margin-top:1px"></div>
+  <div style="display:flex;gap:14px;margin-top:8px">
+    <div><div id="hm-popup-chg1d" style="font-size:16px;font-weight:700"></div><div style="font-size:10px;color:var(--text2)">1D</div></div>
+    <div><div id="hm-popup-chg1w" style="font-size:16px;font-weight:700"></div><div style="font-size:10px;color:var(--text2)">1W</div></div>
+    <div><div id="hm-popup-mktcap" style="font-size:14px;font-weight:600"></div><div style="font-size:10px;color:var(--text2)">Market Cap</div></div>
+  </div>
+  <button class="btn-primary" style="width:100%;margin-top:10px;font-size:12px;padding:6px 0" onclick="_hmGoFin()">📋 ดูงบการเงิน</button>
+</div>
 
 <!-- IDX TOOLTIP -->
 <div id="idx-tt" style="display:none;position:fixed;z-index:9999;background:#1c2128;border:1px solid #444c56;border-radius:8px;padding:10px 14px;font-size:12px;line-height:1.6;color:var(--fg);max-width:280px;pointer-events:none;box-shadow:0 4px 20px rgba(0,0,0,.6)"></div>
@@ -3140,6 +3357,6 @@
 </div>
 
 <script src="static/fin_translations.js?v=20260713a"></script>
-<script src="static/dashboard.js?v=20260715e"></script>
+<script src="static/dashboard.js?v=20260718d"></script>
 </body>
 </html>

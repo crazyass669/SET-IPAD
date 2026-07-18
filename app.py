@@ -7,6 +7,7 @@ SET Dashboard — Flask Web Server
 import json
 import os
 import random
+import re
 import shutil
 import string
 import subprocess
@@ -26,6 +27,8 @@ except Exception:
 
 # atomic write ใช้จาก core.store (Phase 3 — เลิก def ซ้ำในไฟล์นี้)
 from core.store import _atomic_write_json
+from core import run_log
+from core import delisted_log
 
 # Band cache — เก็บผล mrlikestock.com ไว้ 6 ชั่วโมง เพื่อลด latency ค้นซ้ำ
 _band_cache: dict = {}
@@ -38,6 +41,45 @@ _DR_CACHE_TTL = 4 * 3600
 # DR diff-check cache — ผล /api/set/dr/list เทียบ _DR_STATIC ไว้ 6 ชั่วโมง (กดเช็คบ่อยไม่ต้องยิง SET.or.th ซ้ำ)
 _dr_diff_cache: dict = {}
 _DR_DIFF_CACHE_TTL = 6 * 3600
+
+# US index (S&P500/Dow/Nasdaq100) diff-check cache — เทียบ Wikipedia กับไฟล์ local ไว้ 6 ชั่วโมง
+_us_index_diff_cache: dict = {}
+_US_INDEX_DIFF_CACHE_TTL = 6 * 3600
+
+# Heatmap cache (mkt_cap + % เปลี่ยนแปลงรายวันของหุ้นในแต่ละดัชนี) — แยก slot ต่อดัชนี
+# TTL สั้นกว่า cache อื่นเพราะ % เปลี่ยนแปลงต้องสดพอสมควร แต่ไม่สดเกินจนต้องยิง Yahoo ทุกครั้งที่เปิดหน้า
+_heatmap_cache: dict = {}
+_HEATMAP_CACHE_TTL = 15 * 60
+
+# ข่าวรายหุ้น (รวม SET.or.th + Yahoo + Google News) — cache ต่อ (symbol, is_dr) 15 นาที
+# ข่าวไม่ต้องสดวินาทีต่อวินาที แต่ก็ไม่ควรยิง 3 แหล่งซ้ำทุกครั้งที่พิมพ์ค้นหา
+_stock_news_cache: dict = {}
+_STOCK_NEWS_CACHE_TTL = 15 * 60
+
+# Market cap เปลี่ยนช้ามาก (ต่างจากราคา) — cache แยกลงไฟล์ต่างหาก อายุ 1 วัน ลดเวลาโหลด
+# ครั้งแรกจาก ~30-60 วิ (ยิง fast_info ทีละ ticker) เหลือแค่เวลา batch ราคา ~5 วิ
+_MKTCAP_CACHE_TTL = 24 * 3600
+
+
+def _mktcap_cache_path():
+    return os.path.join(BASE_DIR, "data", "us_heatmap_mktcap_cache.json")
+
+
+def _load_mktcap_cache():
+    try:
+        with open(_mktcap_cache_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_mktcap_cache(data):
+    p = _mktcap_cache_path()
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, p)
 
 # Financials cache — งบการเงิน cache 24 ชั่วโมง (ข้อมูลไม่เปลี่ยนบ่อย)
 _fin_cache: dict = {}
@@ -69,6 +111,7 @@ from sources import sec_store
 from sources import financials_store
 from sources import factor_snapshot
 from sources import dr_descriptions
+from sources import us_index_membership
 
 
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
@@ -1280,6 +1323,10 @@ def get_financials_full(symbol):
     if source not in ("yahoo", "yahoo_q", "finnomena_q", "finnomena_y", "set"):
         return jsonify({"error": "source ต้องเป็น yahoo, yahoo_q, finnomena_q, finnomena_y หรือ set เท่านั้น"}), 400
     is_dr = request.args.get("is_dr") == "1"
+    # ใช้เฉพาะตอน source=yahoo/yahoo_q + is_dr แต่ symbol ไม่อยู่ใน DR universe ที่ curate
+    # ไว้ (หุ้น mirror US/HK ทั่วไป) — กัน fetch_yahoo_* พลาดไปดึงเป็นหุ้นไทย .BK
+    # (ดูคอมเมนต์ resolve_yf_ticker ใน dr_descriptions.py — logic เดียวกัน)
+    market = request.args.get("market")
 
     # ETF/กองทุนไม่มีงบการเงินแบบบริษัท — บอกสาเหตุชัดๆ แทน error ว่างเปล่า
     if is_dr:
@@ -1320,9 +1367,9 @@ def get_financials_full(symbol):
 
     try:
         if source == "yahoo":
-            payload = financials_store.fetch_yahoo_full(sym, is_dr=is_dr)
+            payload = financials_store.fetch_yahoo_full(sym, is_dr=is_dr, market=market)
         elif source == "yahoo_q":
-            payload = financials_store.fetch_yahoo_quarterly(sym, is_dr=is_dr)
+            payload = financials_store.fetch_yahoo_quarterly(sym, is_dr=is_dr, market=market)
         elif source == "finnomena_q":
             payload = financials_store.fetch_finnomena_quarterly(sym, is_dr=is_dr)
         else:
@@ -1341,9 +1388,52 @@ def financials_meta():
     return jsonify(financials_store.get_meta_summary(BASE_DIR))
 
 
+_FIN_UNIVERSE_STALE_DAYS = 180   # ราคาไม่ขยับเกินนี้ = น่าจะแขวน SP/เพิกถอน/ฟื้นฟูกิจการถาวร
+                                  # (ตรวจจริง: 295 หุ้น "ขาด" ในหน้าตรวจครบถ้วน 270 ตัวไม่เทรดมา
+                                  # เกิน 30 วัน, 240 ตัวเกินปี — sync ซ้ำเท่าไหร่ก็ไม่มีทางได้ข้อมูล
+                                  # เพราะ Yahoo/SET.or.th ไม่มีงบให้บริษัทที่หยุดดำเนินการ)
+
+
 def _financials_universe():
-    tickers = sorted(price_store.get_last_dates(BASE_DIR).keys())
-    return [t[:-3] if t.endswith(".BK") else t for t in tickers]
+    last_dates = price_store.get_last_dates(BASE_DIR)
+    tickers = sorted(last_dates.keys())
+    syms = [t[:-3] if t.endswith(".BK") else t for t in tickers]
+    # ตัดตราสารที่ "ไม่มีงบการเงินเป็นของตัวเอง" หรือ "ไม่มีทางมีงบอีกแล้ว" ออกจาก universe
+    # — เดิมโดนนับรวมแล้วค้างเป็น "หุ้นขาด" ในหน้าตรวจสอบความครบถ้วน ให้ผู้ใช้กดดึงซ้ำฟรีตลอดไป
+    # โดยไม่มีทางสำเร็จ (ตรวจกับ Yahoo/SET.or.th ตรงๆ แล้วคืน 404/ไม่มีข้อมูลจริงสม่ำเสมอ):
+    #   1) ใบ DR ที่เทรดบน SET (เช่น SP50001) — รายชื่อชัวร์จาก field drs ของ DR universe
+    #   2) DW (derivative warrants เช่น ADVA01CB, BANP01CC) — จับด้วยรูปแบบชื่อมาตรฐาน
+    #      underlying + เลขโบรก 2 หลัก + C/P + รุ่น 1 ตัวอักษร (บังคับ prefix ≥2 ตัวอักษร
+    #      กันหุ้นจริงชื่อสั้นอย่าง 24CS หลุดเข้า pattern — ตรวจกับ universe จริงแล้วไม่มีหุ้นจริงโดน)
+    #   3) ดัชนีรายกลุ่มอุตสาหกรรมขึ้นต้นด้วย "!" (เช่น !AGRO) — ติดมากับ import หุ้น delisted
+    #   4) ราคาไม่ขยับเกิน _FIN_UNIVERSE_STALE_DAYS วัน — แขวน SP/เพิกถอน/ฟื้นฟูกิจการถาวร
+    dr_series = {d for s in load_dr_universe(BASE_DIR) for d in (s.get("drs") or [])}
+    dw_pat = re.compile(r"^[A-Z0-9]{2,}\d{2}[CP][A-Z]$")
+    from datetime import datetime as _dt, timedelta as _td
+    cutoff = _dt.now() - _td(days=_FIN_UNIVERSE_STALE_DAYS)
+
+    def _is_stale(sym):
+        d = last_dates.get(sym + ".BK") or last_dates.get(sym)
+        if not d:
+            return False
+        try:
+            return _dt.strptime(d, "%Y-%m-%d") < cutoff
+        except (TypeError, ValueError):
+            return False
+
+    out = []
+    for s in syms:
+        if s in dr_series or dw_pat.match(s) or s.startswith("!"):
+            continue
+        if _is_stale(s):
+            # บันทึกไว้ให้ backtest รุ่นถัดไปรู้ว่าหุ้นนี้ "ยังอยู่จริง" ถึงวันไหน
+            # (upsert — เก็บวันที่ตรวจพบครั้งแรก ไม่ทับทุกรอบที่ universe กรองซ้ำ)
+            delisted_log.record_delisted(
+                BASE_DIR, s, "TH", f"ราคาไม่ขยับเกิน {_FIN_UNIVERSE_STALE_DAYS} วัน (แขวน SP/เพิกถอน)",
+                last_seen=last_dates.get(s + ".BK") or last_dates.get(s))
+            continue
+        out.append(s)
+    return out
 
 
 def _dr_financials_universe():
@@ -1711,6 +1801,370 @@ def mirror_symbols():
     return jsonify(factor_snapshot.get_mirror_symbols(BASE_DIR))
 
 
+@app.route("/api/us-index-membership")
+def get_us_index_membership():
+    """รายชื่อ ticker ที่อยู่ใน S&P 500 / Dow Jones / Nasdaq 100 (ไฟล์ local อัพเดทได้ผ่าน
+    ปุ่ม "ดึงเฉพาะที่ขาด/เก่า" ในหน้างบการเงิน — ดู /api/us-index-sync) ใช้กรองรายการ
+    browse หุ้น US — คืน {SP500:[...], DOW:[...], NDX:[...]}"""
+    path = os.path.join(BASE_DIR, "data", "us_index_membership.json")
+    if not os.path.exists(path):
+        return jsonify({})
+    try:
+        with open(path, encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify({})
+
+
+@app.route("/api/us-index-check-updates")
+def us_index_check_updates():
+    """เทียบรายชื่อ S&P 500 / Dow Jones / Nasdaq 100 สดจาก Wikipedia กับไฟล์ local — รายงาน
+    ตัวใหม่/ตัวที่ถูกถอดต่อดัชนี ไม่แก้ไฟล์ local ให้ (คู่กับ dr_check_updates ของหน้า DR
+    แต่ใช้กับ 3 ดัชนี US แทน underlying ของ DR)"""
+    cached = _us_index_diff_cache.get("result")
+    if cached and (time.time() - _us_index_diff_cache.get("ts", 0) < _US_INDEX_DIFF_CACHE_TTL):
+        return jsonify(cached)
+    try:
+        mirror_us = factor_snapshot.get_mirror_symbols(BASE_DIR).get("US", [])
+        result, _live = us_index_membership.diff_membership(BASE_DIR, mirror_us=mirror_us)
+        _us_index_diff_cache["result"] = result
+        _us_index_diff_cache["ts"] = time.time()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/us-index-sync", methods=["POST"])
+def start_us_index_sync():
+    """ปุ่ม "ดึงเฉพาะที่ขาด/เก่า (local)" ของดัชนี US — เช็ค Wikipedia แล้วอัพเดทไฟล์
+    local ให้ตรง จากนั้นดึงงบการเงินเฉพาะ ticker ในดัชนีที่ยังไม่อยู่ใน mirror list หลัก
+    (factor_mirror) ผ่าน Yahoo Finance โดยตรง (ข้ามคู่ที่เพิ่งดึงไปไม่เกิน min_age_days วัน)"""
+    min_age_days = None
+    if request.is_json:
+        body = request.json or {}
+        raw_age = body.get("min_age_days")
+        if raw_age is not None:
+            try:
+                min_age_days = max(0, int(raw_age))
+            except (TypeError, ValueError):
+                min_age_days = None
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None, current=0, total=0,
+                      message="กำลังเช็คดัชนี S&P500/Dow/Nasdaq100 จาก Wikipedia...")
+    threading.Thread(target=_run_us_index_sync, args=(min_age_days,), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _load_mirror_names_us():
+    """ชื่อบริษัทหุ้น US จาก mirror_names.json — {} ถ้ายังไม่ได้สร้างไฟล์/อ่านไม่ได้"""
+    path = os.path.join(BASE_DIR, "mirror_names.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return (json.load(f) or {}).get("US", {})
+    except Exception:
+        return {}
+
+
+def _run_us_index_sync(min_age_days=None):
+    try:
+        diff, live = us_index_membership.sync_membership(BASE_DIR)
+        _us_index_diff_cache.clear()   # ลิสต์เปลี่ยน — ผลเช็คหุ้นใหม่เดิมไม่ตรงแล้ว
+        added_n = sum(len(v["new"]) for v in diff.values())
+        removed_n = sum(len(v["removed"]) for v in diff.values())
+
+        mirror_us = set(factor_snapshot.get_mirror_symbols(BASE_DIR).get("US", []))
+        extra = sorted({s for lst in live.values() for s in lst} - mirror_us)
+
+        def cb(current, total, msg):
+            _update(current=current, total=total,
+                    message=f"ดัชนีอัพเดทแล้ว (+{added_n}/-{removed_n}) · {msg}")
+
+        if extra:
+            result = financials_store.sync_all(BASE_DIR, extra, sources=("yahoo_q", "yahoo"),
+                                               callback=cb, is_dr=True, market="US",
+                                               min_age_days=min_age_days)
+            _fin_analytics_cache.clear()
+        else:
+            result = {"ok": 0, "fail": 0, "total": 0, "skipped": 0}
+
+        # เติมชื่อบริษัทของตัวที่ยังไม่มีชื่อ (ไม่อยู่ใน mirror_names.json) จาก payload ที่เพิ่งดึงมา
+        # ให้ปุ่มกรองดัชนีในหน้างบการเงินโชว์ชื่อได้ครบ ไม่ใช่แค่ symbol เฉยๆ
+        local = us_index_membership.load_local(BASE_DIR)
+        mirror_names_us = _load_mirror_names_us()
+        extra_names = dict(local.get("extra_names") or {})
+        for sym in extra:
+            if sym in mirror_names_us or sym in extra_names:
+                continue
+            payload = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=True) \
+                or financials_store.get(BASE_DIR, sym, "yahoo", is_dr=True)
+            if payload and payload.get("name") and payload["name"] != sym:
+                extra_names[sym] = payload["name"]
+        local["extra_names"] = extra_names
+        us_index_membership.save_local(BASE_DIR, local)
+
+        skipped = result.get("skipped", 0)
+        _update(running=False, done=True,
+                message=f"เสร็จแล้ว! ดัชนีอัพเดท +{added_n}/-{removed_n} · งบการเงิน {result['ok']}/{result['total']} สำเร็จ"
+                        + (f" · ข้าม {skipped} คู่ (ดึงไปแล้วไม่เกิน {min_age_days} วัน)" if skipped else "")
+                        + (f" (ล้มเหลว {result['fail']})" if result["fail"] else ""))
+    except Exception as e:
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+
+
+@app.route("/api/us-index-heatmap")
+def us_index_heatmap():
+    """Heatmap ของ S&P 500 / Dow Jones / Nasdaq 100 — ?index=SP500|DOW|NDX
+    คืน {rows:[{symbol, name, mkt_cap, chg_1d, chg_1w}], ts, requested, missing}
+    mkt_cap ใช้กำหนดขนาดกล่อง, chg_1d/chg_1w ใช้กำหนดสี (ฝั่ง client สลับดูได้ทั้งคู่โดยไม่ต้องยิงซ้ำ)
+    ดึงสดจาก Yahoo (ไม่มีข้อมูลนี้ใน financials.db ที่ sync ไว้ล่วงหน้า — เป็นราคา/มูลค่าตลาด
+    ปัจจุบัน ไม่ใช่งบการเงิน) ราคา cache ไว้ 15 นาทีต่อดัชนี ส่วน market cap cache แยกไฟล์ 1 วัน
+    (เปลี่ยนช้ากว่าราคามาก) กันยิง Yahoo ทุกครั้งที่เปิดหน้า"""
+    import yfinance as yf
+    import pandas as pd
+    from concurrent.futures import ThreadPoolExecutor
+
+    index_key = (request.args.get("index") or "SP500").upper()
+    if index_key not in ("SP500", "DOW", "NDX"):
+        return jsonify({"error": "index ต้องเป็น SP500, DOW หรือ NDX เท่านั้น"}), 400
+    force = request.args.get("force") == "1"
+
+    cached = _heatmap_cache.get(index_key)
+    if not force and cached and (time.time() - cached["ts"] < _HEATMAP_CACHE_TTL):
+        return jsonify(cached)
+
+    local = us_index_membership.load_local(BASE_DIR)
+    tickers = local.get(index_key) or []
+    if not tickers:
+        return jsonify({"error": f"ยังไม่มีรายชื่อ {index_key} ในเครื่อง — กด \"ดึงเฉพาะที่ขาด/เก่า\" ในหน้างบการเงินก่อน"}), 404
+
+    yf_tickers = tickers   # ticker ในไฟล์ local เป็นรูปแบบ yfinance อยู่แล้ว (BRK-B ไม่ใช่ BRK.B)
+
+    # % เปลี่ยนแปลง 1 วัน/1 สัปดาห์ — ดาวน์โหลดพร้อมกันทั้งชุด (เร็วกว่ายิงทีละตัวมาก เหมือน dr_quick_update)
+    # period="1mo" ให้ครบทั้งสองช่วงในการยิงครั้งเดียว (1w = เทียบย้อน 5 วันทำการ)
+    chg1d_map, chg1w_map = {}, {}
+    try:
+        raw = yf.download(yf_tickers, period="1mo", auto_adjust=True,
+                          progress=False, group_by="ticker", threads=True)
+        is_multi = len(yf_tickers) > 1
+        for t in yf_tickers:
+            try:
+                closes = (raw[t]["Close"] if is_multi else raw["Close"]).dropna()
+                if len(closes) >= 2:
+                    chg1d_map[t] = round((closes.iloc[-1] / closes.iloc[-2] - 1) * 100, 2)
+                if len(closes) >= 6:
+                    chg1w_map[t] = round((closes.iloc[-1] / closes.iloc[-6] - 1) * 100, 2)
+                elif len(closes) >= 2:
+                    chg1w_map[t] = round((closes.iloc[-1] / closes.iloc[0] - 1) * 100, 2)
+            except (KeyError, TypeError):
+                continue
+    except Exception as e:
+        print(f"[Heatmap] ดาวน์โหลดราคา {index_key} ล้มเหลว: {e}")
+
+    # Market cap — fast_info ต้องยิงทีละ ticker (ไม่รวมอยู่ใน batch download ด้านบน)
+    # ใช้ disk cache อายุ 1 วันก่อน (เปลี่ยนช้า) ยิง Yahoo เฉพาะตัวที่ cache หมดอายุ/ไม่มี
+    # ขนาน 12 threads เหมือน DR rebuild (ดู _mc_one) ลดจาก sequential ~1-2 นาทีเหลือ ~15-20 วิ
+    def _mc_one(t):
+        try:
+            v = getattr(yf.Ticker(t).fast_info, "market_cap", None)
+            return t, (float(v) if v else None)
+        except Exception:
+            return t, None
+
+    mktcap_cache = _load_mktcap_cache()
+    now_ts = time.time()
+    stale = [t for t in yf_tickers if force
+             or t not in mktcap_cache
+             or now_ts - mktcap_cache[t].get("ts", 0) >= _MKTCAP_CACHE_TTL]
+
+    if stale:
+        try:
+            with ThreadPoolExecutor(max_workers=12) as ex:
+                for t, mc in ex.map(_mc_one, stale):
+                    if mc is not None:
+                        mktcap_cache[t] = {"mc": mc, "ts": now_ts}
+        except Exception as e:
+            print(f"[Heatmap] market cap batch {index_key} ล้มเหลว: {e}")
+        _save_mktcap_cache(mktcap_cache)
+
+    mkt_map = {t: mktcap_cache[t]["mc"] for t in yf_tickers if t in mktcap_cache}
+
+    mirror_names_us = _load_mirror_names_us()
+    extra_names = local.get("extra_names") or {}
+    sector_map = local.get(f"{index_key}_sector") or {}
+
+    rows = []
+    for t in tickers:
+        mc = mkt_map.get(t)
+        chg_1d = chg1d_map.get(t)
+        chg_1w = chg1w_map.get(t)
+        if mc is None and chg_1d is None:
+            continue   # โดนบล็อค/ไม่มีข้อมูลจริงทั้งคู่ — ข้ามแทนที่จะโชว์กล่องว่าง
+        rows.append({
+            "symbol": t,
+            "name": mirror_names_us.get(t) or extra_names.get(t) or t,
+            "mkt_cap": mc,
+            "chg_1d": chg_1d,
+            "chg_1w": chg_1w,
+            "sector": sector_map.get(t) or "อื่นๆ",
+        })
+
+    result = {"rows": rows, "ts": now_ts, "requested": len(tickers), "missing": len(tickers) - len(rows)}
+    _heatmap_cache[index_key] = result
+    return jsonify(result)
+
+
+# ============================================================
+# ข่าวรายหุ้น — รวม 3 แหล่งในหน้าเดียว (เมนู "📰 ข่าวหุ้น")
+#   1) SET.or.th — ประกาศทางการของบริษัท (หุ้นไทยเท่านั้น)
+#   2) Yahoo Finance — ข่าวสำนักต่างประเทศ (ครบสำหรับ US/HK, หุ้นไทยมีบ้าง)
+#   3) Google News RSS — ข่าวสื่อไทย/สากลทุกสำนัก (ครอบคลุมสุด ไม่ต้องมี API key)
+# ============================================================
+
+def _news_resolve_yf(sym, is_dr, market):
+    """หา yf ticker สำหรับดึงข่าว Yahoo — ใช้ logic เดียวกับ fetch_yahoo_full ของ financials_store"""
+    if not is_dr:
+        return sym + ".BK"
+    entry = next((s for s in load_dr_universe(BASE_DIR) if s["sym"] == sym), None)
+    if entry and entry.get("yf"):
+        return entry["yf"]
+    if market == "HK":
+        return sym.zfill(4) + ".HK"
+    return sym
+
+
+def _news_from_set(sym):
+    """ประกาศทางการจาก SET.or.th — คืน [] เงียบๆ ถ้าพัง (แหล่งอื่นยังใช้ได้)"""
+    import urllib.parse
+    from sources.set_api import _bootstrap_headers, _get_json
+    ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, f"/api/set/news/{urllib.parse.quote(sym)}/list?lang=th")
+    rows = []
+    for n in (d.get("newsInfoList") or []):
+        if not n.get("headline"):
+            continue
+        rows.append({
+            "title": n["headline"],
+            "url": n.get("url") or "",
+            "ts": (n.get("datetime") or "")[:19],
+            "source": "set",
+            "publisher": "SET.or.th (ประกาศบริษัท)",
+            "summary": "",
+        })
+    return rows
+
+
+def _news_from_yahoo(yf_ticker):
+    """ข่าวจาก Yahoo Finance ผ่าน yfinance — รองรับทั้ง payload รุ่นใหม่ (ห่อใน 'content')
+    และรุ่นเก่า (field แบนราบ providerPublishTime เป็น epoch)"""
+    import yfinance as yf
+    from datetime import datetime
+    rows = []
+    for n in (yf.Ticker(yf_ticker).news or []):
+        c = n.get("content") or n   # รุ่นใหม่ห่อใน content, รุ่นเก่าอยู่ชั้นนอกเลย
+        title = c.get("title")
+        if not title:
+            continue
+        url = (((c.get("canonicalUrl") or {}).get("url"))
+               or ((c.get("clickThroughUrl") or {}).get("url"))
+               or n.get("link") or "")
+        ts = (c.get("pubDate") or c.get("displayTime") or "")[:19]
+        if not ts and n.get("providerPublishTime"):
+            ts = datetime.fromtimestamp(n["providerPublishTime"]).strftime("%Y-%m-%dT%H:%M:%S")
+        publisher = ((c.get("provider") or {}).get("displayName")) or n.get("publisher") or "Yahoo Finance"
+        summary = re.sub(r"<[^>]+>", "", c.get("summary") or c.get("description") or "")[:250]
+        rows.append({"title": title, "url": url, "ts": ts, "source": "yahoo",
+                     "publisher": publisher, "summary": summary})
+    return rows
+
+
+def _news_from_google(query, lang_th):
+    """Google News RSS — ไม่ต้องมี key · lang_th=True ใช้ feed ไทย (ครอบคลุมสื่อหุ้นไทย
+    อย่าง HoonVision/ข่าวหุ้น/ทันหุ้น), False ใช้ feed อังกฤษ (สำนักสากล)"""
+    import urllib.parse
+    import urllib.request as _ur
+    import ssl as _ssl
+    import xml.etree.ElementTree as _ET
+    from email.utils import parsedate_to_datetime
+    loc = "hl=th&gl=TH&ceid=TH:th" if lang_th else "hl=en-US&gl=US&ceid=US:en"
+    url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&{loc}"
+    req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"})
+    ctx = _ssl.create_default_context()
+    with _ur.urlopen(req, context=ctx, timeout=20) as r:
+        xml = r.read().decode("utf-8", "ignore")
+    rows = []
+    for it in _ET.fromstring(xml).findall(".//item"):
+        title = it.findtext("title") or ""
+        if not title:
+            continue
+        ts = ""
+        try:
+            ts = parsedate_to_datetime(it.findtext("pubDate")).strftime("%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            pass
+        src_el = it.find("source")
+        # Google News ต่อท้าย title ด้วย " - ชื่อสำนัก" — ตัดออกเมื่อรู้ชื่อสำนักจาก tag แล้ว
+        publisher = src_el.text if src_el is not None and src_el.text else "Google News"
+        if title.endswith(" - " + publisher):
+            title = title[:-(len(publisher) + 3)]
+        rows.append({"title": title, "url": it.findtext("link") or "", "ts": ts,
+                     "source": "google", "publisher": publisher, "summary": ""})
+    return rows
+
+
+@app.route("/api/stock-news/<symbol>")
+def stock_news(symbol):
+    """ข่าวรวมของหุ้นตัวเดียว — ?is_dr=1&market=US|HK สำหรับหุ้นต่างประเทศ
+    คืน {rows: [{title,url,ts,source,publisher,summary}], ts, errors: {src: msg}}
+    เรียงใหม่สุดก่อน · dedupe หัวข้อซ้ำข้ามแหล่ง · แหล่งไหนพังไม่ล้มทั้งก้อน (รายงานใน errors)"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    sym = symbol.upper().strip()
+    is_dr = request.args.get("is_dr") == "1"
+    market = (request.args.get("market") or "US").upper()
+
+    cache_key = (sym, is_dr)
+    cached = _stock_news_cache.get(cache_key)
+    if cached and (time.time() - cached["ts"] < _STOCK_NEWS_CACHE_TTL):
+        return jsonify(cached)
+
+    yf_ticker = _news_resolve_yf(sym, is_dr, market)
+    # คำค้น Google: หุ้นไทยเติม "หุ้น" กันชนคำสามัญ (ALL/GIFT/EE) · หุ้นนอกใช้ "stock"
+    g_query = f"{sym} หุ้น" if not is_dr else f"{sym} stock"
+
+    jobs = {"yahoo": lambda: _news_from_yahoo(yf_ticker),
+            "google": lambda: _news_from_google(g_query, lang_th=not is_dr)}
+    if not is_dr:
+        jobs["set"] = lambda: _news_from_set(sym)
+
+    rows, errors = [], {}
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futs = {name: ex.submit(fn) for name, fn in jobs.items()}
+        for name, f in futs.items():
+            try:
+                rows.extend(f.result(timeout=30))
+            except Exception as e:
+                errors[name] = str(e)[:120]
+
+    # dedupe หัวข้อซ้ำข้ามแหล่ง (Google มักเจอข่าวเดียวกับ Yahoo) — คงตัวที่เจอก่อนตามลำดับ
+    # แหล่ง (yahoo มี summary ครบกว่า) · เทียบแบบตัดช่องว่าง/ตัวพิมพ์
+    seen, deduped = set(), []
+    for r in sorted(rows, key=lambda r: r["source"]!= "yahoo"):
+        k = re.sub(r"\s+", "", r["title"].lower())[:80]
+        if k in seen:
+            continue
+        seen.add(k)
+        deduped.append(r)
+    deduped.sort(key=lambda r: r["ts"] or "0000", reverse=True)
+
+    result = {"rows": deduped[:80], "ts": time.time(), "symbol": sym, "errors": errors}
+    _stock_news_cache[cache_key] = result
+    return jsonify(result)
+
+
 @app.route("/api/mirror-names")
 def mirror_names():
     """ชื่อบริษัทของหุ้น US/HK ที่มีงบ (จาก mirror_names.json — สร้างด้วย build_mirror_names.py)
@@ -2067,6 +2521,410 @@ def healthz():
 
 
 # ============================================================
+# DATA HEALTH — ภาพรวมความสดของทุกแหล่งข้อมูลในจอเดียว (local-only)
+# เกณฑ์ (warn/red ชม.) อ้างอิงรอบอัพเดทจริงที่บันทึกไว้ใน คู่มือ-อัพเดทข้อมูล.txt
+# ============================================================
+from datetime import datetime as _dh_dt
+
+def _dh_mtime(path):
+    try:
+        return _dh_dt.fromtimestamp(os.path.getmtime(path))
+    except Exception:
+        return None
+
+def _dh_parse(s):
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return _dh_dt.strptime(s, fmt)
+        except Exception:
+            continue
+    return None
+
+def _dh_age_hours(dt):
+    if dt is None:
+        return None
+    return (_dh_dt.now() - dt).total_seconds() / 3600
+
+def _dh_item(key, label, category, dt, warn_h, red_h, missing_note="ไม่พบไฟล์ / ยังไม่เคยอัพเดท"):
+    age_h = _dh_age_hours(dt)
+    if age_h is None:
+        status = "red"
+    elif age_h >= red_h:
+        status = "red"
+    elif age_h >= warn_h:
+        status = "warn"
+    else:
+        status = "ok"
+    return {
+        "key": key, "label": label, "category": category,
+        "last_at": dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None,
+        "age_hours": round(age_h, 1) if age_h is not None else None,
+        "status": status,
+        "note": None if dt else missing_note,
+    }
+
+
+@app.route("/api/data-health")
+def data_health():
+    """สถานะความสดของไฟล์/DB หลักทุกตัวที่ dashboard ใช้ — เกณฑ์ ok/warn/red
+    ต่อรายการ (ดู PLAN_universe_data_health.txt ส่วนที่ 6 งาน 1)"""
+    items = []
+
+    # ราคา/เทคนิค — auto 3 รอบ/วัน (จ-ศ), gap วันหยุดสุดสัปดาห์ ~59.5 ชม.
+    items.append(_dh_item(
+        "prices", "ราคา/RS/เทคนิค (หุ้นไทย)", "ราคา/เทคนิค",
+        _dh_parse(price_store.get_meta(BASE_DIR, "updated_at")), 30, 72))
+
+    items.append(_dh_item(
+        "indices", "ดัชนีกลุ่ม (TradingView)", "ราคา/เทคนิค",
+        _dh_mtime(os.path.join(BASE_DIR, "indices_cache.json")), 30, 96))
+
+    items.append(_dh_item(
+        "dr_cache", "DR/DRx (ราคา underlying)", "ราคา/เทคนิค",
+        _dh_mtime(DR_CACHE_FILE), 24, 168,
+        missing_note="ยังไม่เคยเปิดหน้า DR/DRx ในเครื่องนี้"))
+
+    # Flow / เจ้าของ
+    items.append(_dh_item(
+        "market_flow", "Capital Flow", "Flow/เจ้าของ",
+        _dh_mtime(os.path.join(BASE_DIR, "market_flow_data.json")), 30, 96))
+
+    items.append(_dh_item(
+        "short_sales", "Short Sales", "Flow/เจ้าของ",
+        _dh_mtime(_SHORT_DATA_FILE), 48, 120))
+
+    items.append(_dh_item(
+        "nvdr", "NVDR", "Flow/เจ้าของ",
+        _dh_mtime(os.path.join(BASE_DIR, "nvdr_data.json")), 48, 120))
+
+    _insider_at = _dh_parse(sec_store._get_meta(BASE_DIR, "insider_last_synced_at"))
+    items.append(_dh_item(
+        "insider", "Insider / ผู้ถือหุ้นใหญ่", "Flow/เจ้าของ",
+        _insider_at, 48, 168))
+
+    # หุ้นเข้าใหม่/ถูกถอด
+    items.append(_dh_item(
+        "set_universe", "รายชื่อหุ้น SET (listedCompanies xls)", "หุ้นเข้าใหม่/ถูกถอด",
+        _dh_mtime(os.path.join(BASE_DIR, "listedCompanies_en_US.xls")), 45 * 24, 90 * 24))
+
+    items.append(_dh_item(
+        "us_index_membership", "สมาชิกดัชนี US (S&P500/DOW/NDX)", "หุ้นเข้าใหม่/ถูกถอด",
+        _dh_mtime(os.path.join(BASE_DIR, "data", "us_index_membership.json")), 45 * 24, 90 * 24))
+
+    # งบการเงิน (local-only)
+    _fin_summary = financials_store.get_meta_summary(BASE_DIR)
+    items.append(_dh_item(
+        "financials", "งบการเงิน หุ้นไทย+DR (financials.db)", "งบการเงิน",
+        _dh_parse(_fin_summary.get("last_synced_at")), 100 * 24, 150 * 24,
+        missing_note="ยังไม่เคยรัน update_financials.py"))
+
+    # เก็บเป็น JSON string {"at": "YYYY-MM-DD HH:MM", "ok":.., "empty":.., "fail":.., "total":.., "force":..}
+    # ไม่ใช่ plain datetime string เหมือน meta อื่น — ต้องแกะก่อน parse
+    _mirror_raw = financials_store._get_meta(BASE_DIR, "finnomena_mirror_last")
+    _mirror_at = None
+    _mirror_info = {}
+    if _mirror_raw:
+        try:
+            _mirror_info = json.loads(_mirror_raw)
+            _mirror_at = _dh_parse(_mirror_info.get("at"))
+        except Exception:
+            pass
+    _mirror_item = _dh_item(
+        "mirror", "Mirror งบ US/HK ทั้งตลาด (Finnomena)", "งบการเงิน",
+        _mirror_at, 100 * 24, 200 * 24,
+        missing_note="ยังไม่เคยรัน mirror_finnomena.py")
+    # ตัว detector "Finnomena อาจเปลี่ยน/ปิด API" — force run (ยิงซ้ำทุกตัวที่มีงบ
+    # เพื่อดึงงวดใหม่) ปกติต้องได้ ok > 0 เสมอถ้ามี candidate เยอะ ถ้า ok=0 ทั้งที่ total
+    # เยอะ = parser พังหรือ API เปลี่ยนรูปแบบ ไม่ใช่แค่ "ไม่มีงวดใหม่ตามฤดูกาล"
+    if _mirror_info.get("force") and _mirror_info.get("total", 0) > 50 and _mirror_info.get("ok", 0) == 0:
+        _mirror_item["status"] = "red"
+        _mirror_item["note"] = ("⚠ รอบ force ล่าสุดดึงงบสำเร็จ 0 ตัวจาก "
+                                 f"{_mirror_info['total']} ตัว — Finnomena อาจเปลี่ยน/ปิด API "
+                                 "(ไม่ใช่แค่ไม่มีงวดใหม่ตามฤดูกาล) ดู PLAN_universe_data_health.txt งาน 4")
+    items.append(_mirror_item)
+
+    # Valuation ตลาด — ปกติช้ากว่าปัจจุบัน ~1 เดือน (ไม่ใช่ค้าง) เตือนเมื่อ >=2 เดือน
+    _pe_status = "ok"
+    _pe_last = None
+    _pe_note = None
+    if os.path.exists(_MARKET_STATS_FILE):
+        try:
+            with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
+                _mstats = json.load(f)
+            _pe_dates = (_mstats.get("pe", {}) or {}).get("dates") or []
+            _pe_last = _pe_dates[-1] if _pe_dates else None
+            if _pe_last:
+                _py, _pm = (int(x) for x in _pe_last.split("-"))
+                _now = _dh_dt.now()
+                _months_old = (_now.year * 12 + _now.month) - (_py * 12 + _pm)
+                _pe_status = "ok" if _months_old <= 1 else ("warn" if _months_old == 2 else "red")
+            else:
+                _pe_status = "red"
+        except Exception:
+            _pe_status = "red"
+            _pe_note = "อ่านไฟล์ไม่ได้"
+    else:
+        _pe_status = "red"
+        _pe_note = "ไม่พบไฟล์ / ยังไม่เคยอัพเดท"
+    items.append({
+        "key": "market_stats", "label": "P/E & P/BV ตลาด (SET)", "category": "Valuation",
+        "last_at": _pe_last, "age_hours": None, "status": _pe_status, "note": _pe_note,
+    })
+
+    # สำรอง financials.db + set_prices.db + sec_filings.db + delisted_log.json
+    # นอกเครื่อง (external drive/cloud sync) — บันทึกโดย backup_financials_offsite.py
+    # ผ่าน core.run_log เดียวกับกลไกอัพเดทอื่น ความเสี่ยงสูงสุดของระบบ: ไฟล์เหล่านี้
+    # สร้างใหม่ไม่ได้ถ้า Finnomena ปิด API หรือหุ้นถูก delist ไปแล้ว
+    _backup_status = run_log.read_status(BASE_DIR).get("offsite_backup")
+    items.append(_dh_item(
+        "offsite_backup", "สำรองไฟล์สร้างใหม่ไม่ได้นอกเครื่อง", "งบการเงิน",
+        _dh_parse(_backup_status.get("at")) if _backup_status else None,
+        35 * 24, 60 * 24,
+        missing_note="ยังไม่เคยรัน python backup_financials_offsite.py <ปลายทาง> — "
+                      "financials.db/set_prices.db สร้างใหม่ไม่ได้ถ้า Finnomena ปิด API "
+                      "หรือหุ้น delisted (ดู PLAN_universe_data_health.txt งาน 4)"))
+
+    summary = {"ok": 0, "warn": 0, "red": 0}
+    for it in items:
+        summary[it["status"]] += 1
+
+    return jsonify({
+        "checked_at": _dh_dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "items": items,
+        "summary": summary,
+    })
+
+
+@app.route("/api/data-health-ping")
+def data_health_ping():
+    """ยิงทดสอบแหล่งข้อมูลภายนอกทีละ 1 request เบาๆ (timeout สั้น) — ใช้ตอบคำถาม
+    'ตอนนี้ดึงจาก SET/Yahoo/Finnomena/TradingView ได้จริงไหม' ไม่ได้ผูกกับ mtime"""
+    import urllib.request as _dh_ur
+    import ssl as _dh_ssl
+
+    results = []
+
+    def _ping(key, label, url, headers=None, timeout=6):
+        t0 = time.time()
+        try:
+            req = _dh_ur.Request(url, headers=headers or {"User-Agent": "Mozilla/5.0"})
+            ctx = _dh_ssl.create_default_context()
+            with _dh_ur.urlopen(req, context=ctx, timeout=timeout) as r:
+                code = r.getcode()
+                r.read(256)  # แค่พิสูจน์ว่า body มาจริง ไม่ต้องอ่านทั้งหมด
+            ms = round((time.time() - t0) * 1000)
+            results.append({"key": key, "label": label, "ok": 200 <= code < 400,
+                             "http_status": code, "ms": ms, "error": None})
+        except Exception as e:
+            ms = round((time.time() - t0) * 1000)
+            results.append({"key": key, "label": label, "ok": False,
+                             "http_status": None, "ms": ms, "error": str(e)[:160]})
+
+    _ping("set", "SET.or.th", "https://www.set.or.th/en/market/product/stock/quote/ptt/price")
+    _ping("yahoo", "Yahoo Finance", "https://query1.finance.yahoo.com/v8/finance/chart/PTT.BK")
+    _ping("finnomena", "Finnomena", "https://www.finnomena.com/fn3/api/stock/list?exchange=TH")
+    # TradingView ดึงข้อมูลจริงผ่าน WebSocket (ดู sources/tradingview.py) — ปิงนี้เช็คแค่
+    # "เข้าถึงโดเมนได้ไหม" (เครือข่าย/บล็อก) ไม่ใช่การพิสูจน์ endpoint ข้อมูลเต็มรูปแบบ
+    _ping("tradingview", "TradingView (reachability)", "https://www.tradingview.com/")
+
+    return jsonify({"checked_at": _dh_dt.now().strftime("%Y-%m-%d %H:%M:%S"), "results": results})
+
+
+# (ชื่อไฟล์ต้นทาง, label ไทย) — ต้องตรงกับ FILES ใน backup_financials_offsite.py
+_OFFSITE_BACKUP_FILES = [
+    ("financials.db", "งบการเงิน (financials.db)"),
+    ("set_prices.db", "ราคาหุ้น + หุ้นเพิกถอน (set_prices.db)"),
+    ("sec_filings.db", "SEC filings / insider (sec_filings.db)"),
+    ("delisted_log.json", "ประวัติหุ้นเข้า/ออก (delisted_log.json)"),
+]
+
+
+@app.route("/api/backup-files-status")
+def backup_files_status():
+    """แยกรายไฟล์ว่า backup_financials_offsite.py สำรองแต่ละตัวล่าสุดวันไหน/ขนาดเท่าไหร่
+    — ต่างจาก item 'offsite_backup' ใน /api/data-health (บอกแค่ 'สำรองล่าสุดเมื่อไหร่'
+    รวมทั้งรอบ) ตัวนี้อ่าน dest_dir จาก run_log แล้วสแกนโฟลเดอร์ปลายทางจริง ทำให้เห็นได้
+    ถ้าไฟล์ไหนไม่ได้ถูกสำรองจริง (เช่น sec_filings.db ไม่มีตอนรันรอบนั้น)"""
+    status = run_log.read_status(BASE_DIR).get("offsite_backup")
+    if not status:
+        return jsonify({"dest_dir": None, "files": [],
+                         "note": "ยังไม่เคยรัน backup_financials_offsite.py"})
+
+    dest_dir = None
+    try:
+        dest_dir = (json.loads(status.get("message") or "{}")).get("dest_dir")
+    except Exception:
+        pass
+    # เผื่อ record เดิม (ก่อนแก้ให้เก็บ dest_dir เป็น JSON) ยังเป็น plain string อยู่ —
+    # ใช้ path เดียวกับที่ task_backup_offsite.bat เรียกจริงเป็น fallback แทนที่จะ
+    # ต้องรอรอบสำรองถัดไปกว่าจะเห็นตารางนี้
+    if not dest_dir:
+        dest_dir = r"C:\Users\joeki\OneDrive\SET_Dashboard_Backup"
+
+    if not os.path.isdir(dest_dir):
+        return jsonify({"dest_dir": dest_dir, "files": [],
+                         "note": f"เข้าไม่ถึงโฟลเดอร์ปลายทาง{(' ' + dest_dir) if dest_dir else ''} — "
+                                 "external drive ถอดอยู่หรือ OneDrive ยังไม่ sync?"})
+
+    try:
+        entries = os.listdir(dest_dir)
+    except Exception as e:
+        return jsonify({"dest_dir": dest_dir, "files": [], "note": f"อ่านโฟลเดอร์ไม่ได้: {e}"})
+
+    files = []
+    for fname, label in _OFFSITE_BACKUP_FILES:
+        stem, ext = os.path.splitext(fname)
+        matches = sorted(f for f in entries if f.startswith(f"{stem}_") and f.endswith(ext))
+        if not matches:
+            files.append({"file": fname, "label": label, "last_backup_at": None,
+                          "age_hours": None, "size_mb": None, "versions_kept": 0})
+            continue
+        latest = matches[-1]
+        latest_path = os.path.join(dest_dir, latest)
+        try:
+            mtime = _dh_dt.fromtimestamp(os.path.getmtime(latest_path))
+            size_mb = round(os.path.getsize(latest_path) / 1024 / 1024, 1)
+        except Exception:
+            mtime, size_mb = None, None
+        files.append({
+            "file": fname, "label": label,
+            "last_backup_at": mtime.strftime("%Y-%m-%d %H:%M:%S") if mtime else None,
+            "age_hours": round((_dh_dt.now() - mtime).total_seconds() / 3600, 1) if mtime else None,
+            "size_mb": size_mb,
+            "versions_kept": len(matches),
+            "latest_filename": latest,
+        })
+
+    return jsonify({"dest_dir": dest_dir, "files": files, "note": None})
+
+
+_UPDATE_STATUS_LABEL = {
+    "quick_update":   "⚡ Quick Update",
+    "full_refresh":   "⟳ Full Refresh",
+    "financials_sync": "🔄 อัพเดทงบการเงิน (update_financials.py)",
+    "mirror_finnomena": "📥 Mirror US/HK ทั้งตลาด (mirror_finnomena.py)",
+    "offsite_backup":  "🛟 สำรองไฟล์สร้างใหม่ไม่ได้นอกเครื่อง (backup_financials_offsite.py)",
+}
+
+@app.route("/api/update-status")
+def update_status():
+    """ผลการรันล่าสุดของแต่ละกลไกอัพเดท (สำเร็จ/ล้มเหลว) — เขียนโดย core.run_log
+    ตอนจบ Quick Update/Full Refresh (ในแอป) และ update_financials.py/mirror_finnomena.py
+    (สคริปต์ local) ใช้ทำ banner เตือนตอนเปิดแอปถ้ารอบล่าสุดล้มเหลว แม้ผู้ใช้ไม่ได้
+    เฝ้าหน้าจอตอนรัน — ไม่ครอบคลุม GitHub Actions (ใช้ email แจ้งเตือนของ GitHub เอง
+    เพราะ logs/ เป็น local-only ไม่ตามไปที่ CI runner)"""
+    raw = run_log.read_status(BASE_DIR)
+    failed = [{"source": k, "label": _UPDATE_STATUS_LABEL.get(k, k), **v}
+              for k, v in raw.items() if not v.get("ok")]
+    return jsonify({"all": raw, "failed": failed})
+
+
+# หุ้นไทยเข้าใหม่/ถูกถอด — เทียบรายชื่อสดจาก SET.or.th กับ universe งบการเงินในเครื่อง
+# (คู่แนวเดียวกับ _dr_diff_cache/check_dr_diff แต่ใช้กับหุ้นไทยแทน DR)
+_set_universe_diff_cache: dict = {}
+_SET_UNIVERSE_DIFF_TTL = 6 * 3600
+
+@app.route("/api/set-universe-check-updates")
+def set_universe_check_updates():
+    """เทียบรายชื่อหุ้น SET+mai ที่ซื้อขายจริง (โหลดสดจาก SET.or.th) กับ universe
+    ที่ใช้ดึงงบการเงินในเครื่อง (_financials_universe — กรอง DW/DR series/ดัชนีกลุ่ม/
+    หุ้นแขวนถาวรออกแล้ว) รายงานตัวใหม่/ตัวที่หายไปเท่านั้น ไม่แก้อะไรให้อัตโนมัติ"""
+    cached = _set_universe_diff_cache.get("result")
+    if cached and (time.time() - _set_universe_diff_cache.get("ts", 0) < _SET_UNIVERSE_DIFF_TTL):
+        return jsonify(cached)
+    try:
+        from set_data_fetcher import load_set_symbols
+        live = load_set_symbols(BASE_DIR)
+        live_map = {s["symbol"]: s for s in live}
+        local_syms = set(_financials_universe())
+        new_syms = sorted(set(live_map.keys()) - local_syms)
+        removed_syms = sorted(local_syms - set(live_map.keys()))
+        tracked_delisted = sum(1 for k in delisted_log.read_log(BASE_DIR) if k.startswith("TH:"))
+        result = {
+            "live_count": len(live_map), "local_count": len(local_syms),
+            "new": [{"symbol": s, "name": live_map[s]["name"], "market": live_map[s]["market"],
+                     "sector": live_map[s]["sector"]} for s in new_syms],
+            "removed": removed_syms,
+            "tracked_delisted_count": tracked_delisted,
+        }
+        _set_universe_diff_cache["result"] = result
+        _set_universe_diff_cache["ts"] = time.time()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# หุ้น US/HK ตัวใหม่ที่ Finnomena มีแต่ mirror ในเครื่องยังไม่มี — เทียบ /stock/list
+# สดกับ FINN: namespace ใน financials.db (ไม่ดึงงบจริง แค่รายงานจำนวน — กด sync
+# แยกทีหลังผ่าน /api/mirror-sync-new)
+_mirror_diff_cache: dict = {}
+_MIRROR_DIFF_TTL = 6 * 3600
+
+@app.route("/api/mirror-check-updates")
+def mirror_check_updates():
+    cached = _mirror_diff_cache.get("result")
+    if cached and (time.time() - _mirror_diff_cache.get("ts", 0) < _MIRROR_DIFF_TTL):
+        return jsonify(cached)
+    try:
+        cands = financials_store.mirror_candidates(("US", "HK"))
+        con = financials_store._connect(BASE_DIR)
+        try:
+            have = {r[0] for r in con.execute(
+                "SELECT symbol FROM financials WHERE source='finnomena_q' AND symbol LIKE 'FINN:%'")}
+        finally:
+            con.close()
+        new_by_ex = {"US": [], "HK": []}
+        live_counts = {"US": 0, "HK": 0}
+        for ex, name, sid in cands:
+            live_counts[ex] += 1
+            if f"FINN:{ex}:{name}" not in have:
+                new_by_ex[ex].append(name)
+        result = {
+            "live_counts": live_counts,
+            "new_counts": {ex: len(v) for ex, v in new_by_ex.items()},
+            "new_samples": {ex: v[:40] for ex, v in new_by_ex.items()},
+        }
+        _mirror_diff_cache["result"] = result
+        _mirror_diff_cache["ts"] = time.time()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _run_mirror_sync_new():
+    try:
+        cached = _mirror_diff_cache.get("result") or {}
+        exs = tuple(ex for ex, n in (cached.get("new_counts") or {}).items() if n > 0) or ("US", "HK")
+
+        def cb(current, total, msg):
+            _update(current=current, total=total, message=msg)
+
+        result = financials_store.mirror_finnomena(BASE_DIR, exchanges=exs, callback=cb, force=False)
+        _mirror_diff_cache.clear()   # ตัวใหม่ถูกดึงแล้ว — เช็คครั้งหน้าต้องได้ผลใหม่
+        _fin_analytics_cache.clear()
+        _update(running=False, done=True,
+                message=f"เสร็จแล้ว! ดึงงบได้ {result['ok']} ตัว · ไม่มีงบ {result['empty']} ตัว"
+                        + (f" (ล้มเหลว {result['fail']} — ลองอีกครั้งได้)" if result["fail"] else ""))
+    except Exception as e:
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+
+
+@app.route("/api/mirror-sync-new", methods=["POST"])
+def mirror_sync_new():
+    """ดึงงบเฉพาะหุ้น US/HK ตัวใหม่ที่ /api/mirror-check-updates เจอ (ไม่ force ทั้งตลาด —
+    ต่างจาก mirror_finnomena.py force ที่ยิงซ้ำทุกตัวเพื่อ refresh งวดใหม่)"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=0, message="กำลังเริ่ม sync หุ้น US/HK ตัวใหม่...")
+    threading.Thread(target=_run_mirror_sync_new, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+# ============================================================
 # Background refresh
 # ============================================================
 
@@ -2108,9 +2966,11 @@ def _run_refresh(period="max"):
             print(f"[FullRefresh] Capital Flow error: {e}")
 
         _update(running=False, done=True, message="เสร็จแล้ว!")
+        run_log.record_run(BASE_DIR, "full_refresh", True, "เสร็จแล้ว")
 
     except Exception as e:
         # ดึงข้อมูลใหม่ล้มเหลว — คืนค่าข้อมูลสำรอง
+        run_log.record_run(BASE_DIR, "full_refresh", False, str(e))
         if has_backup and os.path.exists(BACKUP_FILE):
             try:
                 shutil.copy2(BACKUP_FILE, DATA_FILE)
@@ -2477,56 +3337,18 @@ def market_internals():
         return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณา Full Refresh ก่อน"}), 404
 
     try:
-        import pandas as pd
-
-        # สร้าง dict: ticker -> pd.Series ของ close (indexed by date string)
-        all_series = {}
-        for ticker, data in price_store.iter_all_series(BASE_DIR):
-            dates  = data.get("dates", [])
-            closes = data.get("closes", [])
-            if len(dates) < 260 or len(closes) < 260:
-                continue
-            s = pd.Series(closes, index=pd.to_datetime(dates))
-            all_series[ticker] = s
-
-        if not all_series:
-            return jsonify({"error": "ข้อมูลไม่เพียงพอ"}), 500
-
-        # หาวันซื้อขายล่าสุด 63 วัน
-        sample = next(iter(all_series.values()))
-        trade_dates = sorted(sample.index[-70:])  # เผื่อ buffer
-        recent_dates = trade_dates[-63:]
-
-        new_high_counts = []
-        new_low_counts  = []
-        date_labels     = []
-
-        for dt in recent_dates:
-            nh = 0
-            nl = 0
-            for ticker, s in all_series.items():
-                try:
-                    loc = s.index.get_loc(dt)
-                    if loc < 252:
-                        continue
-                    current_price = float(s.iloc[loc])
-                    window_52w    = s.iloc[loc - 252 : loc]
-                    if len(window_52w) < 200:
-                        continue
-                    if current_price >= float(window_52w.max()):
-                        nh += 1
-                    elif current_price <= float(window_52w.min()):
-                        nl += 1
-                except Exception:
-                    continue
-            new_high_counts.append(nh)
-            new_low_counts.append(nl)
-            date_labels.append(str(dt)[:10])
+        # ใช้ compute_breadth (vectorized pandas — ~1-2 วิ) แทน loop เดิมที่ทำ
+        # .get_loc() ทีละหุ้นทีละวัน (~1,198 หุ้น x 63 วัน ~25 วิ) และยังผูก
+        # calendar กับหุ้นตัวเดียวที่อาจถูกแขวน/เลิกเทรดแล้ว
+        from services.breadth import compute_breadth
+        breadth = compute_breadth(BASE_DIR, days=63)
+        if not breadth:
+            return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณา Full Refresh ก่อน"}), 404
 
         result = {
-            "dates":      date_labels,
-            "new_highs":  new_high_counts,
-            "new_lows":   new_low_counts,
+            "dates":      breadth["dates"],
+            "new_highs":  breadth["nh"],
+            "new_lows":   breadth["nl"],
         }
         _market_internals_cache["data"] = result
         return jsonify(result)
@@ -2580,10 +3402,12 @@ def _run_quick():
             print(f"[QuickUpdate] Capital Flow error: {e}")
 
         _update(running=False, done=True, message="Quick Update เสร็จแล้ว!")
+        run_log.record_run(BASE_DIR, "quick_update", True, "เสร็จแล้ว")
 
     except Exception as e:
         _update(running=False, done=True, error=str(e),
                 message=f"เกิดข้อผิดพลาด: {e}")
+        run_log.record_run(BASE_DIR, "quick_update", False, str(e))
 
 
 # ============================================================

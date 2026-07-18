@@ -18,6 +18,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")   # คอน
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
+from core import run_log                     # noqa: E402
 from sources import financials_store as fs   # noqa: E402
 
 args = [a for a in sys.argv[1:]]
@@ -29,5 +30,11 @@ limit = int(pos[1]) if len(pos) > 1 else None
 if force:
     print("[FinnMirror] โหมด FORCE — ยิงซ้ำทุกหุ้นที่มีงบ เพื่อดึงงวดใหม่มา merge "
           "(ข้ามเฉพาะตัวที่ไม่มีงบ) · เหมาะรันหลัง earnings season", flush=True)
-fs.mirror_finnomena(BASE, exchanges=exchanges, limit=limit, force=force)
-print("[FinnMirror] อย่าลืมรัน  python build_snapshot.py  เพื่อรีเฟรช Screener", flush=True)
+try:
+    result = fs.mirror_finnomena(BASE, exchanges=exchanges, limit=limit, force=force)
+    print("[FinnMirror] อย่าลืมรัน  python build_snapshot.py  เพื่อรีเฟรช Screener", flush=True)
+    run_log.record_run(BASE, "mirror_finnomena", True,
+                        f"มีงบ {result['ok']} · ไม่มีงบ {result['empty']} · พลาด {result['fail']}")
+except Exception as e:
+    run_log.record_run(BASE, "mirror_finnomena", False, str(e))
+    raise

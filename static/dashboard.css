@@ -200,7 +200,15 @@
   .static-mode #cm-tf-5y,
   .static-mode .nav-btn[onclick*="'financials'"],
   .static-mode .nav-btn[onclick*="'band'"],
+  .static-mode .nav-btn[onclick*="'data-health'"],
   .static-mode #pe-reminder-modal { display: none !important; }
+
+  /* DATA HEALTH — badge สีแดงบนปุ่ม nav เมื่อมีรายการค้าง/red */
+  .dh-nav-badge {
+    display: inline-block; margin-left: 4px; background: var(--red); color: #fff;
+    font-size: 9px; font-weight: 700; border-radius: 8px; padding: 1px 5px;
+    min-width: 14px; text-align: center; vertical-align: middle;
+  }
 
   /* SORT HEADER */
   .tbl th.sortable { cursor: pointer; user-select: none; }
@@ -294,6 +302,11 @@
     margin: 8px 16px 0; padding: 8px 14px; border-radius: 8px;
     font-size: 12px; line-height: 1.5;
     background: rgba(210,153,34,.1); border: 1px solid rgba(210,153,34,.35); color: #d29922;
+  }
+  #run-fail-banner {
+    margin: 8px 16px 0; padding: 8px 14px; border-radius: 8px;
+    font-size: 12px; line-height: 1.5;
+    background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.35); color: #f85149;
   }
 
   /* PAGE TITLE */

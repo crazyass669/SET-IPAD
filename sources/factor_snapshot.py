@@ -20,6 +20,7 @@ import time
 from datetime import datetime
 
 from sources import financials_store as fs
+from core import delisted_log
 
 TABLE = "factor_snapshot"
 
@@ -355,6 +356,13 @@ def build_mirror_snapshot(base_dir, exchanges=("US", "HK"), min_quarters=12, min
                 except ValueError:
                     continue
                 if v_age > 400 or i_age > 400:
+                    # บันทึกไว้ให้ backtest รุ่นถัดไปรู้ว่าหุ้นนี้ "ยังอยู่จริง" ถึงวันไหน
+                    # (upsert — เก็บวันที่ตรวจพบครั้งแรก ไม่ทับทุกรอบที่ snapshot กรองซ้ำ)
+                    last_seen = max(val_dates + inc_dates)[:10]
+                    delisted_log.record_delisted(
+                        base_dir, name, ex,
+                        f"ไม่มีงวด valuation/งบใหม่เกิน 400 วัน (v_age={v_age}, i_age={i_age})",
+                        last_seen=last_seen)
                     continue
                 fq["synced_at"] = None
                 f = _factors_from_finn(fq)

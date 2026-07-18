@@ -61,6 +61,12 @@ jobs:
       - name: Run static update
         run: python run_static_update.py
 
+      # กันข้อมูลเสีย (เช่น SET.or.th เปลี่ยนรูปแบบหน้าเว็บ แล้วได้หุ้นมาแค่ 50
+      # ตัวจาก 927) หลุดขึ้น commit ทับข้อมูลดี — fail ทั้ง workflow ถ้าจำนวน
+      # รายการตกลงเกิน threshold (จะได้อีเมลแจ้งเตือนแทนการได้ข้อมูลเพี้ยน)
+      - name: Sanity-check data before commit
+        run: python ci_sanity_check.py
+
       - name: Commit updated data
         run: |
           git config user.name  "github-actions[bot]"
