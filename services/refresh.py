@@ -114,27 +114,53 @@ def run_with_progress(callback, base_dir=None, period="max"):
     callback(0, total, f"พบ {total} หุ้น — เริ่ม batch download ({period} history)...")
 
     tickers  = [s["ticker"] for s in symbols]
-    sym_map  = {s["ticker"]: s for s in symbols}
     all_data = fetch_all_batch(tickers, callback=callback, period=period)
+
+    # ── Split detector: ถ้าเลือก period สั้นกว่า Max แล้วมี corporate action
+    # (แตกพาร์ ฯลฯ) เกิดขึ้นภายในช่วงที่ดึงมา แท่งเก่าที่เคยบันทึกไว้ (จาก Quick
+    # Update ก่อนหน้า) จะยังเป็นฐานราคาก่อนแตกพาร์ ต้อง refetch เต็ม (period=max)
+    # เฉพาะตัวที่เพี้ยน ไม่งั้น INSERT OR REPLACE จะเขียนทับด้วยฐานใหม่บางส่วน
+    # แล้วทิ้งรอยต่อฐานเก่า/ใหม่ไว้ถาวร (ดู _repair_ca_tickers)
+    callback(total, total, "ตรวจ corporate action (เทียบราคาแท่ง overlap)...")
+    suspects = detect_ca_mismatch(base_dir, all_data)
+    repaired = set()
+    if suspects:
+        print(f"[CA] Full Refresh พบ overlap mismatch: {suspects[:MAX_CA_REPAIR]}")
+        repaired = _repair_ca_tickers(base_dir, all_data, suspects, callback)
+        unrepaired = set(suspects) - repaired
+        if unrepaired:
+            print(f"[CA] Full Refresh {len(unrepaired)} ตัวซ่อมไม่สำเร็จ — "
+                  f"บันทึกด้วยข้อมูลที่ดึงมาได้ตามปกติ (รอรอบถัดไป retry): {sorted(unrepaired)}")
 
     callback(total, total, f"บันทึกราคา ({len(all_data)} หุ้น)...")
     existing_hist = load_history(base_dir) if DUAL_WRITE_JSON else None
-    save_history(all_data, base_dir, existing_hist=existing_hist)
+    save_history(all_data, base_dir, existing_hist=existing_hist, replace_tickers=repaired)
 
-    callback(total, total, f"ดาวน์โหลดเสร็จ — คำนวณ metrics ({len(all_data)}/{total} หุ้น)...")
-
-    stocks = []
-    for i, info_dict in enumerate(symbols):
-        tick = info_dict["ticker"]
-        d    = all_data.get(tick)
-        if d is None:
+    # คำนวณ metrics จาก SQLite ทั้งฐาน (ไม่ใช่แค่ all_data ที่จำกัดตาม period ที่เลือก)
+    # — ตัวที่ดาวน์โหลดพลาดรอบนี้ (แต่เคยมีอยู่ใน DB) จะไม่หายจากหน้าจอ และ ATH/
+    # Return ระยะยาวยังคำนวณจากประวัติเต็มเสมอ ไม่ว่าจะเลือก period ไหนตอน refresh
+    callback(0, total, f"คำนวณ metrics ({total} หุ้น)...")
+    sym_map = {s["ticker"]: s for s in symbols}
+    stocks  = []
+    done    = 0
+    for tick, hist_data in iter_all_series(base_dir):
+        info_dict = sym_map.get(tick)
+        if not info_dict or not hist_data.get("dates"):
             continue
-        result = process_stock(info_dict, d["close"], d["volume"],
-                               high=d.get("high"), low=d.get("low"))
+        try:
+            dates  = pd.to_datetime(hist_data["dates"])
+            close  = pd.Series(hist_data["closes"],  index=dates, dtype=float)
+            volume = pd.Series(hist_data["volumes"], index=dates, dtype=float)
+            high = pd.Series(hist_data["highs"], index=dates, dtype=float) if hist_data.get("highs") else None
+            low  = pd.Series(hist_data["lows"],  index=dates, dtype=float) if hist_data.get("lows") else None
+        except Exception:
+            continue
+        result = process_stock(info_dict, close, volume, high=high, low=low)
         if result:
             stocks.append(result)
-        if i % 100 == 0:
-            callback(i, total, f"คำนวณ {i}/{total}...")
+        done += 1
+        if done % 100 == 0:
+            callback(done, total, f"คำนวณ {done}/{total}...")
 
     callback(0, total, f"ดึง Fundamentals ({len(stocks)} หุ้น)...")
     cap_tickers = [s["ticker"] for s in stocks]
@@ -159,10 +185,7 @@ def run_with_progress(callback, base_dir=None, period="max"):
         s["pbv"]       = fund.get("pbv")
         s["div_yield"] = fund.get("div_yield")
 
-    data_as_of = max(
-        (d["close"].index[-1].strftime("%Y-%m-%d") for d in all_data.values() if len(d["close"]) > 0),
-        default=None
-    )
+    data_as_of = max(get_last_dates(base_dir).values(), default=None)
 
     callback(total, total, f"ตรวจสอบคุณภาพข้อมูล + คำนวณ RS Rank ({len(stocks)} หุ้น)...")
     dq_summary = validate_stocks(stocks, data_as_of)
@@ -219,12 +242,12 @@ def run_quick_update(callback, base_dir=None):
     # ตัดหุ้นค้างนาน (พักเทรด/เพิกถอน เช่น ACAP ค้างเป็นเดือน) ออกจากการหา
     # start_date — ไม่งั้นตัวเดียวลากให้ดาวน์โหลดย้อนหลังหลายเดือนทั้งกระดานทุกรอบ
     # หุ้นพวกนี้ไม่มีแท่งใหม่อยู่แล้ว การเริ่มดึงจากวันใหม่ไม่ทำให้ข้อมูลมันเสีย
-    max_last   = pd.to_datetime(max(last_map.values()))
-    stale_cut  = max_last - pd.Timedelta(days=14)
-    active     = [d for d in last_map.values() if pd.to_datetime(d) >= stale_cut]
-    stale_n    = len(last_map) - len(active)
-    if stale_n:
-        print(f"[QuickUpdate] ข้ามหุ้นค้างนาน {stale_n} ตัว (วันล่าสุดเก่ากว่า {stale_cut.date()})")
+    max_last     = pd.to_datetime(max(last_map.values()))
+    stale_cut    = max_last - pd.Timedelta(days=14)
+    stale_tickers = {t for t, d in last_map.items() if pd.to_datetime(d) < stale_cut}
+    active       = [d for t, d in last_map.items() if t not in stale_tickers]
+    if stale_tickers:
+        print(f"[QuickUpdate] ข้ามหุ้นค้างนาน {len(stale_tickers)} ตัว (วันล่าสุดเก่ากว่า {stale_cut.date()})")
 
     min_last  = min(active)
     start_dt  = pd.to_datetime(min_last)  # re-fetch วันล่าสุดเสมอ เผื่อดึงก่อนตลาดปิด
@@ -246,6 +269,22 @@ def run_quick_update(callback, base_dir=None):
         callback(100, 100, "ไม่มีข้อมูลใหม่ (อาจเป็นวันหยุด)")
         return
 
+    # หุ้นค้างนานที่ถูกตัดออกจากการคำนวณ start_date (ด้านบน) แต่กลับมามีแท่งใหม่
+    # ในรอบนี้ (พักเทรดจบ/กลับมาซื้อขาย) — ดึงแค่ตั้งแต่ start_date (ซึ่งอาจใหม่กว่า
+    # วันสุดท้ายที่มันมีข้อมูลมาก) จะเหลือรูช่วงที่ขาดหายถาวร (ไม่มีวันไล่ตามทีหลัง
+    # เพราะ get_last_dates ของมันจะกลายเป็นวันล่าสุดทันที) ต้อง refetch เต็มช่วง
+    # ที่ขาดเฉพาะตัวเหล่านี้ ตั้งแต่วันสุดท้ายที่มันมีข้อมูลจริงๆ
+    reactivated = stale_tickers & new_data.keys()
+    if reactivated:
+        per_ticker_start = min(last_map[t] for t in reactivated)
+        print(f"[QuickUpdate] หุ้นค้างนานกลับมาเทรด {len(reactivated)} ตัว — "
+              f"refetch ช่วงที่ขาดตั้งแต่ {per_ticker_start}: {sorted(reactivated)}")
+        try:
+            refill = fetch_gap_batch(list(reactivated), per_ticker_start, callback=callback)
+            new_data.update(refill)
+        except Exception as e:
+            print(f"[QuickUpdate] refetch หุ้นค้างนานที่กลับมาเทรดล้มเหลว: {e}")
+
     # ── Split detector: เทียบแท่ง overlap ก่อนบันทึก — ถ้า Yahoo เพิ่งปรับ
     # ราคาย้อนหลัง (แตกพาร์ ฯลฯ) ต้อง refetch เต็มเฉพาะตัว ไม่งั้น series
     # จะเป็นฐานเก่าต่อฐานใหม่ → return/RS ปลอม
@@ -255,6 +294,17 @@ def run_quick_update(callback, base_dir=None):
     if suspects:
         print(f"[CA] พบ overlap mismatch: {suspects[:MAX_CA_REPAIR]}")
         repaired = _repair_ca_tickers(base_dir, new_data, suspects, callback)
+        # ตัวที่ตรวจพบ mismatch แต่ซ่อมไม่สำเร็จ (refetch ล้มเหลว/ข้อมูลสั้นผิดปกติ
+        # หรือเกิน MAX_CA_REPAIR ต่อรอบ) ห้าม upsert แท่งฐานใหม่ทับแท่งฐานเก่า —
+        # ไม่งั้น series จะกลายเป็นฐานเก่าต่อฐานใหม่ (return/RS ปลอม) แถมรอบหน้า
+        # detector จะเทียบกับแท่งที่เพิ่งเขียนทับ (ฐานใหม่แล้ว) เลยไม่เจอ mismatch
+        # อีก = ไม่มีวันซ่อม ปล่อยให้ตามหลัง 1 วัน รอรอบถัดไป detector เจอซ้ำแล้ว retry
+        unrepaired = set(suspects) - repaired
+        for t in unrepaired:
+            new_data.pop(t, None)
+        if unrepaired:
+            print(f"[CA] {len(unrepaired)} ตัวซ่อมไม่สำเร็จ — ข้ามการบันทึกรอบนี้ "
+                  f"(รอรอบถัดไป retry): {sorted(unrepaired)}")
 
     callback(total, total, f"บันทึกราคา ({len(new_data)} หุ้น มีข้อมูลใหม่"
              + (f", replace {len(repaired)} ตัวจาก CA" if repaired else "") + ")...")
