@@ -3592,7 +3592,11 @@ def _run_refresh(period="max"):
 
         _refresh_svc.run_with_progress(cb, BASE_DIR, period=period)
 
-        # อัพเดท Indices (full history)
+        # อัพเดท Indices (full history) + Capital Flow ล้มได้โดยไม่ทำให้ทั้งรอบ
+        # ล้ม (ราคาหุ้น SET หลักได้ไปแล้ว) แต่ต้องโผล่ในผลลัพธ์รอบนี้ ไม่งั้น
+        # run_log บันทึกว่า "สำเร็จ" ทั้งที่มีส่วนล้มเงียบๆ — ผู้ใช้ไม่มีทางรู้
+        warnings = []
+
         _update(current=98, total=100, message="อัพเดท Indices...")
         try:
             global _indices_cache
@@ -3601,15 +3605,18 @@ def _run_refresh(period="max"):
             _indices_cache["data"] = result
         except Exception as e:
             print(f"[FullRefresh] Indices error: {e}")
+            warnings.append(f"Indices ล้มเหลว: {e}")
 
         # อัพเดท Capital Flow
         try:
             _fetch_flow_data()
         except Exception as e:
             print(f"[FullRefresh] Capital Flow error: {e}")
+            warnings.append(f"Capital Flow ล้มเหลว: {e}")
 
-        _update(running=False, done=True, message="เสร็จแล้ว!")
-        run_log.record_run(BASE_DIR, "full_refresh", True, "เสร็จแล้ว")
+        final_msg = "เสร็จแล้ว!" if not warnings else "เสร็จแล้ว (มีบางส่วนล้มเหลว: " + "; ".join(warnings) + ")"
+        _update(running=False, done=True, message=final_msg)
+        run_log.record_run(BASE_DIR, "full_refresh", True, final_msg)
 
     except Exception as e:
         # ดึงข้อมูลใหม่ล้มเหลว — คืนค่าข้อมูลสำรอง
@@ -4054,41 +4061,53 @@ def market_internals():
         return jsonify({"error": str(e)}), 500
 
 
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+
 def _run_quick():
+    failed_steps = []
+
+    def _sub_step(name, current, msg, fn):
+        """รันขั้นตอนเสริม (non-critical) — ล้มแล้วไม่ทำให้ Quick Update ทั้งรอบพัง
+        แต่บันทึกชื่อไว้โชว์ในข้อความสรุป + run_log กันเงียบหาย"""
+        _update(current=current, total=100, message=msg)
+        try:
+            fn()
+        except Exception as e:
+            print(f"[QuickUpdate] {name} error: {e}")
+            failed_steps.append(name)
+
     try:
         import importlib
-        sys.path.insert(0, BASE_DIR)
         from services import refresh as _refresh_svc
         importlib.reload(_refresh_svc)
 
+        # run_quick_update ใช้ตั้งแต่ 0-90% ของ progress bar เอง — ขั้นตอนเสริม
+        # ด้านล่างไล่ 90-99% ต่อ ไม่งั้นแถบวิ่งถอยหลัง (99% -> 93% -> ...)
         def cb(current, total, msg):
-            _update(current=current, total=total, message=msg)
+            pct = (current / total * 90) if total > 0 else 0
+            _update(current=round(pct), total=100, message=msg)
 
         _refresh_svc.run_quick_update(cb, BASE_DIR)
         _market_internals_cache.clear()
         _breadth_cache.clear()
 
-        _update(current=93, total=100, message="อัพเดท Insider/ผู้ถือหุ้นใหญ่...")
-        try:
+        def _insider():
             from sources import sec_store as _sec_store
             _sec_store.sync_insider_trades(BASE_DIR)
             _sec_store.sync_major_changes(BASE_DIR)
-        except Exception as e:
-            print(f"[QuickUpdate] Insider sync error: {e}")
+        _sub_step("Insider/ผู้ถือหุ้นใหญ่", 91, "อัพเดท Insider/ผู้ถือหุ้นใหญ่...", _insider)
 
-        # อัพเดท Indices
-        _update(current=95, total=100, message="อัพเดท Indices...")
-        try:
+        def _indices():
             global _indices_cache
             existing = _load_indices_existing()
             result, _stats = _fetch_indices_tv(existing, full_refresh=False)
             _indices_cache["data"] = result
-        except Exception as e:
-            print(f"[QuickUpdate] Indices error: {e}")
+        _sub_step("Indices", 93, "อัพเดท Indices...", _indices)
 
         # อัพเดทราคา US Index (S&P500/Dow/NDX gap-update) + คำนวณ RS/EMA/Stage/52W ใหม่
-        _update(current=96, total=100, message="อัพเดทราคา US Index...")
-        try:
+        def _us_index():
             def _us_cb(current, total, msg):
                 _update(message=f"US Index: {msg}")
             n_us = _run_us_index_gap_update(progress_cb=_us_cb)
@@ -4096,12 +4115,10 @@ def _run_quick():
             us_index_metrics.build(BASE_DIR)
             _us_breadth_cache.clear()
             print(f"[QuickUpdate] US Index: gap-updated {n_us} ticker, metrics rebuilt")
-        except Exception as e:
-            print(f"[QuickUpdate] US Index error: {e}")
+        _sub_step("US Index", 95, "อัพเดทราคา US Index...", _us_index)
 
         # อัพเดทราคา HK Index (HSI/HSCEI/HSTECH gap-update) + คำนวณ RS/EMA/Stage/52W ใหม่
-        _update(current=96, total=100, message="อัพเดทราคา HK Index...")
-        try:
+        def _hk_index():
             def _hk_cb(current, total, msg):
                 _update(message=f"HK Index: {msg}")
             n_hk = _run_hk_index_gap_update(progress_cb=_hk_cb)
@@ -4110,23 +4127,21 @@ def _run_quick():
             _hk_breadth_cache.clear()
             _hk_heatmap_cache.clear()
             print(f"[QuickUpdate] HK Index: gap-updated {n_hk} ticker, metrics rebuilt")
-        except Exception as e:
-            print(f"[QuickUpdate] HK Index error: {e}")
+        _sub_step("HK Index", 96, "อัพเดทราคา HK Index...", _hk_index)
 
         # อัพเดท short sales + NVDR ประจำวัน
-        _update(current=97, total=100, message="อัพเดท Short Sales...")
-        short_sales_daily_update()
-        _update(current=99, total=100, message="อัพเดท NVDR...")
-        nvdr_daily_update()
+        _sub_step("Short Sales", 97, "อัพเดท Short Sales...", short_sales_daily_update)
+        _sub_step("NVDR", 98, "อัพเดท NVDR...", nvdr_daily_update)
 
         # อัพเดท Capital Flow
-        try:
-            _fetch_flow_data()
-        except Exception as e:
-            print(f"[QuickUpdate] Capital Flow error: {e}")
+        _sub_step("Capital Flow", 99, "อัพเดท Capital Flow...", _fetch_flow_data)
 
-        _update(running=False, done=True, message="Quick Update เสร็จแล้ว!")
-        run_log.record_run(BASE_DIR, "quick_update", True, "เสร็จแล้ว")
+        if failed_steps:
+            summary = "Quick Update เสร็จแล้ว (⚠️ ล้มเหลว: " + ", ".join(failed_steps) + ")"
+        else:
+            summary = "Quick Update เสร็จแล้ว!"
+        _update(running=False, done=True, message=summary)
+        run_log.record_run(BASE_DIR, "quick_update", not failed_steps, summary)
 
     except Exception as e:
         _update(running=False, done=True, error=str(e),
