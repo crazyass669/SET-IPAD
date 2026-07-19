@@ -178,15 +178,19 @@ let _refreshStart = 0;
 async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = null) {
   const btn = document.getElementById(btnId);
   btn.disabled = true;
-  btn.textContent = btnLabel.replace(/^[⚡⟳] /, m => m) + "...";
+  btn.textContent = btnLabel + "...";
 
   try {
     const opts = { method: "POST" };
     if (body) { opts.headers = { "Content-Type": "application/json" }; opts.body = JSON.stringify(body); }
     const r = await fetch(apiEndpoint, opts);
     if (!r.ok) {
-      const err = await r.json();
-      alert("⚠️ " + (err.error || "เกิดข้อผิดพลาด"));
+      // response อาจไม่ใช่ JSON (เช่น 500 ที่ตอบ HTML error page ของ server) —
+      // อย่าให้ .json() ที่ parse ไม่ได้ throw เข้า catch ด้านล่างจนฟ้องข้อความผิด
+      // ("เชื่อมต่อไม่ได้" ทั้งที่จริงเชื่อมต่อได้ แค่ server error)
+      let msg = "เกิดข้อผิดพลาด";
+      try { msg = (await r.json()).error || msg; } catch(e) { msg = `เกิดข้อผิดพลาด (HTTP ${r.status})`; }
+      alert("⚠️ " + msg);
       btn.disabled = false; btn.textContent = btnLabel; return;
     }
   } catch(e) {
@@ -202,74 +206,101 @@ async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = nul
   document.getElementById("progress-msg").textContent = "กำลังเริ่ม...";
   document.getElementById("progress-eta").textContent = "";
 
-  const es = new EventSource("/api/progress");
-  es.onmessage = function(e) {
-    const s = JSON.parse(e.data);
-    const pct = s.total > 0 ? Math.min(Math.round(s.current / s.total * 100), 99) : 0;
-    document.getElementById("progress-bar-fill").style.width = pct + "%";
-    document.getElementById("progress-pct").textContent = pct + "%";
-    document.getElementById("progress-msg").textContent = s.message || "";
-    if (pct > 5 && pct < 99) {
-      const elapsed = (Date.now() - _refreshStart) / 1000;
-      const eta = Math.round(elapsed / pct * (100 - pct));
-      const mm = Math.floor(eta / 60), ss = eta % 60;
-      document.getElementById("progress-eta").textContent =
-        "เหลืออีกประมาณ " + (mm > 0 ? mm + " นาที " : "") + ss + " วินาที";
-    }
-    if (s.done) {
+  let es = null;
+  let sseRetries = 0;
+  const MAX_SSE_RETRIES = 20; // ~จับสะดุด connection ได้ยาวหลายนาที ก่อนจะยอมแพ้จริงๆ
+
+  function finish(s) {
+    document.getElementById("progress-bar-fill").style.width = "100%";
+    document.getElementById("progress-pct").textContent = "100%";
+    setTimeout(function() {
+      overlay.style.display = "none";
+      btn.disabled = false; btn.textContent = btnLabel;
+      if (s.error) {
+        const usedFallback = (s.message || "").includes("ข้อมูลล่าสุด");
+        if (usedFallback) {
+          alert("⚠️ ดึงข้อมูลใหม่ไม่สำเร็จ\nกำลังใช้ข้อมูลล่าสุดแทน");
+          loadData();
+        } else {
+          alert("❌ เกิดข้อผิดพลาด:\n" + s.error);
+        }
+      } else {
+        // ไม่ error แต่มีบางส่วนล้มเหลวไม่ critical (เช่น Indices/Capital Flow
+        // ตอน Full Refresh) — เห็นข้อความเตือนแทนที่จะเงียบหายไปทั้งที่หัวข้อหลักสำเร็จ
+        if ((s.message || "").includes("ล้มเหลว")) {
+          alert("⚠️ " + s.message);
+        }
+        resetNhCache();
+        // clear all page caches so next visit fetches fresh data
+        _idxData = null; _valData = null; _nvdrData = null;
+        _shortData = null; _insData = null;
+        Object.keys(_flowDataByMarket).forEach(k => delete _flowDataByMarket[k]); _valStockData = null;
+        _drLoaded = false; _drData = null;
+        // ล้าง cache หุ้น US/HK ด้วย — job ที่วิ่งผ่าน _startJob (Quick Update, US/HK
+        // Index Max) อัพเดทราคา/metrics ฝั่ง server เสร็จแล้วเสมอ ถ้าไม่ล้างตรงนี้
+        // หน้า "หุ้น US/HK", Heatmap, Rotation จะยังโชว์ข้อมูลเก่าจนกว่าจะ F5 เอง
+        _usData = null; _usSectorRanks = {}; _usBreadthCacheByRange = {};
+        _hkData = null; _hkSectorRanks = {}; _hkBreadthCacheByRange = {};
+        _hmData = {}; _hkHmData = {};
+        loadData();
+        // if already on a data page, reload it immediately
+        const _activePage = document.querySelector('.page.active')?.id;
+        if (_activePage === 'page-indices')   loadIndicesPage();
+        if (_activePage === 'page-dr')        loadDRPage();
+        if (_activePage === 'page-valuation') loadValuationPage();
+        if (_activePage === 'page-short')     loadShortPage();
+        if (_activePage === 'page-insider')   loadInsiderPage();
+        if (_activePage === 'page-flow')      loadFlowPage();
+        if (_activePage === 'page-us-stocks')   loadUsStocksPage();
+        if (_activePage === 'page-us-heatmap')  loadHeatmapPage();
+        if (_activePage === 'page-us-rotation') loadUsRotation();
+        if (_activePage === 'page-hk-stocks')   loadHkStocksPage();
+        if (_activePage === 'page-hk-heatmap')  loadHkHeatmapPage();
+        if (_activePage === 'page-hk-rotation') loadHkRotation();
+        if (onDone) onDone(s);   // ส่ง state สุดท้าย (มี message ที่มี ok/fail count) ให้ caller ใช้ต่อได้
+      }
+    }, 800);
+  }
+
+  function connectSSE() {
+    es = new EventSource("/api/progress");
+    es.onmessage = function(e) {
+      sseRetries = 0; // ข้อความเข้าปกติ -> รีเซ็ตตัวนับ retry
+      const s = JSON.parse(e.data);
+      const pct = s.total > 0 ? Math.min(Math.round(s.current / s.total * 100), 99) : 0;
+      document.getElementById("progress-bar-fill").style.width = pct + "%";
+      document.getElementById("progress-pct").textContent = pct + "%";
+      document.getElementById("progress-msg").textContent = s.message || "";
+      if (pct > 5 && pct < 99) {
+        const elapsed = (Date.now() - _refreshStart) / 1000;
+        const eta = Math.round(elapsed / pct * (100 - pct));
+        const mm = Math.floor(eta / 60), ss = eta % 60;
+        document.getElementById("progress-eta").textContent =
+          "เหลืออีกประมาณ " + (mm > 0 ? mm + " นาที " : "") + ss + " วินาที";
+      }
+      if (s.done) {
+        es.close();
+        finish(s);
+      }
+    };
+    es.onerror = function() {
       es.close();
-      document.getElementById("progress-bar-fill").style.width = "100%";
-      document.getElementById("progress-pct").textContent = "100%";
-      setTimeout(function() {
+      // job (Full Refresh ~1 ชม.) ยังรันอยู่ฝั่ง server ต่อเนื่องแม้ SSE connection
+      // สะดุด — reconnect แทนการปิด overlay ทิ้งเฉยๆ ไม่งั้นผู้ใช้เข้าใจผิดว่าจบแล้ว
+      // ทั้งที่ยังรันอยู่ (กดปุ่มซ้ำจะเจอ 409 งงต่อ)
+      sseRetries++;
+      if (sseRetries > MAX_SSE_RETRIES) {
         overlay.style.display = "none";
         btn.disabled = false; btn.textContent = btnLabel;
-        if (s.error) {
-          const usedFallback = (s.message || "").includes("ข้อมูลล่าสุด");
-          if (usedFallback) {
-            alert("⚠️ ดึงข้อมูลใหม่ไม่สำเร็จ\nกำลังใช้ข้อมูลล่าสุดแทน");
-            loadData();
-          } else {
-            alert("❌ เกิดข้อผิดพลาด:\n" + s.error);
-          }
-        } else {
-          resetNhCache();
-          // clear all page caches so next visit fetches fresh data
-          _idxData = null; _valData = null; _nvdrData = null;
-          _shortData = null; _insData = null;
-          Object.keys(_flowDataByMarket).forEach(k => delete _flowDataByMarket[k]); _valStockData = null;
-          _drLoaded = false; _drData = null;
-          // ล้าง cache หุ้น US/HK ด้วย — job ที่วิ่งผ่าน _startJob (Quick Update, US/HK
-          // Index Max) อัพเดทราคา/metrics ฝั่ง server เสร็จแล้วเสมอ ถ้าไม่ล้างตรงนี้
-          // หน้า "หุ้น US/HK", Heatmap, Rotation จะยังโชว์ข้อมูลเก่าจนกว่าจะ F5 เอง
-          _usData = null; _usSectorRanks = {}; _usBreadthCacheByRange = {};
-          _hkData = null; _hkSectorRanks = {}; _hkBreadthCacheByRange = {};
-          _hmData = {}; _hkHmData = {};
-          loadData();
-          // if already on a data page, reload it immediately
-          const _activePage = document.querySelector('.page.active')?.id;
-          if (_activePage === 'page-indices')   loadIndicesPage();
-          if (_activePage === 'page-dr')        loadDRPage();
-          if (_activePage === 'page-valuation') loadValuationPage();
-          if (_activePage === 'page-short')     loadShortPage();
-          if (_activePage === 'page-insider')   loadInsiderPage();
-          if (_activePage === 'page-flow')      loadFlowPage();
-          if (_activePage === 'page-us-stocks')   loadUsStocksPage();
-          if (_activePage === 'page-us-heatmap')  loadHeatmapPage();
-          if (_activePage === 'page-us-rotation') loadUsRotation();
-          if (_activePage === 'page-hk-stocks')   loadHkStocksPage();
-          if (_activePage === 'page-hk-heatmap')  loadHkHeatmapPage();
-          if (_activePage === 'page-hk-rotation') loadHkRotation();
-          if (onDone) onDone(s);   // ส่ง state สุดท้าย (มี message ที่มี ok/fail count) ให้ caller ใช้ต่อได้
-        }
-      }, 800);
-    }
-  };
-  es.onerror = function() {
-    es.close();
-    overlay.style.display = "none";
-    btn.disabled = false; btn.textContent = btnLabel;
-    loadData();
-  };
+        alert("⚠️ ขาดการเชื่อมต่อกับ server — งานอาจยังรันอยู่เบื้องหลัง\nลองรีเฟรชหน้าเว็บอีกครั้งภายหลัง");
+        loadData();
+        return;
+      }
+      document.getElementById("progress-msg").textContent = "การเชื่อมต่อขาดหาย กำลังลองใหม่...";
+      setTimeout(connectSSE, Math.min(1000 * sseRetries, 5000));
+    };
+  }
+  connectSSE();
 }
 
 function startRefresh() {
@@ -278,10 +309,12 @@ function startRefresh() {
 }
 function confirmRefresh(period) {
   document.getElementById('refresh-dialog').style.display = 'none';
-  // ล้าง DR cache ก่อน เพื่อให้ DR ดึงใหม่ด้วยหลัง SET เสร็จ
-  fetch('/api/dr-full-refresh', { method: 'POST' }).catch(() => {});
   _startJob("/api/refresh", "refresh-btn", "⟳ Full Refresh", { period }, () => {
-    // callback หลัง SET เสร็จ: เริ่ม DR refresh ใน background
+    // callback หลัง SET เสร็จ: ล้าง DR cache แล้วเริ่ม DR refresh ใน background —
+    // ต้องรอ /api/refresh ยืนยันว่างานเริ่มได้จริงและรันจนจบก่อน ไม่งั้นถ้า
+    // /api/refresh ตอบ 409 (มีงานรันอยู่แล้ว) DR cache จะถูกล้างฟรีโดยไม่มีอะไร
+    // มาสร้างใหม่ให้ ทำให้เปิดหน้า DR ครั้งถัดไปต้องดึงใหม่ทั้ง 266 ตัวโดยไม่จำเป็น
+    fetch('/api/dr-full-refresh', { method: 'POST' }).catch(() => {});
     _drLoaded = false;
     _drData   = null;
     const statusEl = document.getElementById('dr-status');
@@ -5149,7 +5182,7 @@ function renderFsTable(rows) {
   const head = FS_COLS.map(c => {
     const arrow = _fsSort.key === c.k ? (_fsSort.dir < 0 ? ' ▼' : ' ▲') : '';
     const tip = c.tip ? ` title="${c.tip}"` : '';
-    return `<th onclick="fsSort('${c.k}')"${tip} style="cursor:pointer;white-space:nowrap;position:sticky;top:0;background:var(--card);z-index:2;${c.sep ? _SEP_CSS : ''}">${c.label}${arrow}</th>`;
+    return `<th onclick="fsSort('${c.k}')"${tip} style="cursor:pointer;white-space:nowrap;position:sticky;top:0;background:var(--bg2);z-index:2;${c.sep ? _SEP_CSS : ''}">${c.label}${arrow}</th>`;
   }).join('');
   const body = rows.map(r => {
     const name = _fsDisplayName(r).replace(/</g, '&lt;');
@@ -6910,7 +6943,7 @@ function _priceAnalyticsHtml(d) {
   const srcNote = d.source === 'close'
     ? `<span style="color:${YELLOW}">· ใช้ราคาปิดดิบ (ไม่มี adj)</span>` : '';
   return `
-    <div style="border:1px solid var(--border);background:var(--card);border-radius:10px;padding:12px 14px">
+    <div style="border:1px solid var(--border);background:var(--bg2);border-radius:10px;padding:12px 14px">
       <div style="font-size:12px;font-weight:600;margin-bottom:10px;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
         <span>📊 สถิติระยะยาว</span>${_tipIconHtml(_PRICE_ANALYTICS_NOTE_HTML)}
         <span style="font-weight:400;font-size:10px;color:var(--text2)">(ราคาย้อนหลังจริง · CAGR/return รวมปันผล) ${srcNote}</span>
@@ -9569,7 +9602,7 @@ function _renderDualLineChart(containerId, seriesA, seriesB, opt) {
       <circle id="${containerId}-dotB" r="4" fill="${opt.colorB}" stroke="var(--bg2)" stroke-width="2" opacity="0"/>
       <rect x="${padL}" y="0" width="${innerW}" height="${H}" fill="transparent" style="cursor:crosshair" id="${containerId}-hit"/>
     </svg>
-    <div id="${containerId}-tip" style="position:absolute;display:none;pointer-events:none;background:var(--card);
+    <div id="${containerId}-tip" style="position:absolute;display:none;pointer-events:none;background:var(--bg2);
       border:1px solid var(--border);border-radius:6px;padding:6px 9px;font-size:11px;line-height:1.7;
       white-space:nowrap;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,.4)"></div>
   </div>`;
