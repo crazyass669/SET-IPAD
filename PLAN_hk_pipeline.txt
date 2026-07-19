@@ -1,0 +1,196 @@
+========================================================================
+ แผนงาน: HK/HSI Pipeline (ราคา + technical + RRG) — คู่ขนานกับ US pipeline
+ อัพเดท: 2026-07-18
+========================================================================
+
+------------------------------------------------------------------------
+ สรุปก่อนเริ่ม (สำรวจแล้ว 2026-07-18)
+------------------------------------------------------------------------
+- งบการเงิน HK พร้อมอยู่แล้ว: mirror Finnomena (financials.db, namespace
+  FINN:HK:{รหัส}) ครอบคลุม 105/105 ตัว (HSI 85 + HSTECH 30 + HSCEI 50,
+  unique) = 100% มีรายการ, 103/105 มีงบจริง (2 ตัวเป็น empty marker:
+  316=SJM Holdings, 868=Xinyi Glass — fallback Yahoo ตรงได้)
+  -> งานนี้จึงเหลือแค่ "ราคา OHLC + technical (RS/EMA/Stage/RRG)"
+     ไม่ต้องแตะงบการเงินเลย
+
+- แหล่งรายชื่อ constituents (ตรวจ Wikipedia จริงแล้ว, ยืนยัน format):
+  * HSI    (en.wikipedia, title=Hang_Seng_Index)
+           table id="constituents", คอลัมน์ Ticker|Name|Sub-index
+           ticker = {{SEHK|เลข}} เช่น {{SEHK|5}} -> normalize "0005.HK"
+           Sub-index (Finance/Utilities/Properties/Commerce & Industry)
+           ใช้แทน sector ได้เลย · ทดสอบดึงได้ 85 ตัว
+  * HSCEI  (en.wikipedia, title=Hang_Seng_China_Enterprises_Index)
+           table "ไม่มี id" -> regex หา header "Weighting...Industry" แทน
+           คอลัมน์ Ticker|Name|Weighting(%)|Industry (ละเอียดกว่า HSI)
+           ทดสอบดึงได้ 50 ตัว
+  * HSTECH (zh.wikipedia, title=恒生科技指数 — ไม่มีหน้า en.wikipedia แยก)
+           ไม่ใช่ wikitable — bullet list ใต้ {{Col-begin}}/{{Col-3}}
+           รูปแบบ "*รหัส5หลัก [[ชื่อจีน]]" -> regex ^\*(\d{4,5})\s+\[\[
+           ไม่ต้องแปลชื่อจีน (ใช้ name_map fallback เหมือน US) ทดสอบได้ 30 ตัว
+  * ตรวจ TradingView components page แล้ว (2026-07-18) — ใช้ไม่ได้ ปิด
+    paywall เห็นแค่ top 10/list ไม่ครบถ้า ไม่ login -> ตัดออก ใช้ Wikipedia
+    เป็นแหล่งหลักตามเดิม (ยืนยันแล้วว่าตรงกับ mirror Finnomena 100%)
+
+- normalize ticker ทุกดัชนี: f"{int(code):04d}.HK" (เช่น 20 -> "0020.HK",
+  9988 -> "9988.HK") ให้ตรง yfinance
+
+========================================================================
+ PHASE 1 — โครงข้อมูลราคา (data infra)
+========================================================================
+[1.1] sources/hk_index_membership.py (ใหม่)
+      - _fetch_wikitext(title, lang='en') รองรับทั้ง en/zh.wikipedia
+        (เลียนแบบ us_index_membership.py._fetch_wikitext แต่เพิ่ม param lang)
+      - parse_hsi(txt)   -> regex ตาราง id="constituents", ticker={{SEHK|N}}
+      - parse_hscei(txt) -> regex หา header Weighting/Industry (ไม่มี id)
+      - parse_hstech(txt)-> regex bullet list "*(\d{4,5})\s+\[\["
+      - fetch_live_membership() -> คืน {HSI:[...], HSCEI:[...], HSTECH:[...],
+        HSI_sector:{...}, HSCEI_sector:{...}} (HSTECH ไม่มี sector จาก
+        Wikipedia -> ปล่อย Unknown, ใช้ ind จาก dr_universe.py เติมทีหลัง)
+      - load_local()/save_local()/sync_membership() แนวเดียวกับ US
+        -> data/hk_index_membership.json
+      - validation กันหน้า Wikipedia เปลี่ยนโครง: raise ถ้า parse ได้
+        < 20 ตัว (เทียบ known count 85/50/30)
+
+[1.2] core/hk_store.py (ใหม่)
+      - ก็อปโครงจาก core/us_store.py ทั้งฟังก์ชัน (DB_FILE = "hk_prices.db"
+        แยกไฟล์ กันชนกับ set_prices.db/us_prices.db)
+      - รวม iter_all_series()/iter_recent_series() ตั้งแต่วันแรก (ให้
+        /api/hk-breadth ใช้ compute_breadth(store=hk_store) ได้ทันที
+        แบบเดียวกับที่เพิ่งต่อยอด services/breadth.py ให้ US)
+
+[1.3] backfill_hk_index_prices.py (ใหม่)
+      - สคริปต์ดึงราคาย้อนหลัง max ครั้งแรก (เลียนแบบ
+        backfill_us_index_prices.py) ใช้ sources/yahoo.py.fetch_all_batch()
+        ตัวเดียวกับ US (รองรับ ticker .HK อยู่แล้ว — DR ใช้ fetch แบบนี้
+        กับหุ้น HK มานานแล้วผ่าน dr_universe.py)
+      - ticker list = union(HSI, HSCEI, HSTECH) จาก
+        hk_index_membership.load_local() -> ~105 ตัว
+      - เขียนลง hk_prices.db ผ่าน hk_store.upsert_bars()
+
+      *** เช็คก่อนรันจริง: เวลาเทรด Asia/Hong_Kong ต่างจาก US/ไทย —
+          ดู timezone dict ที่มีอยู่แล้วใน dr_universe.py:11 ว่าพอสำหรับ
+          gap-update cutoff หรือไม่ (ไม่ใช่ blocker ของ full refresh
+          รอบแรกที่ดึง max ทีเดียว) ***
+
+>>> เกณฑ์ผ่าน Phase 1: hk_prices.db มีราคาครบ ~105 ticker, รัน
+    hk_store.iter_all_series() คืนค่าได้ปกติ ไม่ error
+
+========================================================================
+ PHASE 2 — คำนวณ metrics + endpoints ฝั่ง server
+========================================================================
+[2.1] sources/hk_index_metrics.py (ใหม่)
+      - ก็อปโครงจาก sources/us_index_metrics.py ทั้งฟังก์ชัน build()/load_local()
+      - reuse process_stock() (set_data_fetcher.py) + rank_rs() (core/metrics.py)
+        ตัวเดียวกับหุ้นไทย/US — ห้ามคำนวณสูตรซ้ำเอง
+      - info["market"]="HK", sector จาก HSI_sector/HSCEI_sector (fallback
+        "Unknown" ให้ HSTECH-only ticker แล้วเสริมด้วย ind จาก
+        load_dr_universe() เหมือน name_map ที่ US ทำ)
+      - row["in_hsi"]/row["in_hscei"]/row["in_hstech"] (เทียบแนว
+        in_sp500/in_dow/in_ndx ของ US)
+      - เขียนผลลง data/hk_index_metrics.json
+
+[2.2] app.py — เพิ่ม route คู่ขนานกับ US (ดูของ US เป็นต้นแบบบรรทัดต่อบรรทัด):
+      /api/hk-index-full-refresh   (เทียบ us_index_full_refresh บรรทัด ~928)
+      /api/hk-index-check-updates  (เทียบ us_index_check_updates)
+      /api/hk-index-sync           (เทียบ start_us_index_sync)
+      /api/hk-index-metrics        (เทียบ us_index_metrics_route บรรทัด ~1028)
+      /api/hk-breadth              (เทียบ market_breadth ใหม่ที่ทำให้ US
+                                     — compute_breadth(BASE_DIR, store=hk_store))
+      /api/hk-heatmap              (เทียบ us_index_heatmap บรรทัด ~2073)
+      /api/hk-sector-ranks         (เทียบ endpoint sector ranks ของ US)
+      - เพิ่ม _hk_breadth_cache: dict = {} + clear ใน hk metrics rebuild
+      - ผูกเข้า _run_quick() (Quick Update): gap-update ราคา HK รายวัน +
+        rebuild metrics + clear cache (เทียบจุดที่เพิ่ง _run_us_index_gap_update
+        ใน _run_quick ปัจจุบัน)
+      - เพิ่ม "/api/hk-breadth?range=1y" เข้า warmup list ตอน server start
+        (เทียบที่เพิ่ง bump ให้ us-breadth)
+
+>>> เกณฑ์ผ่าน Phase 2: fetch('/api/hk-index-metrics') คืน ~100+ ตัว มี
+    rs_score/stage/above_ema200 ครบ, fetch('/api/hk-breadth?range=1y')
+    คืน pct_above_ema50/200 ไม่ error (ทดสอบผ่าน Flask test_client
+    แบบเดียวกับที่ยืนยัน /api/us-breadth ไปแล้ว)
+
+========================================================================
+ PHASE 3 — หน้า UI หลัก: "🇭🇰 หุ้น HK"
+========================================================================
+[3.1] set_dashboard.html
+      - nav button "🇭🇰 หุ้น HK" (ต่อจากปุ่ม US Rotation)
+      - page-hk-stocks: ปุ่มเลือกดัชนี HSI/HSTECH/HSCEI/ทั้งหมด (เทียบปุ่ม
+        SP500/DOW/NDX ของ US), ช่องค้นหา, sector filter, ตาราง RS/Stage/
+        EMA/52W/Momentum (คอลัมน์เซ็ตเดียวกับ _US_COLS)
+      - breadth summary strip (4 การ์ด เทียบ us-breadth-strip)
+      - กราฟ % above EMA/NH-NL/McClellan ย้อนหลัง (ก็อปบล็อกที่เพิ่งทำให้
+        US ทั้ง 3 การ์ด เปลี่ยนแค่ id เป็น hk-bc-ema/hk-bc-nhnl/hk-bc-mcc)
+
+[3.2] static/dashboard.js
+      - let _hkData=null, _hkIndex='HSI', _hkSector='ALL', _hkSort=...
+      - const _HK_IDX_FLAG = {HSI:'in_hsi', HSTECH:'in_hstech', HSCEI:'in_hscei'}
+      - loadHkStocksPage()/renderHkTable()/_hkFilteredStocks() — ก็อป
+        โครงจาก loadUsStocksPage()/renderUsTable()/_usFilteredStocks()
+        เปลี่ยนแค่ prefix us->hk, endpoint /api/us-index-metrics->
+        /api/hk-index-metrics
+      - loadHkBreadthChart()/drawHkBreadthChart() — ก็อปจาก
+        loadUsBreadthChart()/drawUsBreadthChart() ตรงๆ (reuse _bcSetup/
+        _bcAxes/_bcLine/_bcBars เหมือนเดิม ไม่ต้องเขียนใหม่)
+      - openHkChartModal(symbol) — เทียบ openUsChartModal (ต้องเช็คว่า
+        modal เดิมรองรับราคา .HK ได้เลยหรือ pattern สร้าง TradingView link
+        ต้องปรับ (TradingView ใช้ HKEX:รหัส ไม่ใช่ 0700.HK))
+      - showPage(): if (id === "hk-stocks") loadHkStocksPage();
+
+>>> เกณฑ์ผ่าน Phase 3: เปิดหน้า "หุ้น HK" เห็นตาราง RS/Stage ของ ~85 ตัว
+    (default HSI), สลับ HSTECH/HSCEI ได้, กราฟ breadth ย้อนหลังขึ้นถูก
+
+========================================================================
+ PHASE 4 — Heatmap HK + HK Rotation (reuse โค้ดเกือบทั้งหมด)
+========================================================================
+[4.1] Heatmap HK
+      - app.py: /api/hk-heatmap (เทียบ us_index_heatmap) — คำนวณ market cap
+        + % เปลี่ยนแปลงจากราคาใน hk_prices.db (ไม่ต้องยิง Yahoo สดเหมือน
+        US heatmap เพราะมีราคาใน DB อยู่แล้วจาก Quick Update)
+      - page-hk-heatmap + loadHeatmapPage()-style function (เทียบ US heatmap
+        treemap ทั้งชุด, sector toggle, 1D/1W period)
+
+[4.2] HK Rotation
+      - page-hk-rotation (ก็อป page-us-rotation ทั้งหน้า)
+      - setHkRotIndex('HSI'|'HSTECH'|'HSCEI'|'ALL', btn), setHkRotTf(...),
+        loadHkRotation()/renderHkRotation()/_rebuildHkRotSectorFilter()
+        — ก็อปจาก US Rotation ที่เพิ่งทำ 100% แค่เปลี่ยน prefix/endpoint
+      - drawRotationScatter() ตัวเดิม reuse ได้ทันที (ไม่ต้องแตะ) แค่ส่ง
+        canvasId:'hk-rotation-map', legendId:'hk-rot-legend',
+        onOpen: openHkChartModal
+
+>>> เกณฑ์ผ่าน Phase 4: heatmap HK render กล่องตาม market cap/สีตาม %
+    เปลี่ยนแปลง, RRG HK plot จุดครบ + คลิกเปิด modal ราคาได้
+
+========================================================================
+ ข้อควรระวังเฉพาะ HK (สะสมจากการสำรวจ)
+========================================================================
+1. Ticker ทับซ้อนข้ามดัชนี (เช่น 700/9988/1211 อยู่ทั้ง HSI+HSTECH+HSCEI)
+   -> ต้อง dedupe ก่อนดึงราคา (union ticker set ครั้งเดียว) แต่ metrics
+      row เก็บ flag in_hsi/in_hstech/in_hscei แยกกันได้ตามจริง (ไม่ผูกขาด
+      ดัชนีเดียวเหมือน US ที่ปกติหุ้นอยู่ดัชนีเดียวเป็นหลัก)
+2. Timezone Asia/Hong_Kong ต่างจากทั้ง US (America/New_York) และไทย
+   (Asia/Bangkok) — gap-update cutoff logic ต้องเช็คแยก ไม่ reuse cutoff
+   ของ US ตรงๆ
+3. HSTECH ไม่มี sector จาก Wikipedia (มีแต่ ticker+ชื่อจีน) — sector จะ
+   โชว์ "Unknown" เว้นแต่ทับซ้อนกับ HSI/HSCEI ที่มี sector หรือทับซ้อนกับ
+   dr_universe.py (ind field, ครอบคลุมบางส่วน)
+4. TradingView link บนโมดัลกราฟ ต้องปรับ format เป็น HKEX:รหัส (ไม่ใช่
+   SET:รหัส หรือ NASDAQ:รหัส แบบ US) — เช็ค _usTvLink()/tvLink() ที่มีอยู่
+   ว่ารองรับ param exchange ได้เลยหรือต้องเพิ่มฟังก์ชันแยก _hkTvLink()
+5. 2 ตัวที่งบเป็น empty marker (316, 868) — ไม่กระทบ Phase 1-4 (เป็นเรื่อง
+   งบการเงินซึ่งพร้อมอยู่แล้วนอกเหนือแผนนี้) แค่บันทึกไว้เผื่อทำ Screener+
+   HK ต่อในอนาคต
+
+========================================================================
+ ลำดับที่แนะนำให้ทำจริง (เรียง impact/ผูกพัน)
+========================================================================
+1. Phase 1 ทั้งหมดก่อน (บล็อกทุกอย่างที่เหลือ) — เช็ค validation ให้แน่น
+   เพราะเป็นจุดเดียวที่พึ่งพา Wikipedia scrape สด
+2. Phase 2 (metrics + endpoints) — ทดสอบผ่าน test_client ก่อนแตะ UI
+   เหมือนที่ทำกับ US ทุกครั้ง (ยืนยัน data ถูกต้องก่อนเขียนกราฟ)
+3. Phase 3 (หน้า HK Stocks) — ส่วนที่ผู้ใช้เห็นและใช้งานจริงก่อน
+4. Phase 4 (Heatmap + Rotation) — reuse โค้ดสูงสุด ทำเร็วที่สุดเมื่อ
+   Phase 1-3 เสร็จ (เหมือนที่ US Rotation ใช้เวลาแค่ช่วงสั้นๆ เพราะ
+   drawRotationScatter มีอยู่แล้ว)
+========================================================================

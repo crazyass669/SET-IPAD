@@ -46,10 +46,19 @@ _DR_DIFF_CACHE_TTL = 6 * 3600
 _us_index_diff_cache: dict = {}
 _US_INDEX_DIFF_CACHE_TTL = 6 * 3600
 
+# HK index (HSI/HSCEI/HSTECH) diff-check cache — เทียบ Wikipedia กับไฟล์ local ไว้ 6 ชั่วโมง
+_hk_index_diff_cache: dict = {}
+_HK_INDEX_DIFF_CACHE_TTL = 6 * 3600
+
 # Heatmap cache (mkt_cap + % เปลี่ยนแปลงรายวันของหุ้นในแต่ละดัชนี) — แยก slot ต่อดัชนี
 # TTL สั้นกว่า cache อื่นเพราะ % เปลี่ยนแปลงต้องสดพอสมควร แต่ไม่สดเกินจนต้องยิง Yahoo ทุกครั้งที่เปิดหน้า
 _heatmap_cache: dict = {}
 _HEATMAP_CACHE_TTL = 15 * 60
+
+# Heatmap HK cache — เหมือน _heatmap_cache ของ US แต่ % เปลี่ยนแปลงคำนวณจาก hk_prices.db
+# ที่มีอยู่แล้ว (ไม่ยิง Yahoo สด) เลยไม่จำเป็นต้องสั้นเท่า US — ใช้ TTL เดียวกันเผื่ออนาคต
+_hk_heatmap_cache: dict = {}
+_HK_HEATMAP_CACHE_TTL = 15 * 60
 
 # ข่าวรายหุ้น (รวม SET.or.th + Yahoo + Google News) — cache ต่อ (symbol, is_dr) 15 นาที
 # ข่าวไม่ต้องสดวินาทีต่อวินาที แต่ก็ไม่ควรยิง 3 แหล่งซ้ำทุกครั้งที่พิมพ์ค้นหา
@@ -75,6 +84,27 @@ def _load_mktcap_cache():
 
 def _save_mktcap_cache(data):
     p = _mktcap_cache_path()
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, p)
+
+
+def _hk_mktcap_cache_path():
+    return os.path.join(BASE_DIR, "data", "hk_heatmap_mktcap_cache.json")
+
+
+def _load_hk_mktcap_cache():
+    try:
+        with open(_hk_mktcap_cache_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_hk_mktcap_cache(data):
+    p = _hk_mktcap_cache_path()
     os.makedirs(os.path.dirname(p), exist_ok=True)
     tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -112,6 +142,7 @@ from sources import financials_store
 from sources import factor_snapshot
 from sources import dr_descriptions
 from sources import us_index_membership
+from sources import hk_index_membership
 
 
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
@@ -924,6 +955,276 @@ def dr_full_refresh():
     return jsonify({"status": "cleared"})
 
 
+@app.route("/api/us-index-full-refresh", methods=["POST"])
+def us_index_full_refresh():
+    """ดึงราคา OHLC ย้อนหลังสูงสุด (period=max) ของสมาชิกดัชนี S&P 500 + Dow + Nasdaq 100
+    ทั้งหมด (union ไม่ซ้ำ ~518 ตัว) ลง us_prices.db — ปุ่มแยกต่างหาก ใช้เฉพาะกดมือ
+    (ไม่ผูกเข้า Quick Update ประจำวัน เพราะ full history โหลดนานกว่า gap-update มาก)
+    ใช้ progress state ร่วมกับงานยาวอื่นๆ (_state/_update/_lock — ดู /api/refresh)"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=0, message="กำลังเริ่มดึงราคา US Index ย้อนหลังสูงสุด...")
+    threading.Thread(target=_run_us_index_full_refresh, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _run_us_index_full_refresh():
+    try:
+        from sources import us_index_membership
+        from sources.yahoo import fetch_all_batch
+        from core import us_store
+
+        tickers = us_index_membership.all_tickers(BASE_DIR)
+        if not tickers:
+            raise ValueError("ไม่พบรายชื่อดัชนี US ใน data/us_index_membership.json — รัน sync ก่อน")
+
+        def cb(current, total, msg):
+            _update(current=current, total=total, message=msg)
+
+        data = fetch_all_batch(tickers, callback=cb, period="max")
+        # ขั้นเขียน DB ใช้เวลาหลายนาที (หลายล้านแถวใน transaction เดียว) — บอกสถานะ
+        # ให้ชัด ไม่งั้น progress ค้างที่ "batch 6/6" จนดูเหมือนแฮงค์
+        _update(current=517, total=518,
+                message=f"กำลังบันทึก {len(data)} ตัวลง us_prices.db (หลายนาที อย่าเพิ่งปิด)...")
+        us_store.init_db(BASE_DIR)
+        us_store.upsert_bars(BASE_DIR, data)
+
+        missing = len(tickers) - len(data)
+        msg = f"เสร็จแล้ว! ดึงราคา US Index ย้อนหลังสูงสุด {len(data)}/{len(tickers)} ตัว"
+        if missing:
+            msg += f" (ขาด {missing} ตัว)"
+        _update(running=False, done=True, message=msg)
+        run_log.record_run(BASE_DIR, "us_index_full_refresh", True, msg)
+    except Exception as e:
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        run_log.record_run(BASE_DIR, "us_index_full_refresh", False, str(e))
+
+    # คำนวณ RS/EMA/Stage/52W ใหม่จากราคาที่เพิ่งดึง — ทำนอก try/except หลักเพื่อให้รันแม้
+    # ราคาบางตัวพลาด (best-effort, ไม่ทำให้ job หลักถูกมองว่า error)
+    try:
+        from sources import us_index_metrics
+        n_metrics = us_index_metrics.build(BASE_DIR)
+        _us_breadth_cache.clear()
+        print(f"[US Index] rebuilt metrics: {n_metrics} ticker")
+    except Exception as e:
+        print(f"[US Index] metrics build error: {e}")
+
+
+def _run_index_gap_update(membership, store, region, label, progress_cb=None):
+    """ดึงเฉพาะวันที่ขาดของสมาชิกดัชนี (gap-update, เร็ว) ต่างจาก full-refresh ที่ดึง
+    ย้อนหลังสูงสุดทั้งประวัติ (ใช้เฉพาะกดมือ) ใช้จาก Quick Update ประจำวัน — คืนจำนวน
+    ticker ที่อัพเดทสำเร็จ
+
+    เดิมมี _run_us_index_gap_update/_run_hk_index_gap_update แยกกัน 2 ฟังก์ชัน
+    เหมือนกันทุกบรรทัดยกเว้น module/region code — รวมเป็นฟังก์ชันเดียวรับ membership/
+    store module + region code ("US"/"HK") + label ไว้ขึ้น log แทน"""
+    from sources.yahoo import fetch_all_batch, fetch_gap_batch
+    from sources.dr_universe import is_latest_bar_stable, region_today_date
+    from services.refresh import detect_ca_mismatch, _repair_ca_tickers
+
+    tickers = membership.all_tickers(BASE_DIR)
+    if not tickers:
+        return 0
+
+    # last_dates อาจมี ticker ที่ถูกถอดจากดัชนีไปแล้วค้างอยู่ (ไม่อัพเดทต่อ) — ถ้าเอา
+    # ไปหา min ทั้งก้อนจะยิ่งลากวันเริ่มดึง (start) ให้เก่าขึ้นเรื่อยๆ ทุกวันที่ผ่านไป
+    # ต้อง filter เหลือเฉพาะ ticker ในดัชนีปัจจุบันก่อน (ตัวที่ถูกถอดไม่ต้องอัพเดทอยู่แล้ว)
+    last_dates_all = store.get_last_dates(BASE_DIR)
+    if not last_dates_all:
+        # DB ยังว่าง (เครื่องใหม่/ยังไม่เคยดึง) — ถ้าปล่อยต่อ ทุกตัวจะกลายเป็น "หุ้นใหม่"
+        # แล้ว Quick Update ประจำวันแอบกลายเป็น full backfill period='max' หลายร้อยตัว
+        # (งานหนักที่ตั้งใจให้กดปุ่ม Index Max เองเท่านั้น)
+        print(f"[{label}] {store.DB_FILE} ยังว่าง — ข้าม gap-update (กดปุ่ม Index Max ก่อน)")
+        return 0
+    last_dates = {t: d for t, d in last_dates_all.items() if t in set(tickers)}
+    new_tickers = [t for t in tickers if t not in last_dates]
+
+    if last_dates:
+        import pandas as pd
+        min_last = min(last_dates.values())
+        # ไม่ +1 วัน — ต้องดึงแท่งล่าสุดที่เก็บไว้แล้วซ้ำ (overlap) ด้วย ไม่งั้นไม่มี
+        # แท่งให้เทียบตรวจ split (ดู detect_ca_mismatch) เหมือน dr_quick_update
+        start = pd.to_datetime(min_last).strftime("%Y-%m-%d")
+        data = fetch_gap_batch(list(last_dates.keys()), start, callback=progress_cb)
+    else:
+        data = {}   # ไม่มี ticker เก่าเลย (DB ว่าง/รอบแรก) — new_tickers ด้านล่างครอบคลุมหมด
+
+    # หุ้นเข้าดัชนีใหม่ (ไม่มีราคาเก่าเลย) — ต้อง backfill เต็มประวัติแยกต่างหาก ไม่งั้น
+    # gap-update ปกติจะดึงแค่ไม่กี่วันล่าสุด ทำให้ RS/EMA200/52W คำนวณไม่ได้อีกนาน
+    if new_tickers:
+        print(f"[{label}] หุ้นเข้าดัชนีใหม่ {len(new_tickers)} ตัว — backfill เต็มประวัติ: {new_tickers}")
+        data.update(fetch_all_batch(new_tickers, callback=progress_cb, period="max"))
+
+    # Split detector: เทียบแท่ง overlap ก่อนบันทึก — ถ้า Yahoo เพิ่งปรับราคาย้อนหลัง
+    # (แตกพาร์ ฯลฯ) ต้อง refetch เต็มเฉพาะตัว ไม่งั้น series จะเป็นฐานเก่าต่อฐานใหม่
+    # (ดู detect_ca_mismatch ใน services/refresh.py — ใช้ตัวเดียวกับหุ้นไทย)
+    suspects = detect_ca_mismatch(BASE_DIR, data, store=store)
+    if suspects:
+        print(f"[{label} CA] พบ overlap mismatch: {suspects}")
+        repaired = _repair_ca_tickers(BASE_DIR, data, suspects, progress_cb or (lambda *a: None))
+        for t in repaired:
+            store.delete_ticker_bars(BASE_DIR, t)
+
+    # ตัดแท่งล่าสุดทิ้งถ้ายังไม่นิ่ง (ตลาดกำลังเปิด/pre-market/after-hours) — เหตุผล
+    # เดียวกับ dr_quick_update (ดูคอมเมนต์ยาวตรงนั้น) timezone ต่างกันตาม region
+    if not is_latest_bar_stable(region):
+        today = region_today_date(region)
+        if today is not None:
+            for t in list(data.keys()):
+                close = data[t].get("close")
+                if close is None or len(close) == 0 or close.index[-1].date() != today:
+                    continue
+                for k in ("open", "high", "low", "close", "adj_close", "volume"):
+                    s = data[t].get(k)
+                    if s is not None and len(s):
+                        data[t][k] = s.iloc[:-1]
+                if len(data[t]["close"]) == 0:
+                    del data[t]
+
+    if data:
+        store.upsert_bars(BASE_DIR, data)
+    return len(data)
+
+
+def _run_us_index_gap_update(progress_cb=None):
+    from sources import us_index_membership
+    from core import us_store
+    return _run_index_gap_update(us_index_membership, us_store, "US", "US Index", progress_cb)
+
+
+@app.route("/api/us-index-metrics")
+def us_index_metrics_route():
+    """RS/EMA/Stage/52W ของสมาชิกดัชนี S&P 500 + Dow + Nasdaq 100 (cache — คำนวณล่วงหน้า
+    ตอน Quick Update / US Index Max ที่ sources/us_index_metrics.py ดู field ที่ได้ที่
+    set_data_fetcher.process_stock() + core.metrics.rank_rs() — เหมือนหุ้นไทยทุกประการ
+    ต่างแค่ field เสริม in_sp500/in_dow/in_ndx สำหรับกรองตามดัชนี"""
+    from sources import us_index_metrics
+    return jsonify(us_index_metrics.load_local(BASE_DIR))
+
+
+@app.route("/api/us-sector-ranks")
+def us_sector_ranks():
+    """จัดอันดับ Sector (GICS) ของสมาชิกดัชนี US ตาม RS/return เฉลี่ย — reuse
+    core.metrics.summarize_groups() ตัวเดียวกับหน้า "Sectors" ของหุ้นไทย (ห้ามเขียนสูตรซ้ำ)
+    query param index=SP500|DOW|NDX (default SP500)"""
+    from sources import us_index_metrics
+    from core.metrics import summarize_groups
+    idx = (request.args.get("index") or "SP500").upper()
+    flag = {"SP500": "in_sp500", "DOW": "in_dow", "NDX": "in_ndx"}.get(idx, "in_sp500")
+    stocks = [s for s in us_index_metrics.load_local(BASE_DIR).get("stocks", []) if s.get(flag)]
+    return jsonify({"sectors": summarize_groups(stocks, "sector")})
+
+
+@app.route("/api/us-history/<symbol>")
+def get_us_history(symbol):
+    """ส่ง full price history ของหุ้นดัชนี US (S&P500/Dow/NDX) จาก us_prices.db —
+    ใช้เติมกราฟ 5Y/Max ใน chart modal (ตัวเดียวกับ /api/history ของหุ้นไทย แค่คนละ DB)"""
+    from core import us_store
+    ticker = symbol.upper().strip()
+    data = us_store.get_ohlc_series(BASE_DIR, ticker)
+    if not data:
+        return jsonify({"error": f"ไม่พบข้อมูล {symbol} — กรุณากด US Index Max ก่อน"}), 404
+    return jsonify({"dates": data["dates"], "closes": data["closes"], "volumes": data["volumes"]})
+
+
+@app.route("/api/hk-index-full-refresh", methods=["POST"])
+def hk_index_full_refresh():
+    """ดึงราคา OHLC ย้อนหลังสูงสุด (period=max) ของสมาชิกดัชนี HSI + HSCEI + HSTECH
+    ทั้งหมด (union ไม่ซ้ำ ~105 ตัว) ลง hk_prices.db — ปุ่มแยกต่างหาก ใช้เฉพาะกดมือ
+    (ไม่ผูกเข้า Quick Update ประจำวัน เพราะ full history โหลดนานกว่า gap-update มาก)
+    ใช้ progress state ร่วมกับงานยาวอื่นๆ (_state/_update/_lock — ดู /api/refresh)"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=0, message="กำลังเริ่มดึงราคา HK Index ย้อนหลังสูงสุด...")
+    threading.Thread(target=_run_hk_index_full_refresh, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _run_hk_index_full_refresh():
+    try:
+        from sources import hk_index_membership
+        from sources.yahoo import fetch_all_batch
+        from core import hk_store
+
+        tickers = hk_index_membership.all_tickers(BASE_DIR)
+        if not tickers:
+            raise ValueError("ไม่พบรายชื่อดัชนี HK ใน data/hk_index_membership.json — รัน sync ก่อน")
+
+        def cb(current, total, msg):
+            _update(current=current, total=total, message=msg)
+
+        data = fetch_all_batch(tickers, callback=cb, period="max")
+        _update(current=104, total=105,
+                message=f"กำลังบันทึก {len(data)} ตัวลง hk_prices.db (หลายนาที อย่าเพิ่งปิด)...")
+        hk_store.init_db(BASE_DIR)
+        hk_store.upsert_bars(BASE_DIR, data)
+
+        missing = len(tickers) - len(data)
+        msg = f"เสร็จแล้ว! ดึงราคา HK Index ย้อนหลังสูงสุด {len(data)}/{len(tickers)} ตัว"
+        if missing:
+            msg += f" (ขาด {missing} ตัว)"
+        _update(running=False, done=True, message=msg)
+        run_log.record_run(BASE_DIR, "hk_index_full_refresh", True, msg)
+    except Exception as e:
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        run_log.record_run(BASE_DIR, "hk_index_full_refresh", False, str(e))
+
+    # คำนวณ RS/EMA/Stage/52W ใหม่จากราคาที่เพิ่งดึง — ทำนอก try/except หลักเพื่อให้รันแม้
+    # ราคาบางตัวพลาด (best-effort, ไม่ทำให้ job หลักถูกมองว่า error)
+    try:
+        from sources import hk_index_metrics
+        n_metrics = hk_index_metrics.build(BASE_DIR)
+        _hk_breadth_cache.clear()
+        print(f"[HK Index] rebuilt metrics: {n_metrics} ticker")
+    except Exception as e:
+        print(f"[HK Index] metrics build error: {e}")
+
+
+def _run_hk_index_gap_update(progress_cb=None):
+    from sources import hk_index_membership
+    from core import hk_store
+    return _run_index_gap_update(hk_index_membership, hk_store, "HK", "HK Index", progress_cb)
+
+
+@app.route("/api/hk-index-metrics")
+def hk_index_metrics_route():
+    """RS/EMA/Stage/52W ของสมาชิกดัชนี HSI + HSCEI + HSTECH (cache — คำนวณล่วงหน้า
+    ตอน Quick Update / HK Index Max ที่ sources/hk_index_metrics.py ดู field ที่ได้ที่
+    set_data_fetcher.process_stock() + core.metrics.rank_rs() — เหมือนหุ้นไทย/US ทุกประการ
+    ต่างแค่ field เสริม in_hsi/in_hscei/in_hstech สำหรับกรองตามดัชนี"""
+    from sources import hk_index_metrics
+    return jsonify(hk_index_metrics.load_local(BASE_DIR))
+
+
+@app.route("/api/hk-sector-ranks")
+def hk_sector_ranks():
+    """จัดอันดับ Sector ของสมาชิกดัชนี HK ตาม RS/return เฉลี่ย — reuse
+    core.metrics.summarize_groups() ตัวเดียวกับหน้า "Sectors" ของหุ้นไทย/US (ห้ามเขียนสูตรซ้ำ)
+    query param index=HSI|HSCEI|HSTECH (default HSI)"""
+    from sources import hk_index_metrics
+    from core.metrics import summarize_groups
+    idx = (request.args.get("index") or "HSI").upper()
+    flag = {"HSI": "in_hsi", "HSCEI": "in_hscei", "HSTECH": "in_hstech"}.get(idx, "in_hsi")
+    stocks = [s for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", []) if s.get(flag)]
+    return jsonify({"sectors": summarize_groups(stocks, "sector")})
+
+
+@app.route("/api/hk-history/<symbol>")
+def get_hk_history(symbol):
+    """ส่ง full price history ของหุ้นดัชนี HK (HSI/HSCEI/HSTECH) จาก hk_prices.db —
+    ใช้เติมกราฟ 5Y/Max ใน chart modal (ตัวเดียวกับ /api/us-history แค่คนละ DB)"""
+    from core import hk_store
+    ticker = symbol.upper().strip()
+    data = hk_store.get_ohlc_series(BASE_DIR, ticker)
+    if not data:
+        return jsonify({"error": f"ไม่พบข้อมูล {symbol} — กรุณากด HK Index Max ก่อน"}), 404
+    return jsonify({"dates": data["dates"], "closes": data["closes"], "volumes": data["volumes"]})
+
+
 @app.route("/api/dr-history/<symbol>")
 def get_dr_history(symbol):
     """ดึง price history สำหรับ DR stock — เสิร์ฟจาก cache ก่อน ไม่ต้อง fetch yfinance ซ้ำ"""
@@ -1662,6 +1963,40 @@ def factor_screener():
     if uni in ("us", "hk"):
         # ชุด mirror ใหญ่มาก (US ~17k) — กรองฝั่ง server ส่งเฉพาะผลลัพธ์ (≤ limit)
         rows = factor_snapshot.get_mirror_snapshot(BASE_DIR, uni.upper())
+
+        # overlay technical (rs/EMA200/52W high/rvol/stage) ให้เฉพาะตัวที่อยู่ใน
+        # S&P500+Dow+NDX (~518 ตัว จาก us_index_metrics.json — ราคาราย daily จาก
+        # us_prices.db) / HSI+HSCEI+HSTECH (~105 ตัว จาก hk_index_metrics.json —
+        # ราคาราย daily จาก hk_prices.db) — mirror ตัวอื่นๆ นอกดัชนีหลักยังไม่มีราคา
+        # รายวันเก็บไว้ เลยยังเป็น None เหมือนเดิม
+        if uni == "us":
+            from sources import us_index_metrics
+            _us_by_sym = {s["symbol"]: s for s in us_index_metrics.load_local(BASE_DIR).get("stocks", [])}
+            for r in rows:
+                s = _us_by_sym.get(r["symbol"])
+                r["rs"] = s.get("rs_score") if s else None
+                r["pct_vs_ema200"] = (round((s["price"] / s["ema200"] - 1) * 100, 2)
+                                       if s and s.get("price") and s.get("ema200") else None)
+                r["pct_off_high52"] = (round((s["price"] / s["high_52w"] - 1) * 100, 2)
+                                        if s and s.get("price") and s.get("high_52w") else None)
+                r["rvol"] = (round(s["vol_today"] / s["vol_avg20"], 4)
+                             if s and s.get("vol_today") and s.get("vol_avg20") else None)
+                r["stage"] = s.get("stage") if s else None
+        elif uni == "hk":
+            from sources import hk_index_metrics
+            # symbol ในชุด mirror เป็นรหัสดิบ (เช่น "0700") ส่วน hk_index_metrics ใช้
+            # รูปแบบ yfinance "0700.HK" — ต่อ ".HK" ก่อน lookup
+            _hk_by_sym = {s["symbol"]: s for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", [])}
+            for r in rows:
+                s = _hk_by_sym.get(f"{r['symbol']}.HK")
+                r["rs"] = s.get("rs_score") if s else None
+                r["pct_vs_ema200"] = (round((s["price"] / s["ema200"] - 1) * 100, 2)
+                                       if s and s.get("price") and s.get("ema200") else None)
+                r["pct_off_high52"] = (round((s["price"] / s["high_52w"] - 1) * 100, 2)
+                                        if s and s.get("price") and s.get("high_52w") else None)
+                r["rvol"] = (round(s["vol_today"] / s["vol_avg20"], 4)
+                             if s and s.get("vol_today") and s.get("vol_avg20") else None)
+                r["stage"] = s.get("stage") if s else None
         try:
             filters = json.loads(request.args.get("filters") or "[]")
         except Exception:
@@ -1915,6 +2250,238 @@ def _run_us_index_sync(min_age_days=None):
         _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
 
 
+@app.route("/api/hk-index-membership")
+def get_hk_index_membership():
+    """รายชื่อ ticker ที่อยู่ใน HSI / HSCEI / HSTECH (ไฟล์ local อัพเดทได้ผ่าน
+    ปุ่ม "ดึงเฉพาะที่ขาด/เก่า" ในหน้างบการเงิน — ดู /api/hk-index-sync) ใช้กรองรายการ
+    browse หุ้น HK — คืน {HSI:[...], HSCEI:[...], HSTECH:[...]}"""
+    path = os.path.join(BASE_DIR, "data", "hk_index_membership.json")
+    if not os.path.exists(path):
+        return jsonify({})
+    try:
+        with open(path, encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify({})
+
+
+@app.route("/api/hk-index-check-updates")
+def hk_index_check_updates():
+    """เทียบรายชื่อ HSI / HSCEI / HSTECH สดจาก Wikipedia กับไฟล์ local — รายงาน
+    ตัวใหม่/ตัวที่ถูกถอดต่อดัชนี ไม่แก้ไฟล์ local ให้ (คู่กับ us_index_check_updates
+    แต่ใช้กับ 3 ดัชนี HK แทน)"""
+    cached = _hk_index_diff_cache.get("result")
+    if cached and (time.time() - _hk_index_diff_cache.get("ts", 0) < _HK_INDEX_DIFF_CACHE_TTL):
+        return jsonify(cached)
+    try:
+        mirror_hk = factor_snapshot.get_mirror_symbols(BASE_DIR).get("HK", [])
+        result, _live = hk_index_membership.diff_membership(BASE_DIR, mirror_hk=mirror_hk)
+        _hk_index_diff_cache["result"] = result
+        _hk_index_diff_cache["ts"] = time.time()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/hk-index-sync", methods=["POST"])
+def start_hk_index_sync():
+    """ปุ่ม "ดึงเฉพาะที่ขาด/เก่า (local)" ของดัชนี HK — เช็ค Wikipedia แล้วอัพเดทไฟล์
+    local ให้ตรง จากนั้นดึงงบการเงินเฉพาะ ticker ในดัชนีที่ยังไม่อยู่ใน mirror list หลัก
+    (factor_mirror) ผ่าน Yahoo Finance โดยตรง (ข้ามคู่ที่เพิ่งดึงไปไม่เกิน min_age_days วัน)"""
+    min_age_days = None
+    if request.is_json:
+        body = request.json or {}
+        raw_age = body.get("min_age_days")
+        if raw_age is not None:
+            try:
+                min_age_days = max(0, int(raw_age))
+            except (TypeError, ValueError):
+                min_age_days = None
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None, current=0, total=0,
+                      message="กำลังเช็คดัชนี HSI/HSCEI/HSTECH จาก Wikipedia...")
+    threading.Thread(target=_run_hk_index_sync, args=(min_age_days,), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _load_mirror_names_hk():
+    """ชื่อบริษัทหุ้น HK จาก mirror_names.json — {} ถ้ายังไม่ได้สร้างไฟล์/อ่านไม่ได้"""
+    path = os.path.join(BASE_DIR, "mirror_names.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return (json.load(f) or {}).get("HK", {})
+    except Exception:
+        return {}
+
+
+def _run_hk_index_sync(min_age_days=None):
+    try:
+        diff, live = hk_index_membership.sync_membership(BASE_DIR)
+        _hk_index_diff_cache.clear()   # ลิสต์เปลี่ยน — ผลเช็คหุ้นใหม่เดิมไม่ตรงแล้ว
+        added_n = sum(len(v["new"]) for v in diff.values())
+        removed_n = sum(len(v["removed"]) for v in diff.values())
+
+        # mirror เก็บชื่อตาม Finnomena (เลขล้วน มีทั้งเติม 0 นำหน้าและไม่เติม เช่น "0700"/"799")
+        # ส่วน membership เป็น "0700.HK" — ต้อง normalize ก่อนเทียบ ไม่งั้น extra = ทั้งดัชนี
+        # ทุกครั้ง (ยิง Yahoo ซ้ำหมด) และ key ที่เก็บ ("0700.HK") จะไม่ตรงกับที่หน้างบ/
+        # โมดัลกราฟ query ("0700" — ดู _loadCmFin ฝั่ง JS ที่ตัด .HK ก่อน fetch)
+        def _hk_code(s):
+            s = s.upper()
+            if s.endswith(".HK"):
+                s = s[:-3]
+            return s.lstrip("0") or "0"
+        mirror_hk = {_hk_code(s) for s in factor_snapshot.get_mirror_symbols(BASE_DIR).get("HK", [])}
+        members = {s for k in ("HSI", "HSCEI", "HSTECH") for s in live.get(k, [])}
+        extra = sorted(s[:-3] for s in members if _hk_code(s) not in mirror_hk)
+
+        def cb(current, total, msg):
+            _update(current=current, total=total,
+                    message=f"ดัชนีอัพเดทแล้ว (+{added_n}/-{removed_n}) · {msg}")
+
+        if extra:
+            result = financials_store.sync_all(BASE_DIR, extra, sources=("yahoo_q", "yahoo"),
+                                               callback=cb, is_dr=True, market="HK",
+                                               min_age_days=min_age_days)
+            _fin_analytics_cache.clear()
+        else:
+            result = {"ok": 0, "fail": 0, "total": 0, "skipped": 0}
+
+        # เติมชื่อบริษัทของตัวที่ยังไม่มีชื่อ (ไม่อยู่ใน mirror_names.json) จาก payload ที่เพิ่งดึงมา
+        # ให้ปุ่มกรองดัชนีในหน้างบการเงินโชว์ชื่อได้ครบ ไม่ใช่แค่ symbol เฉยๆ
+        local = hk_index_membership.load_local(BASE_DIR)
+        mirror_names_hk = _load_mirror_names_hk()
+        extra_names = dict(local.get("extra_names") or {})
+        for sym in extra:
+            if sym in mirror_names_hk or sym in extra_names:
+                continue
+            payload = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=True) \
+                or financials_store.get(BASE_DIR, sym, "yahoo", is_dr=True)
+            if payload and payload.get("name") and payload["name"] != sym:
+                extra_names[sym] = payload["name"]
+        local["extra_names"] = extra_names
+        hk_index_membership.save_local(BASE_DIR, local)
+
+        skipped = result.get("skipped", 0)
+        _update(running=False, done=True,
+                message=f"เสร็จแล้ว! ดัชนีอัพเดท +{added_n}/-{removed_n} · งบการเงิน {result['ok']}/{result['total']} สำเร็จ"
+                        + (f" · ข้าม {skipped} คู่ (ดึงไปแล้วไม่เกิน {min_age_days} วัน)" if skipped else "")
+                        + (f" (ล้มเหลว {result['fail']})" if result["fail"] else ""))
+    except Exception as e:
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+
+
+@app.route("/api/hk-index-heatmap")
+def hk_index_heatmap():
+    """Heatmap ของ HSI / HSCEI / HSTECH — ?index=HSI|HSCEI|HSTECH
+    คืน {rows:[{symbol, name, mkt_cap, chg_1d, chg_1w}], ts, requested, missing}
+    ต่างจาก us_index_heatmap ตรงที่ chg_1d/chg_1w คำนวณจากราคาใน hk_prices.db ที่มีอยู่แล้ว
+    (Quick Update อัพเดทให้ทุกวัน) ไม่ต้องยิง Yahoo สดเหมือน US — เหลือแค่ market cap ที่ต้อง
+    ยิง fast_info สดอยู่ดี (ไม่มีเก็บใน DB ราคา) cache ไฟล์แยก 1 วันเหมือนของ US"""
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor
+    from core import hk_store
+
+    index_key = (request.args.get("index") or "HSI").upper()
+    if index_key not in ("HSI", "HSCEI", "HSTECH"):
+        return jsonify({"error": "index ต้องเป็น HSI, HSCEI หรือ HSTECH เท่านั้น"}), 400
+    force = request.args.get("force") == "1"
+
+    cached = _hk_heatmap_cache.get(index_key)
+    if not force and cached and (time.time() - cached["ts"] < _HK_HEATMAP_CACHE_TTL):
+        return jsonify(cached)
+
+    local = hk_index_membership.load_local(BASE_DIR)
+    tickers = local.get(index_key) or []
+    if not tickers:
+        return jsonify({"error": f"ยังไม่มีรายชื่อ {index_key} ในเครื่อง — กด \"ดึงเฉพาะที่ขาด/เก่า\" ในหน้างบการเงินก่อน"}), 404
+
+    # % เปลี่ยนแปลง 1 วัน/1 สัปดาห์ — คำนวณจาก hk_prices.db ตรงๆ (มีราคาอยู่แล้วจาก Quick
+    # Update ทุกวัน ไม่ต้องยิง Yahoo สดเหมือน US heatmap)
+    # ใช้แค่ 6 แท่งล่าสุดต่อตัว (chg_1d/chg_1w) — iter_recent_series เปิด connection
+    # เดียวอ่านทุก ticker แทนเปิดทีละ connection ต่อตัวด้วย get_ohlc_series (~105 ครั้ง)
+    chg1d_map, chg1w_map = {}, {}
+    recent = dict(hk_store.iter_recent_series(BASE_DIR, warmup_rows=6))
+    for t in tickers:
+        series = recent.get(t)
+        if not series or not series.get("closes"):
+            continue
+        closes = [c for c in series["closes"] if c is not None]
+        if len(closes) >= 2:
+            chg1d_map[t] = round((closes[-1] / closes[-2] - 1) * 100, 2)
+        if len(closes) >= 6:
+            chg1w_map[t] = round((closes[-1] / closes[-6] - 1) * 100, 2)
+        elif len(closes) >= 2:
+            chg1w_map[t] = round((closes[-1] / closes[0] - 1) * 100, 2)
+
+    # Market cap — fast_info ต้องยิงทีละ ticker (ไม่มีใน hk_prices.db) ใช้ disk cache
+    # อายุ 1 วันก่อน (เปลี่ยนช้า) ยิง Yahoo เฉพาะตัวที่ cache หมดอายุ/ไม่มี ขนาน 12 threads
+    def _mc_one(t):
+        try:
+            v = getattr(yf.Ticker(t).fast_info, "market_cap", None)
+            return t, (float(v) if v else None)
+        except Exception:
+            return t, None
+
+    mktcap_cache = _load_hk_mktcap_cache()
+    now_ts = time.time()
+    stale = [t for t in tickers if force
+             or t not in mktcap_cache
+             or now_ts - mktcap_cache[t].get("ts", 0) >= _MKTCAP_CACHE_TTL]
+
+    if stale:
+        try:
+            with ThreadPoolExecutor(max_workers=12) as ex:
+                for t, mc in ex.map(_mc_one, stale):
+                    if mc is not None:
+                        mktcap_cache[t] = {"mc": mc, "ts": now_ts}
+        except Exception as e:
+            print(f"[HK Heatmap] market cap batch {index_key} ล้มเหลว: {e}")
+        _save_hk_mktcap_cache(mktcap_cache)
+
+    mkt_map = {t: mktcap_cache[t]["mc"] for t in tickers if t in mktcap_cache}
+
+    mirror_names_hk = _load_mirror_names_hk()
+    extra_names = local.get("extra_names") or {}
+    # HSTECH ไม่มี *_sector จาก Wikipedia (bullet list ไม่มีคอลัมน์ industry) — ใช้แหล่ง
+    # เดียวกับ hk_index_metrics.build(): รวม sector ของ HSI/HSCEI แล้วเติมจาก dr_universe
+    sector_map = dict(local.get(f"{index_key}_sector") or {})
+    if not sector_map:
+        for k in ("HSI_sector", "HSCEI_sector"):
+            sector_map.update(local.get(k) or {})
+        for e in load_dr_universe(BASE_DIR):
+            yf_t = (e.get("yf") or "").upper()
+            if yf_t.endswith(".HK") and yf_t not in sector_map and e.get("ind"):
+                sector_map[yf_t] = e["ind"]
+
+    rows = []
+    for t in tickers:
+        mc = mkt_map.get(t)
+        chg_1d = chg1d_map.get(t)
+        chg_1w = chg1w_map.get(t)
+        if mc is None and chg_1d is None:
+            continue   # โดนบล็อค/ไม่มีข้อมูลจริงทั้งคู่ — ข้ามแทนที่จะโชว์กล่องว่าง
+        # ชื่อบริษัท: mirror_names/extra_names เก็บด้วยรหัสไม่มี .HK (ตาม Finnomena — มีทั้ง
+        # แบบเติม 0 นำหน้าและไม่เติม) ส่วน t เป็น "0700.HK" — ลองทั้งสองแบบ
+        code = t[:-3] if t.endswith(".HK") else t
+        rows.append({
+            "symbol": t,
+            "name": mirror_names_hk.get(code) or mirror_names_hk.get(code.lstrip("0") or "0")
+                    or extra_names.get(code) or t,
+            "mkt_cap": mc,
+            "chg_1d": chg_1d,
+            "chg_1w": chg_1w,
+            "sector": sector_map.get(t) or "อื่นๆ",
+        })
+
+    result = {"rows": rows, "ts": now_ts, "requested": len(tickers), "missing": len(tickers) - len(rows)}
+    _hk_heatmap_cache[index_key] = result
+    return jsonify(result)
+
+
 @app.route("/api/us-index-heatmap")
 def us_index_heatmap():
     """Heatmap ของ S&P 500 / Dow Jones / Nasdaq 100 — ?index=SP500|DOW|NDX
@@ -2013,7 +2580,11 @@ def us_index_heatmap():
         })
 
     result = {"rows": rows, "ts": now_ts, "requested": len(tickers), "missing": len(tickers) - len(rows)}
-    _heatmap_cache[index_key] = result
+    # chg1d_map ว่างเปล่า = yf.download ทั้งชุดล้มเหลว (โดนบล็อค/เน็ตปัญหา) — ถ้า cache
+    # ผลลัพธ์สีเทาทั้งกระดานนี้ไว้ 15 นาทีจะยิ่งแย่ (ผู้ใช้ต้องรอนานกว่าจะได้ลองใหม่)
+    # ปล่อยให้ request ถัดไปยิง Yahoo ใหม่แทน — cache เฉพาะตอนที่ได้ราคาจริงมาบ้าง
+    if chg1d_map:
+        _heatmap_cache[index_key] = result
     return jsonify(result)
 
 
@@ -2524,7 +3095,7 @@ def healthz():
 # DATA HEALTH — ภาพรวมความสดของทุกแหล่งข้อมูลในจอเดียว (local-only)
 # เกณฑ์ (warn/red ชม.) อ้างอิงรอบอัพเดทจริงที่บันทึกไว้ใน คู่มือ-อัพเดทข้อมูล.txt
 # ============================================================
-from datetime import datetime as _dh_dt
+from datetime import datetime as _dh_dt, timedelta
 
 def _dh_mtime(path):
     try:
@@ -2547,13 +3118,41 @@ def _dh_age_hours(dt):
         return None
     return (_dh_dt.now() - dt).total_seconds() / 3600
 
-def _dh_item(key, label, category, dt, warn_h, red_h, missing_note="ไม่พบไฟล์ / ยังไม่เคยอัพเดท"):
+def _dh_business_age_hours(dt):
+    """อายุแบบตัดชั่วโมงวันเสาร์-อาทิตย์ออก — ใช้เทียบ threshold เท่านั้น (ไม่ใช่ตัวที่
+    แสดงผลให้ผู้ใช้เห็น) กันไม่ให้ prices/flow ขึ้น warn/red หลอกทุกวันจันทร์เช้าหรือช่วง
+    วันหยุดยาว ทั้งที่จริงๆ ไม่มีข้อมูลใหม่ให้ดึงในวันหยุดอยู่แล้ว"""
+    if dt is None:
+        return None
+    now = _dh_dt.now()
+    total_h = (now - dt).total_seconds() / 3600
+    if total_h <= 0:
+        return max(total_h, 0.0)
+    weekend_h = 0.0
+    d = dt.date()
+    end_d = now.date()
+    while d <= end_d:
+        if d.weekday() >= 5:  # 5=เสาร์, 6=อาทิตย์
+            day_start = _dh_dt.combine(d, _dh_dt.min.time())
+            day_end = day_start + timedelta(days=1)
+            overlap_start = max(day_start, dt)
+            overlap_end = min(day_end, now)
+            if overlap_end > overlap_start:
+                weekend_h += (overlap_end - overlap_start).total_seconds() / 3600
+        d += timedelta(days=1)
+    return max(total_h - weekend_h, 0.0)
+
+def _dh_item(key, label, category, dt, warn_h, red_h,
+             missing_note="ไม่พบไฟล์ / ยังไม่เคยอัพเดท", optional=False):
     age_h = _dh_age_hours(dt)
+    status_age_h = _dh_business_age_hours(dt)
     if age_h is None:
+        # optional=True: แหล่งข้อมูลที่ไม่ใช่ทุกเครื่องต้องมี (เช่น ยังไม่เคยเปิดหน้านั้นๆ)
+        # ไม่ควรถูกนับเป็น 🔴 เท่ากับ "เคยมีแล้วค้าง" — แยกเป็น na (⚪ ยังไม่ใช้งาน)
+        status = "na" if optional else "red"
+    elif status_age_h >= red_h:
         status = "red"
-    elif age_h >= red_h:
-        status = "red"
-    elif age_h >= warn_h:
+    elif status_age_h >= warn_h:
         status = "warn"
     else:
         status = "ok"
@@ -2584,7 +3183,7 @@ def data_health():
     items.append(_dh_item(
         "dr_cache", "DR/DRx (ราคา underlying)", "ราคา/เทคนิค",
         _dh_mtime(DR_CACHE_FILE), 24, 168,
-        missing_note="ยังไม่เคยเปิดหน้า DR/DRx ในเครื่องนี้"))
+        missing_note="ยังไม่เคยเปิดหน้า DR/DRx ในเครื่องนี้", optional=True))
 
     # Flow / เจ้าของ
     items.append(_dh_item(
@@ -2612,6 +3211,33 @@ def data_health():
     items.append(_dh_item(
         "us_index_membership", "สมาชิกดัชนี US (S&P500/DOW/NDX)", "หุ้นเข้าใหม่/ถูกถอด",
         _dh_mtime(os.path.join(BASE_DIR, "data", "us_index_membership.json")), 45 * 24, 90 * 24))
+
+    items.append(_dh_item(
+        "hk_index_membership", "สมาชิกดัชนี HK (HSI/HSCEI/HSTECH)", "หุ้นเข้าใหม่/ถูกถอด",
+        _dh_mtime(os.path.join(BASE_DIR, "data", "hk_index_membership.json")), 45 * 24, 90 * 24))
+
+    # ราคา/metrics หุ้นดัชนี US/HK — auto ผ่าน Quick Update/Index Max, เกณฑ์เดียวกับ
+    # ราคาหุ้นไทย (30/72 ชม.) เพราะ upsert_bars() stamp 'updated_at' รอบเดียวกัน
+    from core import us_store as _us_store, hk_store as _hk_store
+    items.append(_dh_item(
+        "us_prices", "ราคาหุ้นดัชนี US (us_prices.db)", "ราคา/เทคนิค",
+        _dh_parse(_us_store.get_meta(BASE_DIR, "updated_at")), 30, 72,
+        missing_note="ยังไม่เคยอัพเดทหุ้น US ในเครื่องนี้", optional=True))
+
+    items.append(_dh_item(
+        "hk_prices", "ราคาหุ้นดัชนี HK (hk_prices.db)", "ราคา/เทคนิค",
+        _dh_parse(_hk_store.get_meta(BASE_DIR, "updated_at")), 30, 72,
+        missing_note="ยังไม่เคยอัพเดทหุ้น HK ในเครื่องนี้", optional=True))
+
+    items.append(_dh_item(
+        "us_index_metrics", "Metrics หุ้นดัชนี US (us_index_metrics.json)", "ราคา/เทคนิค",
+        _dh_mtime(os.path.join(BASE_DIR, "data", "us_index_metrics.json")), 30, 72,
+        missing_note="ยังไม่เคยอัพเดทหุ้น US ในเครื่องนี้", optional=True))
+
+    items.append(_dh_item(
+        "hk_index_metrics", "Metrics หุ้นดัชนี HK (hk_index_metrics.json)", "ราคา/เทคนิค",
+        _dh_mtime(os.path.join(BASE_DIR, "data", "hk_index_metrics.json")), 30, 72,
+        missing_note="ยังไม่เคยอัพเดทหุ้น HK ในเครื่องนี้", optional=True))
 
     # งบการเงิน (local-only)
     _fin_summary = financials_store.get_meta_summary(BASE_DIR)
@@ -2662,6 +3288,16 @@ def data_health():
                 _pe_status = "ok" if _months_old <= 1 else ("warn" if _months_old == 2 else "red")
             else:
                 _pe_status = "red"
+            # เช็ค updated_at คู่กับเดือนข้อมูลด้วย — ถ้าสคริปต์ตายเงียบๆ (เช่น source
+            # เปลี่ยนรูปแบบ) เดือนข้อมูลจะยัง "ok" ได้นานถึง ~2 เดือนกว่าจะรู้ตัว แต่ถ้าไฟล์
+            # เองไม่ถูกเขียนทับมา >45 วันทั้งที่ควรรันทุกเดือน ก็เป็นสัญญาณค้างได้เร็วกว่า
+            _pe_updated_at = _dh_parse(_mstats.get("updated_at"))
+            if _pe_updated_at:
+                _pe_file_age_h = _dh_business_age_hours(_pe_updated_at)
+                if _pe_file_age_h >= 60 * 24 and _pe_status == "ok":
+                    _pe_status = "warn"
+                if _pe_file_age_h >= 90 * 24:
+                    _pe_status = "red"
         except Exception:
             _pe_status = "red"
             _pe_note = "อ่านไฟล์ไม่ได้"
@@ -2686,7 +3322,7 @@ def data_health():
                       "financials.db/set_prices.db สร้างใหม่ไม่ได้ถ้า Finnomena ปิด API "
                       "หรือหุ้น delisted (ดู PLAN_universe_data_health.txt งาน 4)"))
 
-    summary = {"ok": 0, "warn": 0, "red": 0}
+    summary = {"ok": 0, "warn": 0, "red": 0, "na": 0}
     for it in items:
         summary[it["status"]] += 1
 
@@ -2703,8 +3339,7 @@ def data_health_ping():
     'ตอนนี้ดึงจาก SET/Yahoo/Finnomena/TradingView ได้จริงไหม' ไม่ได้ผูกกับ mtime"""
     import urllib.request as _dh_ur
     import ssl as _dh_ssl
-
-    results = []
+    from concurrent.futures import ThreadPoolExecutor
 
     def _ping(key, label, url, headers=None, timeout=6):
         t0 = time.time()
@@ -2715,19 +3350,25 @@ def data_health_ping():
                 code = r.getcode()
                 r.read(256)  # แค่พิสูจน์ว่า body มาจริง ไม่ต้องอ่านทั้งหมด
             ms = round((time.time() - t0) * 1000)
-            results.append({"key": key, "label": label, "ok": 200 <= code < 400,
-                             "http_status": code, "ms": ms, "error": None})
+            return {"key": key, "label": label, "ok": 200 <= code < 400,
+                    "http_status": code, "ms": ms, "error": None}
         except Exception as e:
             ms = round((time.time() - t0) * 1000)
-            results.append({"key": key, "label": label, "ok": False,
-                             "http_status": None, "ms": ms, "error": str(e)[:160]})
+            return {"key": key, "label": label, "ok": False,
+                    "http_status": None, "ms": ms, "error": str(e)[:160]}
 
-    _ping("set", "SET.or.th", "https://www.set.or.th/en/market/product/stock/quote/ptt/price")
-    _ping("yahoo", "Yahoo Finance", "https://query1.finance.yahoo.com/v8/finance/chart/PTT.BK")
-    _ping("finnomena", "Finnomena", "https://www.finnomena.com/fn3/api/stock/list?exchange=TH")
-    # TradingView ดึงข้อมูลจริงผ่าน WebSocket (ดู sources/tradingview.py) — ปิงนี้เช็คแค่
-    # "เข้าถึงโดเมนได้ไหม" (เครือข่าย/บล็อก) ไม่ใช่การพิสูจน์ endpoint ข้อมูลเต็มรูปแบบ
-    _ping("tradingview", "TradingView (reachability)", "https://www.tradingview.com/")
+    # ยิงขนานทั้ง 4 แหล่ง (ไม่ใช่ serial) — ถ้าเน็ตล่มทั้งหมด กรณีที่คนกดปุ่มนี้บ่อยที่สุด
+    # จะรอแค่ ~timeout เดียว (~6 วิ) แทนที่จะรอสะสมทีละตัวจนถึง ~24 วิ
+    targets = [
+        ("set", "SET.or.th", "https://www.set.or.th/en/market/product/stock/quote/ptt/price"),
+        ("yahoo", "Yahoo Finance", "https://query1.finance.yahoo.com/v8/finance/chart/PTT.BK"),
+        ("finnomena", "Finnomena", "https://www.finnomena.com/fn3/api/stock/list?exchange=TH"),
+        # TradingView ดึงข้อมูลจริงผ่าน WebSocket (ดู sources/tradingview.py) — ปิงนี้เช็คแค่
+        # "เข้าถึงโดเมนได้ไหม" (เครือข่าย/บล็อก) ไม่ใช่การพิสูจน์ endpoint ข้อมูลเต็มรูปแบบ
+        ("tradingview", "TradingView (reachability)", "https://www.tradingview.com/"),
+    ]
+    with ThreadPoolExecutor(max_workers=len(targets)) as ex:
+        results = list(ex.map(lambda t: _ping(*t), targets))
 
     return jsonify({"checked_at": _dh_dt.now().strftime("%Y-%m-%d %H:%M:%S"), "results": results})
 
@@ -2805,6 +3446,8 @@ _UPDATE_STATUS_LABEL = {
     "full_refresh":   "⟳ Full Refresh",
     "financials_sync": "🔄 อัพเดทงบการเงิน (update_financials.py)",
     "mirror_finnomena": "📥 Mirror US/HK ทั้งตลาด (mirror_finnomena.py)",
+    "us_index_full_refresh": "📈 ดึงราคา US Index ย้อนหลังสูงสุด",
+    "hk_index_full_refresh": "📈 ดึงราคา HK Index ย้อนหลังสูงสุด",
     "offsite_backup":  "🛟 สำรองไฟล์สร้างใหม่ไม่ได้นอกเครื่อง (backup_financials_offsite.py)",
 }
 
@@ -3320,6 +3963,60 @@ def market_breadth():
         return jsonify({"error": str(e)}), 500
 
 
+_us_breadth_cache: dict = {}
+
+@app.route("/api/us-breadth")
+def us_market_breadth():
+    """Market Breadth รายวันของหุ้น US (% above EMA50/200) จาก us_prices.db —
+    reuse services.breadth.compute_breadth ตัวเดียวกับหุ้นไทย, แค่สลับ store module
+    รับ query param ?range=1y|3y|5y|all (default 1y) — cache แยกต่อ range ใน memory,
+    clear ทั้งหมดหลัง US Index refresh/gap-update"""
+    from services.breadth import RANGE_DAYS
+    rng = request.args.get("range", "1y")
+    if rng not in RANGE_DAYS:
+        rng = "1y"
+    if _us_breadth_cache.get(rng):
+        return jsonify(_us_breadth_cache[rng])
+    try:
+        from services.breadth import compute_breadth
+        from core import us_store
+        data = compute_breadth(BASE_DIR, days=RANGE_DAYS[rng], store=us_store)
+        if not data:
+            return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณากด 📈 US Index Max ก่อน"}), 404
+        _us_breadth_cache[rng] = data
+        return jsonify(data)
+    except Exception as e:
+        print(f"[USBreadth] {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
+
+
+_hk_breadth_cache: dict = {}
+
+@app.route("/api/hk-breadth")
+def hk_market_breadth():
+    """Market Breadth รายวันของหุ้น HK (% above EMA50/200) จาก hk_prices.db —
+    reuse services.breadth.compute_breadth ตัวเดียวกับหุ้นไทย/US, แค่สลับ store module
+    รับ query param ?range=1y|3y|5y|all (default 1y) — cache แยกต่อ range ใน memory,
+    clear ทั้งหมดหลัง HK Index refresh/gap-update"""
+    from services.breadth import RANGE_DAYS
+    rng = request.args.get("range", "1y")
+    if rng not in RANGE_DAYS:
+        rng = "1y"
+    if _hk_breadth_cache.get(rng):
+        return jsonify(_hk_breadth_cache[rng])
+    try:
+        from services.breadth import compute_breadth
+        from core import hk_store
+        data = compute_breadth(BASE_DIR, days=RANGE_DAYS[rng], store=hk_store)
+        if not data:
+            return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณากด 📈 HK Index Max ก่อน"}), 404
+        _hk_breadth_cache[rng] = data
+        return jsonify(data)
+    except Exception as e:
+        print(f"[HKBreadth] {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
+
+
 _market_internals_cache: dict = {}
 
 @app.route("/api/market-internals")
@@ -3388,6 +4085,33 @@ def _run_quick():
             _indices_cache["data"] = result
         except Exception as e:
             print(f"[QuickUpdate] Indices error: {e}")
+
+        # อัพเดทราคา US Index (S&P500/Dow/NDX gap-update) + คำนวณ RS/EMA/Stage/52W ใหม่
+        _update(current=96, total=100, message="อัพเดทราคา US Index...")
+        try:
+            def _us_cb(current, total, msg):
+                _update(message=f"US Index: {msg}")
+            n_us = _run_us_index_gap_update(progress_cb=_us_cb)
+            from sources import us_index_metrics
+            us_index_metrics.build(BASE_DIR)
+            _us_breadth_cache.clear()
+            print(f"[QuickUpdate] US Index: gap-updated {n_us} ticker, metrics rebuilt")
+        except Exception as e:
+            print(f"[QuickUpdate] US Index error: {e}")
+
+        # อัพเดทราคา HK Index (HSI/HSCEI/HSTECH gap-update) + คำนวณ RS/EMA/Stage/52W ใหม่
+        _update(current=96, total=100, message="อัพเดทราคา HK Index...")
+        try:
+            def _hk_cb(current, total, msg):
+                _update(message=f"HK Index: {msg}")
+            n_hk = _run_hk_index_gap_update(progress_cb=_hk_cb)
+            from sources import hk_index_metrics
+            hk_index_metrics.build(BASE_DIR)
+            _hk_breadth_cache.clear()
+            _hk_heatmap_cache.clear()
+            print(f"[QuickUpdate] HK Index: gap-updated {n_hk} ticker, metrics rebuilt")
+        except Exception as e:
+            print(f"[QuickUpdate] HK Index error: {e}")
 
         # อัพเดท short sales + NVDR ประจำวัน
         _update(current=97, total=100, message="อัพเดท Short Sales...")
@@ -4173,6 +4897,18 @@ def get_prices():
             if s.get("sym") and s.get("price") is not None:
                 prices["DR:" + s["sym"]] = s["price"]
 
+    # US Index (S&P500/Dow/NDX) stocks from us_index_metrics.json (ราคา USD)
+    from sources import us_index_metrics
+    for s in us_index_metrics.load_local(BASE_DIR).get("stocks", []):
+        if s.get("symbol") and s.get("price") is not None:
+            prices["US:" + s["symbol"]] = s["price"]
+
+    # HK Index (HSI/HSCEI/HSTECH) stocks from hk_index_metrics.json (ราคา HKD)
+    from sources import hk_index_metrics
+    for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", []):
+        if s.get("symbol") and s.get("price") is not None:
+            prices["HK:" + s["symbol"]] = s["price"]
+
     if not prices:
         return jsonify({"error": "no data"}), 404
     return jsonify({"prices": prices, "updated_at": updated_at})
@@ -4316,7 +5052,8 @@ if __name__ == "__main__":
         _t.sleep(3)   # ให้ server เปิดพอร์ตเสร็จก่อน ค่อยเริ่มงานเบื้องหลัง
         tc = app.test_client()
         for ep in ("/api/market-flow", "/api/breadth?range=1y",
-                   "/api/market-internals", "/api/financials-analytics"):
+                   "/api/market-internals", "/api/financials-analytics",
+                   "/api/us-breadth?range=1y", "/api/hk-breadth?range=1y"):
             try:
                 t0 = _t.time()
                 tc.get(ep)

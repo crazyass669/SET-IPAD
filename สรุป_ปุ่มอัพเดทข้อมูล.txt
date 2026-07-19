@@ -1,0 +1,85 @@
+สรุปปุ่มอัพเดทข้อมูลใน SET Dashboard
+=====================================
+
+1) Quick Update
+-----------------
+Endpoint: /api/quick-update -> run_quick_update() (services/refresh.py)
+- โหลด set_history.json / set_prices.db ที่มีอยู่ -> หาว่าหุ้นแต่ละตัวข้อมูลถึงวันไหนแล้ว
+  -> ดึงเฉพาะ "ช่องว่าง" (gap) จากวันล่าสุดถึงวันนี้เท่านั้น (ไม่ดึงย้อนหลังทั้งหมด, ไม่ดึง fundamentals ใหม่)
+- ต่อด้วย:
+  - sync insider trades / ผู้ถือหุ้นใหญ่
+  - อัพเดท Indices (TradingView, ไม่ full history)
+  - gap-update ราคา US Index และ HK Index พร้อมคำนวณ RS/Stage/EMA/52W ใหม่
+  - อัพเดท short sales + NVDR ประจำวัน
+- เวลาที่ใช้: ~2-5 นาที
+- เหมาะกด: หลัง 17:30 น. (หลัง SET ปิด)
+- หลีกเลี่ยง: 14:30-17:30 น. (Yahoo กำลัง sync)
+
+2) Full Refresh
+-----------------
+Endpoint: /api/refresh -> run_with_progress() (services/refresh.py)
+- ดึงประวัติราคาใหม่ทั้งหมด (period=max) + fundamentals ของหุ้น SET + DR/DRx ทุกตัว
+  แล้วคำนวณ metrics ใหม่ทั้งกระดาน
+- สำรอง set_data.json เดิมไว้ก่อน ถ้าล้มเหลวจะ restore กลับอัตโนมัติ
+- อัพเดท Indices แบบ full history + Capital Flow ด้วย
+- เวลาที่ใช้: 20 นาที - 1.5 ชั่วโมง
+- เหมาะกด: หลัง 17:30 น. เช่นกัน
+
+3) US Index Max
+-----------------
+Endpoint: /api/us-index-full-refresh
+- ดึงราคา OHLC ย้อนหลังสูงสุด (full history) ของหุ้นในดัชนี S&P500 + Dow + Nasdaq100 (~518 ตัว)
+- เก็บลง us_prices.db (แยกจาก set_prices.db)
+- กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน (Quick Update ทำ gap-update ของดัชนีนี้อยู่แล้ว)
+- ใช้ตอน backfill ประวัติยาวครั้งแรก หรือดัชนีเปลี่ยน constituent
+
+4) HK Index Max
+-----------------
+Endpoint: /api/hk-index-full-refresh
+- ดึงราคา OHLC ย้อนหลังสูงสุด (full history) ของหุ้นในดัชนี HSI + HSTECH + HSCEI (~105 ตัว)
+- เก็บลง hk_prices.db (แยกจาก set_prices.db / us_prices.db)
+- กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน (Quick Update ทำ gap-update ของดัชนีนี้อยู่แล้ว)
+- ใช้ตอน backfill ประวัติยาวครั้งแรก หรือดัชนีเปลี่ยน constituent
+
+5) Data Health
+-----------------
+ไม่ใช่ปุ่มดึงข้อมูล - เป็นหน้าตรวจสอบความสดของไฟล์/DB ทั้งหมดที่ dashboard ใช้ในจอเดียว
+(set_prices.db, us_prices.db, hk_prices.db, financials.db ฯลฯ)
+พร้อม badge เตือนถ้ารอบล่าสุดของ Quick Update / Full Refresh ล้มเหลว
+
+ปุ่มย่อยในแต่ละหน้า (ไม่ใช่ปุ่มหลัก) - ผูกกับ Quick Update แค่ไหน
+=====================================
+
+6) ⚡ อัปเดตราคา (หน้า DR / DRx)
+-----------------
+Endpoint: /api/dr-quick-update -> dr_quick_update() (app.py:772)
+- Quick Update (ปุ่มหลัก) ไม่ครอบคลุม DR/DRx เลย (_run_quick() ไม่มีการ sync DR ใดๆ)
+- ปุ่มนี้ดึงราคาล่าสุดของ DR แบบ gap-update จาก Yahoo เข้า cache ในหน่วยความจำ (ไม่ใช่ DB ถาวร)
+- มีแต่ Full Refresh เท่านั้นที่ดึง DR/DRx เต็มรูปแบบ (full history ไม่ใช่ gap เร็วๆ)
+=> ต้องกดปุ่มนี้เองทุกครั้งที่อยากได้ราคา DR ล่าสุด เพราะ Quick Update ข้าม DR ไปเลย
+
+7) ⚡ อัปเดตราคา (หน้า Heatmap ดัชนี US)
+-----------------
+Endpoint: /api/us-index-heatmap -> us_index_heatmap() (app.py:2511)
+- ไม่เกี่ยวกับ Quick Update เลย - ยิง Yahoo Finance สดของตัวเอง แยกระบบจาก us_prices.db
+  (ราคา cache 15 นาที, market cap cache แยก 1 วัน)
+- ไม่จำเป็นต้องกดเองตามปกติ เพราะ cache 15 นาทีหมดอายุแล้วโหลดหน้าใหม่จะดึงสดอัตโนมัติอยู่แล้ว
+  ปุ่มนี้มีไว้บังคับข้าม cache ก่อนเวลาเท่านั้น
+
+8) ⚡ อัพเดท Market Cap (หน้า Heatmap ดัชนี HK)
+-----------------
+Endpoint: /api/hk-index-heatmap -> hk_index_heatmap() (app.py:2420)
+- % เปลี่ยนแปลง (chg_1d/chg_1w) คำนวณจาก hk_prices.db ซึ่ง Quick Update อัพเดทให้ทุกวันอยู่แล้ว
+  -> ส่วนนี้ไม่ต้องกดปุ่ม
+- Market Cap เป็นค่าที่ต้องยิง Yahoo สดแยกต่างหาก (ไม่มีเก็บใน DB ราคา) cache ไว้ 1 วัน
+  ไม่ผูกกับ Quick Update แต่ก็ไม่จำเป็นต้องกดเอง เพราะ cache จะหมดอายุแล้วดึงใหม่อัตโนมัติทุกวันอยู่แล้ว
+  ปุ่มนี้ไว้บังคับสดก่อนเวลาเท่านั้น
+
+ลำดับการกดแนะนำ
+=====================================
+1. หลัง 17:30 น. ทุกวันทำการ -> กด Quick Update
+   (ครอบคลุมหุ้นไทย + US + HK gap-update อยู่แล้ว เพียงพอสำหรับใช้งานประจำวัน)
+2. นานๆ ครั้ง (เช่น ทุกไตรมาส หรือสงสัยว่า fundamentals ล้าสมัย) -> กด Full Refresh
+3. ครั้งแรกที่ตั้งระบบ หรือดัชนีเปลี่ยน constituent -> กด US Index Max และ HK Index Max
+   เพื่อ backfill ประวัติยาว (หลังจากนั้นปล่อยให้ Quick Update gap-update ต่อพอ)
+4. เช็ค Data Health เมื่อไหร่ก็ได้ เพื่อดูว่ามีอะไรค้าง/ล้มเหลวหรือไม่

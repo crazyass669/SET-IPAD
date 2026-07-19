@@ -238,6 +238,12 @@ async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = nul
           _shortData = null; _insData = null;
           Object.keys(_flowDataByMarket).forEach(k => delete _flowDataByMarket[k]); _valStockData = null;
           _drLoaded = false; _drData = null;
+          // ล้าง cache หุ้น US/HK ด้วย — job ที่วิ่งผ่าน _startJob (Quick Update, US/HK
+          // Index Max) อัพเดทราคา/metrics ฝั่ง server เสร็จแล้วเสมอ ถ้าไม่ล้างตรงนี้
+          // หน้า "หุ้น US/HK", Heatmap, Rotation จะยังโชว์ข้อมูลเก่าจนกว่าจะ F5 เอง
+          _usData = null; _usSectorRanks = {}; _usBreadthCacheByRange = {};
+          _hkData = null; _hkSectorRanks = {}; _hkBreadthCacheByRange = {};
+          _hmData = {}; _hkHmData = {};
           loadData();
           // if already on a data page, reload it immediately
           const _activePage = document.querySelector('.page.active')?.id;
@@ -247,6 +253,12 @@ async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = nul
           if (_activePage === 'page-short')     loadShortPage();
           if (_activePage === 'page-insider')   loadInsiderPage();
           if (_activePage === 'page-flow')      loadFlowPage();
+          if (_activePage === 'page-us-stocks')   loadUsStocksPage();
+          if (_activePage === 'page-us-heatmap')  loadHeatmapPage();
+          if (_activePage === 'page-us-rotation') loadUsRotation();
+          if (_activePage === 'page-hk-stocks')   loadHkStocksPage();
+          if (_activePage === 'page-hk-heatmap')  loadHkHeatmapPage();
+          if (_activePage === 'page-hk-rotation') loadHkRotation();
           if (onDone) onDone(s);   // ส่ง state สุดท้าย (มี message ที่มี ok/fail count) ให้ caller ใช้ต่อได้
         }
       }, 800);
@@ -287,11 +299,22 @@ function confirmRefresh(period) {
             renderDRTable();
         }
       }).catch(() => {});
+    checkDataHealthBadge();
   });
 }
 function startQuickUpdate() {
   fetch('/api/dr-quick-update', { method: 'POST' }).catch(() => {});
-  _startJob("/api/quick-update", "quick-update-btn", "⚡ Quick Update");
+  _startJob("/api/quick-update", "quick-update-btn", "⚡ Quick Update", null, checkDataHealthBadge);
+}
+
+function startUsIndexFullRefresh() {
+  if (!confirm('ดึงราคา OHLC ย้อนหลังสูงสุดของ S&P 500 + Dow + Nasdaq 100 (~518 ตัว)?\n\nใช้เวลาสักครู่ (ขึ้นกับความยาวประวัติแต่ละตัว)')) return;
+  _startJob("/api/us-index-full-refresh", "us-index-refresh-btn", "📈 US Index Max", null, checkDataHealthBadge);
+}
+
+function startHkIndexFullRefresh() {
+  if (!confirm('ดึงราคา OHLC ย้อนหลังสูงสุดของ HSI + HSTECH + HSCEI (~105 ตัว)?\n\nใช้เวลาสักครู่ (ขึ้นกับความยาวประวัติแต่ละตัว)')) return;
+  _startJob("/api/hk-index-full-refresh", "hk-index-refresh-btn", "📈 HK Index Max", null, checkDataHealthBadge);
 }
 
 async function restartServer() {
@@ -2562,9 +2585,13 @@ function _wlPopulateSymList() {
   if (dl && dl.children.length === 0) {
     const setSyms = (DATA?.stocks || []).map(s => s.symbol).sort();
     const drSyms  = (_drData || []).map(s => s.sym).sort();
+    const usSyms  = (_usData?.stocks || []).map(s => s.symbol).sort();
+    const hkSyms  = (_hkData?.stocks || []).map(s => s.symbol).sort();
     dl.innerHTML =
       setSyms.map(s => `<option value="${s}" label="${s} (SET)">`).join("") +
-      drSyms.map(s => `<option value="${s}" label="${s} (DR/DRx)">`).join("");
+      drSyms.map(s => `<option value="${s}" label="${s} (DR/DRx)">`).join("") +
+      usSyms.map(s => `<option value="${s}" label="${s} (US Index)">`).join("") +
+      hkSyms.map(s => `<option value="${s}" label="${s} (HK Index)">`).join("");
   }
 }
 
@@ -2572,13 +2599,18 @@ function addToWatchlist() {
   let raw = document.getElementById("wl-input").value.trim().toUpperCase();
   if (!raw) return;
 
-  // ถ้าพิมพ์ "DR:AAPL" ให้เก็บตรง ๆ
-  // ถ้าพิมพ์ "AAPL" → ตรวจว่าอยู่ใน _drData → เติม "DR:" ให้อัตโนมัติ
+  // ถ้าพิมพ์ "DR:AAPL"/"US:AAPL"/"HK:0700.HK" ให้เก็บตรง ๆ
+  // ถ้าพิมพ์ "AAPL" เฉย ๆ → ตรวจลำดับ SET > DR > US Index > HK Index แล้วเติม prefix ให้อัตโนมัติ
+  // (SET/DR คงพฤติกรรมเดิมไว้ก่อน — US/HK เป็นแค่ fallback ตัวที่ไม่มีใน SET/DR)
   let sym = raw;
-  if (!sym.startsWith("DR:")) {
-    const matchesDR  = (_drData || []).some(s => s.sym === sym);
+  if (!sym.startsWith("DR:") && !sym.startsWith("US:") && !sym.startsWith("HK:")) {
     const matchesSET = (DATA?.stocks || []).some(s => s.symbol === sym);
-    if (matchesDR && !matchesSET) sym = "DR:" + sym;
+    const matchesDR  = (_drData || []).some(s => s.sym === sym);
+    const matchesUS  = (_usData?.stocks || []).some(s => s.symbol === sym);
+    const matchesHK  = (_hkData?.stocks || []).some(s => s.symbol === sym);
+    if (!matchesSET && matchesDR) sym = "DR:" + sym;
+    else if (!matchesSET && !matchesDR && matchesUS) sym = "US:" + sym;
+    else if (!matchesSET && !matchesDR && !matchesUS && matchesHK) sym = "HK:" + sym;
   }
 
   if (!watchlist.includes(sym)) {
@@ -2615,26 +2647,37 @@ function renderWatchlist() {
   }
   const stockMap = Object.fromEntries(DATA.stocks.map(s => [s.symbol, s]));
   const drMap    = Object.fromEntries((_drData || []).map(s => [s.sym, s]));
+  const usMap    = Object.fromEntries((_usData?.stocks || []).map(s => [s.symbol, s]));
+  const hkMap    = Object.fromEntries((_hkData?.stocks || []).map(s => [s.symbol, s]));
 
-  // ถ้ามี symbol ใน watchlist ที่ไม่เจอใน SET และ DR ยังไม่โหลด → fetch DR แล้ว re-render
-  if (!_drData) {
-    const hasUnknown = watchlist.some(sym => {
-      const clean = sym.startsWith("DR:") ? sym.slice(3) : sym;
-      return !stockMap[sym] && !stockMap[clean];
+  // ถ้ามี symbol ใน watchlist ที่ไม่เจอใน SET/DR/US Index/HK Index และยังไม่โหลดชุดข้อมูลนั้น
+  // → fetch เฉพาะชุดที่ขาดจริง (ดู prefix DR:/US:/HK: บอกตลาดอยู่แล้ว) แล้ว re-render
+  // เดิม fetch ทั้ง 3 endpoint (รวม ~9MB) ทุกครั้งที่มี symbol ค้างแม้จะรู้ตลาดจาก prefix แล้ว
+  if (!_drData || !_usData || !_hkData) {
+    const need = new Set();
+    let hasUnknown = false;
+    watchlist.forEach(sym => {
+      const hasPfx = sym.startsWith("DR:") || sym.startsWith("US:") || sym.startsWith("HK:");
+      const clean = hasPfx ? sym.slice(3) : sym;
+      if (stockMap[sym] || stockMap[clean] || drMap[clean] || usMap[clean] || hkMap[clean]) return;
+      hasUnknown = true;
+      if (hasPfx) need.add(sym.slice(0, 2));
+      else { need.add("DR"); need.add("US"); need.add("HK"); }   // ไม่รู้ตลาด — เช็คทุกแหล่งเหมือนเดิม
     });
     if (hasUnknown) {
       document.getElementById("wl-tbody").innerHTML =
-        `<tr><td colspan="17"><div class="empty" style="font-size:12px">กำลังโหลดข้อมูล DR/DRx...</div></td></tr>`;
-      fetch('/api/dr')
-        .then(r => r.json())
-        .then(d => {
-          if (d.stocks) {
-            _drData = d.stocks;
-            _drLoaded = true;
-          }
-          renderWatchlist();
-        })
-        .catch(() => renderWatchlist());
+        `<tr><td colspan="17"><div class="empty" style="font-size:12px">กำลังโหลดข้อมูล DR/DRx, US Index และ HK Index...</div></td></tr>`;
+      Promise.all([
+        (_drData || !need.has("DR")) ? Promise.resolve() : fetch('/api/dr').then(r => r.json()).then(d => {
+          if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
+        }).catch(() => {}),
+        (_usData || !need.has("US")) ? Promise.resolve() : fetch('/api/us-index-metrics').then(r => r.json()).then(d => {
+          _usData = d;
+        }).catch(() => {}),
+        (_hkData || !need.has("HK")) ? Promise.resolve() : fetch('/api/hk-index-metrics').then(r => r.json()).then(d => {
+          _hkData = d;
+        }).catch(() => {}),
+      ]).then(renderWatchlist);
       return;
     }
   }
@@ -2691,10 +2734,89 @@ function renderWatchlist() {
         </tr>`;
     }
 
-    // ── SET row (หรือ DR ที่เก็บโดยไม่มี prefix — migrate อัตโนมัติ) ──
+    // ── US Index row (S&P500/Dow/NDX จาก us_index_metrics.json) ──
+    if (sym.startsWith("US:")) {
+      const under = sym.slice(3);
+      const u = usMap[under];
+      if (!u) return `
+        <tr>
+          <td class="text2">—</td>
+          <td><strong style="color:var(--blue)">${under}</strong>
+            <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:4px">US</span>
+          </td>
+          <td colspan="14" class="text2">ยังไม่โหลดข้อมูล US Index — ไปหน้า "หุ้น US" แล้วกด Quick Update ก่อน</td>
+          <td><button class="wl-del-btn" onclick="removeFromWatchlist('${sym}')">✕</button></td>
+        </tr>`;
+      return `
+        <tr data-sym="US:${u.symbol}">
+          <td><span class="${rsColor(u.rs_score)}" style="font-weight:700">${u.rs_score??"-"}</span></td>
+          <td>
+            <strong class="sym-link" style="color:var(--blue)" onclick="openUsChartModal('${u.symbol}')">${u.symbol}</strong>
+            <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">US</span>
+            ${_usTvLink(u.symbol)}
+          </td>
+          <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.name||"—"}</td>
+          <td style="font-size:11px">${u.sector||"—"}</td>
+          <td class="r">${u.price!=null?u.price.toFixed(2):"—"}</td>
+          <td class="r">${pct(u.ret_1d)}</td>
+          <td class="r">${pct(u.ret_1w)}</td>
+          <td class="r">${pct(u.ret_1m)}</td>
+          <td class="r">${pct(u.ret_3m)}</td>
+          <td class="r">${pct(u.ret_ytd)}</td>
+          <td class="r">${pct(u.ret_1y)}</td>
+          <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
+          <td class="r text2" style="font-size:11px">—</td>
+          <td class="r">${emaBadge(u.above_ema50)}</td>
+          <td class="r">${emaBadge(u.above_ema200)}</td>
+          <td class="r" style="white-space:nowrap">${_wlAlertCell(sym)}</td>
+          <td><button class="wl-del-btn" onclick="removeFromWatchlist('${sym}')">✕</button></td>
+        </tr>`;
+    }
+
+    // ── HK Index row (HSI/HSTECH/HSCEI จาก hk_index_metrics.json) ──
+    if (sym.startsWith("HK:")) {
+      const under = sym.slice(3);
+      const h = hkMap[under];
+      if (!h) return `
+        <tr>
+          <td class="text2">—</td>
+          <td><strong style="color:var(--blue)">${under}</strong>
+            <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:4px">HK</span>
+          </td>
+          <td colspan="14" class="text2">ยังไม่โหลดข้อมูล HK Index — ไปหน้า "หุ้น HK" แล้วกด Quick Update ก่อน</td>
+          <td><button class="wl-del-btn" onclick="removeFromWatchlist('${sym}')">✕</button></td>
+        </tr>`;
+      return `
+        <tr data-sym="HK:${h.symbol}">
+          <td><span class="${rsColor(h.rs_score)}" style="font-weight:700">${h.rs_score??"-"}</span></td>
+          <td>
+            <strong class="sym-link" style="color:var(--blue)" onclick="openHkChartModal('${h.symbol}')">${h.symbol}</strong>
+            <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">HK</span>
+            ${_hkTvLink(h.symbol)}
+          </td>
+          <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h.name||"—"}</td>
+          <td style="font-size:11px">${h.sector||"—"}</td>
+          <td class="r">${h.price!=null?h.price.toFixed(2):"—"}</td>
+          <td class="r">${pct(h.ret_1d)}</td>
+          <td class="r">${pct(h.ret_1w)}</td>
+          <td class="r">${pct(h.ret_1m)}</td>
+          <td class="r">${pct(h.ret_3m)}</td>
+          <td class="r">${pct(h.ret_ytd)}</td>
+          <td class="r">${pct(h.ret_1y)}</td>
+          <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
+          <td class="r text2" style="font-size:11px">—</td>
+          <td class="r">${emaBadge(h.above_ema50)}</td>
+          <td class="r">${emaBadge(h.above_ema200)}</td>
+          <td class="r" style="white-space:nowrap">${_wlAlertCell(sym)}</td>
+          <td><button class="wl-del-btn" onclick="removeFromWatchlist('${sym}')">✕</button></td>
+        </tr>`;
+    }
+
+    // ── SET row (หรือ DR/US/HK ที่เก็บโดยไม่มี prefix — migrate อัตโนมัติ) ──
     const s = stockMap[sym];
     if (!s) {
-      // ตรวจว่าเป็น DR underlying ที่ไม่มี prefix
+      // ตรวจว่าเป็น DR underlying ที่ไม่มี prefix (เช็คก่อน US — ถ้าเคยมีทั้งคู่ให้ยึด DR
+      // ตามพฤติกรรมเดิมก่อนเพิ่ม US Index)
       const drMatch = drMap[sym];
       if (drMatch) {
         // migrate: เปลี่ยน sym → DR:sym ใน localStorage แล้ว re-render
@@ -2737,6 +2859,78 @@ function renderWatchlist() {
             <td><button class="wl-del-btn" onclick="removeFromWatchlist('${newSym}')">✕</button></td>
           </tr>`;
       }
+      // ตรวจว่าเป็น US Index ticker ที่ไม่มี prefix (เฉพาะตัวที่ไม่ใช่ DR ด้วย)
+      const usMatch = usMap[sym];
+      if (usMatch) {
+        // migrate: เปลี่ยน sym → US:sym ใน localStorage แล้ว re-render
+        const idx = watchlist.indexOf(sym);
+        if (idx !== -1) {
+          watchlist[idx] = "US:" + sym;
+          localStorage.setItem("set_wl", JSON.stringify(watchlist));
+        }
+        const u = usMatch;
+        const newSym = "US:" + sym;
+        return `
+          <tr data-sym="US:${u.symbol}">
+            <td><span class="${rsColor(u.rs_score)}" style="font-weight:700">${u.rs_score??"-"}</span></td>
+            <td>
+              <strong class="sym-link" style="color:var(--blue)" onclick="openUsChartModal('${u.symbol}')">${u.symbol}</strong>
+              <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">US</span>
+              ${_usTvLink(u.symbol)}
+            </td>
+            <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.name||"—"}</td>
+            <td style="font-size:11px">${u.sector||"—"}</td>
+            <td class="r">${u.price!=null?u.price.toFixed(2):"—"}</td>
+            <td class="r">${pct(u.ret_1d)}</td>
+            <td class="r">${pct(u.ret_1w)}</td>
+            <td class="r">${pct(u.ret_1m)}</td>
+            <td class="r">${pct(u.ret_3m)}</td>
+            <td class="r">${pct(u.ret_ytd)}</td>
+            <td class="r">${pct(u.ret_1y)}</td>
+            <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
+            <td class="r text2" style="font-size:11px">—</td>
+            <td class="r">${emaBadge(u.above_ema50)}</td>
+            <td class="r">${emaBadge(u.above_ema200)}</td>
+            <td class="r" style="white-space:nowrap">${_wlAlertCell(newSym)}</td>
+            <td><button class="wl-del-btn" onclick="removeFromWatchlist('${newSym}')">✕</button></td>
+          </tr>`;
+      }
+      // ตรวจว่าเป็น HK Index ticker ที่ไม่มี prefix (เฉพาะตัวที่ไม่ใช่ DR/US ด้วย)
+      const hkMatch = hkMap[sym];
+      if (hkMatch) {
+        // migrate: เปลี่ยน sym → HK:sym ใน localStorage แล้ว re-render
+        const idx = watchlist.indexOf(sym);
+        if (idx !== -1) {
+          watchlist[idx] = "HK:" + sym;
+          localStorage.setItem("set_wl", JSON.stringify(watchlist));
+        }
+        const h = hkMatch;
+        const newSym = "HK:" + sym;
+        return `
+          <tr data-sym="HK:${h.symbol}">
+            <td><span class="${rsColor(h.rs_score)}" style="font-weight:700">${h.rs_score??"-"}</span></td>
+            <td>
+              <strong class="sym-link" style="color:var(--blue)" onclick="openHkChartModal('${h.symbol}')">${h.symbol}</strong>
+              <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">HK</span>
+              ${_hkTvLink(h.symbol)}
+            </td>
+            <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h.name||"—"}</td>
+            <td style="font-size:11px">${h.sector||"—"}</td>
+            <td class="r">${h.price!=null?h.price.toFixed(2):"—"}</td>
+            <td class="r">${pct(h.ret_1d)}</td>
+            <td class="r">${pct(h.ret_1w)}</td>
+            <td class="r">${pct(h.ret_1m)}</td>
+            <td class="r">${pct(h.ret_3m)}</td>
+            <td class="r">${pct(h.ret_ytd)}</td>
+            <td class="r">${pct(h.ret_1y)}</td>
+            <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
+            <td class="r text2" style="font-size:11px">—</td>
+            <td class="r">${emaBadge(h.above_ema50)}</td>
+            <td class="r">${emaBadge(h.above_ema200)}</td>
+            <td class="r" style="white-space:nowrap">${_wlAlertCell(newSym)}</td>
+            <td><button class="wl-del-btn" onclick="removeFromWatchlist('${newSym}')">✕</button></td>
+          </tr>`;
+      }
       return `
         <tr>
           <td class="text2">—</td><td><strong>${sym}</strong></td>
@@ -2771,6 +2965,23 @@ function renderWatchlist() {
   // sparklines: SET
   renderSparklinesInTable("wl-tbody", DATA.stocks.filter(s => watchlist.includes(s.symbol)));
 
+  // sparklines: US Index — reuse ตัววาดเดียวกับ SET (มี price_history ในฟอร์แมตเดียวกัน
+  // เพราะ process_stock() ตัวเดียวกัน) แค่ clone symbol ใส่ prefix ให้ตรงกับ data-sym
+  if (_usData?.stocks?.length) {
+    const usRows = _usData.stocks
+      .filter(u => watchlist.includes("US:" + u.symbol))
+      .map(u => ({ ...u, symbol: "US:" + u.symbol }));
+    renderSparklinesInTable("wl-tbody", usRows);
+  }
+
+  // sparklines: HK Index — เหมือน US ทุกประการ (process_stock() ตัวเดียวกัน)
+  if (_hkData?.stocks?.length) {
+    const hkRows = _hkData.stocks
+      .filter(h => watchlist.includes("HK:" + h.symbol))
+      .map(h => ({ ...h, symbol: "HK:" + h.symbol }));
+    renderSparklinesInTable("wl-tbody", hkRows);
+  }
+
   // sparklines: DR — วาดจาก close100 ที่ฝังใน data-dr-close
   requestAnimationFrame(() => {
     document.querySelectorAll("#wl-tbody tr[data-dr-close]").forEach(row => {
@@ -2803,6 +3014,8 @@ function showPage(id, btn) {
   if (id === "fundamentals") renderFundamentals();
   if (id === "dr")           loadDRPage();
   if (id === "financials")   initFinPage();
+  if (id === "us-stocks")    loadUsStocksPage();
+  if (id === "hk-stocks")    loadHkStocksPage();
   if (id === "us-heatmap")   loadHeatmapPage();
   if (id === "stock-news")   initNewsPage();
   if (id === "dr-rotation")  loadDRRotation();
@@ -2816,6 +3029,9 @@ function showPage(id, btn) {
   if (id === "indices")      loadIndicesPage();
   if (id === "stage")        renderStage();
   if (id === "ema-breadth")  loadBreadthCharts();
+  if (id === "us-rotation")  loadUsRotation();
+  if (id === "hk-rotation")  loadHkRotation();
+  if (id === "hk-heatmap")   loadHkHeatmapPage();
   if (id === "fcfyield")     renderFcfYieldTable();
   if (id === "data-health")  loadDataHealth();
   if (id === "overview")     { setTimeout(() => { if (!_nhLoaded) loadNewHighChart(); }, 100); }
@@ -4408,20 +4624,27 @@ const FS_PRESETS = [
            ocf_ni_ratio: 1, profit_yoy_q: 10, quarters_available: 16 } },
 ];
 
-// filter ที่หุ้น US/HK ทั้งตลาด (mirror) ไม่มีข้อมูล — งบ Yahoo (Finnomena ล้วนไม่มี)
-// + ค่าสดจากราคา (rs/ema200/high52/rvol มีเฉพาะหุ้นไทย+DR ใน universe หลัก)
-// เลือก universe US/HK เมื่อไหร่ ปิดช่องพวกนี้อัตโนมัติกันงง (กรองแล้วได้ศูนย์)
+// filter ที่หุ้น US/HK ทั้งตลาด (mirror) ไม่มีงบ Yahoo เลย (Finnomena ล้วน) — เลือก
+// universe US/HK เมื่อไหร่ ปิดช่องพวกนี้อัตโนมัติกันงง (กรองแล้วได้ศูนย์)
 const FS_YAHOO_ONLY = new Set(['rev_cagr', 'profit_streak', 'rule_of_40', 'growth_percentile',
   'interest_coverage', 'cash_cycle', 'goodwill_ratio', 'ocf_neg_years', 'shares_chg_yoy',
   'net_cash_positive', 'buyback', 'dividend_coverage',
-  'rs', 'pct_vs_ema200', 'pct_off_high52', 'rvol',
   'pe_sector_pctile', 'roe_sector_pctile']);
+
+// filter สายราคา (rs/ema200/52w high/rvol) — มีข้อมูลจริงเฉพาะหุ้น US ที่อยู่ใน
+// S&P500+Dow+NDX (~518 ตัว, overlay จาก us_index_metrics.json ใน app.py) ตัวอื่น
+// นอกดัชนีหลัก + หุ้น HK ทั้งหมด ยังไม่มีราคารายวันเก็บไว้ (ปิดเฉพาะ HK)
+const FS_PRICE_ONLY = new Set(['rs', 'pct_vs_ema200', 'pct_off_high52', 'rvol']);
 
 function _fsApplyUniverseUI() {
   const uni = document.getElementById('fs-universe')?.value;
-  const off = (uni === 'us' || uni === 'hk');
+  const offYahoo = (uni === 'us' || uni === 'hk');
+  const offPrice = (uni === 'hk');   // US มี overlay ราคาแล้ว (เฉพาะตัวในดัชนีหลัก) — เปิดไว้
   FS_FILTERS.forEach(f => {
-    if (f.g || !FS_YAHOO_ONLY.has(f.k)) return;
+    if (f.g) return;
+    const isYahoo = FS_YAHOO_ONLY.has(f.k), isPrice = FS_PRICE_ONLY.has(f.k);
+    if (!isYahoo && !isPrice) return;
+    const off = isYahoo ? offYahoo : offPrice;
     const el = document.getElementById('fsin-' + f.k) || document.getElementById('fsen-' + f.k);
     if (!el) return;
     el.disabled = off;
@@ -4829,7 +5052,17 @@ async function _runFscreenerMirror(uni, conds) {
     renderFsTable(rows);
     const note = document.createElement('div');
     note.style.cssText = 'font-size:11px;color:var(--text2);margin:4px 0 8px';
-    note.innerHTML = 'ℹ หุ้น US/HK ชุดนี้ใช้งบ <b>Finnomena ล้วน</b> — ตัวกรองที่ต้องใช้งบ Yahoo (net cash, cash cycle, goodwill, buyback, FCF, CAGR รายปี, interest coverage, dilution) และค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) จะไม่มีค่าและกรองไม่ได้';
+    note.innerHTML = 'ℹ หุ้น US/HK ชุดนี้ใช้งบ <b>Finnomena ล้วน</b> — ตัวกรองที่ต้องใช้งบ Yahoo (net cash, cash cycle, goodwill, buyback, FCF, CAGR รายปี, interest coverage, dilution) จะไม่มีค่าและกรองไม่ได้'
+      + (uni === 'us'
+        ? ' · ค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) มีเฉพาะหุ้นใน S&P500/Dow/Nasdaq 100'
+        : ' และค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) ก็ไม่มีเช่นกัน');
+    // เปิดฟิลเตอร์ราคาใน universe US = ตัดหุ้นนอกดัชนีหลัก (ไม่มีค่า rs/ema/52w/rvol)
+    // ออกจากผลทั้งหมดโดยปริยาย — เตือนชัดๆ ไม่ให้เข้าใจว่าหุ้นหาย/บั๊ก
+    if (uni === 'us' && conds.some(c => FS_PRICE_ONLY.has(c.k))) {
+      note.innerHTML = '<span style="color:#e3b341">⚠ เปิดฟิลเตอร์ราคา (RS / EMA200 / high 52wk / RVOL) อยู่ — '
+        + 'ฟิลเตอร์กลุ่มนี้มีค่าเฉพาะหุ้นใน S&P500 / Dow / Nasdaq 100 หุ้น US นอกดัชนีถูกตัดออกจากผลทั้งหมด</span><br>'
+        + note.innerHTML;
+    }
     box.insertBefore(note, box.firstChild);
   } catch (e) {
     box.innerHTML = '<div class="empty" style="color:var(--red)">ค้นไม่สำเร็จ: ' + e.message + '</div>';
@@ -5923,6 +6156,10 @@ async function _fetchLongHistory() {
   try {
     const endpoint = _cmStock._isDR
       ? `/api/dr-history/${encodeURIComponent(_cmStock.symbol)}`
+      : _cmStock._isUSIdx
+      ? `/api/us-history/${encodeURIComponent(_cmStock.symbol)}`
+      : _cmStock._isHKIdx
+      ? `/api/hk-history/${encodeURIComponent(_cmStock.symbol)}`
       : `/api/history/${encodeURIComponent(_cmStock.symbol)}`;
     const r = await fetch(endpoint);
     const d = await r.json();
@@ -6036,6 +6273,160 @@ async function _fetchDRFullHistory(sym) {
 }
 
 // ============================================================
+// US INDEX STOCKS — chart modal (S&P500/Dow/NDX, ข้อมูลจาก us_index_metrics.json)
+// ใช้โมดัลเดียวกับหุ้นไทย/DR แค่ปิด tab/ลิงก์ที่เป็นของไทยล้วน (factsheet/งบ SET/
+// insider-short-nvdr) — price_history/vol_history ติดมากับ metrics อยู่แล้ว (~2 ปี)
+// วาดได้ทันทีไม่ต้องรอ fetch, ส่วน 5Y/Max ค่อยดึงเพิ่มจาก us_prices.db เบื้องหลัง
+// ============================================================
+function openUsChartModal(symbol) {
+  const s = (_usData?.stocks || []).find(x => x.symbol === symbol);
+  if (!s || !s.price_history || s.price_history.length < 5) {
+    alert(`ไม่มีข้อมูลราคาสำหรับ ${symbol} — ลองกด US Index Max`);
+    return;
+  }
+
+  const titleEl = document.getElementById('cm-title');
+  titleEl.textContent = `${s.symbol}  ${s.name || ''}`;
+  titleEl.title = titleEl.textContent;
+  const idxTags = ['in_sp500', 'in_dow', 'in_ndx']
+    .filter(k => s[k]).map(k => ({ in_sp500: 'S&P500', in_dow: 'Dow', in_ndx: 'NDX' }[k])).join(' · ');
+  document.getElementById('cm-sub').textContent = `${s.sector || '—'} · RS ${s.rs_score ?? '—'} · ${idxTags}`;
+  document.getElementById('cm-tv-link').href = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(_usTvSymbol(s.symbol))}&interval=D`;
+  const fsLink = document.getElementById('cm-factsheet-link');
+  if (fsLink) fsLink.style.display = 'none';
+  const setLink = document.getElementById('cm-set-link');
+  if (setLink) setLink.style.display = 'none';
+
+  const mk = (val, lbl, cls = '') =>
+    `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
+  document.getElementById('cm-metrics').innerHTML = [
+    `<div><div class="cm-metric-val">${s.price?.toFixed(2) ?? '—'}</div><div class="cm-metric-lbl">ราคา</div></div>`,
+    mk(pct(s.ret_1d), '1D%'),
+    mk(pct(s.ret_1w), '1W%'),
+    mk(pct(s.ret_1m), '1M%'),
+    mk(pct(s.ret_3m), '3M%'),
+    `<span id="cm-extra-metrics" style="display:contents">` +
+      mk(pct(s.ret_ytd), 'YTD%') +
+      mk(s.high_52w?.toFixed(2) ?? '—', '52W High', 'text2') +
+      mk(s.low_52w?.toFixed(2)  ?? '—', '52W Low',  'text2') +
+      (s.ath != null ? mk(s.ath.toFixed(2), 'ATH', 'text2') : '') +
+      (s.ath_pct != null ? mk((s.ath_pct > 0 ? '+' : '') + s.ath_pct.toFixed(2) + '%', '% จาก ATH', s.ath_pct >= -5 ? 'green' : s.ath_pct >= -20 ? 'yellow' : 'red') : '') +
+    `</span>`,
+    mk(stageBadge(s.stage), 'Stage'),
+  ].join('');
+
+  _cmStock = { ...s, price_history: s.price_history, _isDR: false, _isUSIdx: true };
+  _cmTf = '1y';
+  // เว้น _cmHistoryData ไว้ null (ต่างจาก price_history ที่วาด preview ทันที) —
+  // ให้แท็บ 5Y/Max ยังทำงาน (setCmTf เช็ค !_cmHistoryData ก่อนไปดึงประวัติเต็มจาก
+  // us_prices.db) ถ้าตั้งไว้ล่วงหน้าจะเข้าใจผิดว่ามีข้อมูลครบแล้วไม่ไปดึงเพิ่ม
+  _cmHistoryData = null;
+  _cmVolumeData  = s.vol_history || null;
+  _cmLivePrice = null; _cmLivePriceSym = null;
+  _cmFinLoaded = null;
+  const finBtn    = document.getElementById('cm-mode-fin');
+  const stocksBtn = document.getElementById('cm-mode-stocks');
+  // งบการเงินอ่านจาก namespace mirror US (is_dr=1&market=US — ดู _loadCmFin) ชุดเดียว
+  // กับหน้างบการเงินเต็ม — financials.db เป็น local-only เลยเปิดเฉพาะเวอร์ชันบนเครื่อง
+  if (finBtn)    finBtn.style.display    = IS_STATIC ? 'none' : '';
+  if (stocksBtn) stocksBtn.style.display = 'none';
+  _renderDRDescription(symbol, 'US');
+  setCmMode('chart');
+  document.querySelectorAll('#chart-modal .filter-btn').forEach(b => b.classList.remove('active'));
+  const tfBtn = document.getElementById('cm-tf-1y');
+  if (tfBtn) tfBtn.classList.add('active');
+  document.getElementById('chart-modal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  requestAnimationFrame(() => _drawChart(_cmStock, _cmHistoryData));
+
+  // สถิติระยะยาว จาก yfinance สด (ticker ตรงกับ symbol อยู่แล้ว ไม่ต้องแปลง)
+  _loadPriceAnalytics(symbol, 'cm-lts', () => _cmStock?.symbol === symbol, symbol);
+  const flowBox = document.getElementById('cm-flow-summary');
+  if (flowBox) { flowBox.style.display = 'none'; flowBox.innerHTML = ''; }
+  const insWrap = document.getElementById('popup-insider-section');
+  if (insWrap) insWrap.style.display = 'none';
+  const shortWrap = document.getElementById('popup-short-section');
+  if (shortWrap) shortWrap.style.display = 'none';
+  const nvdrWrap = document.getElementById('popup-nvdr-section');
+  if (nvdrWrap) nvdrWrap.style.display = 'none';
+}
+
+// ============================================================
+// HK INDEX STOCKS — chart modal (HSI/HSTECH/HSCEI, ข้อมูลจาก hk_index_metrics.json)
+// ก็อปโครงจาก openUsChartModal ทั้งหมด ต่างแค่ flag _isHKIdx (ให้ setCmTf ไปดึง
+// /api/hk-history แทน) และ tag ดัชนี in_hsi/in_hstech/in_hscei
+// ============================================================
+function openHkChartModal(symbol) {
+  const s = (_hkData?.stocks || []).find(x => x.symbol === symbol);
+  if (!s || !s.price_history || s.price_history.length < 5) {
+    alert(`ไม่มีข้อมูลราคาสำหรับ ${symbol} — ลองกด HK Index Max`);
+    return;
+  }
+
+  const titleEl = document.getElementById('cm-title');
+  titleEl.textContent = `${s.symbol}  ${s.name || ''}`;
+  titleEl.title = titleEl.textContent;
+  const idxTags = ['in_hsi', 'in_hstech', 'in_hscei']
+    .filter(k => s[k]).map(k => ({ in_hsi: 'HSI', in_hstech: 'HSTECH', in_hscei: 'HSCEI' }[k])).join(' · ');
+  document.getElementById('cm-sub').textContent = `${s.sector || '—'} · RS ${s.rs_score ?? '—'} · ${idxTags}`;
+  const tvCode = s.symbol.replace(/\.HK$/i, '').replace(/^0+/, '') || '0';
+  document.getElementById('cm-tv-link').href = `https://www.tradingview.com/chart/?symbol=HKEX%3A${encodeURIComponent(tvCode)}&interval=D`;
+  const fsLink = document.getElementById('cm-factsheet-link');
+  if (fsLink) fsLink.style.display = 'none';
+  const setLink = document.getElementById('cm-set-link');
+  if (setLink) setLink.style.display = 'none';
+
+  const mk = (val, lbl, cls = '') =>
+    `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
+  document.getElementById('cm-metrics').innerHTML = [
+    `<div><div class="cm-metric-val">${s.price?.toFixed(2) ?? '—'}</div><div class="cm-metric-lbl">ราคา</div></div>`,
+    mk(pct(s.ret_1d), '1D%'),
+    mk(pct(s.ret_1w), '1W%'),
+    mk(pct(s.ret_1m), '1M%'),
+    mk(pct(s.ret_3m), '3M%'),
+    `<span id="cm-extra-metrics" style="display:contents">` +
+      mk(pct(s.ret_ytd), 'YTD%') +
+      mk(s.high_52w?.toFixed(2) ?? '—', '52W High', 'text2') +
+      mk(s.low_52w?.toFixed(2)  ?? '—', '52W Low',  'text2') +
+      (s.ath != null ? mk(s.ath.toFixed(2), 'ATH', 'text2') : '') +
+      (s.ath_pct != null ? mk((s.ath_pct > 0 ? '+' : '') + s.ath_pct.toFixed(2) + '%', '% จาก ATH', s.ath_pct >= -5 ? 'green' : s.ath_pct >= -20 ? 'yellow' : 'red') : '') +
+    `</span>`,
+    mk(stageBadge(s.stage), 'Stage'),
+  ].join('');
+
+  _cmStock = { ...s, price_history: s.price_history, _isDR: false, _isUSIdx: false, _isHKIdx: true };
+  _cmTf = '1y';
+  _cmHistoryData = null;
+  _cmVolumeData  = s.vol_history || null;
+  _cmLivePrice = null; _cmLivePriceSym = null;
+  _cmFinLoaded = null;
+  const finBtn    = document.getElementById('cm-mode-fin');
+  const stocksBtn = document.getElementById('cm-mode-stocks');
+  // งบการเงิน mirror HK: namespace ใน financials.db ใช้รหัสดิบไม่มี .HK (เช่น "0700")
+  // — _loadCmFin ตัด suffix ให้เอง (local-only เหมือนฝั่ง US)
+  if (finBtn)    finBtn.style.display    = IS_STATIC ? 'none' : '';
+  if (stocksBtn) stocksBtn.style.display = 'none';
+  _renderDRDescription(symbol.replace(/\.HK$/i, ''), 'HK', symbol);
+  setCmMode('chart');
+  document.querySelectorAll('#chart-modal .filter-btn').forEach(b => b.classList.remove('active'));
+  const tfBtn = document.getElementById('cm-tf-1y');
+  if (tfBtn) tfBtn.classList.add('active');
+  document.getElementById('chart-modal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  requestAnimationFrame(() => _drawChart(_cmStock, _cmHistoryData));
+
+  _loadPriceAnalytics(symbol, 'cm-lts', () => _cmStock?.symbol === symbol, symbol);
+  const flowBox = document.getElementById('cm-flow-summary');
+  if (flowBox) { flowBox.style.display = 'none'; flowBox.innerHTML = ''; }
+  const insWrap = document.getElementById('popup-insider-section');
+  if (insWrap) insWrap.style.display = 'none';
+  const shortWrap = document.getElementById('popup-short-section');
+  if (shortWrap) shortWrap.style.display = 'none';
+  const nvdrWrap = document.getElementById('popup-nvdr-section');
+  if (nvdrWrap) nvdrWrap.style.display = 'none';
+}
+
+// ============================================================
 // DR COMPANY DESCRIPTION — Yahoo Finance longBusinessSummary แปลไทยล่วงหน้า
 // (local sync ผ่านปุ่ม, bake เป็น static ให้เว็บมือถือ/ไอแพดด้วย ดู STATIC_MAP)
 // ============================================================
@@ -6088,13 +6479,15 @@ function _drDescHtml(d, textId) {
     </div>`;
 }
 
-function _renderDRDescription(sym, market) {
+// guardSym: symbol ที่ตั้งไว้ใน _cmStock (ใช้เช็คว่า modal ยังเป็นตัวเดิม) — ต่างจาก sym
+// เฉพาะหุ้น HK index ที่ _cmStock.symbol = "0700.HK" แต่ fetch ใช้รหัสดิบ "0700"
+function _renderDRDescription(sym, market, guardSym = sym) {
   const box = document.getElementById('cm-desc-box');
   if (!box) return;
   box.style.display = 'none';
   box.innerHTML = '';
   const draw = (d) => {
-    if (_cmStock?.symbol !== sym) return;   // modal เปลี่ยนตัวไปแล้วระหว่างรอโหลด
+    if (_cmStock?.symbol !== guardSym) return;   // modal เปลี่ยนตัวไปแล้วระหว่างรอโหลด
     if (!d || !d.th) return;                // ไม่มีข้อมูล — ไม่โชว์กล่องเปล่า
     box.style.display = 'block';
     box.innerHTML = _drDescHtml(d, 'cm-desc-text');
@@ -6799,9 +7192,13 @@ function _loadCmFin() {
   // ดึงจาก financials.db ที่เก็บไว้ในเครื่อง (ใช้ได้ทั้งหุ้นไทยและ DR) แทนที่จะยิง Yahoo
   // สดทุกครั้ง — ถ้าตัวนี้ยังไม่เคย sync มาก่อน backend จะดึงสดให้ครั้งเดียวแล้วเก็บถาวรต่อ
   // is_dr=1 บอก backend ให้อ่าน/เขียน namespace ฝั่ง DR แยกจากหุ้นไทย กัน symbol ชื่อชนกัน (เช่น META)
+  // หุ้น US/HK index (นอก DR universe) ใช้ namespace mirror เดียวกับหน้างบการเงินเต็ม:
+  // is_dr=1 + market บอกตลาด — HK ต้องตัด .HK ออกให้เหลือรหัสดิบ (mirror เก็บเป็น "0700")
   const isDrSym = !!_cmStock?._isDR;
-  const qs = isDrSym ? '&is_dr=1' : '';
-  _loadCmFinBand(sym, qs);
+  const mirMarket = isDrSym ? null : _cmStock?._isUSIdx ? 'US' : _cmStock?._isHKIdx ? 'HK' : null;
+  const finSym = mirMarket === 'HK' ? sym.replace(/\.HK$/i, '') : sym;
+  const qs = isDrSym ? '&is_dr=1' : mirMarket ? `&is_dr=1&market=${mirMarket}` : '';
+  _loadCmFinBand(sym, qs, finSym);
   // ลอง Finnomena รายปีก่อน (รวมจากไตรมาส ย้อนได้ ~16-20 ปี แทน Yahoo ~4-5 ปี) — ถ้าหุ้นนี้
   // ไม่มี (ตลาดที่ Finnomena ไม่ครอบ เช่น JP/EU หรือปีบัญชีไม่ตรงปฏิทินจนตรวจสอบไม่ผ่าน)
   // fallback ไป Yahoo รายปีเหมือนเดิมอัตโนมัติ — ผู้ใช้ไม่ต้องกดอะไรเพิ่ม
@@ -6811,14 +7208,14 @@ function _loadCmFin() {
     document.getElementById('cm-fin-body').innerHTML = _renderCmFin(d, source);
     requestAnimationFrame(() => _drawCmFinChart(d, source));
   };
-  fetch(`/api/financials-full/${encodeURIComponent(sym)}?source=finnomena_y${qs}`)
+  fetch(`/api/financials-full/${encodeURIComponent(finSym)}?source=finnomena_y${qs}`)
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error('no-finnomena');
       showFin(d, 'finnomena_y');
     })
     .catch(() => {
-      fetch(`/api/financials-full/${encodeURIComponent(sym)}?source=yahoo${qs}`)
+      fetch(`/api/financials-full/${encodeURIComponent(finSym)}?source=yahoo${qs}`)
         .then(r => r.json())
         .then(d => {
           if (d.error) { document.getElementById('cm-fin-loading').style.display = 'none';
@@ -6835,19 +7232,23 @@ function _loadCmFin() {
 // แถบ "มูลค่าเทียบอดีตตัวเอง (PE/PBV band)" ในหน้า 🧾 งบการเงิน ของ popup กราฟหุ้น — ต้องใช้ข้อมูล
 // รายไตรมาส (finnomena_q) แยกจากตารางสรุปรายปีด้านบน (_renderCmFin ใช้ finnomena_y/yahoo)
 // ยิงคู่ขนานไปเลย ไม่ต้องรอตารางหลักโหลดเสร็จก่อน — พลาด/ไม่มีข้อมูลก็แค่ไม่โชว์กล่องนี้ ไม่กระทบตารางหลัก
-function _loadCmFinBand(sym, qs) {
+function _loadCmFinBand(sym, qs, fetchSym = sym) {
+  // fetchSym ต่างจาก sym เฉพาะหุ้น HK index: _cmStock.symbol = "0700.HK" (ไว้เช็คว่า
+  // modal ยังเป็นตัวเดิม) แต่ fetch ต้องใช้รหัสดิบ "0700" ตาม namespace mirror
   const box = document.getElementById('cm-fin-band');
   if (!box) return;
   box.innerHTML = '';
-  fetch(`/api/financials-full/${encodeURIComponent(sym)}?source=finnomena_q${qs}`)
+  fetch(`/api/financials-full/${encodeURIComponent(fetchSym)}?source=finnomena_q${qs}`)
     .then(r => r.json())
     .then(d => {
       if (_cmStock?.symbol !== sym) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
       if (d.error) return;
       box.innerHTML = _finTrendSection(d, 'finnomena_q', 'cm-');
       if (!IS_STATIC) {
-        _loadLiveValuationBand(d, !!_cmStock?._isDR, _cmStock?.currency === 'USD' ? 'US' : _cmStock?.currency === 'HKD' ? 'HK' : null,
-          'cm-', () => _cmStock?.symbol === sym);
+        const isDr = !!(_cmStock?._isDR || _cmStock?._isUSIdx || _cmStock?._isHKIdx);
+        const market = _cmStock?._isUSIdx ? 'US' : _cmStock?._isHKIdx ? 'HK'
+          : _cmStock?.currency === 'USD' ? 'US' : _cmStock?.currency === 'HKD' ? 'HK' : null;
+        _loadLiveValuationBand(d, isDr, market, 'cm-', () => _cmStock?.symbol === sym);
       }
     })
     .catch(() => {});
@@ -7501,6 +7902,883 @@ function startUSIndexSync() {
 }
 
 // ============================================================
+// US STOCKS — RS/Stage/52W/Momentum/EMA ของสมาชิกดัชนี S&P500/Dow/NDX
+// อ่าน /api/us-index-metrics (คำนวณล่วงหน้าตอน Quick Update / US Index Max)
+// ============================================================
+let _usData = null;          // {updated_at,total,stocks:[...]}
+let _usIndex = 'SP500';      // SP500 | DOW | NDX
+let _usView = 'all';         // all | rs80 | stage2 | nearhigh | momentum | ema200
+let _usSector = 'ALL';
+let _usSort = { key: 'rs_score', dir: 1 };   // dir 1 = มาก→น้อย (ดู usSortBy)
+
+const _US_IDX_FLAG = { SP500: 'in_sp500', DOW: 'in_dow', NDX: 'in_ndx' };
+
+function _usPctOffHigh(s) {
+  if (!s.price || !s.high_52w) return null;
+  return (s.price - s.high_52w) / s.high_52w * 100;   // ≤ 0
+}
+
+function setUsIndex(idx, btn) {
+  _usIndex = idx;
+  document.querySelectorAll('#us-idx-sp500,#us-idx-dow,#us-idx-ndx').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  _rebuildUsSectorFilter();
+  if (_usMode === 'sectors') loadUsSectorRanks();
+  else renderUsTable();
+}
+
+function setUsView(view, btn) {
+  _usView = view;
+  document.querySelectorAll('#us-view-btns .filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  // preset sort ให้เข้ากับมุมมอง
+  if (view === 'nearhigh')      _usSort = { key: '_pct_off_high', dir: 1 };
+  else if (view === 'momentum') _usSort = { key: 'rs_momentum', dir: 1 };
+  else                          _usSort = { key: 'rs_score', dir: 1 };
+  renderUsTable();
+}
+
+function usSortBy(key) {
+  if (_usSort.key === key) {
+    _usSort.dir *= -1;
+  } else {
+    // คอลัมน์ตัวเลข dir:1 = มาก→น้อยก่อน (ปกติ) แต่คอลัมน์ string (Symbol/Sector)
+    // ใช้ localeCompare*(-1) เมื่อ dir=1 ทำให้กลายเป็น Z→A ตั้งแต่คลิกแรก — สลับ
+    // dir เริ่มต้นเป็น -1 เฉพาะคอลัมน์ string ให้ได้ A→Z ตามที่คนคาดหวังตอนคลิกแรก
+    const col = _US_COLS.find(c => c.key === key);
+    _usSort = { key, dir: col && col.str ? -1 : 1 };
+  }
+  renderUsTable();
+}
+
+// ============================================================
+// US % ABOVE EMA ย้อนหลัง — เหมือนกราฟ bc-ema ของหน้า EMA Breadth หุ้นไทย
+// แต่ดึงจาก /api/us-breadth (us_prices.db) แทน — reuse _bcSetup/_bcAxes/_bcLine
+// ============================================================
+let _usBreadthData = null;
+let _usBreadthRange = '1y';
+let _usBreadthCacheByRange = {};
+let _usBreadthLoading = false;
+
+function setUsBreadthRange(range, btn) {
+  if (_usBreadthRange === range) return;
+  _usBreadthRange = range;
+  document.querySelectorAll('#us-breadth-range-btns .filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  loadUsBreadthChart();
+}
+
+async function loadUsBreadthChart() {
+  const rng = _usBreadthRange;
+  const cached = _usBreadthCacheByRange[rng];
+  if (cached) { _usBreadthData = cached; drawUsBreadthChart(); return; }
+  if (_usBreadthLoading) return;
+  _usBreadthLoading = true;
+  ['us-bc-ema', 'us-bc-nhnl', 'us-bc-mcc'].forEach(id => {
+    const loading = document.getElementById(id + '-loading');
+    const canvas  = document.getElementById(id);
+    if (loading) { loading.style.display = 'block'; loading.textContent = 'กำลังโหลด...'; }
+    if (canvas)  canvas.style.display = 'none';
+  });
+  try {
+    const r = await fetch('/api/us-breadth?range=' + encodeURIComponent(rng));
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    _usBreadthCacheByRange[rng] = d;
+    if (rng === _usBreadthRange) {
+      _usBreadthData = d;
+      drawUsBreadthChart();
+    }
+  } catch (e) {
+    ['us-bc-ema', 'us-bc-nhnl', 'us-bc-mcc'].forEach(id => {
+      const el = document.getElementById(id + '-loading');
+      if (el) el.textContent = 'โหลดไม่สำเร็จ: ' + e.message;
+    });
+  } finally {
+    _usBreadthLoading = false;
+    if (_usBreadthRange !== rng && !_usBreadthCacheByRange[_usBreadthRange]) loadUsBreadthChart();
+  }
+}
+
+// Breadth chart (EMA50/200 breadth, NH-NL, McClellan) — เดิม US/HK มีฟังก์ชันแยกกัน
+// (drawUsBreadthChart/drawHkBreadthChart) เหมือนกันทุกบรรทัดยกเว้น id prefix รวมเป็น
+// ฟังก์ชันเดียวรับ prefix ('us'/'hk') — ตัวเรียกเดิม (drawUsBreadthChart()) ยังใช้ได้
+// เหมือนเดิมทุกจุด ไม่ต้องแก้ call site
+function drawIndexBreadthChart(prefix, d) {
+  if (!d) return;
+  const n = d.dates.length;
+
+  let c = _bcSetup(`${prefix}-bc-ema`);
+  if (c) {
+    const toY = _bcAxes(c, 0, 100, d.dates, [20, 50, 80]);
+    _bcLine(c, d.pct_above_ema50,  toY, '#e3b341');
+    _bcLine(c, d.pct_above_ema200, toY, '#3fb950');
+    document.getElementById(`${prefix}-bc-ema-now`).innerHTML =
+      ` — <span style="color:#e3b341">EMA50: ${d.pct_above_ema50[n-1]}%</span> · ` +
+      `<span style="color:#3fb950">EMA200: ${d.pct_above_ema200[n-1]}%</span>`;
+  }
+
+  c = _bcSetup(`${prefix}-bc-nhnl`);
+  if (c) {
+    const net = d.nh.map((h, i) => h - d.nl[i]);
+    const m = Math.max(...net.map(Math.abs), 5);
+    const toY = _bcAxes(c, -m, m, d.dates, [0]);
+    _bcBars(c, net, toY, 0);
+    const r = d.nhnl_ratio[n-1];
+    document.getElementById(`${prefix}-bc-nhnl-now`).textContent =
+      ` — NH ${d.nh[n-1]} / NL ${d.nl[n-1]}` + (r != null ? ` (ratio ${r})` : '');
+  }
+
+  c = _bcSetup(`${prefix}-bc-mcc`);
+  if (c) {
+    const osc = d.mcclellan_osc;
+    const m = Math.max(...osc.filter(v => v != null).map(Math.abs), 50);
+    const toY = _bcAxes(c, -m, m, d.dates, [-70, 0, 70]);
+    _bcBars(c, osc, toY, 0);
+    const cur = osc[n-1], sum = d.mcclellan_sum[n-1];
+    document.getElementById(`${prefix}-bc-mcc-now`).innerHTML =
+      ` — <span style="color:${cur >= 0 ? '#3fb950' : '#f85149'}">${cur}</span>` +
+      ` · summation ${sum >= 0 ? '+' : ''}${sum}`;
+  }
+}
+
+function drawUsBreadthChart() {
+  drawIndexBreadthChart('us', _usBreadthData);
+}
+
+// ============================================================
+// US ROTATION — RRG ของหุ้น US เทียบค่าเฉลี่ยดัชนี/sector ที่เลือก
+// reuse drawRotationScatter (ตัวเดียวกับหน้า Rotation ไทย/DR Rotation)
+// ============================================================
+let _usRotIndex = 'SP500';   // SP500 | DOW | NDX | ALL
+let _usRotTf = 'long';
+let _usRotBenchmark = 'index';   // index | sector — 'sector' มีผลก็ต่อเมื่อเลือก sector เจาะจง (ไม่ใช่ ALL)
+
+function setUsRotBenchmark(mode, btn) {
+  _usRotBenchmark = mode;
+  document.querySelectorAll('#usrot-bm-index,#usrot-bm-sector').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  renderUsRotation();
+}
+
+function setUsRotIndex(idx, btn) {
+  _usRotIndex = idx;
+  document.querySelectorAll('#usrot-idx-sp500,#usrot-idx-dow,#usrot-idx-ndx,#usrot-idx-all').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  _rebuildUsRotSectorFilter();
+  renderUsRotation();
+}
+
+function setUsRotTf(tf, btn) {
+  _usRotTf = tf;
+  document.querySelectorAll('#usrot-tf-long,#usrot-tf-short').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const sub = document.getElementById('usrot-subtitle');
+  if (sub) sub.innerHTML = 'RRG ของหุ้น US แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · ' +
+    (tf === 'short' ? 'แกน X = 1M% Y = 1W% (เทียบกลุ่ม)' : 'แกน X = 3M% Y = 1M% (เทียบกลุ่ม)');
+  renderUsRotation();
+}
+
+async function loadUsRotation() {
+  const gate = document.getElementById('usrot-gate'), body = document.getElementById('usrot-body');
+  if (!_usData) {
+    gate.style.display = ''; gate.textContent = 'กำลังดึงข้อมูลหุ้น US...'; body.style.display = 'none';
+    try {
+      const d = await (await fetch('/api/us-index-metrics')).json();
+      if (d.error) throw new Error(d.error);
+      _usData = d;
+    } catch (e) {
+      gate.textContent = 'โหลดข้อมูลหุ้น US ไม่สำเร็จ: ' + e.message;
+      return;
+    }
+  }
+  if (!_usData || !_usData.stocks || !_usData.stocks.length) {
+    gate.style.display = ''; body.style.display = 'none';
+    gate.textContent = 'ยังไม่มีข้อมูล — กดปุ่ม 📈 US Index Max หรือ ⚡ Quick Update ก่อน';
+    return;
+  }
+  gate.style.display = 'none'; body.style.display = '';
+  _rebuildUsRotSectorFilter();
+  renderUsRotation();
+}
+
+function _rebuildUsRotSectorFilter() {
+  if (!_usData || !_usData.stocks) return;
+  const flag = _US_IDX_FLAG[_usRotIndex];
+  const inIdx = flag ? _usData.stocks.filter(s => s[flag]) : _usData.stocks;
+  const sectors = ['ALL', ...[...new Set(inIdx.map(s => s.sector || 'Unknown'))].sort()];
+  const sel = document.getElementById('usrot-sector');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = sectors.map(s => `<option value="${s}">${s === 'ALL' ? 'ทุก Sector' : s}</option>`).join('');
+  sel.value = sectors.includes(cur) ? cur : 'ALL';
+}
+
+function renderUsRotation() {
+  if (!_usData || !_usData.stocks) return;
+  const flag = _US_IDX_FLAG[_usRotIndex];
+  const universe = flag ? _usData.stocks.filter(s => s[flag]) : _usData.stocks;
+  const isShort = _usRotTf === 'short';
+  const valid = universe.filter(s => isShort
+    ? (s.ret_1m != null && s.ret_1w != null)
+    : (s.ret_3m != null && s.ret_1m != null));
+  if (!valid.length) return;
+  const sector = document.getElementById('usrot-sector')?.value || 'ALL';
+  const shown = sector === 'ALL' ? valid : valid.filter(s => (s.sector || 'Unknown') === sector);
+  // benchmark = ค่าเฉลี่ยทั้งดัชนี (ปกติ) หรือค่าเฉลี่ยเฉพาะ sector ที่เลือก (ถ้าสลับโหมด
+  // และเลือก sector เจาะจงแล้ว) — ใช้ดูว่าใครแรง/อ่อนกว่า "เพื่อนร่วม sector" แทนทั้งตลาด
+  const bmSet = (_usRotBenchmark === 'sector' && sector !== 'ALL') ? shown : valid;
+  const avg = f => { const v = bmSet.filter(s => s[f] != null); return v.length ? v.reduce((a, s) => a + s[f], 0) / v.length : 0; };
+  const a3m = avg('ret_3m'), a1m = avg('ret_1m'), a1w = avg('ret_1w'), a6m = avg('ret_6m'), a1y = avg('ret_1y');
+  const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
+  const items = shown.map(s => ({
+    name: s.symbol, sector: s.sector,
+    ret_3m: rel(s.ret_3m, a3m), ret_1m: rel(s.ret_1m, a1m), ret_1w: rel(s.ret_1w, a1w),
+    ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
+  }));
+  const info = document.getElementById('usrot-info');
+  const bmLabel = bmSet === shown ? `เฉลี่ย sector "${sector}"` : 'เฉลี่ยทั้งดัชนี';
+  if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmLabel} (${bmSet.length} ตัว)` +
+    (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
+             : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
+  drawRotationScatter(items, { canvasId: 'us-rotation-map', legendId: 'us-rot-legend', tf: _usRotTf, onOpen: openUsChartModal });
+}
+
+// ============================================================
+// HK ROTATION — RRG ของหุ้น HK เทียบค่าเฉลี่ยดัชนี/sector ที่เลือก
+// ก็อปโครงจาก US ROTATION ด้านบนทั้งหมด — reuse drawRotationScatter ตัวเดิม 100%
+// ============================================================
+let _hkRotIndex = 'HSI';   // HSI | HSTECH | HSCEI | ALL
+let _hkRotTf = 'long';
+let _hkRotBenchmark = 'index';   // index | sector — เหตุผลเดียวกับ _usRotBenchmark
+
+function setHkRotBenchmark(mode, btn) {
+  _hkRotBenchmark = mode;
+  document.querySelectorAll('#hkrot-bm-index,#hkrot-bm-sector').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  renderHkRotation();
+}
+
+function setHkRotIndex(idx, btn) {
+  _hkRotIndex = idx;
+  document.querySelectorAll('#hkrot-idx-hsi,#hkrot-idx-hstech,#hkrot-idx-hscei,#hkrot-idx-all').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  _rebuildHkRotSectorFilter();
+  renderHkRotation();
+}
+
+function setHkRotTf(tf, btn) {
+  _hkRotTf = tf;
+  document.querySelectorAll('#hkrot-tf-long,#hkrot-tf-short').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const sub = document.getElementById('hkrot-subtitle');
+  if (sub) sub.innerHTML = 'RRG ของหุ้น HK แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · ' +
+    (tf === 'short' ? 'แกน X = 1M% Y = 1W% (เทียบกลุ่ม)' : 'แกน X = 3M% Y = 1M% (เทียบกลุ่ม)');
+  renderHkRotation();
+}
+
+async function loadHkRotation() {
+  const gate = document.getElementById('hkrot-gate'), body = document.getElementById('hkrot-body');
+  if (!_hkData) {
+    gate.style.display = ''; gate.textContent = 'กำลังดึงข้อมูลหุ้น HK...'; body.style.display = 'none';
+    try {
+      const d = await (await fetch('/api/hk-index-metrics')).json();
+      if (d.error) throw new Error(d.error);
+      _hkData = d;
+    } catch (e) {
+      gate.textContent = 'โหลดข้อมูลหุ้น HK ไม่สำเร็จ: ' + e.message;
+      return;
+    }
+  }
+  if (!_hkData || !_hkData.stocks || !_hkData.stocks.length) {
+    gate.style.display = ''; body.style.display = 'none';
+    gate.textContent = 'ยังไม่มีข้อมูล — กดปุ่ม 📈 HK Index Max หรือ ⚡ Quick Update ก่อน';
+    return;
+  }
+  gate.style.display = 'none'; body.style.display = '';
+  _rebuildHkRotSectorFilter();
+  renderHkRotation();
+}
+
+function _rebuildHkRotSectorFilter() {
+  if (!_hkData || !_hkData.stocks) return;
+  const flag = _HK_IDX_FLAG[_hkRotIndex];
+  const inIdx = flag ? _hkData.stocks.filter(s => s[flag]) : _hkData.stocks;
+  const sectors = ['ALL', ...[...new Set(inIdx.map(s => s.sector || 'Unknown'))].sort()];
+  const sel = document.getElementById('hkrot-sector');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = sectors.map(s => `<option value="${s}">${s === 'ALL' ? 'ทุก Sector' : s}</option>`).join('');
+  sel.value = sectors.includes(cur) ? cur : 'ALL';
+}
+
+function renderHkRotation() {
+  if (!_hkData || !_hkData.stocks) return;
+  const flag = _HK_IDX_FLAG[_hkRotIndex];
+  const universe = flag ? _hkData.stocks.filter(s => s[flag]) : _hkData.stocks;
+  const isShort = _hkRotTf === 'short';
+  const valid = universe.filter(s => isShort
+    ? (s.ret_1m != null && s.ret_1w != null)
+    : (s.ret_3m != null && s.ret_1m != null));
+  if (!valid.length) return;
+  const sector = document.getElementById('hkrot-sector')?.value || 'ALL';
+  const shown = sector === 'ALL' ? valid : valid.filter(s => (s.sector || 'Unknown') === sector);
+  const bmSet = (_hkRotBenchmark === 'sector' && sector !== 'ALL') ? shown : valid;
+  const avg = f => { const v = bmSet.filter(s => s[f] != null); return v.length ? v.reduce((a, s) => a + s[f], 0) / v.length : 0; };
+  const a3m = avg('ret_3m'), a1m = avg('ret_1m'), a1w = avg('ret_1w'), a6m = avg('ret_6m'), a1y = avg('ret_1y');
+  const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
+  const items = shown.map(s => ({
+    name: s.symbol, sector: s.sector,
+    ret_3m: rel(s.ret_3m, a3m), ret_1m: rel(s.ret_1m, a1m), ret_1w: rel(s.ret_1w, a1w),
+    ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
+  }));
+  const info = document.getElementById('hkrot-info');
+  const bmLabel = bmSet === shown ? `เฉลี่ย sector "${sector}"` : 'เฉลี่ยทั้งดัชนี';
+  if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmLabel} (${bmSet.length} ตัว)` +
+    (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
+             : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
+  drawRotationScatter(items, { canvasId: 'hk-rotation-map', legendId: 'hk-rot-legend', tf: _hkRotTf, onOpen: openHkChartModal });
+}
+
+function loadUsStocksPage() {
+  if (_usData) { renderUsTable(); loadUsBreadthChart(); return; }
+  const tbody = document.getElementById('us-stocks-tbody');
+  if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
+  fetch('/api/us-index-metrics')
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) throw new Error(d.error);
+      _usData = d;
+      if (!d.stocks || !d.stocks.length) {
+        if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">ยังไม่มีข้อมูล — กดปุ่ม <b>📈 US Index Max</b> หรือ <b>⚡ Quick Update</b> เพื่อดึงราคาและคำนวณ metrics</td></tr>`;
+        return;
+      }
+      _rebuildUsSectorFilter();
+      renderUsTable();
+      loadUsBreadthChart();
+    })
+    .catch(e => {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
+    });
+}
+
+function _rebuildUsSectorFilter() {
+  if (!_usData) return;
+  const flag = _US_IDX_FLAG[_usIndex];
+  const inIdx = _usData.stocks.filter(s => s[flag]);
+  const sectors = ['ALL', ...[...new Set(inIdx.map(s => s.sector || 'Unknown'))].sort()];
+  const sel = document.getElementById('us-sector-filter');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = sectors.map(s => `<option value="${s}">${s === 'ALL' ? 'ทุก Sector' : s}</option>`).join('');
+  sel.value = sectors.includes(cur) ? cur : 'ALL';
+  _usSector = sel.value;
+}
+
+function _usFilteredStocks() {
+  if (!_usData) return [];
+  const flag = _US_IDX_FLAG[_usIndex];
+  let rows = _usData.stocks.filter(s => s[flag]);
+  // precompute derived fields
+  rows = rows.map(s => ({ ...s, _pct_off_high: _usPctOffHigh(s) }));
+  const sel = document.getElementById('us-sector-filter');
+  _usSector = sel ? sel.value : 'ALL';
+  if (_usSector !== 'ALL') rows = rows.filter(s => (s.sector || 'Unknown') === _usSector);
+  const q = (document.getElementById('us-search')?.value || '').trim().toLowerCase();
+  if (q) rows = rows.filter(s => s.symbol.toLowerCase().includes(q) || (s.name || '').toLowerCase().includes(q));
+  // view filter
+  if (_usView === 'rs80')     rows = rows.filter(s => (s.rs_score ?? -1) >= 80);
+  else if (_usView === 'stage2')   rows = rows.filter(s => s.stage === 2);
+  else if (_usView === 'nearhigh') rows = rows.filter(s => s._pct_off_high != null && s._pct_off_high >= -5);
+  else if (_usView === 'momentum') rows = rows.filter(s => (s.rs_momentum ?? 0) > 0);
+  else if (_usView === 'ema200')   rows = rows.filter(s => s.above_ema200 === true);
+  return rows;
+}
+
+const _US_COLS = [
+  { key: 'rs_score',      label: 'RS',        w: 46 },
+  { key: 'symbol',        label: 'Symbol',    w: 90, str: true },
+  { key: 'sector',        label: 'Sector',    w: 150, str: true },
+  { key: 'price',         label: 'ราคา',       w: 70 },
+  { key: 'ret_1d',        label: '1D',        w: 62 },
+  { key: 'ret_1w',        label: '1W',        w: 62 },
+  { key: 'ret_1m',        label: '1M',        w: 62 },
+  { key: 'ret_3m',        label: '3M',        w: 62 },
+  { key: 'ret_1y',        label: '1Y',        w: 66 },
+  { key: 'rs_momentum',   label: 'RS Δ4w',    w: 62 },
+  { key: '_pct_off_high', label: '% จาก High', w: 76 },
+  { key: 'above_ema50',   label: 'EMA50',     w: 56 },
+  { key: 'above_ema200',  label: 'EMA200',    w: 58 },
+  { key: 'stage',         label: 'Stage',     w: 80 },
+];
+
+// TradingView ใช้ "." คั่น class share (BRK.B) ส่วน ticker ในไฟล์ local/us_prices.db
+// เป็นรูปแบบ yfinance ("BRK-B") — ไม่แปลงก่อนจะเปิดหน้า TradingView ค้นหาไม่เจอ
+function _usTvSymbol(sym) {
+  return sym.replace(/-/g, '.');
+}
+
+function _usTvLink(sym) {
+  return `<a href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(_usTvSymbol(sym))}" target="_blank" title="เปิด TradingView" style="text-decoration:none;font-size:10px;margin-left:3px;opacity:.6">↗</a>`;
+}
+
+function renderUsTable() {
+  if (!_usData) return;
+  let rows = _usFilteredStocks();
+  rows.sort((a, b) => {
+    const av = a[_usSort.key], bv = b[_usSort.key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1; if (bv == null) return -1;
+    if (typeof av === 'string') return av.localeCompare(bv) * (_usSort.dir === 1 ? -1 : 1);
+    return (bv - av) * _usSort.dir;
+  });
+
+  // header
+  const thead = document.getElementById('us-thead');
+  if (thead) thead.innerHTML = _US_COLS.map(c => {
+    const arrow = _usSort.key === c.key ? (_usSort.dir === 1 ? ' ▾' : ' ▴') : '';
+    const align = c.str ? 'left' : 'right';
+    return `<th style="width:${c.w}px;text-align:${align};cursor:pointer;white-space:nowrap" onclick="usSortBy('${c.key}')">${c.label}${arrow}</th>`;
+  }).join('');
+
+  const body = rows.map(s => {
+    const offHigh = s._pct_off_high;
+    const offCls = offHigh == null ? 'text2' : offHigh >= -3 ? 'green' : offHigh >= -10 ? 'yellow' : 'text2';
+    return `<tr>
+      <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score ?? '-'}</span></td>
+      <td><strong class="sym-link" onclick="openUsChartModal('${s.symbol}')">${s.symbol}</strong>${_usTvLink(s.symbol)}</td>
+      <td style="font-size:11px;color:var(--text2)">${s.sector || '—'}</td>
+      <td class="r">${s.price != null ? s.price.toFixed(2) : '—'}</td>
+      <td class="r">${pct(s.ret_1d)}</td>
+      <td class="r">${pct(s.ret_1w)}</td>
+      <td class="r">${pct(s.ret_1m)}</td>
+      <td class="r">${pct(s.ret_3m)}</td>
+      <td class="r">${pct(s.ret_1y)}</td>
+      <td class="r">${s.rs_momentum != null ? `<span class="${s.rs_momentum > 0 ? 'green' : s.rs_momentum < 0 ? 'red' : 'text2'}">${s.rs_momentum > 0 ? '+' : ''}${s.rs_momentum}</span>` : '<span class="text2">—</span>'}</td>
+      <td class="r"><span class="${offCls}" style="font-size:11px">${offHigh != null ? offHigh.toFixed(1) + '%' : '—'}</span></td>
+      <td class="r">${emaBadge(s.above_ema50)}</td>
+      <td class="r">${emaBadge(s.above_ema200)}</td>
+      <td class="r">${stageBadge(s.stage)}</td>
+    </tr>`;
+  }).join('');
+  const tbody = document.getElementById('us-stocks-tbody');
+  if (tbody) tbody.innerHTML = body || `<tr><td colspan="14" style="text-align:center;padding:20px;color:var(--text2)">ไม่มีหุ้นตรงเงื่อนไข</td></tr>`;
+
+  // count + updated
+  const total = _usData.stocks.filter(s => s[_US_IDX_FLAG[_usIndex]]).length;
+  const upd = _usData.updated_at ? ` · อัพเดท ${_usData.updated_at}` : '';
+  const cnt = document.getElementById('us-count');
+  if (cnt) cnt.textContent = `แสดง ${rows.length}/${total} ตัว${upd}`;
+
+  _renderUsBreadth();
+}
+
+// ── US Sector Ranking (mode toggle บนหน้า "หุ้น US") ──────────────────────
+// อ่าน /api/us-sector-ranks?index=... ซึ่ง reuse core.metrics.summarize_groups()
+// ตัวเดียวกับหน้า Sectors ของหุ้นไทย (cache แยกตาม index เพราะ endpoint กรองฝั่ง server)
+let _usMode = 'stocks';
+let _usSectorRanks = {};      // { SP500: [...], DOW: [...], NDX: [...] }
+let _usSectorSort = { key: 'avg_rs', dir: 1 };
+
+function setUsMode(mode) {
+  _usMode = mode;
+  const btn = document.getElementById('us-mode-sectors');
+  if (btn) btn.classList.toggle('active', mode === 'sectors');
+  document.getElementById('us-stocks-wrap').style.display  = mode === 'sectors' ? 'none' : '';
+  document.getElementById('us-sectors-wrap').style.display = mode === 'sectors' ? '' : 'none';
+  if (mode === 'sectors') loadUsSectorRanks();
+}
+
+function usSectorSortBy(key) {
+  if (_usSectorSort.key === key) _usSectorSort.dir *= -1;
+  else _usSectorSort = { key, dir: 1 };
+  renderUsSectorTable();
+}
+
+function loadUsSectorRanks() {
+  if (_usSectorRanks[_usIndex]) { renderUsSectorTable(); return; }
+  const tbody = document.getElementById('us-sectors-tbody');
+  if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
+  fetch(`/api/us-sector-ranks?index=${_usIndex}`)
+    .then(r => r.json())
+    .then(d => { _usSectorRanks[_usIndex] = d.sectors || []; renderUsSectorTable(); })
+    .catch(e => {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
+    });
+}
+
+function renderUsSectorTable() {
+  const rows = [...(_usSectorRanks[_usIndex] || [])];
+  rows.sort((a, b) => {
+    const av = a[_usSectorSort.key], bv = b[_usSectorSort.key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1; if (bv == null) return -1;
+    return (bv - av) * _usSectorSort.dir;
+  });
+  const tbody = document.getElementById('us-sectors-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = rows.map((s, i) => `
+    <tr style="cursor:pointer" onclick="_openUsSector('${s.name.replace(/'/g,"\\'")}')">
+      <td class="text2">${i + 1}</td>
+      <td><strong>${s.name}</strong></td>
+      <td class="r text2">${s.count}</td>
+      <td class="r"><span class="${rsColor(s.avg_rs)}" style="font-weight:700">${s.avg_rs ?? '—'}</span></td>
+      <td class="r">${pct(s.ret_1d)}</td>
+      <td class="r">${pct(s.ret_1w)}</td>
+      <td class="r">${pct(s.ret_1m)}</td>
+      <td class="r">${pct(s.ret_3m)}</td>
+      <td class="r">${pct(s.ret_1y)}</td>
+      <td class="r">${s.pct_above_ema50 != null ? s.pct_above_ema50 + '%' : '—'}</td>
+    </tr>`).join('') || `<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--text2)">ไม่มีข้อมูล</td></tr>`;
+}
+
+// คลิกแถว sector → กลับไปหน้าตารางหุ้น กรองเฉพาะ sector นั้น
+function _openUsSector(name) {
+  setUsMode('stocks');
+  const sel = document.getElementById('us-sector-filter');
+  if (sel) { sel.value = name; _usSector = name; }
+  renderUsTable();
+}
+
+function _renderUsBreadth() {
+  const flag = _US_IDX_FLAG[_usIndex];
+  const all = _usData.stocks.filter(s => s[flag]);
+  const n = all.length || 1;
+  const p200 = all.filter(s => s.above_ema200).length / n * 100;
+  const p50  = all.filter(s => s.above_ema50).length / n * 100;
+  const rs80 = all.filter(s => (s.rs_score ?? 0) >= 80).length;
+  const nearHigh = all.filter(s => { const o = _usPctOffHigh(s); return o != null && o >= -3; }).length;
+  const s2 = all.filter(s => s.stage === 2).length;
+  const tile = (label, val, sub, color) =>
+    `<div class="card" style="padding:12px 14px">
+      <div style="font-size:11px;color:var(--text2)">${label}</div>
+      <div style="font-size:22px;font-weight:700;color:${color || 'var(--text)'}">${val}</div>
+      <div style="font-size:10px;color:var(--text2)">${sub}</div>
+    </div>`;
+  const emaColor = p200 >= 60 ? '#3fb950' : p200 < 40 ? '#f85149' : '#e3b341';
+  const strip = document.getElementById('us-breadth-strip');
+  if (strip) strip.innerHTML =
+    tile('% เหนือ EMA200', p200.toFixed(0) + '%', `EMA50: ${p50.toFixed(0)}%`, emaColor) +
+    tile('RS ≥ 80', rs80, `${(rs80 / n * 100).toFixed(0)}% ของดัชนี`, '#3fb950') +
+    tile('Stage 2', s2, `${(s2 / n * 100).toFixed(0)}% กำลังขาขึ้น`, '#3fb950') +
+    tile('ใกล้ 52W High', nearHigh, 'ห่าง high ≤ 3%', '#58a6ff');
+}
+
+// ============================================================
+// HK INDEX STOCKS — RS/Stage/52W/Momentum/EMA ของสมาชิก HSI/HSTECH/HSCEI
+// ก็อปโครงจาก US INDEX STOCKS ด้านบนทั้งหมด (ต่างแค่ prefix us->hk, endpoint,
+// รายชื่อดัชนี, และ TradingView link ที่ต้องใช้ HKEX:รหัส แทน symbol ตรงๆ)
+// ============================================================
+let _hkData = null;          // {updated_at,total,stocks:[...]}
+let _hkIndex = 'HSI';        // HSI | HSTECH | HSCEI
+let _hkView = 'all';         // all | rs80 | stage2 | nearhigh | momentum | ema200
+let _hkSector = 'ALL';
+let _hkSort = { key: 'rs_score', dir: 1 };
+
+const _HK_IDX_FLAG = { HSI: 'in_hsi', HSTECH: 'in_hstech', HSCEI: 'in_hscei' };
+
+function _hkPctOffHigh(s) {
+  if (!s.price || !s.high_52w) return null;
+  return (s.price - s.high_52w) / s.high_52w * 100;
+}
+
+function setHkIndex(idx, btn) {
+  _hkIndex = idx;
+  document.querySelectorAll('#hk-idx-hsi,#hk-idx-hstech,#hk-idx-hscei').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  _rebuildHkSectorFilter();
+  if (_hkMode === 'sectors') loadHkSectorRanks();
+  else renderHkTable();
+}
+
+function setHkView(view, btn) {
+  _hkView = view;
+  document.querySelectorAll('#hk-view-btns .filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (view === 'nearhigh')      _hkSort = { key: '_pct_off_high', dir: 1 };
+  else if (view === 'momentum') _hkSort = { key: 'rs_momentum', dir: 1 };
+  else                          _hkSort = { key: 'rs_score', dir: 1 };
+  renderHkTable();
+}
+
+function hkSortBy(key) {
+  if (_hkSort.key === key) {
+    _hkSort.dir *= -1;
+  } else {
+    // เหตุผลเดียวกับ usSortBy — คอลัมน์ string เริ่ม dir:-1 ให้ได้ A→Z ตั้งแต่คลิกแรก
+    const col = _HK_COLS.find(c => c.key === key);
+    _hkSort = { key, dir: col && col.str ? -1 : 1 };
+  }
+  renderHkTable();
+}
+
+// ============================================================
+// HK % ABOVE EMA ย้อนหลัง — ดึงจาก /api/hk-breadth — reuse _bcSetup/_bcAxes/_bcLine
+// ============================================================
+let _hkBreadthData = null;
+let _hkBreadthRange = '1y';
+let _hkBreadthCacheByRange = {};
+let _hkBreadthLoading = false;
+
+function setHkBreadthRange(range, btn) {
+  if (_hkBreadthRange === range) return;
+  _hkBreadthRange = range;
+  document.querySelectorAll('#hk-breadth-range-btns .filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  loadHkBreadthChart();
+}
+
+async function loadHkBreadthChart() {
+  const rng = _hkBreadthRange;
+  const cached = _hkBreadthCacheByRange[rng];
+  if (cached) { _hkBreadthData = cached; drawHkBreadthChart(); return; }
+  if (_hkBreadthLoading) return;
+  _hkBreadthLoading = true;
+  ['hk-bc-ema', 'hk-bc-nhnl', 'hk-bc-mcc'].forEach(id => {
+    const loading = document.getElementById(id + '-loading');
+    const canvas  = document.getElementById(id);
+    if (loading) { loading.style.display = 'block'; loading.textContent = 'กำลังโหลด...'; }
+    if (canvas)  canvas.style.display = 'none';
+  });
+  try {
+    const r = await fetch('/api/hk-breadth?range=' + encodeURIComponent(rng));
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    _hkBreadthCacheByRange[rng] = d;
+    if (rng === _hkBreadthRange) {
+      _hkBreadthData = d;
+      drawHkBreadthChart();
+    }
+  } catch (e) {
+    ['hk-bc-ema', 'hk-bc-nhnl', 'hk-bc-mcc'].forEach(id => {
+      const el = document.getElementById(id + '-loading');
+      if (el) el.textContent = 'โหลดไม่สำเร็จ: ' + e.message;
+    });
+  } finally {
+    _hkBreadthLoading = false;
+    if (_hkBreadthRange !== rng && !_hkBreadthCacheByRange[_hkBreadthRange]) loadHkBreadthChart();
+  }
+}
+
+function drawHkBreadthChart() {
+  drawIndexBreadthChart('hk', _hkBreadthData);
+}
+
+function loadHkStocksPage() {
+  if (_hkData) { renderHkTable(); loadHkBreadthChart(); return; }
+  const tbody = document.getElementById('hk-stocks-tbody');
+  if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
+  fetch('/api/hk-index-metrics')
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) throw new Error(d.error);
+      _hkData = d;
+      if (!d.stocks || !d.stocks.length) {
+        if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">ยังไม่มีข้อมูล — กดปุ่ม <b>📈 HK Index Max</b> หรือ <b>⚡ Quick Update</b> เพื่อดึงราคาและคำนวณ metrics</td></tr>`;
+        return;
+      }
+      _rebuildHkSectorFilter();
+      renderHkTable();
+      loadHkBreadthChart();
+    })
+    .catch(e => {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
+    });
+}
+
+function _rebuildHkSectorFilter() {
+  if (!_hkData) return;
+  const flag = _HK_IDX_FLAG[_hkIndex];
+  const inIdx = _hkData.stocks.filter(s => s[flag]);
+  const sectors = ['ALL', ...[...new Set(inIdx.map(s => s.sector || 'Unknown'))].sort()];
+  const sel = document.getElementById('hk-sector-filter');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = sectors.map(s => `<option value="${s}">${s === 'ALL' ? 'ทุก Sector' : s}</option>`).join('');
+  sel.value = sectors.includes(cur) ? cur : 'ALL';
+  _hkSector = sel.value;
+}
+
+function _hkFilteredStocks() {
+  if (!_hkData) return [];
+  const flag = _HK_IDX_FLAG[_hkIndex];
+  let rows = _hkData.stocks.filter(s => s[flag]);
+  rows = rows.map(s => ({ ...s, _pct_off_high: _hkPctOffHigh(s) }));
+  const sel = document.getElementById('hk-sector-filter');
+  _hkSector = sel ? sel.value : 'ALL';
+  if (_hkSector !== 'ALL') rows = rows.filter(s => (s.sector || 'Unknown') === _hkSector);
+  const q = (document.getElementById('hk-search')?.value || '').trim().toLowerCase();
+  if (q) rows = rows.filter(s => s.symbol.toLowerCase().includes(q) || (s.name || '').toLowerCase().includes(q));
+  if (_hkView === 'rs80')     rows = rows.filter(s => (s.rs_score ?? -1) >= 80);
+  else if (_hkView === 'stage2')   rows = rows.filter(s => s.stage === 2);
+  else if (_hkView === 'nearhigh') rows = rows.filter(s => s._pct_off_high != null && s._pct_off_high >= -5);
+  else if (_hkView === 'momentum') rows = rows.filter(s => (s.rs_momentum ?? 0) > 0);
+  else if (_hkView === 'ema200')   rows = rows.filter(s => s.above_ema200 === true);
+  return rows;
+}
+
+const _HK_COLS = [
+  { key: 'rs_score',      label: 'RS',        w: 46 },
+  { key: 'symbol',        label: 'Symbol',    w: 90, str: true },
+  { key: 'sector',        label: 'Sector',    w: 150, str: true },
+  { key: 'price',         label: 'ราคา',       w: 70 },
+  { key: 'ret_1d',        label: '1D',        w: 62 },
+  { key: 'ret_1w',        label: '1W',        w: 62 },
+  { key: 'ret_1m',        label: '1M',        w: 62 },
+  { key: 'ret_3m',        label: '3M',        w: 62 },
+  { key: 'ret_1y',        label: '1Y',        w: 66 },
+  { key: 'rs_momentum',   label: 'RS Δ4w',    w: 62 },
+  { key: '_pct_off_high', label: '% จาก High', w: 76 },
+  { key: 'above_ema50',   label: 'EMA50',     w: 56 },
+  { key: 'above_ema200',  label: 'EMA200',    w: 58 },
+  { key: 'stage',         label: 'Stage',     w: 80 },
+];
+
+// TradingView ใช้ HKEX:รหัส (ไม่มีเลข 0 นำหน้า, ไม่มี .HK) ต่างจาก symbol
+// รูปแบบ yfinance ("0700.HK") ที่ใช้เก็บใน hk_prices.db/hk_index_metrics.json
+function _hkTvLink(sym) {
+  const code = sym.replace(/\.HK$/i, '').replace(/^0+/, '') || '0';
+  return `<a href="https://www.tradingview.com/chart/?symbol=HKEX%3A${encodeURIComponent(code)}" target="_blank" title="เปิด TradingView" style="text-decoration:none;font-size:10px;margin-left:3px;opacity:.6">↗</a>`;
+}
+
+function renderHkTable() {
+  if (!_hkData) return;
+  let rows = _hkFilteredStocks();
+  rows.sort((a, b) => {
+    const av = a[_hkSort.key], bv = b[_hkSort.key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1; if (bv == null) return -1;
+    if (typeof av === 'string') return av.localeCompare(bv) * (_hkSort.dir === 1 ? -1 : 1);
+    return (bv - av) * _hkSort.dir;
+  });
+
+  const thead = document.getElementById('hk-thead');
+  if (thead) thead.innerHTML = _HK_COLS.map(c => {
+    const arrow = _hkSort.key === c.key ? (_hkSort.dir === 1 ? ' ▾' : ' ▴') : '';
+    const align = c.str ? 'left' : 'right';
+    return `<th style="width:${c.w}px;text-align:${align};cursor:pointer;white-space:nowrap" onclick="hkSortBy('${c.key}')">${c.label}${arrow}</th>`;
+  }).join('');
+
+  const body = rows.map(s => {
+    const offHigh = s._pct_off_high;
+    const offCls = offHigh == null ? 'text2' : offHigh >= -3 ? 'green' : offHigh >= -10 ? 'yellow' : 'text2';
+    return `<tr>
+      <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score ?? '-'}</span></td>
+      <td><strong class="sym-link" onclick="openHkChartModal('${s.symbol}')">${s.symbol}</strong>${_hkTvLink(s.symbol)}</td>
+      <td style="font-size:11px;color:var(--text2)">${s.sector || '—'}</td>
+      <td class="r">${s.price != null ? s.price.toFixed(2) : '—'}</td>
+      <td class="r">${pct(s.ret_1d)}</td>
+      <td class="r">${pct(s.ret_1w)}</td>
+      <td class="r">${pct(s.ret_1m)}</td>
+      <td class="r">${pct(s.ret_3m)}</td>
+      <td class="r">${pct(s.ret_1y)}</td>
+      <td class="r">${s.rs_momentum != null ? `<span class="${s.rs_momentum > 0 ? 'green' : s.rs_momentum < 0 ? 'red' : 'text2'}">${s.rs_momentum > 0 ? '+' : ''}${s.rs_momentum}</span>` : '<span class="text2">—</span>'}</td>
+      <td class="r"><span class="${offCls}" style="font-size:11px">${offHigh != null ? offHigh.toFixed(1) + '%' : '—'}</span></td>
+      <td class="r">${emaBadge(s.above_ema50)}</td>
+      <td class="r">${emaBadge(s.above_ema200)}</td>
+      <td class="r">${stageBadge(s.stage)}</td>
+    </tr>`;
+  }).join('');
+  const tbody = document.getElementById('hk-stocks-tbody');
+  if (tbody) tbody.innerHTML = body || `<tr><td colspan="14" style="text-align:center;padding:20px;color:var(--text2)">ไม่มีหุ้นตรงเงื่อนไข</td></tr>`;
+
+  const total = _hkData.stocks.filter(s => s[_HK_IDX_FLAG[_hkIndex]]).length;
+  const upd = _hkData.updated_at ? ` · อัพเดท ${_hkData.updated_at}` : '';
+  const cnt = document.getElementById('hk-count');
+  if (cnt) cnt.textContent = `แสดง ${rows.length}/${total} ตัว${upd}`;
+
+  _renderHkBreadth();
+}
+
+// ── HK Sector Ranking (mode toggle บนหน้า "หุ้น HK") ──────────────────────
+let _hkMode = 'stocks';
+let _hkSectorRanks = {};      // { HSI: [...], HSTECH: [...], HSCEI: [...] }
+let _hkSectorSort = { key: 'avg_rs', dir: 1 };
+
+function setHkMode(mode) {
+  _hkMode = mode;
+  const btn = document.getElementById('hk-mode-sectors');
+  if (btn) btn.classList.toggle('active', mode === 'sectors');
+  document.getElementById('hk-stocks-wrap').style.display  = mode === 'sectors' ? 'none' : '';
+  document.getElementById('hk-sectors-wrap').style.display = mode === 'sectors' ? '' : 'none';
+  if (mode === 'sectors') loadHkSectorRanks();
+}
+
+function hkSectorSortBy(key) {
+  if (_hkSectorSort.key === key) _hkSectorSort.dir *= -1;
+  else _hkSectorSort = { key, dir: 1 };
+  renderHkSectorTable();
+}
+
+function loadHkSectorRanks() {
+  if (_hkSectorRanks[_hkIndex]) { renderHkSectorTable(); return; }
+  const tbody = document.getElementById('hk-sectors-tbody');
+  if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
+  fetch(`/api/hk-sector-ranks?index=${_hkIndex}`)
+    .then(r => r.json())
+    .then(d => { _hkSectorRanks[_hkIndex] = d.sectors || []; renderHkSectorTable(); })
+    .catch(e => {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
+    });
+}
+
+function renderHkSectorTable() {
+  const rows = [...(_hkSectorRanks[_hkIndex] || [])];
+  rows.sort((a, b) => {
+    const av = a[_hkSectorSort.key], bv = b[_hkSectorSort.key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1; if (bv == null) return -1;
+    return (bv - av) * _hkSectorSort.dir;
+  });
+  const tbody = document.getElementById('hk-sectors-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = rows.map((s, i) => `
+    <tr style="cursor:pointer" onclick="_openHkSector('${s.name.replace(/'/g,"\\'")}')">
+      <td class="text2">${i + 1}</td>
+      <td><strong>${s.name}</strong></td>
+      <td class="r text2">${s.count}</td>
+      <td class="r"><span class="${rsColor(s.avg_rs)}" style="font-weight:700">${s.avg_rs ?? '—'}</span></td>
+      <td class="r">${pct(s.ret_1d)}</td>
+      <td class="r">${pct(s.ret_1w)}</td>
+      <td class="r">${pct(s.ret_1m)}</td>
+      <td class="r">${pct(s.ret_3m)}</td>
+      <td class="r">${pct(s.ret_1y)}</td>
+      <td class="r">${s.pct_above_ema50 != null ? s.pct_above_ema50 + '%' : '—'}</td>
+    </tr>`).join('') || `<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--text2)">ไม่มีข้อมูล</td></tr>`;
+}
+
+function _openHkSector(name) {
+  setHkMode('stocks');
+  const sel = document.getElementById('hk-sector-filter');
+  if (sel) { sel.value = name; _hkSector = name; }
+  renderHkTable();
+}
+
+function _renderHkBreadth() {
+  const flag = _HK_IDX_FLAG[_hkIndex];
+  const all = _hkData.stocks.filter(s => s[flag]);
+  const n = all.length || 1;
+  const p200 = all.filter(s => s.above_ema200).length / n * 100;
+  const p50  = all.filter(s => s.above_ema50).length / n * 100;
+  const rs80 = all.filter(s => (s.rs_score ?? 0) >= 80).length;
+  const nearHigh = all.filter(s => { const o = _hkPctOffHigh(s); return o != null && o >= -3; }).length;
+  const s2 = all.filter(s => s.stage === 2).length;
+  const tile = (label, val, sub, color) =>
+    `<div class="card" style="padding:12px 14px">
+      <div style="font-size:11px;color:var(--text2)">${label}</div>
+      <div style="font-size:22px;font-weight:700;color:${color || 'var(--text)'}">${val}</div>
+      <div style="font-size:10px;color:var(--text2)">${sub}</div>
+    </div>`;
+  const emaColor = p200 >= 60 ? '#3fb950' : p200 < 40 ? '#f85149' : '#e3b341';
+  const strip = document.getElementById('hk-breadth-strip');
+  if (strip) strip.innerHTML =
+    tile('% เหนือ EMA200', p200.toFixed(0) + '%', `EMA50: ${p50.toFixed(0)}%`, emaColor) +
+    tile('RS ≥ 80', rs80, `${(rs80 / n * 100).toFixed(0)}% ของดัชนี`, '#3fb950') +
+    tile('Stage 2', s2, `${(s2 / n * 100).toFixed(0)}% กำลังขาขึ้น`, '#3fb950') +
+    tile('ใกล้ 52W High', nearHigh, 'ห่าง high ≤ 3%', '#58a6ff');
+}
+
+// ============================================================
 // HEATMAP — S&P 500 / Dow Jones / Nasdaq 100 (treemap: ขนาด=market cap, สี=% วันนี้)
 // ============================================================
 let _hmIndex = 'SP500';
@@ -7552,7 +8830,10 @@ function loadHeatmapPage(forceRefresh = false) {
       const age = Math.max(0, Math.round((Date.now() / 1000) - d.ts));
       const ageStr = age < 60 ? `${age} วิที่แล้ว` : `${Math.round(age / 60)} นาทีที่แล้ว`;
       const missNote = d.missing ? ` · ขาด ${d.missing} ตัว (Yahoo ดึงไม่ได้)` : '';
-      note.textContent = `ข้อมูล ณ ${ageStr} · ${d.rows.length}/${d.requested} ตัว${missNote}`;
+      // นับเฉพาะแถวที่มี mkt_cap วาดเป็นกล่องได้จริง (rows.length รวมแถวที่มีแค่ chg_1d
+      // แต่ไม่มี mkt_cap ด้วย ซึ่ง _renderHeatmap กรองทิ้งก่อนวาด — นับตรงนี้ให้ตรงกัน)
+      const drawn = (d.rows || []).filter(r => r.mkt_cap > 0).length;
+      note.textContent = `ข้อมูล ณ ${ageStr} · ${drawn}/${d.requested} ตัว${missNote}`;
     })
     .catch(e => {
       box.innerHTML = `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--red);font-size:13px;padding:20px;text-align:center">⚠ โหลดไม่สำเร็จ: ${e.message}</div>`;
@@ -7719,6 +9000,8 @@ function _hmShowPopup(ev, sym) {
   setChg('hm-popup-chg1d', r.chg_1d);
   setChg('hm-popup-chg1w', r.chg_1w);
   document.getElementById('hm-popup-mktcap').textContent = _drFmtCap(r.mkt_cap);
+  const finBtn = document.getElementById('hm-popup-fin-btn');
+  if (finBtn) finBtn.onclick = _hmGoFin;
   const vw = window.innerWidth, vh = window.innerHeight;
   let left = ev.clientX + 12, top = ev.clientY + 12;
   if (left + 220 > vw) left = ev.clientX - 232;
@@ -7740,6 +9023,181 @@ function _hmGoFin() {
   const sym = _hmPopupSym;
   document.getElementById('hm-popup').style.display = 'none';
   location.hash = '#fin/dr/' + sym;   // ทริกเกอร์ _finApplyHash — ไม่ต้องเดา setTimeout ว่าหน้าโหลดเสร็จหรือยัง
+}
+
+// ============================================================
+// HK HEATMAP — HSI / HSTECH / HSCEI (treemap: ขนาด=market cap, สี=% วันนี้)
+// ก็อปโครงจาก US HEATMAP ด้านบนทั้งหมด — reuse _squarify/_hmColor ตัวเดิม (generic ไม่มี id
+// ผูกอยู่) ต่างแค่ prefix hm->hk-hm, endpoint /api/hk-index-heatmap, และ popup ใช้ตัวแปร/
+// handler แยก (_hkHmPopupSym) เพราะ popup DOM #hm-popup ใช้ร่วมกันแค่ตัว element ไม่ใช่ state
+// ============================================================
+let _hkHmIndex = 'HSI';
+let _hkHmPeriod = 'chg_1d';
+let _hkHmData = {};      // {HSI:{rows,ts,requested,missing}, HSTECH:{...}, HSCEI:{...}}
+let _hkHmPopupSym = null;
+
+let _hkHmResizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(_hkHmResizeTimer);
+  _hkHmResizeTimer = setTimeout(() => {
+    if (document.getElementById('page-hk-heatmap')?.classList.contains('active') && _hkHmData[_hkHmIndex]) {
+      _renderHkHeatmap(_hkHmData[_hkHmIndex]);
+    }
+  }, 200);
+});
+
+function setHkHeatmapIndex(idx, btn) {
+  _hkHmIndex = idx;
+  document.querySelectorAll('#hk-hm-idx-hsi,#hk-hm-idx-hstech,#hk-hm-idx-hscei').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  loadHkHeatmapPage();
+}
+
+function setHkHeatmapPeriod(period, btn) {
+  _hkHmPeriod = period;
+  document.querySelectorAll('#hk-hm-period-1d,#hk-hm-period-1w').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (_hkHmData[_hkHmIndex]) _renderHkHeatmap(_hkHmData[_hkHmIndex]);
+}
+
+function loadHkHeatmapPage(forceRefresh = false) {
+  const box = document.getElementById('hk-hm-box');
+  const note = document.getElementById('hk-hm-note');
+  if (!box) return;
+  if (!forceRefresh && _hkHmData[_hkHmIndex]) { _renderHkHeatmap(_hkHmData[_hkHmIndex]); return; }
+  const btn = document.getElementById('hk-hm-refresh-btn');
+  if (forceRefresh && btn) { btn.disabled = true; btn.textContent = '⚡ กำลังอัพเดท...'; }
+  box.innerHTML = `<div id="hk-hm-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">กำลังโหลด heatmap (${forceRefresh ? 'บังคับดึง market cap สดจาก Yahoo' : 'ครั้งแรกอาจใช้เวลา ~30-60 วิ'})...</div>`;
+  note.textContent = '';
+  fetch(`/api/hk-index-heatmap?index=${_hkHmIndex}${forceRefresh ? '&force=1' : ''}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) throw new Error(d.error);
+      _hkHmData[_hkHmIndex] = d;
+      _renderHkHeatmap(d);
+      const age = Math.max(0, Math.round((Date.now() / 1000) - d.ts));
+      const ageStr = age < 60 ? `${age} วิที่แล้ว` : `${Math.round(age / 60)} นาทีที่แล้ว`;
+      const missNote = d.missing ? ` · ขาด ${d.missing} ตัว` : '';
+      // นับเฉพาะแถวที่มี mkt_cap วาดเป็นกล่องได้จริง (เหมือน US heatmap — ดูคอมเมนต์ที่ loadHeatmapPage)
+      const drawn = (d.rows || []).filter(r => r.mkt_cap > 0).length;
+      note.textContent = `ข้อมูล ณ ${ageStr} · ${drawn}/${d.requested} ตัว${missNote}`;
+    })
+    .catch(e => {
+      box.innerHTML = `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--red);font-size:13px;padding:20px;text-align:center">⚠ โหลดไม่สำเร็จ: ${e.message}</div>`;
+    })
+    .finally(() => {
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ อัพเดท Market Cap'; }
+    });
+}
+
+function _hkHmCellHtml(r, x, y, w, h, search) {
+  if (w < 1 || h < 1) return '';
+  const chg = r[_hkHmPeriod];
+  const chgStr = chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—';
+  const showName = w > 70 && h > 40;
+  const fontSize = Math.max(9, Math.min(16, Math.min(w, h) / 5));
+  const dim = search && !r.symbol.toLowerCase().includes(search) && !(r.name || '').toLowerCase().includes(search);
+  const ring = search && !dim ? 'outline:2px solid #fff;outline-offset:-2px;' : '';
+  return `<div onclick="_hkHmShowPopup(event,'${r.symbol}')" title="${(r.name || '').replace(/"/g, '&quot;')} (${r.symbol}): ${chgStr}"
+    style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;background:${_hmColor(chg)};
+    border:1px solid var(--bg2);box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;overflow:hidden;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.5);
+    font-size:${fontSize}px;line-height:1.3;padding:2px;transition:filter .1s,opacity .15s;${ring}
+    ${dim ? 'opacity:.15;' : ''}"
+    onmouseenter="this.style.filter='brightness(1.2)'" onmouseleave="this.style.filter=''">
+    <div style="font-weight:700;white-space:nowrap">${r.symbol}</div>
+    ${showName ? `<div style="font-size:${Math.max(8, fontSize - 3)}px;opacity:.85">${chgStr}</div>` : ''}
+  </div>`;
+}
+
+function _renderHkHeatmap(data) {
+  const box = document.getElementById('hk-hm-box');
+  if (!box) return;
+  const rows = data.rows || data;
+  const valid = rows.filter(r => r.mkt_cap > 0);
+  if (!valid.length) {
+    box.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">ไม่มีข้อมูล market cap ที่ใช้วาด heatmap ได้</div>';
+    return;
+  }
+  const W = box.clientWidth || 1000, H = box.clientHeight || 640;
+  const searchEl = document.getElementById('hk-hm-search');
+  const search = (searchEl?.value || '').trim().toLowerCase();
+  const bySector = document.getElementById('hk-hm-sector-toggle')?.checked;
+
+  if (!bySector) {
+    const items = valid.map(r => ({ value: r.mkt_cap, row: r })).sort((a, b) => b.value - a.value);
+    box.innerHTML = _squarify(items, 0, 0, W, H)
+      .map(b => _hkHmCellHtml(b.row, b.box.x, b.box.y, b.box.w, b.box.h, search)).join('');
+    return;
+  }
+
+  const groups = {};
+  valid.forEach(r => { (groups[r.sector || 'อื่นๆ'] ??= []).push(r); });
+  const sectorItems = Object.entries(groups)
+    .map(([sec, stocks]) => ({ value: stocks.reduce((a, r) => a + r.mkt_cap, 0), sec, stocks }))
+    .sort((a, b) => b.value - a.value);
+  const sectorBoxes = _squarify(sectorItems, 0, 0, W, H);
+
+  let html = '';
+  sectorBoxes.forEach(sb => {
+    const { x, y, w, h } = sb.box;
+    if (w < 2 || h < 2) return;
+    const HEADER = h > 30 ? 16 : 0;
+    html += `<div style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;
+      border:2px solid var(--bg2);box-sizing:border-box;overflow:hidden">
+      ${HEADER ? `<div style="height:${HEADER}px;line-height:${HEADER}px;font-size:10px;font-weight:600;
+        color:var(--text2);padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+        background:var(--bg2)">${sb.sec}</div>` : ''}
+    </div>`;
+    const innerItems = sb.stocks.map(r => ({ value: r.mkt_cap, row: r })).sort((a, b) => b.value - a.value);
+    const innerBoxes = _squarify(innerItems, x, y + HEADER, w, h - HEADER);
+    html += innerBoxes.map(b => _hkHmCellHtml(b.row, b.box.x, b.box.y, b.box.w, b.box.h, search)).join('');
+  });
+  box.innerHTML = html;
+}
+
+function _hkHmShowPopup(ev, sym) {
+  const rows = (_hkHmData[_hkHmIndex] || {}).rows || [];
+  const r = rows.find(x => x.symbol === sym);
+  if (!r) return;
+  _hkHmPopupSym = sym;
+  const pop = document.getElementById('hm-popup');
+  document.getElementById('hm-popup-sym').textContent = r.symbol;
+  document.getElementById('hm-popup-name').textContent = r.name || '';
+  document.getElementById('hm-popup-sector').textContent = r.sector || '';
+  const setChg = (id, v) => {
+    const el = document.getElementById(id);
+    el.textContent = v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '—';
+    el.style.color = v == null ? 'var(--text2)' : v >= 0 ? 'var(--green)' : 'var(--red)';
+  };
+  setChg('hm-popup-chg1d', r.chg_1d);
+  setChg('hm-popup-chg1w', r.chg_1w);
+  document.getElementById('hm-popup-mktcap').textContent = _drFmtCap(r.mkt_cap);
+  const finBtn = document.getElementById('hm-popup-fin-btn');
+  if (finBtn) finBtn.onclick = _hkHmGoFin;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  let left = ev.clientX + 12, top = ev.clientY + 12;
+  if (left + 220 > vw) left = ev.clientX - 232;
+  if (top + 160 > vh) top = ev.clientY - 172;
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+  pop.style.display = 'block';
+  ev.stopPropagation();
+  document.addEventListener('click', _hmCloseOnOutside, { once: true });
+}
+
+function _hkHmGoFin() {
+  if (!_hkHmPopupSym) return;
+  // งบเก็บใต้ namespace mirror ด้วยรหัสดิบไม่มี .HK ("0700") — ส่ง "0700.HK" ทั้ง suffix
+  // จะค้นไม่เจอเสมอ และต้องสลับ market เป็น HK ก่อน ไม่งั้น searchFinancials ใช้
+  // _finMirMarket ที่ค้างอยู่ (default US) เดา yf ticker ผิดตลาด (ดู _loadCmFin ที่ทำแบบเดียวกัน)
+  const sym = _hkHmPopupSym.replace(/\.HK$/i, '');
+  document.getElementById('hm-popup').style.display = 'none';
+  _finMirMarket = 'HK';
+  document.querySelectorAll('#fin-mir-us,#fin-mir-hk').forEach(b => b.classList.remove('active'));
+  const hkBtn = document.getElementById('fin-mir-hk');
+  if (hkBtn) hkBtn.classList.add('active');
+  location.hash = '#fin/dr/' + sym;
 }
 
 // ============================================================
@@ -9885,8 +11343,8 @@ function startDRFinancialsSyncIncremental() {
 // /api/data-health = mtime/meta ของแต่ละแหล่ง (เบา, เรียกได้บ่อย)
 // /api/data-health-ping = ยิงทดสอบ SET/Yahoo/Finnomena/TradingView จริง (ช้ากว่า)
 // ============================================================
-const _DH_STATUS_LABEL = { ok: '🟢 สด', warn: '🟡 เริ่มค้าง', red: '🔴 ต้องดู' };
-const _DH_STATUS_COLOR = { ok: 'var(--green)', warn: 'var(--yellow)', red: 'var(--red)' };
+const _DH_STATUS_LABEL = { ok: '🟢 สด', warn: '🟡 เริ่มค้าง', red: '🔴 ต้องดู', na: '⚪ ยังไม่ใช้งาน' };
+const _DH_STATUS_COLOR = { ok: 'var(--green)', warn: 'var(--yellow)', red: 'var(--red)', na: 'var(--text2)' };
 
 function _dhAgeText(item) {
   if (item.age_hours == null) {
@@ -9907,10 +11365,12 @@ async function loadDataHealth() {
   try {
     const r = await fetch('/api/data-health');
     const d = await r.json();
+    _dhApplyBadge(d);
     checkedEl.textContent = `เช็คล่าสุด: ${d.checked_at}`;
     summaryEl.innerHTML = `<span style="color:var(--green)">🟢 ${d.summary.ok}</span> · ` +
       `<span style="color:var(--yellow)">🟡 ${d.summary.warn}</span> · ` +
-      `<span style="color:var(--red)">🔴 ${d.summary.red}</span>`;
+      `<span style="color:var(--red)">🔴 ${d.summary.red}</span>` +
+      (d.summary.na ? ` · <span style="color:var(--text2)">⚪ ${d.summary.na}</span>` : '');
 
     // จัดกลุ่มตาม category ให้อ่านง่าย
     const byCategory = {};
@@ -9935,6 +11395,41 @@ async function loadDataHealth() {
     wrap.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</div>`;
   }
   loadBackupFilesStatus();
+  loadLastRuns();
+}
+
+// กดล่าสุดของ Quick Update / Full Refresh — ใช้ /api/update-status ตัวเดียวกับที่
+// checkRunFailures() ใช้ทำ banner แดง (core/run_log.py เขียนตอนจบแต่ละรอบ)
+async function loadLastRuns() {
+  const wrap = document.getElementById('dh-last-runs-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<span style="color:var(--text2)">กำลังเช็ค...</span>';
+  try {
+    const r = await fetch('/api/update-status');
+    const d = await r.json();
+    const rows = [
+      { key: 'quick_update', label: '⚡ Quick Update' },
+      { key: 'full_refresh', label: '⟳ Full Refresh' },
+    ];
+    wrap.innerHTML = rows.map(({ key, label }) => {
+      const v = d.all[key];
+      if (!v) return `<div><b>${label}</b><br><span style="color:var(--text2)">ยังไม่เคยกด</span></div>`;
+      const at = new Date(v.at.replace(' ', 'T'));
+      const hAgo = (Date.now() - at.getTime()) / 3600000;
+      const ageTxt = hAgo < 1 ? `${Math.round(hAgo * 60)} นาทีก่อน`
+        : hAgo < 48 ? `${hAgo.toFixed(1)} ชม.ก่อน`
+        : `${(hAgo / 24).toFixed(1)} วันก่อน`;
+      const color = !v.ok ? 'var(--red)' : hAgo >= 48 ? 'var(--yellow)' : 'var(--green)';
+      const statusIcon = v.ok ? '🟢' : '🔴';
+      return `<div><b>${label}</b><br>
+        <span style="color:${color};font-weight:600">${statusIcon} ${v.at}</span>
+        <span style="color:var(--text2)"> (${ageTxt})</span>
+        ${!v.ok ? `<br><span style="color:var(--red);font-size:11px">${_escHtml(v.message || '')}</span>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    wrap.innerHTML = `<span style="color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</span>`;
+  }
 }
 
 // ตารางแยกรายไฟล์ — ไฟล์สร้างใหม่ไม่ได้ (financials.db/set_prices.db/sec_filings.db/
@@ -9976,19 +11471,40 @@ async function loadBackupFilesStatus() {
 
 // เรียกตอนเปิดแอป (เงียบๆ) — แค่เอาไว้เติม badge แดงบนปุ่ม nav ถ้ามีรายการค้าง
 // ไม่ render ตารางเต็ม (ตารางเต็มโหลดตอนกดเข้าเมนูเองผ่าน loadDataHealth)
-async function checkDataHealthBadge() {
-  if (IS_STATIC) return;
-  try {
-    const r = await fetch('/api/data-health');
-    const d = await r.json();
-    const badge = document.getElementById('dh-nav-badge');
-    if (!badge) return;
+function _dhLastRunText(item) {
+  if (!item || !item.last_at) return 'ยังไม่เคยกด';
+  const h = item.age_hours;
+  const rel = h == null ? '' : h < 1 ? ' (เมื่อสักครู่)' :
+    h < 24 ? ` (${Math.round(h)} ชม.ที่แล้ว)` : ` (${Math.round(h / 24)} วันที่แล้ว)`;
+  return `กดล่าสุด: ${item.last_at}${rel}`;
+}
+
+// ใช้ผลจาก /api/data-health ที่ fetch มาแล้ว (เช่นจาก loadDataHealth) เติม badge/
+// last-run text ได้เลยโดยไม่ต้องยิง fetch ซ้ำ
+function _dhApplyBadge(d) {
+  const badge = document.getElementById('dh-nav-badge');
+  if (badge) {
     if (d.summary.red > 0) {
       badge.textContent = d.summary.red;
       badge.style.display = 'inline-block';
     } else {
       badge.style.display = 'none';
     }
+  }
+  const byKey = {};
+  (d.items || []).forEach(it => byKey[it.key] = it);
+  const usEl = document.getElementById('us-index-last-run');
+  if (usEl) usEl.textContent = _dhLastRunText(byKey.us_prices);
+  const hkEl = document.getElementById('hk-index-last-run');
+  if (hkEl) hkEl.textContent = _dhLastRunText(byKey.hk_prices);
+}
+
+async function checkDataHealthBadge() {
+  if (IS_STATIC) return;
+  try {
+    const r = await fetch('/api/data-health');
+    const d = await r.json();
+    _dhApplyBadge(d);
   } catch (e) { /* เงียบ — ไม่ใช่ฟีเจอร์หลัก */ }
 }
 
@@ -10012,7 +11528,7 @@ async function pingDataSources() {
               <td>${x.label}</td>
               <td style="color:${x.ok ? 'var(--green)' : 'var(--red)'};font-weight:600">${x.ok ? '🟢 ตอบสนอง' : '🔴 ไม่ตอบ'}</td>
               <td style="font-size:11px;color:var(--text2)">${x.ms} ms</td>
-              <td style="font-size:11px;color:var(--text2)">${x.error || (x.http_status ? 'HTTP ' + x.http_status : '—')}</td>
+              <td style="font-size:11px;color:var(--text2)">${x.error ? _escHtml(x.error) : (x.http_status ? 'HTTP ' + x.http_status : '—')}</td>
             </tr>`).join('')}</tbody>
         </table></div>
       </div>`;
@@ -13771,7 +15287,9 @@ let _wlAlertSym = null;
 function openWlAlertModal(sym) {
   _wlAlertSym = sym;
   const isDR = _isDRSym(sym);
-  const label = isDR ? `DR: ${_drUnder(sym)} (USD)` : sym;
+  const isUS = _isUsSym(sym);
+  const isHK = _isHkSym(sym);
+  const label = isDR ? `DR: ${_drUnder(sym)} (USD)` : isUS ? `US: ${_usUnder(sym)} (USD)` : isHK ? `HK: ${_hkUnder(sym)} (HKD)` : sym;
   document.getElementById("wl-alert-modal-title").textContent = `🔔 แจ้งเตือนราคา — ${label}`;
   const priceLabel = _currentPriceLabel(sym);
   document.getElementById("wl-al-price").placeholder = priceLabel || "0.00";
@@ -13875,12 +15393,18 @@ function _populateAlertSymList() {
   if (!dl) return;
   const setSyms = (DATA?.stocks || []).map(s => s.symbol).filter(Boolean).sort();
   const drSyms  = (_drData || []).map(s => "DR:" + s.sym).sort();
-  // rebuild เสมอ เพราะ SET และ DR load คนละเวลา
-  dl.innerHTML = [...setSyms, ...drSyms].map(s => `<option value="${s}">`).join("");
+  const usSyms  = (_usData?.stocks || []).map(s => "US:" + s.symbol).sort();
+  const hkSyms  = (_hkData?.stocks || []).map(s => "HK:" + s.symbol).sort();
+  // rebuild เสมอ เพราะ SET/DR/US/HK โหลดคนละเวลา
+  dl.innerHTML = [...setSyms, ...drSyms, ...usSyms, ...hkSyms].map(s => `<option value="${s}">`).join("");
 }
 
 function _isDRSym(sym) { return sym.startsWith("DR:"); }
 function _drUnder(sym) { return sym.slice(3); }
+function _isUsSym(sym) { return sym.startsWith("US:"); }
+function _usUnder(sym) { return sym.slice(3); }
+function _isHkSym(sym) { return sym.startsWith("HK:"); }
+function _hkUnder(sym) { return sym.slice(3); }
 
 function _currentPriceLabel(sym) {
   if (_isDRSym(sym)) {
@@ -13888,6 +15412,14 @@ function _currentPriceLabel(sym) {
     const dr = (_drData || []).find(x => x.sym === under);
     const curr = dr?.region === "TH" ? "THB" : (under.includes(".") ? "" : "USD");
     return dr ? `ราคาปัจจุบัน: ${dr.price?.toFixed(2)} ${curr}` : null;
+  }
+  if (_isUsSym(sym)) {
+    const u = (_usData?.stocks || []).find(x => x.symbol === _usUnder(sym));
+    return u ? `ราคาปัจจุบัน: ${u.price?.toFixed(2)} USD` : null;
+  }
+  if (_isHkSym(sym)) {
+    const h = (_hkData?.stocks || []).find(x => x.symbol === _hkUnder(sym));
+    return h ? `ราคาปัจจุบัน: ${h.price?.toFixed(2)} HKD` : null;
   }
   const s = DATA?.stocks?.find(x => x.symbol === sym);
   return s ? `ราคาปัจจุบัน: ${s.price?.toFixed(2)} บาท` : null;
@@ -13947,15 +15479,25 @@ function renderAlertPanel() {
   const active = alerts.filter(a => !a.triggered);
   const triggered = alerts.filter(a => a.triggered);
 
+  // แสดงสกุลเงิน/label ให้ตรงตลาด — DR/US = USD, HK = HKD, ที่เหลือ (SET) = บาท
+  // (เหมือนกันกับ _showAlertToast/_showBrowserNotification ที่ทำ mapping นี้อยู่แล้ว)
+  const _alSymMeta = sym => {
+    const isDR = _isDRSym(sym), isUS = _isUsSym(sym), isHK = _isHkSym(sym);
+    const curr = isHK ? "HKD" : (isDR || isUS) ? "USD" : "บาท";
+    const label = isDR ? `DR: ${_drUnder(sym)}` : isUS ? `US: ${_usUnder(sym)}` : isHK ? `HK: ${_hkUnder(sym)}` : sym;
+    return { curr, label, dp: isDR ? 4 : 2 };
+  };
+
   const activeEl = document.getElementById("al-active-list");
   activeEl.innerHTML = active.length === 0
     ? `<div class="alert-empty">ยังไม่มีแจ้งเตือน — เพิ่มได้ด้านบน</div>`
     : active.map(a => {
         const condTh = a.condition === "above" ? "≥" : "≤";
+        const { curr, label, dp } = _alSymMeta(a.symbol);
         return `<div class="alert-item">
           <div class="alert-item-body">
-            <div class="alert-sym">${a.symbol}</div>
-            <div class="alert-cond">ราคา ${condTh} <strong>${a.targetPrice.toFixed(2)}</strong> บาท</div>
+            <div class="alert-sym">${label}</div>
+            <div class="alert-cond">ราคา ${condTh} <strong>${a.targetPrice.toFixed(dp)}</strong> ${curr}</div>
             ${a.note ? `<div class="alert-note">${a.note}</div>` : ""}
           </div>
           <button class="alert-del-btn" onclick="deleteAlert('${a.id}')" title="ลบ">×</button>
@@ -13968,10 +15510,11 @@ function renderAlertPanel() {
   triggeredEl.innerHTML = triggered.map(a => {
     const condTh = a.condition === "above" ? "≥" : "≤";
     const when = a.triggeredAt ? new Date(a.triggeredAt).toLocaleString("th-TH", { hour12: false }) : "";
+    const { curr, label, dp } = _alSymMeta(a.symbol);
     return `<div class="alert-item triggered">
       <div class="alert-item-body">
-        <div class="alert-sym">${a.symbol} <span style="font-size:10px;color:var(--yellow)">✓ triggered</span></div>
-        <div class="alert-cond">ราคา ${condTh} ${a.targetPrice.toFixed(2)} → ราคาจริง <strong>${a.triggeredPrice?.toFixed(2) ?? "—"}</strong></div>
+        <div class="alert-sym">${label} <span style="font-size:10px;color:var(--yellow)">✓ triggered</span></div>
+        <div class="alert-cond">ราคา ${condTh} ${a.targetPrice.toFixed(dp)} → ราคาจริง <strong>${a.triggeredPrice?.toFixed(dp) ?? "—"}</strong> ${curr}</div>
         ${when ? `<div class="alert-note">${when}</div>` : ""}
         ${a.note ? `<div class="alert-note">${a.note}</div>` : ""}
       </div>
@@ -14073,8 +15616,10 @@ function _showNextAlertPopup() {
     box.className = isUp ? "up" : "down";
     document.getElementById("alert-popup-icon").textContent = isUp ? "🔼" : "🔽";
     const isDRAlert = _isDRSym(alert.symbol);
-    const curr = isDRAlert ? "USD" : "บาท";
-    const symLabel = isDRAlert ? `DR: ${_drUnder(alert.symbol)}` : alert.symbol;
+    const isUSAlert = _isUsSym(alert.symbol);
+    const isHKAlert = _isHkSym(alert.symbol);
+    const curr = isHKAlert ? "HKD" : (isDRAlert || isUSAlert) ? "USD" : "บาท";
+    const symLabel = isDRAlert ? `DR: ${_drUnder(alert.symbol)}` : isUSAlert ? `US: ${_usUnder(alert.symbol)}` : isHKAlert ? `HK: ${_hkUnder(alert.symbol)}` : alert.symbol;
     document.getElementById("alert-popup-sym").textContent = symLabel;
     document.getElementById("alert-popup-msg").innerHTML =
       `ราคา <strong style="font-size:18px;color:${isUp ? "var(--green)" : "var(--red)"}">${price.toFixed(isDRAlert ? 4 : 2)}</strong> ${curr}<br>
@@ -14103,9 +15648,11 @@ function _showBrowserNotification(alert, price) {
   if (Notification.permission !== "granted") return;
   const condTh = alert.condition === "above" ? "≥" : "≤";
   const isDR = _isDRSym(alert.symbol);
-  const curr = isDR ? "USD" : "บาท";
+  const isUS = _isUsSym(alert.symbol);
+  const isHK = _isHkSym(alert.symbol);
+  const curr = isHK ? "HKD" : (isDR || isUS) ? "USD" : "บาท";
   const dp = isDR ? 4 : 2;
-  const symLabel = isDR ? `DR: ${_drUnder(alert.symbol)}` : alert.symbol;
+  const symLabel = isDR ? `DR: ${_drUnder(alert.symbol)}` : isUS ? `US: ${_usUnder(alert.symbol)}` : isHK ? `HK: ${_hkUnder(alert.symbol)}` : alert.symbol;
   new Notification(`🔔 ${symLabel} ถึงราคาเป้า!`, {
     body: `ราคา ${price.toFixed(dp)} ${curr} (เป้า ${condTh} ${alert.targetPrice.toFixed(dp)})${alert.note ? "\n" + alert.note : ""}`,
     icon: "/favicon.ico",
@@ -14141,7 +15688,7 @@ async function checkWatchlistConfluence() {
   let changed = false;
 
   for (const rawSym of watchlist) {
-    if (_isDRSym(rawSym)) continue;   // สัญญาณคำนวณเฉพาะหุ้นไทย SET ไม่ครอบคลุม DR
+    if (_isDRSym(rawSym) || _isUsSym(rawSym)) continue;   // สัญญาณคำนวณเฉพาะหุ้นไทย SET ไม่ครอบคลุม DR/US
     const row = d.stocks.find(r => r.symbol === rawSym);
     if (!row || Math.abs(row.score) < 3) continue;
     if (seen[rawSym] === genAt) continue;   // แจ้งไปแล้วสำหรับข้อมูลชุดนี้

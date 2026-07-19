@@ -58,7 +58,12 @@
   <button class="nav-btn" onclick="showPage('short',this)" title="Short Sales — ข้อมูลการขายชอร์ตรายหุ้น, Squeeze Radar">Short</button>
   <button class="nav-btn" onclick="showPage('confluence',this)" title="สัญญาณเงินทุนรวม — insider + short + NVDR ที่ตรงกันหลายชั้น">🎯 สัญญาณรวม</button>
   <button class="nav-btn" onclick="showPage('financials',this)">งบการเงิน</button>
+  <button class="nav-btn" onclick="showPage('us-stocks',this)" title="หุ้น US — RS / Stage / 52W High / Momentum / EMA ของสมาชิก S&amp;P 500 · Dow Jones · Nasdaq 100 (ราคา OHLC ใน us_prices.db, คำนวณสูตรเดียวกับหุ้นไทย)">🇺🇸 หุ้น US</button>
   <button class="nav-btn" onclick="showPage('us-heatmap',this)" title="Heatmap S&amp;P 500 / Dow Jones / Nasdaq 100 (หุ้น US) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้ · คนละหน้ากับ &quot;Heatmap&quot; ของหุ้นไทยด้านซ้าย">🗺️ Heatmap US</button>
+  <button class="nav-btn" onclick="showPage('us-rotation',this)" title="US Rotation — RRG ของหุ้น US แต่ละตัว เทียบกับค่าเฉลี่ยดัชนี/sector ที่เลือก">🔄 US Rotation</button>
+  <button class="nav-btn" onclick="showPage('hk-stocks',this)" title="หุ้น HK — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Hang Seng Index · Hang Seng TECH · Hang Seng China Enterprises (ราคา OHLC ใน hk_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US)">🇭🇰 หุ้น HK</button>
+  <button class="nav-btn" onclick="showPage('hk-heatmap',this)" title="Heatmap HSI / HSTECH / HSCEI (หุ้น HK) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้">🗺️ Heatmap HK</button>
+  <button class="nav-btn" onclick="showPage('hk-rotation',this)" title="HK Rotation — RRG ของหุ้น HK แต่ละตัว เทียบกับค่าเฉลี่ยดัชนี/sector ที่เลือก">🔄 HK Rotation</button>
   <button class="nav-btn" onclick="showPage('stock-news',this)" title="ข่าวรายหุ้น — รวมประกาศ SET.or.th + Yahoo Finance + Google News ในหน้าเดียว แค่พิมพ์ชื่อย่อหุ้น">📰 ข่าวหุ้น</button>
   <button class="nav-btn" onclick="showPage('data-health',this)" title="Data Health — ความสดของทุกไฟล์/DB ที่ dashboard ใช้ในจอเดียว + ปิงแหล่งข้อมูลภายนอก (local-only)">🩺 Data Health<span id="dh-nav-badge" class="dh-nav-badge" style="display:none"></span></button>
   <div class="nav-right">
@@ -87,6 +92,26 @@
         ✅ เหมาะ: <b>17:30 น. ขึ้นไป</b> (หลัง SET ปิด)<br>
         📦 ดึง Fundamentals + ประวัติราคาใหม่ทั้งหมด<br>
         ⏱ ใช้เวลา 20 นาที – 1.5 ชั่วโมง
+      </div>
+    </div>
+    <div class="btn-wrap">
+      <button class="refresh-btn" id="us-index-refresh-btn" onclick="startUsIndexFullRefresh()">📈 US Index Max</button>
+      <div class="btn-note">
+        <b>📈 US Index Max — S&amp;P 500 + Dow + Nasdaq 100</b><br>
+        ดึงราคา OHLC ย้อนหลัง<b>สูงสุด</b>ทั้ง ~518 ตัว<br>
+        📦 เก็บลง us_prices.db (แยกจาก set_prices.db)<br>
+        ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
+        <span id="us-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
+      </div>
+    </div>
+    <div class="btn-wrap">
+      <button class="refresh-btn" id="hk-index-refresh-btn" onclick="startHkIndexFullRefresh()">📈 HK Index Max</button>
+      <div class="btn-note">
+        <b>📈 HK Index Max — HSI + HSTECH + HSCEI</b><br>
+        ดึงราคา OHLC ย้อนหลัง<b>สูงสุด</b>ทั้ง ~105 ตัว<br>
+        📦 เก็บลง hk_prices.db (แยกจาก set_prices.db/us_prices.db)<br>
+        ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
+        <span id="hk-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
       </div>
     </div>
     <div class="btn-wrap">
@@ -646,7 +671,7 @@
   <div class="page-sub">หุ้นที่สนใจ — บันทึกไว้ใน browser</div>
 
   <div class="wl-input-row">
-    <input class="wl-input" id="wl-input" placeholder="SET: PTT, KBANK  |  DR: AAPL, NVDA, TSLA ..." list="wl-sym-list" oninput="this.value=this.value.toUpperCase()" autocomplete="off" onkeydown="if(event.key==='Enter')addToWatchlist()">
+    <input class="wl-input" id="wl-input" placeholder="SET: PTT, KBANK  |  DR: AAPL, NVDA, TSLA  |  US Index: MSFT, AMZN  |  HK Index: 0700.HK, 9988.HK ..." list="wl-sym-list" oninput="this.value=this.value.toUpperCase()" autocomplete="off" onkeydown="if(event.key==='Enter')addToWatchlist()">
     <datalist id="wl-sym-list"></datalist>
     <button class="wl-add-btn" onclick="addToWatchlist()">+ เพิ่ม</button>
     <button class="filter-btn" onclick="wlExport()" title="คัดลอกรายชื่อ watchlist เป็นข้อความ เอาไปวางบนอีกเครื่อง (มือถือ/ไอแพด/โน้ตบุ๊ค)" style="font-size:11px">📤 คัดลอกไปเครื่องอื่น</button>
@@ -2633,6 +2658,77 @@
   </div>
 </div>
 
+<!-- PAGE: US ROTATION — RRG ของหุ้น US (RS/momentum เทียบค่าเฉลี่ยดัชนี/sector ที่เลือก) -->
+<div id="page-us-rotation" class="page">
+  <div class="page-title">🔄 US Rotation</div>
+  <div class="page-sub" id="usrot-subtitle">RRG ของหุ้น US แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
+  <div id="usrot-gate" class="empty" style="display:none;padding:24px"></div>
+  <div id="usrot-body" style="display:none">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
+      <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn active" id="usrot-idx-sp500" onclick="setUsRotIndex('SP500',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">S&amp;P 500</button>
+        <button class="filter-btn" id="usrot-idx-dow" onclick="setUsRotIndex('DOW',this)" style="font-size:12px;padding:5px 12px">Dow Jones</button>
+        <button class="filter-btn" id="usrot-idx-ndx" onclick="setUsRotIndex('NDX',this)" style="font-size:12px;padding:5px 12px">Nasdaq 100</button>
+        <button class="filter-btn" id="usrot-idx-all" onclick="setUsRotIndex('ALL',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">ทั้งหมด</button>
+      </div>
+      <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn active" id="usrot-tf-long" onclick="setUsRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
+        <button class="filter-btn" id="usrot-tf-short" onclick="setUsRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+      </div>
+      <select id="usrot-sector" onchange="renderUsRotation()" style="font-size:13px"></select>
+      <div class="filter-row" style="gap:0;margin:0" title="เทียบราคาแต่ละตัวกับค่าเฉลี่ยของทั้งดัชนี หรือเฉพาะ sector ที่เลือก (มีผลเมื่อเลือก sector เจาะจง ไม่ใช่ 'ทุก Sector')">
+        <button class="filter-btn active" id="usrot-bm-index" onclick="setUsRotBenchmark('index',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">เทียบดัชนี</button>
+        <button class="filter-btn" id="usrot-bm-sector" onclick="setUsRotBenchmark('sector',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">เทียบ Sector</button>
+      </div>
+      <span id="usrot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
+    </div>
+    <div class="card" style="padding:8px">
+      <canvas id="us-rotation-map" style="width:100%;display:block"></canvas>
+    </div>
+    <div id="us-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
+    <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
+      🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
+      🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
+    </div>
+  </div>
+</div>
+
+<!-- PAGE: HK ROTATION — ก็อปโครงจาก page-us-rotation ทั้งหมด (drawRotationScatter ตัวเดิม 100%
+     ไม่ต้องแตะ) ต่างแค่ prefix usrot->hkrot, ดัชนี HSI/HSTECH/HSCEI/ทั้งหมด, endpoint hk-index-metrics -->
+<div id="page-hk-rotation" class="page">
+  <div class="page-title">🔄 HK Rotation</div>
+  <div class="page-sub" id="hkrot-subtitle">RRG ของหุ้น HK แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
+  <div id="hkrot-gate" class="empty" style="display:none;padding:24px"></div>
+  <div id="hkrot-body" style="display:none">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
+      <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn active" id="hkrot-idx-hsi" onclick="setHkRotIndex('HSI',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">HSI</button>
+        <button class="filter-btn" id="hkrot-idx-hstech" onclick="setHkRotIndex('HSTECH',this)" style="font-size:12px;padding:5px 12px">HSTECH</button>
+        <button class="filter-btn" id="hkrot-idx-hscei" onclick="setHkRotIndex('HSCEI',this)" style="font-size:12px;padding:5px 12px">HSCEI</button>
+        <button class="filter-btn" id="hkrot-idx-all" onclick="setHkRotIndex('ALL',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">ทั้งหมด</button>
+      </div>
+      <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn active" id="hkrot-tf-long" onclick="setHkRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
+        <button class="filter-btn" id="hkrot-tf-short" onclick="setHkRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+      </div>
+      <select id="hkrot-sector" onchange="renderHkRotation()" style="font-size:13px"></select>
+      <div class="filter-row" style="gap:0;margin:0" title="เทียบราคาแต่ละตัวกับค่าเฉลี่ยของทั้งดัชนี หรือเฉพาะ sector ที่เลือก (มีผลเมื่อเลือก sector เจาะจง ไม่ใช่ 'ทุก Sector')">
+        <button class="filter-btn active" id="hkrot-bm-index" onclick="setHkRotBenchmark('index',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">เทียบดัชนี</button>
+        <button class="filter-btn" id="hkrot-bm-sector" onclick="setHkRotBenchmark('sector',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">เทียบ Sector</button>
+      </div>
+      <span id="hkrot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
+    </div>
+    <div class="card" style="padding:8px">
+      <canvas id="hk-rotation-map" style="width:100%;display:block"></canvas>
+    </div>
+    <div id="hk-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
+    <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
+      🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
+      🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
+    </div>
+  </div>
+</div>
+
 <!-- PAGE: FUNDAMENTAL SCREENER (Screener+) -->
 <div id="page-fscreener" class="page">
   <div class="page-title">🔬 Fundamental Screener</div>
@@ -2821,6 +2917,176 @@
 <!-- PAGE: US INDEX HEATMAP — คนละหน้ากับ "Heatmap" เดิม (id="page-heatmap") ที่เป็น Market
      Heatmap ของหุ้นไทยจัดกลุ่มตาม Sector — ห้ามใช้ id/route "heatmap" ซ้ำกับหน้านั้นเด็ดขาด
      (getElementById จะเจอหน้าไทยก่อนเสมอเพราะอยู่ก่อนใน DOM ทำให้หน้านี้ไม่มีทางแสดงได้เลย) -->
+<!-- PAGE: US STOCKS — RS/Stage/52W/Momentum/EMA ของสมาชิกดัชนี US (อ่านจาก /api/us-index-metrics) -->
+<div id="page-us-stocks" class="page">
+  <div class="page-title">🇺🇸 หุ้น US — S&amp;P 500 · Dow Jones · Nasdaq 100</div>
+  <div class="page-sub">RS / Stage / 52W High / Momentum / EMA — คำนวณสูตรเดียวกับหุ้นไทย (core/metrics.py) จากราคา OHLC ใน us_prices.db · อัพเดทตอนกด Quick Update หรือปุ่ม 📈 US Index Max</div>
+
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+    <div class="filter-row" style="gap:0;margin:0">
+      <button class="filter-btn active" id="us-idx-sp500" onclick="setUsIndex('SP500',this)" style="border-radius:6px 0 0 6px;min-width:90px">S&amp;P 500</button>
+      <button class="filter-btn" id="us-idx-dow" onclick="setUsIndex('DOW',this)" style="min-width:90px">Dow Jones</button>
+      <button class="filter-btn" id="us-idx-ndx" onclick="setUsIndex('NDX',this)" style="border-radius:0 6px 6px 0;min-width:90px">Nasdaq 100</button>
+    </div>
+    <div class="filter-row" style="gap:0;margin:0" id="us-view-btns">
+      <button class="filter-btn active" data-view="all"      onclick="setUsView('all',this)"      style="border-radius:6px 0 0 6px">ทั้งหมด</button>
+      <button class="filter-btn"        data-view="rs80"     onclick="setUsView('rs80',this)">RS 80+</button>
+      <button class="filter-btn"        data-view="stage2"   onclick="setUsView('stage2',this)" title="Stage 2 — เหนือ EMA200 + EMA200 ชันขึ้น (Weinstein)">Stage 2 ✅</button>
+      <button class="filter-btn"        data-view="nearhigh" onclick="setUsView('nearhigh',this)" title="ห่างจาก 52-week high ไม่เกิน 5%">ใกล้ 52W High</button>
+      <button class="filter-btn"        data-view="momentum" onclick="setUsView('momentum',this)" title="RS momentum เป็นบวก — RS ปัจจุบันสูงกว่า 4 สัปดาห์ก่อน">Momentum นำ</button>
+      <button class="filter-btn"        data-view="ema200"   onclick="setUsView('ema200',this)"   style="border-radius:0 6px 6px 0">เหนือ EMA200</button>
+    </div>
+    <input id="us-search" class="scr-input" style="width:150px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="renderUsTable()">
+    <select id="us-sector-filter" class="scr-input" style="width:160px;font-size:12px" onchange="renderUsTable()"><option value="ALL">ทุก Sector</option></select>
+    <button class="filter-btn" id="us-mode-sectors" onclick="setUsMode(document.getElementById('us-mode-sectors').classList.contains('active')?'stocks':'sectors')" title="สลับไปดูอันดับ Sector (RS/return เฉลี่ยแต่ละกลุ่ม)">🏭 จัดอันดับ Sector</button>
+    <span id="us-count" style="font-size:11px;color:var(--text2)"></span>
+  </div>
+
+  <!-- Breadth summary strip -->
+  <div id="us-breadth-strip" class="grid-4" style="margin-bottom:12px"></div>
+
+  <!-- % Above EMA ย้อนหลัง (เหมือนหน้า EMA Breadth ของหุ้นไทย) -->
+  <div class="filter-row" id="us-breadth-range-btns" style="margin-bottom:10px">
+    <button class="filter-btn active" onclick="setUsBreadthRange('1y',this)">1Y</button>
+    <button class="filter-btn" onclick="setUsBreadthRange('3y',this)">3Y</button>
+    <button class="filter-btn" onclick="setUsBreadthRange('5y',this)">5Y</button>
+    <button class="filter-btn" onclick="setUsBreadthRange('all',this)">All</button>
+  </div>
+  <div class="rotation-grid" style="grid-template-columns:1fr;gap:12px;margin-bottom:14px">
+    <div class="card" style="padding:12px 14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">% หุ้นเหนือ EMA50/EMA200 ย้อนหลัง — สุขภาพระยะกลาง-ยาวของดัชนี US
+        <span id="us-bc-ema-now" style="font-weight:400;color:var(--text2);font-size:11px"></span>
+      </div>
+      <div id="us-bc-ema-loading" style="color:var(--text2);font-size:11px">กำลังโหลด...</div>
+      <canvas id="us-bc-ema" style="display:none;width:100%;height:170px"></canvas>
+    </div>
+    <div class="card" style="padding:12px 14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">52W New High − New Low ย้อนหลัง — ความแข็งแรงของ leadership
+        <span id="us-bc-nhnl-now" style="font-weight:400;color:var(--text2);font-size:11px"></span>
+      </div>
+      <div id="us-bc-nhnl-loading" style="color:var(--text2);font-size:11px">กำลังโหลด...</div>
+      <canvas id="us-bc-nhnl" style="display:none;width:100%;height:170px"></canvas>
+    </div>
+    <div class="card" style="padding:12px 14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">McClellan Oscillator — โมเมนตัมระยะสั้นของแรงซื้อทั้งดัชนี US
+        <span id="us-bc-mcc-now" style="font-weight:400;color:var(--text2);font-size:11px"></span>
+      </div>
+      <div id="us-bc-mcc-loading" style="color:var(--text2);font-size:11px">กำลังโหลด...</div>
+      <canvas id="us-bc-mcc" style="display:none;width:100%;height:170px"></canvas>
+    </div>
+  </div>
+
+  <div class="card" style="padding:0;overflow-x:auto" id="us-stocks-wrap">
+    <table class="tbl" id="us-stocks-tbl">
+      <thead><tr id="us-thead"></tr></thead>
+      <tbody id="us-stocks-tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="card" style="padding:0;overflow-x:auto;display:none" id="us-sectors-wrap">
+    <table class="tbl" id="us-sectors-tbl">
+      <thead><tr>
+        <th style="width:32px">#</th>
+        <th style="text-align:left">Sector</th>
+        <th class="r">หุ้น</th>
+        <th class="r" style="cursor:pointer" onclick="usSectorSortBy('avg_rs')">RS เฉลี่ย</th>
+        <th class="r" style="cursor:pointer" onclick="usSectorSortBy('ret_1d')">1D</th>
+        <th class="r" style="cursor:pointer" onclick="usSectorSortBy('ret_1w')">1W</th>
+        <th class="r" style="cursor:pointer" onclick="usSectorSortBy('ret_1m')">1M</th>
+        <th class="r" style="cursor:pointer" onclick="usSectorSortBy('ret_3m')">3M</th>
+        <th class="r" style="cursor:pointer" onclick="usSectorSortBy('ret_1y')">1Y</th>
+        <th class="r" style="cursor:pointer" onclick="usSectorSortBy('pct_above_ema50')">% เหนือ EMA50</th>
+      </tr></thead>
+      <tbody id="us-sectors-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- PAGE: HK STOCKS — RS/Stage/52W/Momentum/EMA ของสมาชิกดัชนี HK (อ่านจาก /api/hk-index-metrics) -->
+<div id="page-hk-stocks" class="page">
+  <div class="page-title">🇭🇰 หุ้น HK — Hang Seng Index · Hang Seng TECH · Hang Seng China Enterprises</div>
+  <div class="page-sub">RS / Stage / 52W High / Momentum / EMA — คำนวณสูตรเดียวกับหุ้นไทย/US (core/metrics.py) จากราคา OHLC ใน hk_prices.db · อัพเดทตอนกด Quick Update หรือปุ่ม 📈 HK Index Max</div>
+
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+    <div class="filter-row" style="gap:0;margin:0">
+      <button class="filter-btn active" id="hk-idx-hsi" onclick="setHkIndex('HSI',this)" style="border-radius:6px 0 0 6px;min-width:90px">HSI</button>
+      <button class="filter-btn" id="hk-idx-hstech" onclick="setHkIndex('HSTECH',this)" style="min-width:90px">HSTECH</button>
+      <button class="filter-btn" id="hk-idx-hscei" onclick="setHkIndex('HSCEI',this)" style="border-radius:0 6px 6px 0;min-width:90px">HSCEI</button>
+    </div>
+    <div class="filter-row" style="gap:0;margin:0" id="hk-view-btns">
+      <button class="filter-btn active" data-view="all"      onclick="setHkView('all',this)"      style="border-radius:6px 0 0 6px">ทั้งหมด</button>
+      <button class="filter-btn"        data-view="rs80"     onclick="setHkView('rs80',this)">RS 80+</button>
+      <button class="filter-btn"        data-view="stage2"   onclick="setHkView('stage2',this)" title="Stage 2 — เหนือ EMA200 + EMA200 ชันขึ้น (Weinstein)">Stage 2 ✅</button>
+      <button class="filter-btn"        data-view="nearhigh" onclick="setHkView('nearhigh',this)" title="ห่างจาก 52-week high ไม่เกิน 5%">ใกล้ 52W High</button>
+      <button class="filter-btn"        data-view="momentum" onclick="setHkView('momentum',this)" title="RS momentum เป็นบวก — RS ปัจจุบันสูงกว่า 4 สัปดาห์ก่อน">Momentum นำ</button>
+      <button class="filter-btn"        data-view="ema200"   onclick="setHkView('ema200',this)"   style="border-radius:0 6px 6px 0">เหนือ EMA200</button>
+    </div>
+    <input id="hk-search" class="scr-input" style="width:150px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="renderHkTable()">
+    <select id="hk-sector-filter" class="scr-input" style="width:160px;font-size:12px" onchange="renderHkTable()"><option value="ALL">ทุก Sector</option></select>
+    <button class="filter-btn" id="hk-mode-sectors" onclick="setHkMode(document.getElementById('hk-mode-sectors').classList.contains('active')?'stocks':'sectors')" title="สลับไปดูอันดับ Sector (RS/return เฉลี่ยแต่ละกลุ่ม)">🏭 จัดอันดับ Sector</button>
+    <span id="hk-count" style="font-size:11px;color:var(--text2)"></span>
+  </div>
+
+  <!-- Breadth summary strip -->
+  <div id="hk-breadth-strip" class="grid-4" style="margin-bottom:12px"></div>
+
+  <!-- % Above EMA ย้อนหลัง (เหมือนหน้า EMA Breadth ของหุ้นไทย) -->
+  <div class="filter-row" id="hk-breadth-range-btns" style="margin-bottom:10px">
+    <button class="filter-btn active" onclick="setHkBreadthRange('1y',this)">1Y</button>
+    <button class="filter-btn" onclick="setHkBreadthRange('3y',this)">3Y</button>
+    <button class="filter-btn" onclick="setHkBreadthRange('5y',this)">5Y</button>
+    <button class="filter-btn" onclick="setHkBreadthRange('all',this)">All</button>
+  </div>
+  <div class="rotation-grid" style="grid-template-columns:1fr;gap:12px;margin-bottom:14px">
+    <div class="card" style="padding:12px 14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">% หุ้นเหนือ EMA50/EMA200 ย้อนหลัง — สุขภาพระยะกลาง-ยาวของดัชนี HK
+        <span id="hk-bc-ema-now" style="font-weight:400;color:var(--text2);font-size:11px"></span>
+      </div>
+      <div id="hk-bc-ema-loading" style="color:var(--text2);font-size:11px">กำลังโหลด...</div>
+      <canvas id="hk-bc-ema" style="display:none;width:100%;height:170px"></canvas>
+    </div>
+    <div class="card" style="padding:12px 14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">52W New High − New Low ย้อนหลัง — ความแข็งแรงของ leadership
+        <span id="hk-bc-nhnl-now" style="font-weight:400;color:var(--text2);font-size:11px"></span>
+      </div>
+      <div id="hk-bc-nhnl-loading" style="color:var(--text2);font-size:11px">กำลังโหลด...</div>
+      <canvas id="hk-bc-nhnl" style="display:none;width:100%;height:170px"></canvas>
+    </div>
+    <div class="card" style="padding:12px 14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">McClellan Oscillator — โมเมนตัมระยะสั้นของแรงซื้อทั้งดัชนี HK
+        <span id="hk-bc-mcc-now" style="font-weight:400;color:var(--text2);font-size:11px"></span>
+      </div>
+      <div id="hk-bc-mcc-loading" style="color:var(--text2);font-size:11px">กำลังโหลด...</div>
+      <canvas id="hk-bc-mcc" style="display:none;width:100%;height:170px"></canvas>
+    </div>
+  </div>
+
+  <div class="card" style="padding:0;overflow-x:auto" id="hk-stocks-wrap">
+    <table class="tbl" id="hk-stocks-tbl">
+      <thead><tr id="hk-thead"></tr></thead>
+      <tbody id="hk-stocks-tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="card" style="padding:0;overflow-x:auto;display:none" id="hk-sectors-wrap">
+    <table class="tbl" id="hk-sectors-tbl">
+      <thead><tr>
+        <th style="width:32px">#</th>
+        <th style="text-align:left">Sector</th>
+        <th class="r">หุ้น</th>
+        <th class="r" style="cursor:pointer" onclick="hkSectorSortBy('avg_rs')">RS เฉลี่ย</th>
+        <th class="r" style="cursor:pointer" onclick="hkSectorSortBy('ret_1d')">1D</th>
+        <th class="r" style="cursor:pointer" onclick="hkSectorSortBy('ret_1w')">1W</th>
+        <th class="r" style="cursor:pointer" onclick="hkSectorSortBy('ret_1m')">1M</th>
+        <th class="r" style="cursor:pointer" onclick="hkSectorSortBy('ret_3m')">3M</th>
+        <th class="r" style="cursor:pointer" onclick="hkSectorSortBy('ret_1y')">1Y</th>
+        <th class="r" style="cursor:pointer" onclick="hkSectorSortBy('pct_above_ema50')">% เหนือ EMA50</th>
+      </tr></thead>
+      <tbody id="hk-sectors-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
 <div id="page-us-heatmap" class="page">
   <div class="page-title">Heatmap ดัชนี US</div>
   <div class="page-sub">ขนาดกล่อง = มูลค่าตลาด (Market Cap) · สี = % เปลี่ยนแปลง — ข้อมูลจาก Yahoo Finance สด</div>
@@ -2852,6 +3118,43 @@
 
   <div id="hm-box" style="position:relative;width:100%;height:640px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
     <div id="hm-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">กำลังโหลด heatmap (ครั้งแรกอาจใช้เวลา ~30-60 วิ)...</div>
+  </div>
+</div>
+
+<!-- PAGE: HK INDEX HEATMAP — ก็อปโครงจาก page-us-heatmap ทั้งหมด ต่างแค่ prefix hm->hk-hm,
+     endpoint /api/hk-index-heatmap, และไม่มีปุ่ม "⚡ อัพเดทราคา" บังคับสด (chg_1d/1w คำนวณจาก
+     hk_prices.db ที่มีอยู่แล้ว ไม่ได้ยิง Yahoo สดเหมือน US — force รีเฟรชแค่ market cap) -->
+<div id="page-hk-heatmap" class="page">
+  <div class="page-title">Heatmap ดัชนี HK</div>
+  <div class="page-sub">ขนาดกล่อง = มูลค่าตลาด (Market Cap) · สี = % เปลี่ยนแปลง — % เปลี่ยนแปลงจากราคาใน hk_prices.db (อัพเดททุกวันตอน Quick Update), Market Cap ดึงสดจาก Yahoo Finance</div>
+
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+    <div class="filter-row" style="gap:0;margin:0">
+      <button class="filter-btn active" id="hk-hm-idx-hsi" onclick="setHkHeatmapIndex('HSI',this)" style="border-radius:6px 0 0 6px;min-width:100px">HSI</button>
+      <button class="filter-btn" id="hk-hm-idx-hstech" onclick="setHkHeatmapIndex('HSTECH',this)" style="min-width:100px">HSTECH</button>
+      <button class="filter-btn" id="hk-hm-idx-hscei" onclick="setHkHeatmapIndex('HSCEI',this)" style="border-radius:0 6px 6px 0;min-width:100px">HSCEI</button>
+    </div>
+    <div class="filter-row" style="gap:0;margin:0">
+      <button class="filter-btn active" id="hk-hm-period-1d" onclick="setHkHeatmapPeriod('chg_1d',this)" style="border-radius:6px 0 0 6px;min-width:56px" title="% เปลี่ยนแปลงวันนี้">1D</button>
+      <button class="filter-btn" id="hk-hm-period-1w" onclick="setHkHeatmapPeriod('chg_1w',this)" style="border-radius:0 6px 6px 0;min-width:56px" title="% เปลี่ยนแปลง 5 วันทำการล่าสุด">1W</button>
+    </div>
+    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer;user-select:none">
+      <input type="checkbox" id="hk-hm-sector-toggle" checked onchange="_renderHkHeatmap(_hkHmData[_hkHmIndex])"> จัดกลุ่มตาม Sector
+    </label>
+    <input id="hk-hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderHkHeatmap(_hkHmData[_hkHmIndex])">
+    <button class="filter-btn" id="hk-hm-refresh-btn" onclick="loadHkHeatmapPage(true)" title="บังคับดึง market cap สดจาก Yahoo Finance ใหม่ทั้งชุด (ข้าม cache 1 วันของ server) — ปกติไม่ต้องกด">⚡ อัพเดท Market Cap</button>
+    <span id="hk-hm-note" style="font-size:11px;color:var(--text2)"></span>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:11px;color:var(--text2)">
+    <span>-3%</span>
+    <div style="width:180px;height:10px;border-radius:4px;background:linear-gradient(to right, rgb(248,81,73), rgb(33,38,45), rgb(63,185,80))"></div>
+    <span>+3%</span>
+    <span style="margin-left:4px">(สีเข้มขึ้นตามขนาด % คลิปที่ ±3%)</span>
+  </div>
+
+  <div id="hk-hm-box" style="position:relative;width:100%;height:640px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+    <div id="hk-hm-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">กำลังโหลด heatmap (ครั้งแรกอาจใช้เวลา ~30-60 วิ)...</div>
   </div>
 </div>
 
@@ -2905,6 +3208,11 @@
     <div id="dh-ping-result" style="margin-top:10px;display:none"></div>
   </div>
 
+  <div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">🕐 กดล่าสุด — Quick Update / Full Refresh</div>
+    <div id="dh-last-runs-wrap" style="display:flex;gap:24px;flex-wrap:wrap;font-size:12px"></div>
+  </div>
+
   <div id="dh-table-wrap"></div>
 
   <div class="card" style="padding:14px 16px;margin-bottom:12px">
@@ -2938,11 +3246,20 @@
     </div>
 
     <!-- ดัชนี US -->
-    <div style="padding:10px 0 0">
+    <div style="padding:10px 0;border-bottom:1px solid var(--border)">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <strong style="font-size:12.5px;min-width:110px">📈 ดัชนี US (S&amp;P500/DOW/NDX)</strong>
         <span style="font-size:11px;color:var(--text2)">มีปุ่มเช็คอยู่แล้วในหน้า "🗺️ Heatmap US"</span>
         <button class="filter-btn" onclick="showPage('us-heatmap', [...document.querySelectorAll('.nav-btn')].find(b=>b.getAttribute('onclick')?.includes(`'us-heatmap'`)))">ไปหน้า Heatmap US</button>
+      </div>
+    </div>
+
+    <!-- ดัชนี HK -->
+    <div style="padding:10px 0 0">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <strong style="font-size:12.5px;min-width:110px">📈 ดัชนี HK (HSI/HSTECH/HSCEI)</strong>
+        <span style="font-size:11px;color:var(--text2)">มีปุ่มเช็คอยู่แล้วในหน้า "🗺️ Heatmap HK"</span>
+        <button class="filter-btn" onclick="showPage('hk-heatmap', [...document.querySelectorAll('.nav-btn')].find(b=>b.getAttribute('onclick')?.includes(`'hk-heatmap'`)))">ไปหน้า Heatmap HK</button>
       </div>
     </div>
   </div>
@@ -2958,7 +3275,7 @@
     <div><div id="hm-popup-chg1w" style="font-size:16px;font-weight:700"></div><div style="font-size:10px;color:var(--text2)">1W</div></div>
     <div><div id="hm-popup-mktcap" style="font-size:14px;font-weight:600"></div><div style="font-size:10px;color:var(--text2)">Market Cap</div></div>
   </div>
-  <button class="btn-primary" style="width:100%;margin-top:10px;font-size:12px;padding:6px 0" onclick="_hmGoFin()">📋 ดูงบการเงิน</button>
+  <button class="btn-primary" id="hm-popup-fin-btn" style="width:100%;margin-top:10px;font-size:12px;padding:6px 0" onclick="_hmGoFin()">📋 ดูงบการเงิน</button>
 </div>
 
 <!-- IDX TOOLTIP -->

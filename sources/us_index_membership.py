@@ -10,7 +10,8 @@ import ssl
 import urllib.request
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
-_INDEXES = ("SP500", "DOW", "NDX")
+INDEXES = ("SP500", "DOW", "NDX")
+_INDEXES = INDEXES   # ชื่อเดิม — คงไว้กันโค้ดอื่นอ้างอิงพลาด
 
 
 def _fetch_wikitext(title):
@@ -121,6 +122,14 @@ def save_local(base_dir, data):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
     os.replace(tmp, p)
+
+
+def all_tickers(base_dir):
+    """union ticker ของทั้ง 3 ดัชนี (ไม่ซ้ำ) จากไฟล์ local — เดิมแต่ละที่ที่ต้องการ
+    union นี้ (app.py, backfill script, metrics builder) เขียน sorted(set(...)|...)
+    ซ้ำมือเอง กระจาย ~6 จุด แก้ยากถ้า INDEXES เปลี่ยน"""
+    local = load_local(base_dir)
+    return sorted(set().union(*(local.get(k, []) for k in INDEXES)))
 
 
 def diff_membership(base_dir, mirror_us=None):

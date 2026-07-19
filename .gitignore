@@ -52,6 +52,18 @@ set_prices.db-shm
 set_prices.db.bak*
 backups/
 
+# SQLite ราคาสมาชิกดัชนี US (S&P500/Dow/NDX) — local only, regenerate ได้ด้วยปุ่ม
+# "US Index Max" หรือ backfill_us_index_prices.py (330MB เกิน limit GitHub อยู่ดี)
+us_prices.db
+us_prices.db-wal
+us_prices.db-shm
+
+# SQLite ราคาสมาชิกดัชนี HK (HSI/HSCEI/HSTECH) — local only, regenerate ได้ด้วย
+# backfill_hk_index_prices.py
+hk_prices.db
+hk_prices.db-wal
+hk_prices.db-shm
+
 # SQLite SEC filings store (insider trades / major shareholder changes)
 sec_filings.db
 sec_filings.db-wal

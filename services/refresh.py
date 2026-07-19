@@ -10,6 +10,7 @@ from datetime import datetime
 
 import pandas as pd
 
+from core import store as _default_ca_store
 from core.metrics import validate_stocks, rank_rs, summarize_groups
 from core.store import (OUT_FILE, DUAL_WRITE_JSON, _atomic_write_json,
                         _check_stock_count, get_closes_map, get_last_dates,
@@ -19,13 +20,17 @@ from services.rotation import update_rotation_state
 from set_data_fetcher import load_set_symbols, process_stock, sanitize
 
 
-def detect_ca_mismatch(base_dir, new_data, tol=0.005, min_bad=2):
+def detect_ca_mismatch(base_dir, new_data, tol=0.005, min_bad=2, store=None):
     """Split detector: เทียบราคาแท่ง overlap (ที่ดึงมาใหม่ vs ที่เก็บไว้)
     ถ้า Yahoo เพิ่งปรับราคาย้อนหลัง (แตกพาร์/รวมพาร์/ปันผลเป็นหุ้น) แท่งเดิม
     จะไม่ตรงกับที่เก็บไว้ทั้งแถบ — คืน list ของ ticker ที่ต้อง refetch เต็ม
 
     min_bad=2: ต้องเพี้ยนอย่างน้อย 2 แท่ง กัน false positive จากการแก้ข้อมูล
-    จุดเดียว/ความต่างจากการปัดเศษ"""
+    จุดเดียว/ความต่างจากการปัดเศษ
+
+    store=None → core.store (หุ้นไทย, set_prices.db) — ส่ง core.us_store/core.hk_store
+    เข้ามาแทนเพื่อใช้ split detector ตัวเดียวกันกับหุ้น US/HK (โครง get_closes_map เหมือนกัน)"""
+    store = store or _default_ca_store
     suspects = []
     for tick, d in new_data.items():
         try:
@@ -34,7 +39,7 @@ def detect_ca_mismatch(base_dir, new_data, tol=0.005, min_bad=2):
                 continue
             closes = {dt: float(c) for dt, c in zip(dates, d["close"])}
             # ตัดแท่งล่าสุดออก (วันนี้เป็นราคาใหม่จริง ไม่ใช่ overlap)
-            stored = get_closes_map(base_dir, tick, dates[:-1])
+            stored = store.get_closes_map(base_dir, tick, dates[:-1])
             bad = 0
             for dt, sc in stored.items():
                 nc = closes.get(dt)
@@ -55,7 +60,9 @@ MAX_CA_REPAIR = 30   # เพดานซ่อมต่อรอบ — mismatc
 
 def _repair_ca_tickers(base_dir, new_data, suspects, callback):
     """refetch เต็ม (period=max) เฉพาะหุ้นที่ตรวจพบ CA — แทนข้อมูลใน new_data
-    คืน set ของ ticker ที่ซ่อมสำเร็จ (ให้ save_history replace ทั้ง series)"""
+    คืน set ของ ticker ที่ซ่อมสำเร็จ (ผู้เรียกต้อง delete ticker เดิมออกก่อน upsert
+    ทั้ง series ใหม่ — ดู save_history's replace_tickers ของหุ้นไทย หรือ
+    delete_ticker_bars + upsert_bars ตรงๆ ของ US/HK gap-update)"""
     if len(suspects) > MAX_CA_REPAIR:
         print(f"[CA] mismatch {len(suspects)} ตัว — มากผิดปกติ "
               f"(แหล่งข้อมูลอาจเปลี่ยนฐานทั้งกระดาน?) ซ่อมรอบนี้ {MAX_CA_REPAIR} ตัวแรก "
