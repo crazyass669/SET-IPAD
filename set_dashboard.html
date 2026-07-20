@@ -42,6 +42,9 @@
   <button class="nav-btn" onclick="showPage('stocks',this)">หุ้นทั้งหมด</button>
   <button class="nav-btn" onclick="showPage('screener',this)">Screener</button>
   <button class="nav-btn" onclick="showPage('fscreener',this)" title="Fundamental Screener — กรองหุ้นด้วยงบการเงินย้อน 16 ปี (Finnomena+Yahoo+SET) พร้อม preset สำเร็จรูป · ต้องรันบนเครื่อง (local)">🔬 Screener+</button>
+  <button class="nav-btn" onclick="showPage('peer',this)" title="Peer Compare — เทียบหุ้นในกลุ่ม sector/industry เดียวกันด้าน valuation/คุณภาพ/growth ในตารางเดียว (หุ้นไทย, local-only)">🆚 เทียบเพื่อน</button>
+  <button class="nav-btn" onclick="showPage('tearsheet',this)" title="Tearsheet — หุ้น 1 ตัว ครบในหน้าเดียว: Header + Valuation Snapshot (เฟส A, หุ้นไทย, local-only)">📋 Tearsheet</button>
+  <button class="nav-btn" onclick="showPage('calendar',this)" title="ปฏิทินงบ/ปันผล — วันประกาศงบ (yfinance ประมาณการ) + XD/จ่ายปันผล (SET.or.th ทางการ) ของหุ้นใน Watchlist ล่วงหน้า 30 วัน (เฟส A, local-only)">📅 ปฏิทิน</button>
   <button class="nav-btn" onclick="showPage('breakout',this)">52W H/L &amp; Breakout</button>
   <button class="nav-btn" onclick="showPage('momentum',this)">Momentum</button>
   <button class="nav-btn" onclick="showPage('heatmap',this)">Heatmap</button>
@@ -65,6 +68,7 @@
   <button class="nav-btn" onclick="showPage('hk-heatmap',this)" title="Heatmap HSI / HSTECH / HSCEI (หุ้น HK) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้">🗺️ Heatmap HK</button>
   <button class="nav-btn" onclick="showPage('hk-rotation',this)" title="HK Rotation — RRG ของหุ้น HK แต่ละตัว เทียบกับค่าเฉลี่ยดัชนี/sector ที่เลือก">🔄 HK Rotation</button>
   <button class="nav-btn" onclick="showPage('stock-news',this)" title="ข่าวรายหุ้น — รวมประกาศ SET.or.th + Yahoo Finance + Google News ในหน้าเดียว แค่พิมพ์ชื่อย่อหุ้น">📰 ข่าวหุ้น</button>
+  <button class="nav-btn" onclick="showPage('filings',this)" title="งบ &amp; รายงานทางการ — รวมลิงก์เอกสารต้นทาง (56-1 One Report / 10-K / Annual Report HKEX) + เว็บสรุปงบ + prompt วิเคราะห์ 13 ข้อ แค่พิมพ์ชื่อย่อหุ้น">📑 รายงานทางการ</button>
   <button class="nav-btn" onclick="showPage('data-health',this)" title="Data Health — ความสดของทุกไฟล์/DB ที่ dashboard ใช้ในจอเดียว + ปิงแหล่งข้อมูลภายนอก (local-only)">🩺 Data Health<span id="dh-nav-badge" class="dh-nav-badge" style="display:none"></span></button>
   <div class="nav-right">
     <!-- Market Regime Light — % หุ้นเหนือ EMA200 (3 โซนจากผล backtest) -->
@@ -2768,6 +2772,77 @@
   </div>
 </div>
 
+<!-- PAGE: PEER COMPARE -->
+<div id="page-peer" class="page">
+  <div class="page-title">🆚 เทียบเพื่อนร่วมกลุ่ม (Peer Compare)</div>
+  <div class="page-sub">เลือกหุ้น 1 ตัวหรือเลือก Sector ตรง ๆ — เห็นเพื่อนร่วมกลุ่มวางเทียบกันด้าน valuation/คุณภาพ/growth ในตารางเดียว ตอบคำถาม "ถูกหรือแพงเทียบเพื่อน" (หุ้นไทยทุกตัว / US-HK เฉพาะสมาชิกดัชนีหลัก — local-only)</div>
+  <div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <button class="filter-btn active" id="peer-tab-th" onclick="setPeerMarket('TH',this)" style="border-radius:6px 0 0 6px;min-width:90px">🇹🇭 ไทย</button>
+      <button class="filter-btn" id="peer-tab-us" onclick="setPeerMarket('US',this)" style="border-radius:0;min-width:90px">🇺🇸 US</button>
+      <button class="filter-btn" id="peer-tab-hk" onclick="setPeerMarket('HK',this)" style="border-radius:0 6px 6px 0;min-width:90px">🇭🇰 HK</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <input id="peer-sym" list="peer-datalist" class="scr-input" style="width:200px;font-size:13px"
+        placeholder="เช่น CPALL, PTT, KBANK" oninput="this.value=this.value.toUpperCase()"
+        onkeydown="if(event.key==='Enter') loadPeerCompare()">
+      <datalist id="peer-datalist"></datalist>
+      <button class="btn-primary" onclick="loadPeerCompare()">🔍 เทียบเพื่อน</button>
+      <span style="color:var(--text2);font-size:12px">หรือ</span>
+      <select id="peer-sector-select" style="font-size:13px" onchange="loadPeerCompareBySector()">
+        <option value="">— เลือก Sector ตรง ๆ —</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">คอลัมน์</span>
+      <button class="filter-btn active" id="peer-preset-valuation" onclick="setPeerPreset('valuation',this)">💰 Valuation</button>
+      <button class="filter-btn" id="peer-preset-quality" onclick="setPeerPreset('quality',this)">🩺 คุณภาพ</button>
+      <button class="filter-btn" id="peer-preset-growth" onclick="setPeerPreset('growth',this)">📈 Growth</button>
+    </div>
+  </div>
+  <div id="peer-meta" style="font-size:12px;color:var(--text2);margin-bottom:8px"></div>
+  <div id="peer-results"><div class="empty">พิมพ์ชื่อหุ้นหรือเลือก Sector เพื่อเริ่มเทียบ</div></div>
+</div>
+
+<!-- PAGE: TEARSHEET -->
+<div id="page-tearsheet" class="page">
+  <div class="page-title">📋 Tearsheet — หุ้น 1 ตัว ครบในหน้าเดียว</div>
+  <div class="page-sub">Header + Valuation + งบย่อ + เงินทุน & คนวงใน + ฤดูกาล + ข่าว + เอกสารทางการ ในหน้าเดียว — หุ้นไทยทุกตัว / US-HK เฉพาะสมาชิกดัชนีหลัก (S&P500+Dow+NDX, HSI+HSCEI+HSTECH) — local-only</div>
+  <div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <button class="filter-btn active" id="ts-tab-th" onclick="setTsMarket('TH',this)" style="border-radius:6px 0 0 6px;min-width:96px">🇹🇭 ไทย</button>
+      <button class="filter-btn" id="ts-tab-us" onclick="setTsMarket('US',this)" style="border-radius:0;min-width:96px">🇺🇸 US</button>
+      <button class="filter-btn" id="ts-tab-hk" onclick="setTsMarket('HK',this)" style="border-radius:0 6px 6px 0;min-width:96px">🇭🇰 HK</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input id="ts-sym" list="ts-datalist" class="scr-input" style="width:200px;font-size:13px"
+        placeholder="เช่น CPALL, PTT, KBANK" oninput="this.value=this.value.toUpperCase()"
+        onkeydown="if(event.key==='Enter') loadTearsheet()">
+      <datalist id="ts-datalist"></datalist>
+      <button class="btn-primary" onclick="loadTearsheet()">📋 เปิด Tearsheet</button>
+    </div>
+  </div>
+  <div id="ts-body"><div class="empty">พิมพ์ชื่อหุ้นเพื่อเริ่ม</div></div>
+</div>
+
+<!-- PAGE: CALENDAR -->
+<div id="page-calendar" class="page">
+  <div class="page-title">📅 ปฏิทินงบ/ปันผล</div>
+  <div class="page-sub">วันประกาศงบ (yfinance ประมาณการ) + XD/จ่ายปันผล (SET.or.th ทางการ) ของหุ้นใน Watchlist —
+    เฟส A: เฉพาะหุ้นใน Watchlist เท่านั้น (ยังไม่รองรับ DR + ยังไม่มีมุมมองปฏิทินรายเดือน) local-only</div>
+  <div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn active" id="cal-range-7" onclick="_calSetRange(7,this)" style="border-radius:6px 0 0 6px">7 วันข้างหน้า</button>
+        <button class="filter-btn" id="cal-range-30" onclick="_calSetRange(30,this)">30 วันข้างหน้า</button>
+        <button class="filter-btn" id="cal-range-all" onclick="_calSetRange(365,this)" style="border-radius:0 6px 6px 0">ทั้งหมดที่มีข้อมูล</button>
+      </div>
+      <button class="filter-btn" style="font-size:12px;margin-left:auto" onclick="loadCalendarPage(true)">🔄 ดึงข้อมูลใหม่ทั้งหมด</button>
+    </div>
+  </div>
+  <div id="cal-result"><div class="empty" style="padding:24px">กำลังโหลด...</div></div>
+</div>
+
 <!-- PAGE: FINANCIALS -->
 <div id="page-financials" class="page">
   <div class="page-title">งบการเงิน</div>
@@ -2790,8 +2865,10 @@
         title="งบรายปีละเอียดทุก field จาก Yahoo Finance (~5 ปี) — มีรายการงบดุลครบสุด">📅 Yahoo · รายปี</button>
       <button class="filter-btn" id="fin-view-yq-btn" onclick="setFinView('yahoo_q',this)" style="min-width:140px"
         title="งบรายไตรมาสละเอียดจาก Yahoo (~5-6 ไตรมาสล่าสุด สะสมยาวขึ้นทุกรอบ sync)">📆 Yahoo · รายไตรมาส</button>
-      <button class="filter-btn" id="fin-view-set-btn" onclick="setFinView('set',this)" style="border-radius:0 6px 6px 0;min-width:130px"
+      <button class="filter-btn" id="fin-view-set-btn" onclick="setFinView('set',this)" style="min-width:130px"
         title="งบทางการจาก SET.or.th (หุ้นไทยเท่านั้น)">🇹🇭 SET.or.th</button>
+      <button class="filter-btn" id="fin-view-div-btn" onclick="setFinView('dividends',this)" style="border-radius:0 6px 6px 0;min-width:110px"
+        title="ประวัติปันผล + streak/CAGR/yield รายปี — TH/US/HK">💵 ปันผล</button>
     </div>
     <span id="fin-meta-note" style="font-size:11px;color:var(--text2)"></span>
     <button class="filter-btn" style="margin-left:auto;font-size:12px" id="fin-compare-btn" onclick="toggleFinCompare()">⚖️ เทียบหุ้น 2 ตัว</button>
@@ -3192,6 +3269,60 @@
   <div id="news-result"></div>
 </div>
 
+<!-- PAGE: FILINGS — งบ & รายงานทางการ: ลิงก์เอกสารต้นทางรายหุ้น (ไทย/US/HK)
+     ไม่มี backend — ทุกลิงก์ build จาก ticker ฝั่ง JS ล้วนๆ แล้วเปิดแท็บใหม่ให้อ่านที่ต้นทาง -->
+<div id="page-filings" class="page">
+  <div class="page-title">📑 รายงานทางการ</div>
+  <div class="page-sub" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    รวมลิงก์เอกสารต้นทางของหุ้นรายตัวในคลิกเดียว — 🇹🇭 56-1 One Report / SET · 🇺🇸 10-K, 10-Q, 8-K จาก SEC EDGAR · 🇭🇰 Annual Report จาก HKEXnews + เว็บสรุปงบ และ prompt วิเคราะห์ 13 ข้อสำหรับวางใน AI
+    <span id="fil-guide-btn" onclick="toggleFilGuide()" title="เอกสารแต่ละแบบคืออะไร + เทียบไทย/US/HK"
+      style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid #1f6feb;background:#1f6feb22;color:#58a6ff;cursor:pointer;font-weight:600;white-space:nowrap">
+      💡 เอกสารแต่ละแบบคืออะไร
+    </span>
+  </div>
+  <div id="fil-guide-box" style="display:none;margin:10px 0 4px;padding:14px 18px;background:#161b22;border:1px solid #1f6feb55;border-radius:10px;font-size:12px;line-height:1.7;color:var(--fg)">
+    <div style="font-size:13px;font-weight:700;color:#58a6ff;margin-bottom:8px">📑 เอกสารแต่ละตลาดเทียบกัน (แบบเดียวกันแต่คนละชื่อ)</div>
+    <div style="overflow-x:auto">
+      <table style="border-collapse:collapse;font-size:12px;min-width:520px">
+        <thead><tr style="color:#58a6ff;text-align:left">
+          <th style="padding:4px 12px 4px 0">เอกสาร</th><th style="padding:4px 12px">🇹🇭 ไทย</th><th style="padding:4px 12px">🇺🇸 US</th><th style="padding:4px 12px">🇭🇰 HK</th>
+        </tr></thead>
+        <tbody style="color:var(--fg)">
+          <tr><td style="padding:3px 12px 3px 0"><b>รายงานประจำปี</b> (งบตรวจสอบ + วิเคราะห์ธุรกิจ + ความเสี่ยง)</td><td style="padding:3px 12px">56-1 One Report</td><td style="padding:3px 12px">10-K</td><td style="padding:3px 12px">Annual Report</td></tr>
+          <tr><td style="padding:3px 12px 3px 0"><b>งบไตรมาส</b></td><td style="padding:3px 12px">งบไตรมาส (SET)</td><td style="padding:3px 12px">10-Q</td><td style="padding:3px 12px">Interim Report</td></tr>
+          <tr><td style="padding:3px 12px 3px 0"><b>ข่าว/เหตุการณ์สำคัญ</b></td><td style="padding:3px 12px">ข่าว SET</td><td style="padding:3px 12px">8-K</td><td style="padding:3px 12px">Announcement</td></tr>
+          <tr><td style="padding:3px 12px 3px 0"><b>ค่าตอบแทน/ผู้ถือหุ้น</b> (ก่อนประชุม)</td><td style="padding:3px 12px">หนังสือเชิญประชุม</td><td style="padding:3px 12px">DEF 14A</td><td style="padding:3px 12px">Circular</td></tr>
+          <tr><td style="padding:3px 12px 3px 0"><b>ผู้บริหารซื้อ-ขายหุ้น</b> (insider)</td><td style="padding:3px 12px">แบบ 59 (ก.ล.ต.)</td><td style="padding:3px 12px">Form 4</td><td style="padding:3px 12px">Disclosure of Interests</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div style="margin-top:10px;padding-top:9px;border-top:1px solid #1f6feb33;font-size:11.5px;color:var(--text2)">
+      <b style="color:#58a6ff">วิธีใช้:</b> เลือกตลาด → พิมพ์ชื่อย่อหุ้น (US ใช้ ticker เช่น <b>NVDA</b> · HK ใช้ code เช่น <b>0700.HK</b> หรือพิมพ์ <b>700</b> เฉยๆ ก็ได้) → กดดูลิงก์ → คลิกปุ่มเอกสารเพื่อเปิดหน้าต้นทางในแท็บใหม่ (hover ปุ่มดูคำอธิบายได้)<br>
+      อยากได้บทวิเคราะห์ครบ 13 ข้อ (รวมให้คะแนน 1-10 + Final Verdict) กดปุ่ม <b style="color:#58a6ff">📋 คัดลอก Prompt</b> แล้วเอาไปวางใน Claude / ChatGPT พร้อมลิงก์เอกสารที่แนบให้อัตโนมัติ
+    </div>
+  </div>
+
+  <div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <div style="display:flex">
+        <button class="filter-btn active" id="fil-tab-th" onclick="setFilTab('TH',this)" style="border-radius:6px 0 0 6px;min-width:96px">🇹🇭 ไทย</button>
+        <button class="filter-btn" id="fil-tab-us" onclick="setFilTab('US',this)" style="border-radius:0;min-width:96px">🇺🇸 US</button>
+        <button class="filter-btn" id="fil-tab-hk" onclick="setFilTab('HK',this)" style="border-radius:0 6px 6px 0;min-width:96px">🇭🇰 HK</button>
+      </div>
+      <input id="fil-sym" list="fil-datalist" class="scr-input" style="width:200px;font-size:13px"
+        placeholder="เช่น PTT, NVDA, 0700.HK" onkeydown="if(event.key==='Enter') searchFilings()">
+      <datalist id="fil-datalist"></datalist>
+      <button class="btn-primary" onclick="searchFilings()">🔍 ดูลิงก์เอกสาร</button>
+      <button class="filter-btn" onclick="resetFilings()" title="ล้างช่องค้นหาและผลลัพธ์ (ไม่ลบประวัติเพิ่งดู)">↺ รีเซต</button>
+      <span id="fil-hint" style="font-size:11px;color:var(--text2)"></span>
+    </div>
+    <!-- ชิปหุ้นที่เพิ่งดู (โผล่เมื่อเคยค้น) -->
+    <div id="fil-recent" style="display:none;margin-top:10px;font-size:12px"></div>
+  </div>
+
+  <div id="fil-result"></div>
+</div>
+
 <!-- PAGE: DATA HEALTH — ความสดของทุกไฟล์/DB ที่ dashboard ใช้ + ปิงแหล่งข้อมูลภายนอก
      (local-only — ต้องรันผ่าน Flask ไม่มีบน GitHub Pages เพราะไม่มี backend ให้เช็ค) -->
 <div id="page-data-health" class="page">
@@ -3266,7 +3397,7 @@
 </div>
 
 <!-- HEATMAP CELL TOOLTIP/POPUP -->
-<div id="hm-popup" style="display:none;position:fixed;z-index:8500;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;width:220px;box-shadow:0 8px 32px rgba(0,0,0,.6)">
+<div id="hm-popup" style="display:none;position:fixed;z-index:8500;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;width:220px;box-shadow:0 8px 32px rgba(0,0,0,.6)">
   <div id="hm-popup-sym" style="font-size:15px;font-weight:700"></div>
   <div id="hm-popup-name" style="font-size:11px;color:var(--text2);margin-top:2px;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
   <div id="hm-popup-sector" style="font-size:10px;color:var(--text2);margin-top:1px"></div>
@@ -3282,7 +3413,7 @@
 <div id="idx-tt" style="display:none;position:fixed;z-index:9999;background:#1c2128;border:1px solid #444c56;border-radius:8px;padding:10px 14px;font-size:12px;line-height:1.6;color:var(--fg);max-width:280px;pointer-events:none;box-shadow:0 4px 20px rgba(0,0,0,.6)"></div>
 
 <!-- STOCK QUICK POPUP -->
-<div id="stock-popup" style="display:none;position:fixed;z-index:8000;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;width:260px;box-shadow:0 8px 32px rgba(0,0,0,.6)">
+<div id="stock-popup" style="display:none;position:fixed;z-index:8000;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;width:260px;box-shadow:0 8px 32px rgba(0,0,0,.6)">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
     <div>
       <div id="spop-sym" style="font-size:17px;font-weight:700;color:var(--fg)"></div>
@@ -3293,6 +3424,7 @@
   <div id="spop-loading" style="font-size:11px;color:var(--text2);text-align:center;padding:20px 0">กำลังโหลด...</div>
   <canvas id="spop-canvas" width="228" height="90" style="display:none;width:100%;border-radius:6px"></canvas>
   <div id="spop-fin-note" style="display:none;font-size:10px;color:var(--text2);text-align:right;margin-top:4px"></div>
+  <div id="spop-fz" style="display:none;font-size:11px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);gap:10px"></div>
   <div style="display:flex;gap:8px;margin-top:12px">
     <button id="spop-btn-chart" class="btn-primary" style="flex:1;font-size:12px;padding:6px 0" onclick="closeStockPopup();openChartModal(_spopSym)">📈 กราฟ</button>
     <button id="spop-btn-fin" class="btn-primary" style="flex:1;font-size:12px;padding:6px 0;background:var(--card2);border:1px solid var(--border)" onclick="closeStockPopup();_spopGoFin(_spopSym)">📋 งบการเงิน</button>
@@ -3319,6 +3451,12 @@
           <a id="cm-set-link" href="#" target="_blank" rel="noopener"
             style="display:none;align-items:center;font-size:12px;padding:5px 12px;border-left:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer;white-space:nowrap"
             title="ดูหน้าหุ้นบน SET.or.th">🌐 SET</a>
+          <button id="cm-peer-btn" onclick="openPeerFromModal()"
+            style="align-items:center;font-size:12px;padding:5px 12px;border-left:1px solid var(--border);border-top:none;border-right:none;border-bottom:none;background:var(--card2);color:var(--text2);cursor:pointer;white-space:nowrap"
+            title="เทียบกับเพื่อนร่วม sector">🆚 เทียบเพื่อน</button>
+          <button id="cm-tearsheet-btn" onclick="openTearsheetFromModal()"
+            style="align-items:center;font-size:12px;padding:5px 12px;border-left:1px solid var(--border);border-top:none;border-right:none;border-bottom:none;background:var(--card2);color:var(--text2);cursor:pointer;white-space:nowrap"
+            title="ดูสรุปเต็ม (Tearsheet)">📋 ดูสรุปเต็ม</button>
         </div>
         <a id="cm-tv-link" href="#" target="_blank" rel="noopener"
           style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer"

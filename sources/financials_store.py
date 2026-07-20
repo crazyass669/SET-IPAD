@@ -53,6 +53,15 @@ def init_db(base_dir):
               PRIMARY KEY(symbol, source)
             );
             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE IF NOT EXISTS dividends(
+              symbol TEXT, market TEXT, ex_date TEXT, dps REAL, synced_at TEXT,
+              PRIMARY KEY(symbol, market, ex_date)
+            );
+            CREATE TABLE IF NOT EXISTS calendar_events(
+              symbol TEXT, market TEXT, type TEXT, date TEXT, confidence TEXT,
+              source TEXT, detail TEXT, synced_at TEXT,
+              PRIMARY KEY(symbol, market, type, date)
+            );
         """)
         con.commit()
     finally:
@@ -426,6 +435,216 @@ def fetch_yahoo_quarterly(symbol, is_dr=False, market=None):
         "type": stock_type, "currency": currency, "period": "quarter",
         "income": income, "balance": balance, "cashflow": cashflow,
     }
+
+
+def fetch_dividends(sym, market=None):
+    """ดึงประวัติปันผล (ex-date -> DPS) จาก yfinance ย้อนสูงสุดที่ Yahoo มี (มักเกิน 20 ปี
+    สำหรับหุ้นไทย) — ใช้ ticker เดียวกับ resolve_yf_ticker (dr_descriptions.py) เพื่อให้
+    TH/US/HK resolve เป็น ticker เดียวกับที่หน้าอื่นในโปรเจกต์ใช้อยู่แล้ว
+    yfinance ปรับ dividends ตาม split ให้อัตโนมัติแล้ว (ต่างจาก EPS ของ Finnomena ที่ไม่ปรับ
+    — ดูคอมเมนต์ใน dividend_stats.py ตอนคำนวณ payout ratio)
+    คืน list [{ "ex_date": "YYYY-MM-DD", "dps": float }, ...] เรียงตามวันที่"""
+    import yfinance as yf
+    from sources.dr_descriptions import resolve_yf_ticker
+
+    sym = sym.upper().strip()
+    yf_ticker, _is_etf = resolve_yf_ticker(_PROJECT_ROOT, sym, market=market)
+    if not yf_ticker:
+        yf_ticker = sym + ".BK"
+
+    series = yf.Ticker(yf_ticker).dividends
+    if series is None or series.empty:
+        return []
+    out = []
+    for ts, dps in series.items():
+        if dps is None or float(dps) <= 0:
+            continue
+        out.append({"ex_date": ts.strftime("%Y-%m-%d"), "dps": round(float(dps), 6)})
+    out.sort(key=lambda r: r["ex_date"])
+    return out
+
+
+def save_dividends(base_dir, sym, market, rows):
+    """เก็บ/merge ประวัติปันผลลง DB (upsert ทีละแถวตาม ex_date — ไม่ลบของเก่าที่ยัง valid)"""
+    init_db(base_dir)
+    sym = sym.upper().strip()
+    market = (market or "TH").upper()
+    con = _connect(base_dir)
+    try:
+        now = datetime.now().isoformat()
+        con.executemany(
+            "INSERT INTO dividends(symbol, market, ex_date, dps, synced_at) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(symbol, market, ex_date) DO UPDATE SET dps=excluded.dps, synced_at=excluded.synced_at",
+            [(sym, market, r["ex_date"], r["dps"], now) for r in rows]
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def get_dividends(base_dir, sym, market=None):
+    """คืน (rows, synced_at ล่าสุด) ของหุ้นตัวหนึ่งจาก DB local — None ถ้ายังไม่เคย sync"""
+    if not db_exists(base_dir):
+        return None, None
+    init_db(base_dir)   # กัน DB เก่าที่ยังไม่มีตาราง dividends (เพิ่มเข้ามาทีหลัง financials/meta)
+    sym = sym.upper().strip()
+    market = (market or "TH").upper()
+    con = _connect(base_dir)
+    try:
+        rows = con.execute(
+            "SELECT ex_date, dps, synced_at FROM dividends WHERE symbol=? AND market=? ORDER BY ex_date",
+            (sym, market)).fetchall()
+    finally:
+        con.close()
+    if not rows:
+        return None, None
+    synced_at = max(r[2] for r in rows)
+    return [{"ex_date": r[0], "dps": r[1]} for r in rows], synced_at
+
+
+def _fetch_set_corporate_actions(sym):
+    """XD/AGM/สิทธิต่างๆ ที่ประกาศทางการจาก SET.or.th — /api/set/stock/<sym>/corporate-action
+    (internal API เดียวกับ set_api.py, ไม่มีสัญญา — พบตอนสำรวจ 2026-07-20) หุ้นไทยเท่านั้น
+    แปลงเป็น calendar_events แถวเดียวต่อ 1 เหตุการณ์: caType='XD' -> 'xd' (ex-date) + 'pay'
+    (payment date, ถ้ามี) — ข้อมูลนี้เป็นของจริงที่ประกาศแล้วเสมอ (ไม่ใช่ประมาณการ) จึงถือว่า
+    confidence='confirmed' เสมอ ต่างจาก earnings ที่มาจาก yfinance (ดู fetch_earnings_calendar)
+    ยังไม่รองรับ caType อื่น (XM ประชุมผู้ถือหุ้น, XB สิทธิจองซื้อ ฯลฯ) — ตาม scope เฟส A"""
+    from sources.set_api import _bootstrap_headers, _get_json
+    import urllib.parse
+
+    ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, f"/api/set/stock/{urllib.parse.quote(sym)}/corporate-action")
+    out = []
+    for row in (d or []):
+        if row.get("caType") != "XD":
+            continue
+        dps = row.get("dividend")
+        detail = f"เงินปันผล {dps} บาท/หุ้น" if dps is not None else "สิทธิประโยชน์ XD"
+        xdate = (row.get("xdate") or "")[:10]
+        if xdate:
+            out.append({"type": "xd", "date": xdate, "confidence": "confirmed",
+                        "source": "set.or.th", "detail": detail})
+        pay_date = (row.get("paymentDate") or "")[:10]
+        if pay_date:
+            out.append({"type": "pay", "date": pay_date, "confidence": "confirmed",
+                        "source": "set.or.th", "detail": detail})
+    return out
+
+
+def fetch_earnings_calendar(sym, market=None):
+    """วันประกาศงบล่วงหน้าจาก yfinance get_earnings_dates — ใช้ได้ทั้ง 3 ตลาด แต่หุ้นไทย
+    ตัวเล็กมักไม่มี/คลาดเคลื่อน จึงติด confidence='estimated' เสมอ (ต่างจาก XD ของ SET.or.th
+    ที่เป็น confirmed) เก็บเฉพาะแถวที่ยังไม่มี Reported EPS (แปลว่ายังไม่ประกาศ = อนาคต)"""
+    import math
+    import yfinance as yf
+    from sources.dr_descriptions import resolve_yf_ticker
+
+    sym = sym.upper().strip()
+    yf_ticker, _is_etf = resolve_yf_ticker(_PROJECT_ROOT, sym, market=market)
+    if not yf_ticker:
+        yf_ticker = sym + ".BK"
+
+    out = []
+    try:
+        df = yf.Ticker(yf_ticker).get_earnings_dates(limit=8)
+    except Exception:
+        return out
+    if df is None or df.empty:
+        return out
+    for ts, row in df.iterrows():
+        reported = row.get("Reported EPS")
+        if reported is not None and not (isinstance(reported, float) and math.isnan(reported)):
+            continue   # มีผลจริงแล้ว = อดีต ไม่ใช่ปฏิทินล่วงหน้า
+        est = row.get("EPS Estimate")
+        detail = f"คาดการณ์ EPS {round(float(est), 2)}" if est is not None and not (isinstance(est, float) and math.isnan(est)) else "วันประกาศงบ (ประมาณการ)"
+        out.append({"type": "earnings", "date": ts.strftime("%Y-%m-%d"), "confidence": "estimated",
+                    "source": "yahoo", "detail": detail})
+    return out
+
+
+def fetch_calendar_events(sym, market=None):
+    """รวม XD/pay (SET.or.th, หุ้นไทยเท่านั้น) + earnings (yfinance, ทุกตลาด) เป็นชุดเดียว
+    ไม่ throw ถ้าแหล่งใดแหล่งหนึ่งพัง — คืนเท่าที่ดึงได้ (ปฏิทินไม่ควร fail ทั้งก้อนเพราะแหล่ง
+    เดียวล่ม)"""
+    mkt = (market or "TH").upper()
+    events = []
+    if mkt in ("TH", "SET"):
+        try:
+            events.extend(_fetch_set_corporate_actions(sym.upper().strip()))
+        except Exception as e:
+            print(f"[Calendar] SET corporate-action ล้มเหลวสำหรับ {sym}: {e}")
+    try:
+        events.extend(fetch_earnings_calendar(sym, market=mkt))
+    except Exception as e:
+        print(f"[Calendar] yfinance earnings ล้มเหลวสำหรับ {sym}: {e}")
+    return events
+
+
+def _calendar_meta_key(sym, market):
+    return f"calendar_synced:{market}:{sym}"
+
+
+def save_calendar_events(base_dir, sym, market, rows):
+    """เก็บ/merge เหตุการณ์ปฏิทินลง DB (upsert ตาม symbol+market+type+date)
+    เก็บ synced_at ต่อ symbol ลงตาราง meta เสมอ **แม้ rows ว่าง** (ไม่มี event ในอนาคตเป็นเรื่อง
+    ปกติ ไม่ใช่ไม่เคย sync) — ไม่งั้น get_calendar_events จะมองว่า "ไม่เคย sync" ตลอดกาลแล้วดึงสด
+    ซ้ำทุกครั้งที่เปิดหน้า Calendar (พบจากรีวิวโค้ด 2026-07-20 — เสี่ยงโดน rate limit เพราะ
+    Promise.all ยิงทั้ง watchlist พร้อมกัน)"""
+    init_db(base_dir)
+    sym = sym.upper().strip()
+    market = (market or "TH").upper()
+    con = _connect(base_dir)
+    try:
+        now = datetime.now().isoformat()
+        if rows:
+            con.executemany(
+                "INSERT INTO calendar_events(symbol, market, type, date, confidence, source, detail, synced_at) "
+                "VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(symbol, market, type, date) DO UPDATE SET "
+                "confidence=excluded.confidence, source=excluded.source, detail=excluded.detail, synced_at=excluded.synced_at",
+                [(sym, market, r["type"], r["date"], r["confidence"], r["source"], r.get("detail"), now) for r in rows]
+            )
+        con.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_calendar_meta_key(sym, market), now)
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def get_calendar_events(base_dir, sym, market=None, from_date=None):
+    """คืน (rows, synced_at ล่าสุด) ของหุ้นตัวหนึ่งจาก DB local — default กรองเฉพาะวันที่ >=
+    from_date (ปฏิทินย้อนหลังไม่มีประโยชน์ ต่างจากประวัติปันผลที่ต้องเก็บย้อนยาว)
+    คืน (None, None) ต่อเมื่อ 'ไม่เคย sync จริงๆ' เท่านั้น — ถ้า sync แล้วแต่ไม่มี event ในอนาคต
+    คืน ([], synced_at) เพื่อไม่ให้ caller ดึงสดซ้ำ (ดู synced_at มาจาก meta table ไม่ใช่ max(rows)
+    เพราะ rows อาจว่างตอนไม่มี event เลย)"""
+    if not db_exists(base_dir):
+        return None, None
+    init_db(base_dir)
+    sym = sym.upper().strip()
+    market = (market or "TH").upper()
+    con = _connect(base_dir)
+    try:
+        if from_date:
+            rows = con.execute(
+                "SELECT type, date, confidence, source, detail FROM calendar_events "
+                "WHERE symbol=? AND market=? AND date>=? ORDER BY date",
+                (sym, market, from_date)).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT type, date, confidence, source, detail FROM calendar_events "
+                "WHERE symbol=? AND market=? ORDER BY date",
+                (sym, market)).fetchall()
+        meta_row = con.execute(
+            "SELECT value FROM meta WHERE key=?", (_calendar_meta_key(sym, market),)).fetchone()
+    finally:
+        con.close()
+    synced_at = meta_row[0] if meta_row else None
+    if not rows and synced_at is None:
+        return None, None
+    return [{"type": r[0], "date": r[1], "confidence": r[2], "source": r[3], "detail": r[4]} for r in rows], synced_at
 
 
 def compute_quarterly_growth(payload_yahoo_q):
@@ -1125,6 +1344,74 @@ def mirror_finnomena(base_dir, exchanges=("TH", "HK", "US"), limit=None,
     return {"ok": ok, "empty": empty, "fail": fail, "total": total}
 
 
+def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, callback=None):
+    """ดึงงบ Yahoo annual ('yahoo' source) ให้หุ้น mirror US/HK ที่เป็นสมาชิกดัชนีหลักเท่านั้น
+    (S&P500+Dow+NDX / HSI+HSCEI+HSTECH — ตัดสินใจ scope ไว้แบบนี้ใน PLAN_stock_study_suite.txt
+    เพราะ mirror ทั้งก้อนมีเป็นหมื่นตัว sync ทั้งหมดไม่ไหว) เก็บใต้ namespace 'FINN:{ex}:{name}'
+    เดียวกับ finnomena_q มิเรอร์ — **ไม่ใช้ namespace 'DR:'** เพราะพวกนี้ไม่ใช่ DR ที่มี NVDR
+    ซื้อขายจริงในไทย (ใช้ is_dr=True แค่ตอนเรียก fetch_yahoo_full เพื่อให้ resolve yf ticker
+    ถูกต้องตามตลาด — ดู docstring fetch_yahoo_full — แต่ upsert เก็บด้วย is_dr=False)
+
+    tickers_by_ex: {"US": [ticker, ...], "HK": [ticker4digit, ...]}
+    ข้าม ticker ที่มี source='yahoo' อยู่แล้วไม่ว่า namespace ไหน (กัน sync ซ้ำของ 104 ตัว
+    ที่ overlap กับ DR portfolio ที่ sync ไปแล้ว) — resume ได้เสมอเหมือน mirror_finnomena
+    คืน {"ok": n, "fail": n, "total": n, "skipped": n}"""
+    init_db(base_dir)
+    con = _connect(base_dir)
+    try:
+        have = {r[0] for r in con.execute("SELECT symbol FROM financials WHERE source='yahoo'")}
+    finally:
+        con.close()
+
+    todo = []
+    for ex, names in tickers_by_ex.items():
+        for name in names:
+            name = name.upper().strip()
+            if _mirror_key(ex, name) in have or _dr_key(name) in have:
+                continue
+            todo.append((ex, name))
+    skipped = sum(len(v) for v in tickers_by_ex.values()) - len(todo)
+    total = len(todo)
+    ok = fail = 0
+    consec_fail = 0
+    gate = threading.Semaphore(3)
+
+    def _one(ex, name):
+        with gate:
+            try:
+                payload = fetch_yahoo_full(name, is_dr=True, market=ex)
+            except Exception:
+                time.sleep(1.0)
+                payload = fetch_yahoo_full(name, is_dr=True, market=ex)
+            finally:
+                time.sleep(0.3)
+        upsert(base_dir, _mirror_key(ex, name), "yahoo", payload, is_dr=False)
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex_pool:
+        futures = {ex_pool.submit(_one, ex, name): (ex, name) for ex, name in todo}
+        for f in as_completed(futures):
+            ex, name = futures[f]
+            done += 1
+            try:
+                f.result()
+                ok += 1
+                consec_fail = 0
+            except Exception as e:
+                fail += 1
+                consec_fail += 1
+                print(f"[MirrorYahooIndex] {ex}:{name} ล้มเหลว: {str(e)[:80]}")
+                if consec_fail >= 15:
+                    print("[MirrorYahooIndex] ล้มเหลวติดกัน 15 ตัว — เสี่ยงโดนบล็อคชั่วคราว "
+                          "แต่ยังปล่อยงานที่เหลือใน pool ทำต่อ (ไม่ hard-stop เหมือน mirror_finnomena "
+                          "เพราะ ThreadPoolExecutor ยิงคำขอออกไปพร้อมกันแล้ว)")
+            if callback and (done % 10 == 0 or done == total):
+                callback(done, total, f"Yahoo mirror index {done}/{total} | ok={ok} fail={fail}")
+
+    print(f"[MirrorYahooIndex] จบ: ok={ok} fail={fail} total={total} skipped={skipped}")
+    return {"ok": ok, "fail": fail, "total": total, "skipped": skipped}
+
+
 # ============================================================
 # Bulk sync
 # ============================================================
@@ -1478,7 +1765,10 @@ def compute_balance_quality(payload_yahoo):
     ocf  = _yahoo_row(payload_yahoo, "cashflow", "Operating Cash Flow")
 
     out = {"net_cash": None, "net_cash_positive": None, "de_ratio": None,
-           "goodwill_ratio": None, "shares_chg_yoy": None, "buyback": None, "ocf_neg_years": None}
+           "goodwill_ratio": None, "shares_chg_yoy": None, "buyback": None, "ocf_neg_years": None,
+           # จำนวนหุ้นล่าสุด (งวดปีล่าสุด) — ใช้คำนวณ mkt_cap = price × shares_out ตอนที่ไม่มี
+           # mkt_cap สดจากแหล่งอื่น (เช่น us/hk_index_metrics.json ที่ไม่เก็บฟิลด์นี้เลย)
+           "shares_out": (sh[max(sh)] if sh else None)}
 
     if cash and debt:
         d = max(set(cash) & set(debt), default=None)
@@ -1509,6 +1799,120 @@ def compute_balance_quality(payload_yahoo):
                 break
         out["ocf_neg_years"] = n
     return out
+
+
+FSCORE_CRITERIA_META = (
+    ("F1", "ROA เป็นบวก"),
+    ("F2", "กระแสเงินสดจากการดำเนินงานเป็นบวก"),
+    ("F3", "ROA ปีนี้ดีกว่าปีก่อน"),
+    ("F4", "CFO มากกว่ากำไรสุทธิ (คุณภาพกำไร)"),
+    ("F5", "หนี้สินระยะยาวต่อสินทรัพย์ลดลง"),
+    ("F6", "อัตราส่วนสภาพคล่องดีขึ้น"),
+    ("F7", "ไม่เพิ่มทุน (จำนวนหุ้นไม่เพิ่มขึ้น)"),
+    ("F8", "อัตรากำไรขั้นต้นดีขึ้น"),
+    ("F9", "ประสิทธิภาพใช้สินทรัพย์ดีขึ้น"),
+)
+
+
+def compute_fscore(payload_yahoo):
+    """Piotroski F-Score (0-9) จากงบ Yahoo รายปี — เทียบปีล่าสุดกับปีก่อนหน้าทันที
+    (จัดตำแหน่งปีตามปฏิทินของ Total Assets ซึ่งมีครบทุกปีเสมอ)
+    แต่ละข้อคำนวณอิสระ ข้อไหนขาด field ที่ต้องใช้ -> pass=None (ไม่นับทั้งตัวเศษ/ส่วน)
+    คืน {f_score: จำนวนข้อที่ผ่าน, f_score_max: จำนวนข้อที่เช็คได้จริง (<=9),
+         f_score_detail: [{code, label, pass}], f_score_as_of: ปีล่าสุดที่ใช้}"""
+    ni  = _yahoo_row(payload_yahoo, "income", "Net Income")
+    ta  = _yahoo_row(payload_yahoo, "balance", "Total Assets")
+    ocf = _yahoo_row(payload_yahoo, "cashflow", "Operating Cash Flow")
+    ltd = _yahoo_row(payload_yahoo, "balance", "Long Term Debt")
+    if not ltd:
+        ltd = _yahoo_row(payload_yahoo, "balance", "Total Debt")
+    ca  = _yahoo_row(payload_yahoo, "balance", "Current Assets")
+    cl  = _yahoo_row(payload_yahoo, "balance", "Current Liabilities")
+    sh  = _yahoo_row(payload_yahoo, "balance", "Ordinary Shares Number", "Share Issued")
+    gp  = _yahoo_row(payload_yahoo, "income", "Gross Profit")
+    rev = _yahoo_row(payload_yahoo, "income", "Total Revenue", "Operating Revenue")
+
+    ta_dates = sorted(ta.keys())
+    if not ta_dates:
+        detail = [{"code": c, "label": l, "pass": None} for c, l in FSCORE_CRITERIA_META]
+        return {"f_score": 0, "f_score_max": 0, "f_score_detail": detail, "f_score_as_of": None}
+    d1 = ta_dates[-1]
+    d0 = ta_dates[-2] if len(ta_dates) >= 2 else None
+
+    def _ratio(num_row, den_row, d):
+        if d is None:
+            return None
+        num, den = num_row.get(d), den_row.get(d)
+        if num is None or den is None or den == 0:
+            return None
+        return num / den
+
+    roa1, roa0 = _ratio(ni, ta, d1), _ratio(ni, ta, d0)
+    lev1, lev0 = _ratio(ltd, ta, d1), _ratio(ltd, ta, d0)
+    cr1, cr0 = _ratio(ca, cl, d1), _ratio(ca, cl, d0)
+    gm1, gm0 = _ratio(gp, rev, d1), _ratio(gp, rev, d0)
+    at1, at0 = _ratio(rev, ta, d1), _ratio(rev, ta, d0)
+    ni1, ocf1 = ni.get(d1), ocf.get(d1)
+    sh1, sh0 = sh.get(d1), sh.get(d0) if d0 else None
+
+    checks = (
+        None if roa1 is None else roa1 > 0,
+        None if ocf1 is None else ocf1 > 0,
+        None if (roa1 is None or roa0 is None) else roa1 > roa0,
+        None if (ocf1 is None or ni1 is None) else ocf1 > ni1,
+        None if (lev1 is None or lev0 is None) else lev1 < lev0,
+        None if (cr1 is None or cr0 is None) else cr1 > cr0,
+        None if (sh1 is None or sh0 is None) else sh1 <= sh0 * 1.005,
+        None if (gm1 is None or gm0 is None) else gm1 > gm0,
+        None if (at1 is None or at0 is None) else at1 > at0,
+    )
+    detail = [{"code": c, "label": l, "pass": p} for (c, l), p in zip(FSCORE_CRITERIA_META, checks)]
+    computed = [p for p in checks if p is not None]
+    return {"f_score": sum(1 for p in computed if p), "f_score_max": len(computed),
+            "f_score_detail": detail, "f_score_as_of": d1}
+
+
+def compute_zscore(payload_yahoo, mkt_cap, variant="Z2"):
+    """Altman Z-Score จากงบ Yahoo รายปี (ปีล่าสุด) — variant='Z' (ต้นฉบับ, ต้องมี mkt_cap)
+    หรือ 'Z2' (Z'' emerging market, ไม่ง้อ mkt_cap) ค่า field ขาด -> คืน z_score=None
+    โซน: Z  > 2.99 ปลอดภัย / 1.81-2.99 เทา / < 1.81 เสี่ยง
+         Z'' > 2.6  ปลอดภัย / 1.1-2.6  เทา / < 1.1  เสี่ยง"""
+    wc  = _yahoo_row(payload_yahoo, "balance", "Working Capital")
+    ca  = _yahoo_row(payload_yahoo, "balance", "Current Assets")
+    cl  = _yahoo_row(payload_yahoo, "balance", "Current Liabilities")
+    re_ = _yahoo_row(payload_yahoo, "balance", "Retained Earnings")
+    ebit = _yahoo_row(payload_yahoo, "income", "EBIT")
+    ta  = _yahoo_row(payload_yahoo, "balance", "Total Assets")
+    tl  = _yahoo_row(payload_yahoo, "balance", "Total Liabilities Net Minority Interest")
+    eq  = _yahoo_row(payload_yahoo, "balance", "Stockholders Equity")
+    rev = _yahoo_row(payload_yahoo, "income", "Total Revenue", "Operating Revenue")
+
+    none = {"z_score": None, "z_variant": variant, "z_zone": None, "z_as_of": None}
+    ta_dates = sorted(ta.keys())
+    if not ta_dates:
+        return none
+    d = ta_dates[-1]
+    ta_v = ta.get(d)
+    if not ta_v or ta_v <= 0:
+        return {**none, "z_as_of": d}
+
+    wc_v = wc.get(d)
+    if wc_v is None and d in ca and d in cl:
+        wc_v = ca[d] - cl[d]
+    re_v, ebit_v, tl_v, eq_v, rev_v = re_.get(d), ebit.get(d), tl.get(d), eq.get(d), rev.get(d)
+
+    if variant == "Z":
+        if None in (wc_v, re_v, ebit_v, rev_v) or not tl_v or not mkt_cap:
+            return {**none, "z_as_of": d}
+        z = (1.2 * wc_v / ta_v + 1.4 * re_v / ta_v + 3.3 * ebit_v / ta_v
+             + 0.6 * mkt_cap / tl_v + 1.0 * rev_v / ta_v)
+        zone = "safe" if z > 2.99 else ("grey" if z >= 1.81 else "distress")
+    else:
+        if None in (wc_v, re_v, ebit_v, eq_v) or not tl_v:
+            return {**none, "z_as_of": d}
+        z = (6.56 * wc_v / ta_v + 3.26 * re_v / ta_v + 6.72 * ebit_v / ta_v + 1.05 * eq_v / tl_v)
+        zone = "safe" if z > 2.6 else ("grey" if z >= 1.1 else "distress")
+    return {"z_score": round(z, 2), "z_variant": variant, "z_zone": zone, "z_as_of": d}
 
 
 def compute_earnings_quality(payload_q):

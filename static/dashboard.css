@@ -897,7 +897,7 @@ body.static-mode #tbl-momentum   th:nth-child(4),  body.static-mode #tbl-momentu
   .data-table th:first-child, .data-table td:first-child {
     position: sticky;
     left: 0;
-    background: var(--card);
+    background: var(--bg2);
     z-index: 2;
     box-shadow: 2px 0 4px rgba(0,0,0,.35);
   }

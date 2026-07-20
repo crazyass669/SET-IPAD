@@ -1,0 +1,126 @@
+# -*- coding: utf-8 -*-
+"""sources/dividend_stats.py — คำนวณสถิติปันผลจากประวัติ ex-date/DPS (financials_store.get_dividends)
+
+Phase A (เริ่มแรก): DPS รายปี, streak, CAGR, YoY, ความถี่การจ่าย/ปี, yield รายปี (TH เท่านั้น
+ตอนนี้ — ต้องมี price_series จาก set_prices.db)
+ยังไม่ทำ (phase B): payout ratio จาก EPS Finnomena + ปรับ split (เสี่ยงผิดสุด ต้องมี
+split log ก่อน — ดู PLAN_stock_study_suite.txt งาน #5)
+"""
+from collections import defaultdict
+from datetime import date
+
+
+def _annual_from_rows(rows):
+    """rows: [{ex_date, dps}] -> {year: {"dps": sum, "count": n, "events": [...]}}"""
+    by_year = defaultdict(lambda: {"dps": 0.0, "count": 0, "events": []})
+    for r in rows:
+        y = int(r["ex_date"][:4])
+        by_year[y]["dps"] += r["dps"]
+        by_year[y]["count"] += 1
+        by_year[y]["events"].append(r)
+    return dict(by_year)
+
+
+def _nearest_close_on_or_before(dates, closes, target_iso):
+    """หาราคาปิดล่าสุดที่ <= target_iso จาก series ที่เรียงตามวันที่แล้ว (binary search มือ)"""
+    lo, hi, best = 0, len(dates) - 1, None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if dates[mid] <= target_iso:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return closes[best] if best is not None else None
+
+
+def compute_dividend_stats(rows, price_series=None, current_year=None):
+    """rows: [{ex_date, dps}] เรียงตามวันที่ (ผลจาก financials_store.get_dividends)
+    price_series: {"dates": [...], "closes": [...]} จาก core.store.get_series (optional —
+    ไม่มีก็ข้าม yield รายปี)
+    คืน None ถ้าไม่มีประวัติเลย"""
+    if not rows:
+        return None
+
+    annual = _annual_from_rows(rows)
+    years = sorted(annual.keys())
+    cy = current_year or date.today().year
+    # ปีปัจจุบันอาจจ่ายไม่ครบรอบ (ปันผลระหว่างกาลยังไม่ออกงวดสุดท้าย) — ไม่นับใน streak/CAGR
+    # แต่ยังโชว์เป็นแถวข้อมูลดิบได้
+    complete_years = [y for y in years if y < cy]
+
+    # นับย้อนจากปีล่าสุดที่ "ครบปี" กลับไปทีละปี — หยุดทันทีที่เจอปีขาดหาย (ไม่ต่อเนื่อง)
+    # ถ้าปีครบปีล่าสุดไม่ใช่ cy-1 (หุ้นหยุดจ่ายไปแล้วหลายปี) ถือว่า streak = 0 ทันที — ไม่งั้นจะนับ
+    # ย้อนจากปีที่หยุดจ่ายไปแล้วทำให้ดูเหมือนยังจ่ายต่อเนื่องอยู่ทั้งที่หยุดไปนานแล้ว
+    still_paying = bool(complete_years) and complete_years[-1] == cy - 1
+
+    # streak_paid: จ่าย > 0 ต่อเนื่อง (แยกอิสระจาก nondecreasing — ปีที่จ่ายลดลงยังนับต่อได้)
+    streak_paid = 0
+    if still_paying:
+        for i in range(len(complete_years) - 1, -1, -1):
+            y = complete_years[i]
+            if i < len(complete_years) - 1 and y != complete_years[i + 1] - 1:
+                break
+            if annual[y]["dps"] <= 0:
+                break
+            streak_paid += 1
+
+    # streak_nondecreasing: จ่ายเท่าเดิมหรือมากขึ้นต่อเนื่อง (หยุดทันทีที่ลดลงหรือขาดหาย)
+    streak_nondecreasing = 0
+    if still_paying:
+        for i in range(len(complete_years) - 1, -1, -1):
+            y = complete_years[i]
+            if i < len(complete_years) - 1 and y != complete_years[i + 1] - 1:
+                break
+            if annual[y]["dps"] <= 0:
+                break
+            if i < len(complete_years) - 1 and annual[y]["dps"] > annual[complete_years[i + 1]]["dps"]:
+                break
+            streak_nondecreasing += 1
+
+    def _cagr(n_years):
+        pts = [y for y in complete_years if y > cy - 1 - n_years]
+        if len(pts) < 2:
+            return None
+        first_y, last_y = pts[0], pts[-1]
+        first, last = annual[first_y]["dps"], annual[last_y]["dps"]
+        span = last_y - first_y
+        if first <= 0 or span <= 0:
+            return None
+        return round(((last / first) ** (1 / span) - 1) * 100, 2)
+
+    yoy = None
+    if len(complete_years) >= 2:
+        y0, y1 = complete_years[-1], complete_years[-2]
+        prev = annual[y1]["dps"]
+        if prev > 0:
+            yoy = round((annual[y0]["dps"] / prev - 1) * 100, 2)
+
+    freq = None
+    if complete_years:
+        recent = complete_years[-3:]
+        counts = [annual[y]["count"] for y in recent]
+        freq = round(sum(counts) / len(counts))
+
+    yearly = []
+    d_dates = (price_series or {}).get("dates")
+    d_closes = (price_series or {}).get("closes")
+    for y in years:
+        row = {"year": y, "dps": round(annual[y]["dps"], 4), "count": annual[y]["count"],
+               "complete": y < cy, "yield_pct": None}
+        if d_dates and d_closes:
+            px = _nearest_close_on_or_before(d_dates, d_closes, f"{y}-12-31")
+            if px:
+                row["yield_pct"] = round(annual[y]["dps"] / px * 100, 2)
+        yearly.append(row)
+
+    return {
+        "years": yearly,
+        "streak_paid_years": streak_paid,
+        "streak_nondecreasing_years": streak_nondecreasing,
+        "cagr_5y_pct": _cagr(5),
+        "cagr_10y_pct": _cagr(10),
+        "yoy_growth_pct": yoy,
+        "events_per_year": freq,
+        "events": rows,
+    }

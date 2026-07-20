@@ -14,6 +14,7 @@ overlay จาก set_data.json ตอน query เอง (ราคาเปล
 valuation percentile ในนี้อิงราคางวดล่าสุดของ Finnomena (อัพเดตตาม mirror)
 """
 import json
+import os
 import re
 import sqlite3
 import time
@@ -23,6 +24,33 @@ from sources import financials_store as fs
 from core import delisted_log
 
 TABLE = "factor_snapshot"
+
+# ชื่อ GICS sector ที่ถือเป็น "สถาบันการเงิน" สำหรับ US/HK (us/hk_index_metrics.json ใช้ชื่อ
+# sector ไม่ตรงกันเป๊ะระหว่างไฟล์ — HK มีทั้ง "Financials" (แบงก์จีน) และ "Finance" (HSBC/HKEX/
+# AIA/BOCHK) — เจอจากรีวิวโค้ด 2026-07-20 ว่าเช็คแค่ "Financials" ตัวเดียวหลุด 4 ตัวนี้ไป)
+FINANCIAL_SECTOR_NAMES = {"Financials", "Finance", "Financial Services"}
+
+_financial_sector_cache = None
+
+
+def _financial_sector_symbols(base_dir):
+    """สัญลักษณ์หุ้นไทยกลุ่มการเงิน (ธนาคาร/เงินทุน-หลักทรัพย์/ประกัน) จาก set_data.json —
+    industry='Financials' ครอบคลุมทั้ง 3 กลุ่มนี้ (ไม่รวม Property Fund & REITs ซึ่งอยู่คนละ
+    industry) ใช้กัน Z-Score ที่ตีความไม่ได้กับงบดุลสถาบันการเงิน (ไม่มี current asset/liability
+    ปกติ) แคชไว้ระดับ process เพราะ set_data.json ไม่เปลี่ยนบ่อยเท่าการ build snapshot
+    ไม่แคชถ้าอ่านไฟล์ล้มเหลว — กัน error ชั่วคราวครั้งแรกทำให้ผลเป็น set ว่างตลอดไปทั้ง process"""
+    global _financial_sector_cache
+    if _financial_sector_cache is not None:
+        return _financial_sector_cache
+    path = os.path.join(base_dir, "set_data.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        out = {s["symbol"] for s in d.get("stocks", []) if s.get("industry") == "Financials"}
+    except (OSError, json.JSONDecodeError, KeyError):
+        return set()
+    _financial_sector_cache = out
+    return out
 
 
 def _connect(base_dir):
@@ -47,9 +75,13 @@ def init_table(base_dir):
         con.close()
 
 
-def _factors_for(base_dir, sym, is_dr):
+def _factors_for(base_dir, sym, is_dr, z_variant=None):
     """คำนวณ factor ทั้งหมดของหุ้น 1 ตัวจากงบใน DB — คืน dict แบน หรือ None ถ้าไม่มีงบ Yahoo
-    (Yahoo รายปีเป็น field หลักของ growth/ratio/FCF — ไม่มีก็คำนวณตัวหลักไม่ได้)"""
+    (Yahoo รายปีเป็น field หลักของ growth/ratio/FCF — ไม่มีก็คำนวณตัวหลักไม่ได้)
+
+    z_variant: บังคับ Z-Score variant ('Z'|'Z2') แทน default ที่ผูกกับ is_dr — ใช้ตอนเรียกกับ
+    หุ้น mirror US/HK ดัชนีหลัก (key 'FINN:{ex}:{name}', is_dr=False สำหรับ storage) ที่ควรได้ Z'
+    (ต้นฉบับ) เหมือน DR ไม่ใช่ Z'' (emerging market) ที่ default ให้เมื่อ is_dr=False"""
     y = fs.get(base_dir, sym, "yahoo", is_dr=is_dr)
     if not y:
         return None
@@ -87,6 +119,22 @@ def _factors_for(base_dir, sym, is_dr):
     # (endpoint จะ refine ด้วย pe_live สดสำหรับหุ้นไทยอีกชั้น)
     peg = _calc_peg(valp["pe"]["value"], tg["profit_ttm_yoy"])
 
+    # F-Score / Z-Score — ต้องใช้งบ Yahoo รายปี (มีอยู่แล้วจาก y ด้านบน)
+    fscore = fs.compute_fscore(y)
+    # mkt_cap สดใช้ราคางวดล่าสุดของ Finnomena (เหมือน valuation percentile ด้านบน)
+    # -> ค้าง (refresh ตอน rebuild snapshot ครั้งถัดไป) ไม่ใช่ราคาสดรายวินาที
+    mc_row = (fq or {}).get("valuation", {}).get("Market Cap", {})
+    mkt_cap = mc_row[max(mc_row)] if mc_row else None
+    # Z' (ต้นฉบับ) สำหรับ DR/ต่างประเทศ, Z'' (emerging market) สำหรับหุ้นไทย
+    z_variant = z_variant or ("Z" if is_dr else "Z2")
+    if (not is_dr) and sym in _financial_sector_symbols(base_dir):
+        # สถาบันการเงิน (ธนาคาร/เงินทุน/ประกัน) — งบดุลไม่มี current asset/liability
+        # ปกติ ทำให้ working capital ตีความไม่ได้ -> ไม่แสดง Z-Score
+        zscore = {"z_score": None, "z_variant": None, "z_zone": None, "z_as_of": None,
+                  "z_excluded_reason": "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"}
+    else:
+        zscore = fs.compute_zscore(y, mkt_cap, variant=z_variant)
+
     f = {
         # --- growth (รายปี) ---
         "growth_score": gs["growth_score"], "rev_cagr": gs["rev_cagr"],
@@ -121,7 +169,7 @@ def _factors_for(base_dir, sym, is_dr):
         # --- คุณภาพงบดุล / risk ---
         "net_cash": bq["net_cash"], "net_cash_positive": bq["net_cash_positive"],
         "goodwill_ratio": bq["goodwill_ratio"], "shares_chg_yoy": bq["shares_chg_yoy"],
-        "buyback": bq["buyback"], "ocf_neg_years": bq["ocf_neg_years"],
+        "buyback": bq["buyback"], "ocf_neg_years": bq["ocf_neg_years"], "shares_out": bq["shares_out"],
         # --- valuation percentile (อิงราคางวดล่าสุดของ Finnomena) ---
         "pe_value": valp["pe"]["value"], "pe_percentile": valp["pe"]["percentile"],
         "pe_median": valp["pe"]["median"],
@@ -133,6 +181,12 @@ def _factors_for(base_dir, sym, is_dr):
         "low_season_q": seas["low_q"] if seas else None,
         "season_swing": seas["swing_pct"] if seas else None,
         "entering_high_season": (_entering_high_season(qg.get("latest_quarter"), seas["high_q"]) if seas else None),
+        # --- Piotroski F-Score / Altman Z-Score ---
+        "f_score": fscore["f_score"], "f_score_max": fscore["f_score_max"],
+        "f_score_detail": fscore["f_score_detail"], "f_score_as_of": fscore["f_score_as_of"],
+        "z_score": zscore["z_score"], "z_variant": zscore["z_variant"],
+        "z_zone": zscore["z_zone"], "z_as_of": zscore["z_as_of"],
+        "z_excluded_reason": zscore.get("z_excluded_reason"),
     }
     return f
 
@@ -302,7 +356,10 @@ def _factors_from_finn(fq):
         "revenue_streak": None, "profit_streak": None, "rule_of_40": None,
         "interest_coverage": None, "net_cash": None, "net_cash_positive": None,
         "goodwill_ratio": None, "shares_chg_yoy": None, "buyback": None, "ocf_neg_years": None,
+        "shares_out": None,
         "fcf": None, "dividend_coverage": None, "dio": None, "dso": None, "dpo": None,
+        "f_score": None, "f_score_max": None, "f_score_detail": None, "f_score_as_of": None,
+        "z_score": None, "z_variant": None, "z_zone": None, "z_as_of": None, "z_excluded_reason": None,
     }
 
 
@@ -365,7 +422,20 @@ def build_mirror_snapshot(base_dir, exchanges=("US", "HK"), min_quarters=12, min
                         last_seen=last_seen)
                     continue
                 fq["synced_at"] = None
-                f = _factors_from_finn(fq)
+                # ถ้ามีงบ Yahoo annual sync ไว้แล้วใช้ _factors_for เดียวกับ TH/DR ได้ FCF/
+                # net_cash/CAGR/F-Score/Z-Score ครบ แทนที่จะเป็น None ทั้งหมดแบบ _factors_from_finn
+                # — เช็ค 2 namespace: FINN:{ex}:{name} (จาก sync_mirror_yahoo_index จำกัดแค่หุ้น
+                # ดัชนีหลัก) ก่อน แล้ว fallback ไป DR:{name} (หุ้นที่บังเอิญอยู่ใน DR portfolio
+                # ที่ curate ไว้อยู่แล้ว ~104 ตัว sync ไว้ก่อนงานนี้ทั้งคู่ finnomena_q+yahoo)
+                # ห้ามลืมเช็ค DR: — พลาดจุดนี้ตอนแรกทำให้หุ้นดังๆ อย่าง AAPL/CAT ที่อยู่ใน DR
+                # portfolio อยู่แล้วไม่ได้ full factors ทั้งที่มีงบ Yahoo พร้อมใช้จริง
+                f = None
+                if fs.get(base_dir, key, "yahoo", is_dr=False):
+                    f = _factors_for(base_dir, key, is_dr=False, z_variant="Z")
+                elif fs.get(base_dir, name, "yahoo", is_dr=True):
+                    f = _factors_for(base_dir, name, is_dr=True)
+                if f is None:
+                    f = _factors_from_finn(fq)
                 recs.append((name, ex, f))
                 if callback and len(recs) % 200 == 0:
                     callback(ex, len(recs), name)

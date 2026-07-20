@@ -1683,6 +1683,92 @@ def get_financials_full(symbol):
     return jsonify(data)
 
 
+_DIVIDENDS_STALE_DAYS = 30   # ตามแผน PLAN_stock_study_suite.txt งาน #5
+
+
+@app.route("/api/dividends/<market>/<symbol>")
+def get_dividends_endpoint(market, symbol):
+    """ประวัติปันผล + สถิติ (streak/CAGR/YoY/ความถี่/yield รายปี) — เก็บใน financials.db
+    (local-only) ดึงสดจาก yfinance ครั้งแรกหรือเมื่อข้อมูลเก่าเกิน 30 วัน, ?refresh=1 บังคับดึงสด
+    yield รายปีคำนวณได้เฉพาะหุ้นไทย (มีราคาปิดใน set_prices.db) — US/HK ยังไม่รองรับ (phase A)"""
+    from sources import dividend_stats
+    from datetime import datetime as _dt, timedelta as _td
+    mkt = (market or "TH").upper()
+    sym = symbol.upper().strip()
+    force = request.args.get("refresh") == "1"
+
+    rows, synced_at = financials_store.get_dividends(BASE_DIR, sym, mkt)
+    stale = True
+    if synced_at:
+        try:
+            stale = (_dt.now() - _dt.fromisoformat(synced_at)) > _td(days=_DIVIDENDS_STALE_DAYS)
+        except ValueError:
+            stale = True
+
+    fetch_error = None
+    if force or rows is None or stale:
+        try:
+            fresh = financials_store.fetch_dividends(sym, market=mkt)
+            if fresh:
+                financials_store.save_dividends(BASE_DIR, sym, mkt, fresh)
+                rows, synced_at = financials_store.get_dividends(BASE_DIR, sym, mkt)
+                stale = False
+        except Exception as e:
+            fetch_error = str(e)
+
+    if not rows:
+        msg = f"ไม่พบประวัติปันผลของ {sym}" + (f" ({fetch_error})" if fetch_error else "")
+        return jsonify({"error": msg}), 404
+
+    price_series = None
+    if mkt in ("TH", "SET"):
+        price_series = price_store.get_series(BASE_DIR, sym + ".BK")
+
+    stats = dividend_stats.compute_dividend_stats(rows, price_series=price_series)
+    return jsonify({
+        "symbol": sym, "market": mkt, "synced_at": synced_at, "stale": stale,
+        "fetch_error": fetch_error, **(stats or {}),
+    })
+
+
+_CALENDAR_STALE_DAYS = 7   # ปฏิทินเปลี่ยนเร็วกว่าปันผล (ประกาศใหม่ได้ตลอด) — sync ถี่กว่า
+
+
+@app.route("/api/calendar-events/<market>/<symbol>")
+def get_calendar_events_endpoint(market, symbol):
+    """ปฏิทิน XD/pay (SET.or.th, หุ้นไทยเท่านั้น, confirmed) + earnings (yfinance, ทุกตลาด,
+    estimated) ของหุ้นตัวเดียว — เก็บใน financials.db (local-only), stale เกิน 7 วันดึงสดใหม่
+    เอง, ?refresh=1 บังคับ ดู PLAN_stock_study_suite.txt งาน #4"""
+    from datetime import datetime as _dt, timedelta as _td, date as _date
+    mkt = (market or "TH").upper()
+    sym = symbol.upper().strip()
+    force = request.args.get("refresh") == "1"
+    today_iso = _date.today().isoformat()
+
+    rows, synced_at = financials_store.get_calendar_events(BASE_DIR, sym, mkt, from_date=today_iso)
+    stale = True
+    if synced_at:
+        try:
+            stale = (_dt.now() - _dt.fromisoformat(synced_at)) > _td(days=_CALENDAR_STALE_DAYS)
+        except ValueError:
+            stale = True
+
+    fetch_error = None
+    if force or rows is None or stale:
+        try:
+            fresh = financials_store.fetch_calendar_events(sym, market=mkt)
+            financials_store.save_calendar_events(BASE_DIR, sym, mkt, fresh)
+            rows, synced_at = financials_store.get_calendar_events(BASE_DIR, sym, mkt, from_date=today_iso)
+            stale = False
+        except Exception as e:
+            fetch_error = str(e)
+
+    return jsonify({
+        "symbol": sym, "market": mkt, "synced_at": synced_at, "stale": stale,
+        "fetch_error": fetch_error, "events": rows or [],
+    })
+
+
 @app.route("/api/financials-meta")
 def financials_meta():
     """วันที่ sync งบการเงินเต็มล่าสุด — ใช้เช็คฝั่ง UI ว่าถึงรอบเตือนอัพเดท (~2 เดือน) หรือยัง"""
@@ -1841,7 +1927,7 @@ def start_financials_sync():
     return jsonify({"ok": True})
 
 
-def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map, yahoo_only=False):
+def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map, yahoo_only=False, fin_sector_syms=None):
     """คำนวณ growth/PEG/FCF/streak/ratio ของ symbol กลุ่มเดียว (หุ้นไทย หรือ DR)
     แยก percentile ranking กันคนละ universe — ไม่งั้นหุ้นไทยจะถูกเทียบ growth score
     กับหุ้นเทคยักษ์ใหญ่ระดับโลกที่ปนอยู่ใน DR (และกลับกัน)
@@ -1900,7 +1986,19 @@ def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map, yahoo_only=Fa
         latest_rev = rev_row[max(rev_row)] if rev_row else None
         mc = mktcap_map.get(sym)
         ps = (mc / latest_rev) if (mc and latest_rev and latest_rev > 0) else None
-        result[sym] = {**gs, **fcf, **streaks, **ratios, **qg, **tg, "peg": peg, "ps": ps}
+        # F-Score/Z-Score — mkt_cap ที่นี่มาจาก set_data.json (สดกว่า Finnomena valuation
+        # ที่ factor_snapshot ใช้) ธนาคาร/เงินทุน/ประกันไทย ไม่แสดง Z-Score (ดู
+        # factor_snapshot._financial_sector_symbols — งบดุลตีความไม่ได้กับสูตร Altman)
+        fscore = financials_store.compute_fscore(payload)
+        if (not is_dr) and fin_sector_syms and sym in fin_sector_syms:
+            zscore = {"z_score": None, "z_variant": None, "z_zone": None}
+        else:
+            zscore = financials_store.compute_zscore(payload, mc, variant=("Z" if is_dr else "Z2"))
+        result[sym] = {**gs, **fcf, **streaks, **ratios, **qg, **tg, "peg": peg, "ps": ps,
+                       "f_score": fscore["f_score"], "f_score_max": fscore["f_score_max"],
+                       "f_score_detail": fscore["f_score_detail"],
+                       "z_score": zscore["z_score"], "z_variant": zscore["z_variant"],
+                       "z_zone": zscore["z_zone"]}
         growth_raw[sym] = gs["growth_score"]
 
     percentiles = rank_percentile(growth_raw)
@@ -1941,8 +2039,9 @@ def financials_analytics():
 
     set_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=False)
     dr_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=True)
+    fin_sector_syms = factor_snapshot._financial_sector_symbols(BASE_DIR)
     result = {
-        "set": _compute_fin_analytics_for(set_symbols, False, pe_map, mktcap_map, yahoo_only=yahoo_only),
+        "set": _compute_fin_analytics_for(set_symbols, False, pe_map, mktcap_map, yahoo_only=yahoo_only, fin_sector_syms=fin_sector_syms),
         "dr": _compute_fin_analytics_for(dr_symbols, True, pe_map, mktcap_map, yahoo_only=yahoo_only),
     }
 
@@ -2115,6 +2214,310 @@ def factor_screener():
             r["pe_sector_pctile"] = pe_pct.get(r["symbol"])
             r["roe_sector_pctile"] = roe_pct.get(r["symbol"])
     return jsonify({"rows": rows, "meta": factor_snapshot.snapshot_meta(BASE_DIR)})
+
+
+@app.route("/api/peer-compare")
+def peer_compare():
+    """🆚 เทียบเพื่อนร่วม sector/industry ในตารางเดียว — งาน #3 ของ PLAN_stock_study_suite.txt
+
+    ?symbol=CPALL          : ใช้ sector ของหุ้นนี้เป็นกลุ่ม (หุ้นตั้งต้น pin บนสุดฝั่ง frontend)
+    ?sector=...&level=...  : เลือกกลุ่มตรง ๆ ไม่ต้องมีหุ้นตั้งต้น
+    ?level=sector|industry : ชั้นการจัดกลุ่ม (default sector) — auto ขยับเป็น industry เอง
+                              ถ้ากลุ่ม sector มีสมาชิก < 4 ตัว (percentile ไม่มีนัยยะ)
+    ?market=TH|US|HK       : default TH · US/HK เฉพาะสมาชิกดัชนีหลัก (us/hk_index_metrics.json
+                              ~623 ตัว) — mirror ตัวอื่นนอกดัชนีหลักไม่มี sector เก็บไว้ ยังไม่รองรับ
+                              level เป็น 'sector' อย่างเดียวเสมอ (index metrics มีแค่ชั้นเดียว
+                              ไม่มี industry ย่อยแบบ set_data.json)
+
+    ตัวเลข factor มาจาก factor_snapshot/factor_snapshot_mirror (local-only) — ไม่คำนวณใหม่"""
+    symbol = (request.args.get("symbol") or "").upper().strip()
+    sector_q = (request.args.get("sector") or "").strip()
+    level = request.args.get("level") or "sector"
+    if level not in ("sector", "industry"):
+        level = "sector"
+    mkt = (request.args.get("market") or "TH").upper()
+    if mkt not in ("TH", "US", "HK"):
+        mkt = "TH"
+    if mkt != "TH":
+        level = "sector"   # index metrics มีแค่ sector ชั้นเดียว ไม่มี industry ให้ widen
+
+    th_map = _tearsheet_universe_map(mkt)
+    if not th_map:
+        return jsonify({"rows": [], "median": None, "count": 0,
+                        "meta": {"note": f"ไม่มีข้อมูล universe ของตลาด {mkt}"}})
+
+    base = th_map.get(symbol) if symbol else None
+    if sector_q:
+        group_key = sector_q
+    elif base:
+        group_key = base.get(level) or base.get("sector")
+        level = level if base.get(level) else "sector"
+    else:
+        return jsonify({"rows": [], "median": None, "count": 0,
+                        "meta": {"note": "ต้องระบุ symbol หรือ sector"}})
+    if not group_key:
+        return jsonify({"rows": [], "median": None, "count": 0,
+                        "meta": {"note": f"หุ้น {symbol} ไม่มีข้อมูล {level}"}})
+
+    members = [sym for sym, s in th_map.items() if s.get(level) == group_key]
+    widened = False
+    if level == "sector" and len(members) < 4:
+        ind = (base or {}).get("industry") if base else None
+        if not ind and sector_q:
+            # ผู้ใช้เลือก sector ตรง ๆ (ไม่มีหุ้นตั้งต้น) — หา industry จากสมาชิกกลุ่มเดิม
+            sample = th_map.get(members[0]) if members else None
+            ind = sample.get("industry") if sample else None
+        if ind:
+            wide_members = [sym for sym, s in th_map.items() if s.get("industry") == ind]
+            if len(wide_members) > len(members):
+                members, level, group_key, widened = wide_members, "industry", ind, True
+
+    if mkt == "TH":
+        snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
+        fin_sector_syms = factor_snapshot._financial_sector_symbols(BASE_DIR)
+    else:
+        snap_rows = {r["symbol"]: r for r in factor_snapshot.get_mirror_snapshot(BASE_DIR, mkt)}
+        # เช็คด้วยชื่อ GICS sector ทุกรูปแบบที่พบจริงใน us/hk_index_metrics.json (ไม่ใช่แค่
+        # "Financials" เดี่ยวๆ — HK มี "Finance" แยกต่างหากสำหรับ HSBC/HKEX/AIA/BOCHK ด้วย)
+        fin_sector_syms = {sy for sy, s2 in th_map.items()
+                           if s2.get("sector") in factor_snapshot.FINANCIAL_SECTOR_NAMES}
+
+    rows = []
+    for sym in members:
+        s = th_map.get(sym) or {}
+        f = snap_rows.get(_mirror_sym(mkt, sym)) or {}
+        is_fin = sym in fin_sector_syms
+        mc = s.get("mkt_cap")
+        if mc is None and mkt != "TH" and s.get("price") and f.get("shares_out"):
+            mc = s["price"] * f["shares_out"]   # ดู comment เดียวกันใน /api/tearsheet
+        # US/HK: factor_snapshot_mirror ไม่รู้จัก sector ตอน build (คำนวณจากทั้ง mirror universe
+        # ไม่ใช่แค่สมาชิกดัชนีหลักที่มี sector) — บังคับซ่อน Z-Score เองตรงนี้แทนสำหรับกลุ่มการเงิน
+        z_score, z_zone = f.get("z_score"), f.get("z_zone")
+        z_reason = f.get("z_excluded_reason")
+        if is_fin and mkt != "TH":
+            z_score, z_zone = None, None
+            z_reason = "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"
+        row = {
+            "symbol": sym, "name": s.get("name"), "sector": s.get("sector"),
+            "industry": s.get("industry"), "mkt_cap": mc,
+            "pe": s.get("pe") if s.get("pe") is not None else f.get("pe_value"),
+            "pbv": s.get("pbv") if s.get("pbv") is not None else f.get("pbv_value"),
+            "div_yield": s.get("div_yield"),
+            "peg": f.get("peg"), "ps_value": f.get("ps_value"),
+            "roe": f.get("roe"), "roa": f.get("roa"),
+            "gross_margin": f.get("gross_margin"), "net_margin": f.get("net_margin"),
+            "de_ratio": f.get("de_ratio"), "interest_coverage": f.get("interest_coverage"),
+            "ocf_ni_ratio": f.get("ocf_ni_ratio"),
+            "f_score": f.get("f_score"), "f_score_max": f.get("f_score_max"),
+            "z_score": z_score, "z_zone": z_zone, "z_variant": f.get("z_variant"),
+            "z_excluded_reason": z_reason,
+            "rev_cagr": f.get("rev_cagr"), "profit_cagr": f.get("profit_cagr"),
+            "rev_ttm_yoy": f.get("rev_ttm_yoy"), "profit_ttm_yoy": f.get("profit_ttm_yoy"),
+            "revenue_streak": f.get("revenue_streak"), "growth_score": f.get("growth_score"),
+            "rule_of_40": f.get("rule_of_40"),
+            "quarters_available": f.get("quarters_available"),
+            "is_financial_sector": is_fin,
+            "has_financials": _mirror_sym(mkt, sym) in snap_rows,
+        }
+        rows.append(row)
+
+    num_cols = ["mkt_cap", "pe", "pbv", "div_yield", "peg", "ps_value", "roe", "roa",
+                "gross_margin", "net_margin", "de_ratio", "interest_coverage", "ocf_ni_ratio",
+                "f_score", "z_score", "rev_cagr", "profit_cagr", "rev_ttm_yoy", "profit_ttm_yoy",
+                "revenue_streak", "growth_score", "rule_of_40"]
+    median = {}
+    for c in num_cols:
+        vals = sorted(v for v in (r.get(c) for r in rows) if isinstance(v, (int, float)))
+        n = len(vals)
+        if n:
+            mid = n // 2
+            median[c] = vals[mid] if n % 2 else round((vals[mid - 1] + vals[mid]) / 2, 3)
+        else:
+            median[c] = None
+
+    rows.sort(key=lambda r: (r.get("mkt_cap") or 0), reverse=True)
+    computed_at = (factor_snapshot.snapshot_meta(BASE_DIR).get("computed_at") if mkt == "TH"
+                   else factor_snapshot.mirror_snapshot_meta(BASE_DIR).get("computed_at"))
+    return jsonify({
+        "rows": rows, "median": median, "count": len(rows),
+        "meta": {"level": level, "group": group_key, "widened": widened,
+                 "base_symbol": symbol or None, "market": mkt, "computed_at": computed_at},
+    })
+
+
+def _mirror_sym(mkt, sym):
+    """แปลง symbol ให้ตรงกับ key ที่ factor_snapshot_mirror ใช้จริง — hk_index_metrics.json
+    เก็บ symbol แบบ '0700.HK' (ให้ยิง yfinance ตรงๆ ได้) แต่ namespace mirror ('FINN:HK:0700'
+    ทั้ง finnomena_q/yahoo) ใช้รหัสดิบไม่มี suffix เสมอ — ต้องตัด '.HK' ก่อน lookup ทุกครั้ง
+    ไม่งั้น snap_rows.get(sym) จะไม่เจออะไรเลยสำหรับหุ้น HK ทั้งหมด (US ไม่มีปัญหานี้)"""
+    return sym.replace(".HK", "") if mkt == "HK" else sym
+
+
+def _tearsheet_universe_map(mkt):
+    """คืน {symbol: entry} ของตลาดที่ tearsheet รองรับ — TH จาก set_data.json (ทุกหุ้น),
+    US/HK จาก us_index_metrics.json/hk_index_metrics.json (เฉพาะสมาชิกดัชนีหลัก S&P500+
+    Dow+NDX / HSI+HSCEI+HSTECH ~623 ตัว — scope ที่ตัดสินใจไว้ใน PLAN_stock_study_suite.txt
+    เพราะ mirror ทั้งก้อนไม่มีราคารายวัน/sector เก็บไว้ ยกเว้นกลุ่มดัชนีหลักนี้)
+    field ชื่อเดียวกันทุกไฟล์ (ret_1d/rs_score/stage/price_history ฯลฯ) โค้ดข้างล่างเลยใช้ร่วมกันได้"""
+    out = {}
+    if mkt == "TH":
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, encoding="utf-8") as f:
+                    for s in json.load(f).get("stocks", []):
+                        out[s["symbol"]] = s
+            except Exception:
+                pass
+    elif mkt == "US":
+        from sources import us_index_metrics
+        for s in us_index_metrics.load_local(BASE_DIR).get("stocks", []):
+            out[s["symbol"]] = s
+    elif mkt == "HK":
+        from sources import hk_index_metrics
+        for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", []):
+            out[s["symbol"]] = s
+    return out
+
+
+@app.route("/api/tearsheet/<market>/<symbol>")
+def tearsheet(market, symbol):
+    """📋 Tearsheet (งาน #1 ใน PLAN_stock_study_suite.txt) — header + valuation + quality + DCF
+    input แบบเบา รวมใน call เดียว ส่วนหนัก (เงินทุน/ฤดูกาล/ข่าว) ให้หน้าเรียก endpoint เดิมแยกเอง
+    async (/api/financials-analytics, /api/insider-trades, /api/price-analytics, /api/stock-news ฯลฯ)
+
+    market=TH: universe ทั้งหมด (set_data.json) · market=US/HK: เฉพาะสมาชิกดัชนีหลัก
+    (us_index_metrics.json/hk_index_metrics.json) — หุ้น mirror ตัวอื่นนอกดัชนีหลักยังไม่มี
+    ราคารายวัน/sector เก็บไว้ ยังไม่รองรับ (501 พร้อมข้อความบอกเหตุผล)"""
+    mkt = market.upper()
+    sym = symbol.upper().strip()
+    if mkt not in ("TH", "US", "HK"):
+        return jsonify({"error": f"ไม่รู้จักตลาด {mkt}"}), 400
+
+    th_map = _tearsheet_universe_map(mkt)
+    s = th_map.get(sym)
+    if not s:
+        if mkt != "TH":
+            return jsonify({"error": f"ไม่พบหุ้น {sym} ในดัชนีหลัก ({mkt}) — Tearsheet รองรับเฉพาะ"
+                                      f" สมาชิก S&P500+Dow+NDX (US) / HSI+HSCEI+HSTECH (HK) ตอนนี้"}), 404
+        return jsonify({"error": f"ไม่พบหุ้น {sym}"}), 404
+
+    header = {
+        "symbol": sym, "name": s.get("name"), "sector": s.get("sector"), "industry": s.get("industry"),
+        "is_reit": s.get("is_reit"),
+        "price": s.get("price"), "ret_1d": s.get("ret_1d"), "ret_1w": s.get("ret_1w"),
+        "ret_1m": s.get("ret_1m"), "ret_3m": s.get("ret_3m"), "ret_1y": s.get("ret_1y"),
+        "ret_ytd": s.get("ret_ytd"),
+        "rs_score": s.get("rs_score"), "rs_momentum": s.get("rs_momentum"), "stage": s.get("stage"),
+        "high_52w": s.get("high_52w"), "low_52w": s.get("low_52w"),
+        "pct_off_high52": (round((s["price"] / s["high_52w"] - 1) * 100, 2)
+                            if s.get("price") and s.get("high_52w") else None),
+        "above_ema50": s.get("above_ema50"), "above_ema200": s.get("above_ema200"),
+        "ema200_slope_pct": s.get("ema200_slope_pct"), "atr14_pct": s.get("atr14_pct"),
+        "sparkline": (s.get("price_history") or [])[-260:],
+    }
+
+    if mkt == "TH":
+        snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
+    else:
+        snap_rows = {r["symbol"]: r for r in factor_snapshot.get_mirror_snapshot(BASE_DIR, mkt)}
+    f = snap_rows.get(_mirror_sym(mkt, sym)) or {}
+
+    def _label(pct):
+        if pct is None:
+            return None
+        if pct <= 25:
+            return "cheap"
+        if pct >= 75:
+            return "expensive"
+        return "normal"
+
+    sector = s.get("sector")
+    sec_syms = [sym2 for sym2, s2 in th_map.items() if sector and s2.get("sector") == sector]
+
+    def _sector_median(getter):
+        vals = [v for v in (getter(sym2) for sym2 in sec_syms) if isinstance(v, (int, float))]
+        if not vals:
+            return None
+        vals.sort()
+        n = len(vals)
+        mid = n // 2
+        return vals[mid] if n % 2 else round((vals[mid - 1] + vals[mid]) / 2, 3)
+
+    valuation = {
+        "pe": {
+            "value": s.get("pe") if s.get("pe") is not None else f.get("pe_value"),
+            "percentile": f.get("pe_percentile"), "label": _label(f.get("pe_percentile")),
+            "sector_median": _sector_median(lambda sy: (th_map.get(sy) or {}).get("pe")
+                                             if (th_map.get(sy) or {}).get("pe") is not None
+                                             else (snap_rows.get(sy) or {}).get("pe_value")),
+        },
+        "pbv": {
+            "value": s.get("pbv") if s.get("pbv") is not None else f.get("pbv_value"),
+            "percentile": f.get("pbv_percentile"), "label": _label(f.get("pbv_percentile")),
+            "sector_median": _sector_median(lambda sy: (th_map.get(sy) or {}).get("pbv")
+                                             if (th_map.get(sy) or {}).get("pbv") is not None
+                                             else (snap_rows.get(sy) or {}).get("pbv_value")),
+        },
+        "ps": {
+            "value": f.get("ps_value"), "percentile": f.get("ps_percentile"),
+            "label": _label(f.get("ps_percentile")),
+            "sector_median": _sector_median(lambda sy: (snap_rows.get(sy) or {}).get("ps_value")),
+        },
+        "div_yield": {
+            "value": s.get("div_yield"),
+            "sector_median": _sector_median(lambda sy: (th_map.get(sy) or {}).get("div_yield")),
+        },
+    }
+
+    mkt_cap = s.get("mkt_cap")
+    if mkt_cap is None and mkt != "TH" and s.get("price") and f.get("shares_out"):
+        # us/hk_index_metrics.json ไม่เก็บ mkt_cap เลย (ยืนยันแล้ว 0/518 US, 0/105 HK) —
+        # คำนวณเองจาก price สด × shares_out ล่าสุด (งบ Yahoo annual) แทน ไม่งั้น DCF/fcf_yield
+        # จะ "ข้อมูลไม่พอ" ทุกตัวทั้งที่มี FCF จริง
+        mkt_cap = s["price"] * f["shares_out"]
+    fcf = f.get("fcf")
+    if mkt == "TH":
+        is_financial = sym in factor_snapshot._financial_sector_symbols(BASE_DIR)
+    else:
+        # US/HK ไม่มีลิสต์สถาบันการเงินคิวเรตแบบ TH — ใช้ชื่อ GICS sector จาก
+        # us/hk_index_metrics.json แทน (ครอบทุกรูปแบบชื่อที่พบจริง — ดู FINANCIAL_SECTOR_NAMES,
+        # HK มีทั้ง "Financials"/"Finance" แยกกัน เช็คแค่ตัวเดียวจะหลุด HSBC/HKEX/AIA/BOCHK)
+        is_financial = (s.get("sector") in factor_snapshot.FINANCIAL_SECTOR_NAMES)
+
+    # US/HK: factor_snapshot_mirror ไม่รู้จัก sector ตอน build (คำนวณจากทั้ง mirror universe ไม่ใช่
+    # แค่สมาชิกดัชนีหลักที่มี sector) — บังคับซ่อน Z-Score เองตรงนี้แทนสำหรับกลุ่มการเงิน (เหมือนที่
+    # ทำใน /api/peer-compare)
+    z_score, z_zone, z_reason = f.get("z_score"), f.get("z_zone"), f.get("z_excluded_reason")
+    if is_financial and mkt != "TH":
+        z_score, z_zone = None, None
+        z_reason = "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"
+
+    quality = {
+        "roe": f.get("roe"), "de_ratio": f.get("de_ratio"), "gross_margin": f.get("gross_margin"),
+        "fcf_yield": round(fcf / mkt_cap * 100, 2) if (fcf is not None and mkt_cap) else None,
+        "dividend_coverage": f.get("dividend_coverage"),
+        "f_score": f.get("f_score"), "f_score_max": f.get("f_score_max"),
+        "f_score_detail": f.get("f_score_detail"),
+        "z_score": z_score, "z_variant": f.get("z_variant"), "z_zone": z_zone,
+        "z_excluded_reason": z_reason,
+    }
+
+    discount_rate_default = {"TH": 9.0, "US": 8.5, "HK": 9.5}[mkt]
+    dcf = {
+        "fcf": fcf, "mkt_cap": mkt_cap, "net_cash": f.get("net_cash"), "price": s.get("price"),
+        "rev_cagr": f.get("rev_cagr"), "profit_cagr": f.get("profit_cagr"),
+        "is_financial_sector": is_financial,
+        "discount_rate_default": discount_rate_default, "terminal_growth_default": 2.5,
+    }
+
+    meta_computed_at = (factor_snapshot.snapshot_meta(BASE_DIR).get("computed_at") if mkt == "TH"
+                         else factor_snapshot.mirror_snapshot_meta(BASE_DIR).get("computed_at"))
+    return jsonify({
+        "symbol": sym, "market": mkt, "header": header, "valuation": valuation, "quality": quality,
+        "dcf": dcf,
+        "meta": {"computed_at": meta_computed_at,
+                 "has_factors": _mirror_sym(mkt, sym) in snap_rows},
+    })
 
 
 @app.route("/api/track-search", methods=["POST"])
@@ -3564,6 +3967,52 @@ def mirror_sync_new():
         _state.update(running=True, done=False, error=None,
                       current=0, total=0, message="กำลังเริ่ม sync หุ้น US/HK ตัวใหม่...")
     threading.Thread(target=_run_mirror_sync_new, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _run_mirror_yahoo_index_sync():
+    """งาน #1/#3 US/HK support (PLAN_stock_study_suite.txt) — sync งบ Yahoo annual ให้หุ้น
+    mirror US/HK เฉพาะสมาชิกดัชนีหลัก (S&P500+Dow+NDX จาก us_index_metrics.json / HSI+HSCEI+
+    HSTECH จาก hk_index_metrics.json — ~623 ตัว ไม่ใช่ mirror ทั้งก้อนที่มีเป็นพันตัว) แล้ว
+    rebuild factor_snapshot_mirror ให้ Tearsheet/Peer Compare/F-Score-Z-Score เห็นข้อมูลใหม่"""
+    try:
+        from sources import us_index_metrics, hk_index_metrics
+        us_syms = [s["symbol"] for s in us_index_metrics.load_local(BASE_DIR).get("stocks", [])]
+        # hk_index_metrics เก็บ symbol แบบ "0700.HK" (สำหรับ yfinance เรียกตรงๆ) แต่
+        # namespace mirror ('FINN:HK:0700', ทั้ง finnomena_q เดิมและที่จะ sync yahoo เพิ่ม)
+        # ใช้รหัสดิบ 4 หลักไม่มี suffix — ต้องตัด ".HK" ออกก่อนเสมอ ไม่งั้น fetch_yahoo_full
+        # จะไปสร้าง ticker ผิดเป็น "0700.HK.HK" (ยิงพลาดทุกตัว — เจอบั๊กนี้ตอนรันจริงรอบแรก)
+        hk_syms = [s["symbol"].replace(".HK", "") for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", [])]
+
+        def cb(current, total, msg):
+            _update(current=current, total=total, message=msg)
+
+        result = financials_store.sync_mirror_yahoo_index(
+            BASE_DIR, {"US": us_syms, "HK": hk_syms}, callback=cb)
+
+        _update(message="Sync งบเสร็จ — กำลัง rebuild factor snapshot mirror...")
+        mirror_counts = factor_snapshot.build_mirror_snapshot(BASE_DIR, exchanges=("US", "HK"))
+        _fin_analytics_cache.clear()
+
+        _update(running=False, done=True,
+                message=f"เสร็จแล้ว! ดึงงบ Yahoo ได้ {result['ok']} ตัว "
+                        f"(ข้าม {result['skipped']} ที่มีอยู่แล้ว"
+                        + (f", ล้มเหลว {result['fail']}" if result["fail"] else "") + ") · "
+                        f"rebuild mirror snapshot: US {mirror_counts.get('US', 0)} / HK {mirror_counts.get('HK', 0)} ตัว")
+    except Exception as e:
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+
+
+@app.route("/api/mirror-yahoo-index-sync", methods=["POST"])
+def mirror_yahoo_index_sync():
+    """เริ่ม sync งบ Yahoo annual ของหุ้น US/HK ดัชนีหลัก (งาน US/HK support) — job เดียวกับ
+    ระบบ progress bar เดิม (ใช้ _state/_lock ร่วมกับ /api/refresh, /api/mirror-sync-new)"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=0, message="กำลังเริ่ม sync งบ Yahoo หุ้น US/HK ดัชนีหลัก...")
+    threading.Thread(target=_run_mirror_yahoo_index_sync, daemon=True).start()
     return jsonify({"ok": True})
 
 
