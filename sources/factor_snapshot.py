@@ -289,6 +289,24 @@ def init_mirror_table(base_dir):
         con.close()
 
 
+def upsert_mirror_row(base_dir, symbol, market, factors):
+    """เขียน/อัพเดต factor_snapshot_mirror แถวเดียว — ต่างจาก build_mirror_snapshot ที่
+    DELETE+INSERT ทั้งตลาด ใช้ตอน on-demand fetch หุ้น mirror US/HK ที่ไม่ใช่สมาชิกดัชนีหลัก
+    (ดู sources/mirror_ondemand.py) ให้ผลลัพธ์โผล่ใน Screener+/Peer Compare ทันทีโดยไม่ต้องรอ
+    rebuild ทั้งตลาดรอบถัดไป"""
+    init_mirror_table(base_dir)
+    con = _connect(base_dir)
+    try:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        con.execute(
+            f"INSERT INTO {MIRROR_TABLE}(symbol, market, factors, computed_at) VALUES (?,?,?,?) "
+            f"ON CONFLICT(symbol, market) DO UPDATE SET factors=excluded.factors, computed_at=excluded.computed_at",
+            (symbol, market, json.dumps(factors, ensure_ascii=False), now))
+        con.commit()
+    finally:
+        con.close()
+
+
 def _entering_high_season(latest_q_date, high_q):
     """ไตรมาสถัดจากงวดล่าสุดที่รายงาน = ไฮซีซั่นไหม (ใช้หาหุ้นที่ 'กำลังจะเข้าไฮซีซั่น')"""
     if not latest_q_date or not high_q:

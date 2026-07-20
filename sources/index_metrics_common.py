@@ -9,6 +9,7 @@
 (single source of truth — ห้าม copy สูตรมาคำนวณเองซ้ำ)"""
 import json
 import os
+import time
 from datetime import datetime
 
 import pandas as pd
@@ -25,22 +26,12 @@ def _series(ohlc, key):
     return pd.Series(ohlc[key], index=idx, dtype=float)
 
 
-def build(base_dir, cfg, callback=None):
-    """คำนวณ metrics ทุกตัวในดัชนีตาม cfg แล้วเขียนทับ cfg['out_file'] คืนจำนวนตัวที่สำเร็จ
+def _compute_all_rows(base_dir, cfg, callback=None):
+    """คำนวณ metrics ดิบ (ยังไม่ rank_rs) ของทุก ticker ในดัชนีตาม cfg — แยกออกจาก build()
+    ให้ compute_ondemand_row() เรียกใช้ร่วมกันได้ (เติมหุ้นนอกดัชนี 1 ตัวแล้ว rank รวมกัน)
+    กันเขียน loop คำนวณต่อ ticker ซ้ำ 2 ที่
 
-    cfg keys:
-      membership, store   — module ของตลาดนั้น (เช่น us_index_membership, us_store)
-      index_keys           — tuple ชื่อดัชนี เช่น ("SP500","DOW","NDX")
-      sector_keys_order    — tuple key ของ sector map ใน membership local เรียงจาก
-                             ทับก่อน->ทับทีหลัง (ตัวหลังชนะ — ดู cfg ของ US ที่ต้องให้
-                             GICS (SP500/DOW) ทับ ICB (NDX) เพราะหุ้นเมกะแคปอยู่ทั้งคู่)
-      sector_fallback_dr   — True ถ้าต้องเติม sector จาก dr_universe (field 'ind') สำหรับ
-                             ตัวที่ยังไม่มี sector (HSTECH ไม่มี sector จาก Wikipedia)
-      name_map_predicate   — fn(yf_ticker_upper) -> bool บอกว่า dr_universe entry นี้
-                             เป็นของตลาดนี้หรือไม่ (ใช้เอาชื่อบริษัทมาเติม)
-      market_code          — "US"/"HK" ฯลฯ ใส่ใน info['market']
-      out_file             — path (relative to base_dir) ของ JSON output
-    """
+    cfg keys: ดู docstring build()"""
     membership_local = cfg["membership"].load_local(base_dir)
     index_keys = cfg["index_keys"]
     sets = {k: set(membership_local.get(k, [])) for k in index_keys}
@@ -90,7 +81,48 @@ def build(base_dir, cfg, callback=None):
         for k in index_keys:
             row[f"in_{k.lower()}"] = ticker in sets[k]
         stocks.append(row)
+    return stocks
 
+
+_all_rows_cache = {}   # (base_dir, market_code) -> (ts, stocks) — TTL สั้น กัน compute_ondemand_row
+                        # อ่าน+คำนวณ cohort ทั้งดัชนี (~500-600 ตัวจาก prices.db) ซ้ำทุกครั้งที่
+                        # ผู้ใช้เปิดหุ้น mirror ตัวใหม่ติดกันในช่วงเวลาสั้นๆ (เช่นไล่เปิดทีละตัว
+                        # ใน Screener+) — build() ไม่ใช้ cache นี้ (ต้อง fresh เสมอ รันเป็น
+                        # background job แยกมี progress callback อยู่แล้ว)
+_ALL_ROWS_TTL = 300   # วินาที — ราคาระหว่างวันขยับได้ แต่ 5 นาทีไม่กระทบ RS/stage/EMA200 อยู่แล้ว
+
+
+def _compute_all_rows_cached(base_dir, cfg):
+    """เหมือน _compute_all_rows แต่ cache ผลไว้ _ALL_ROWS_TTL วินาที — ใช้เฉพาะ path on-demand
+    (compute_ondemand_row) คืน copy ของ list เสมอ (ไม่ใช่ reference คืน) กัน caller append
+    หุ้น on-demand เข้าไปใน list ที่แชร์กับ call อื่นโดยไม่ตั้งใจ"""
+    key = (base_dir, cfg["market_code"])
+    now = time.time()
+    cached = _all_rows_cache.get(key)
+    if cached and (now - cached[0] < _ALL_ROWS_TTL):
+        return list(cached[1])
+    stocks = _compute_all_rows(base_dir, cfg)
+    _all_rows_cache[key] = (now, stocks)
+    return list(stocks)
+
+
+def build(base_dir, cfg, callback=None):
+    """คำนวณ metrics ทุกตัวในดัชนีตาม cfg แล้วเขียนทับ cfg['out_file'] คืนจำนวนตัวที่สำเร็จ
+
+    cfg keys:
+      membership, store   — module ของตลาดนั้น (เช่น us_index_membership, us_store)
+      index_keys           — tuple ชื่อดัชนี เช่น ("SP500","DOW","NDX")
+      sector_keys_order    — tuple key ของ sector map ใน membership local เรียงจาก
+                             ทับก่อน->ทับทีหลัง (ตัวหลังชนะ — ดู cfg ของ US ที่ต้องให้
+                             GICS (SP500/DOW) ทับ ICB (NDX) เพราะหุ้นเมกะแคปอยู่ทั้งคู่)
+      sector_fallback_dr   — True ถ้าต้องเติม sector จาก dr_universe (field 'ind') สำหรับ
+                             ตัวที่ยังไม่มี sector (HSTECH ไม่มี sector จาก Wikipedia)
+      name_map_predicate   — fn(yf_ticker_upper) -> bool บอกว่า dr_universe entry นี้
+                             เป็นของตลาดนี้หรือไม่ (ใช้เอาชื่อบริษัทมาเติม)
+      market_code          — "US"/"HK" ฯลฯ ใส่ใน info['market']
+      out_file             — path (relative to base_dir) ของ JSON output
+    """
+    stocks = _compute_all_rows(base_dir, cfg, callback)
     stocks = rank_rs(stocks)
 
     out = {
@@ -105,6 +137,34 @@ def build(base_dir, cfg, callback=None):
         json.dump(out, f, ensure_ascii=False)
     os.replace(tmp, path)
     return len(stocks)
+
+
+def compute_ondemand_row(base_dir, cfg, ticker, close, volume, high, low, name, sector, industry):
+    """คำนวณ metrics (ราคา/return/RS/stage/EMA/ATR/sparkline) ของหุ้นตัวเดียวที่ไม่ใช่สมาชิก
+    ดัชนีหลัก โดย rank RS เทียบกับสมาชิกดัชนีหลักทั้งหมดที่มีราคาอยู่แล้วใน <mkt>_prices.db
+    (ไม่ fetch เพิ่มสำหรับสมาชิกเดิม, ticker ที่ขอมาไม่ได้เขียนทับ cfg['out_file'] — คำนวณสด
+    ในหน่วยความจำเท่านั้น) ใช้ตอน on-demand fetch หุ้น mirror US/HK นอกดัชนีหลัก (ดู
+    sources/mirror_ondemand.py) คืน None ถ้าราคาที่ให้มาไม่พอคำนวณ (< 5 แท่ง)"""
+    stocks = _compute_all_rows_cached(base_dir, cfg)
+    info = {
+        "symbol": ticker, "ticker": ticker, "name": name or ticker,
+        "market": cfg["market_code"], "industry": industry or sector or "Unknown",
+        "sector": sector or "Unknown",
+    }
+    new_row = process_stock(info, close, volume, high=high, low=low)
+    if new_row is None:
+        return None
+    for k in cfg["index_keys"]:
+        new_row[f"in_{k.lower()}"] = False
+    stocks.append(new_row)
+
+    # ไม่เรียก validate_stocks() ตรงนี้ — build() (persisted path) ก็ไม่เรียกเหมือนกัน ต้องให้
+    # ทั้งสอง path ไม่มี dq ติดตัวเหมือนกัน (rank_rs อ่าน s['dq']['rs_eligible'] แบบ default=True
+    # เมื่อไม่มี dq เลย — ดู core/metrics.py::rank_rs) ไม่งั้น cohort ที่ใช้ rank percentile จะ
+    # ไม่ตรงกัน (persisted rank บนทุกตัว, on-demand rank บนตัวที่ validate ผ่านเท่านั้น)
+    stocks = rank_rs(stocks)
+    result = next((s for s in stocks if s["symbol"] == ticker), None)
+    return sanitize([result])[0] if result else None
 
 
 _load_cache = {}   # (base_dir, out_file) -> (mtime, result) — กัน parse JSON ซ้ำทุก request

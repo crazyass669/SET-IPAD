@@ -12,6 +12,14 @@ import yfinance as yf
 BATCH_SIZE = 100
 
 
+def _squeeze(x):
+    """yf.download() ของ ticker เดี่ยว (chunk ยาว 1) บางเวอร์ชันคืน column เป็น MultiIndex
+    (Price, Ticker) เสมอแม้ยิงตัวเดียว — ทำให้ df['Close'] เป็น DataFrame 1 คอลัมน์แทนที่จะเป็น
+    Series ตรงๆ (ต่างจาก batch หลายตัวที่ raw[tick]['Close'] เป็น Series อยู่แล้ว) squeeze ให้
+    เป็น Series เสมอ กัน .iloc[-1] คืนแถวทั้งแถวแทนสเกลาร์ตัวเดียว"""
+    return x.iloc[:, 0] if hasattr(x, "ndim") and x.ndim == 2 else x
+
+
 def _extract_ohlcav(df, min_bars=5):
     """แกะ OHLC + Adj Close + Volume จาก DataFrame ของหุ้นตัวเดียว (yf.download,
     auto_adjust=False) — จัดทุก series ให้ align กับ index ของ Close ที่ไม่เป็น null
@@ -21,15 +29,15 @@ def _extract_ohlcav(df, min_bars=5):
     split+ปันผล — ใช้คำนวณผลตอบแทน/CAGR/seasonality/drawdown ระยะยาวให้ถูก)"""
     if df is None or df.empty or "Close" not in df:
         return None
-    close = df["Close"].dropna()
+    close = _squeeze(df["Close"]).dropna()
     if len(close) < min_bars:
         return None
     idx = close.index
 
     def _col(name):
-        return df[name].reindex(idx) if name in df else None
+        return _squeeze(df[name]).reindex(idx) if name in df else None
 
-    vol = df["Volume"].reindex(idx) if "Volume" in df else None
+    vol = _squeeze(df["Volume"]).reindex(idx) if "Volume" in df else None
     return {
         "open":      _col("Open"),
         "high":      _col("High"),
@@ -133,6 +141,46 @@ def fetch_gap_batch(tickers, start_date, callback=None):
 # 4. Parallel fundamentals fetcher (market cap + P/E + P/BV + Div Yield)
 # ============================================================
 
+def _info_with_retry(ticker, session, attempts=4):
+    """ดึง yf.Ticker(ticker).info พร้อม retry/backoff เมื่อโดน rate-limit (429/crumb) — แยกออก
+    มาจาก fetch_market_caps_parallel ให้ fetch_company_info เรียกใช้ร่วมได้ (ตัวเดียวไม่ต้อง
+    parallel เหมือน bulk แต่ retry logic เดิมยังจำเป็น)"""
+    import random
+    for attempt in range(attempts):
+        try:
+            return yf.Ticker(ticker, session=session).info
+        except Exception as e:
+            err = str(e).lower()
+            if "rate" in err or "too many" in err or "429" in err or "401" in err or "crumb" in err:
+                time.sleep((2 ** attempt) + random.uniform(1, 3))
+            else:
+                return {}
+    return {}
+
+
+def fetch_company_info(ticker):
+    """ดึงข้อมูลบริษัทตัวเดียวจาก yf.Ticker(ticker).info — sector/industry/ชื่อ/มูลค่าตลาด/
+    valuation คร่าวๆ ใช้กับหุ้น mirror US/HK ที่ไม่ใช่สมาชิกดัชนีหลัก ตอน on-demand fetch
+    (ดู sources/mirror_ondemand.py) — เบา ยิงครั้งเดียวต่อ ticker ไม่ parallel เหมือน
+    fetch_market_caps_parallel (นั่นออกแบบไว้สำหรับหลายร้อยตัวพร้อมกัน)"""
+    import requests
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    })
+    info = _info_with_retry(ticker, session)
+    mc, pe, pbv, dy = info.get("marketCap"), info.get("trailingPE"), info.get("priceToBook"), info.get("dividendYield")
+    return {
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "long_name": info.get("longName") or info.get("shortName"),
+        "mkt_cap":   int(mc)          if mc  is not None else None,
+        "pe":        round(float(pe),  2) if pe  is not None else None,
+        "pbv":       round(float(pbv), 2) if pbv is not None else None,
+        "div_yield": round(float(dy),  2) if dy  is not None else None,
+    }
+
+
 def fetch_market_caps_parallel(tickers, callback=None, workers=3):
     """ดึง market_cap + P/E + P/BV + Div Yield — sequential per-ticker เพื่อใช้ crumb เดียวกัน"""
     import random
@@ -149,33 +197,24 @@ def fetch_market_caps_parallel(tickers, callback=None, workers=3):
 
     def _get_fund(tick):
         time.sleep(random.uniform(0.3, 1.0))
-        for attempt in range(4):
-            try:
-                t    = yf.Ticker(tick, session=session)
-                info = t.info
-                mc   = info.get("marketCap")
-                pe   = info.get("trailingPE")
-                pbv  = info.get("priceToBook")
-                dy   = info.get("dividendYield")
-                # เดิมมี heuristic "ค่า < 1.0 ถือว่าเป็น decimal → คูณ 100" เพราะ
-                # yfinance รุ่นเก่าเคยคืนทศนิยม (0.0583) — ปัจจุบัน yfinance คืน
-                # เป็น % ตรงๆ แล้ว (ยืนยันแล้วว่าตรงกับ SET API เช่น DELTA=0.19
-                # หมายถึง 0.19% ไม่ใช่ 19%) heuristic เดิมเลยไปพองหุ้น yield ต่ำ
-                # จริง (growth stock, high P/E) ให้ผิดเพี้ยน ×100 — เอาออก ใช้ค่าตรงๆ
-                return tick, {
-                    "mkt_cap":   int(mc)          if mc  is not None else None,
-                    "pe":        round(float(pe),  2) if pe  is not None else None,
-                    "pbv":       round(float(pbv), 2) if pbv is not None else None,
-                    "div_yield": round(float(dy),  2) if dy  is not None else None,
-                }
-            except Exception as e:
-                err = str(e).lower()
-                if "rate" in err or "too many" in err or "429" in err or "401" in err or "crumb" in err:
-                    wait = (2 ** attempt) + random.uniform(1, 3)
-                    time.sleep(wait)
-                else:
-                    return tick, {}
-        return tick, {}
+        info = _info_with_retry(tick, session)
+        if not info:
+            return tick, {}
+        mc   = info.get("marketCap")
+        pe   = info.get("trailingPE")
+        pbv  = info.get("priceToBook")
+        dy   = info.get("dividendYield")
+        # เดิมมี heuristic "ค่า < 1.0 ถือว่าเป็น decimal → คูณ 100" เพราะ
+        # yfinance รุ่นเก่าเคยคืนทศนิยม (0.0583) — ปัจจุบัน yfinance คืน
+        # เป็น % ตรงๆ แล้ว (ยืนยันแล้วว่าตรงกับ SET API เช่น DELTA=0.19
+        # หมายถึง 0.19% ไม่ใช่ 19%) heuristic เดิมเลยไปพองหุ้น yield ต่ำ
+        # จริง (growth stock, high P/E) ให้ผิดเพี้ยน ×100 — เอาออก ใช้ค่าตรงๆ
+        return tick, {
+            "mkt_cap":   int(mc)          if mc  is not None else None,
+            "pe":        round(float(pe),  2) if pe  is not None else None,
+            "pbv":       round(float(pbv), 2) if pbv is not None else None,
+            "div_yield": round(float(dy),  2) if dy  is not None else None,
+        }
 
     total = len(tickers)
     done  = 0

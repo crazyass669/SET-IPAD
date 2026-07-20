@@ -62,6 +62,10 @@ def init_db(base_dir):
               source TEXT, detail TEXT, synced_at TEXT,
               PRIMARY KEY(symbol, market, type, date)
             );
+            CREATE TABLE IF NOT EXISTS mirror_ondemand(
+              symbol TEXT, market TEXT, payload TEXT, synced_at TEXT,
+              PRIMARY KEY(symbol, market)
+            );
         """)
         con.commit()
     finally:
@@ -661,6 +665,31 @@ def save_calendar_events(base_dir, sym, market, rows):
         con.close()
 
 
+def get_all_calendar_events(base_dir, from_date=None, market=None):
+    """คืน event ปฏิทินทั้งหมดที่เคย sync ไว้ใน local DB ข้ามทุกหุ้น (ไม่ใช่แค่ watchlist) —
+    ใช้กับตัวกรอง "ทั้งหมดที่มีข้อมูล"/"ตามตลาด" ในหน้า Calendar อ่านจาก cache เท่านั้น ไม่ fetch สด
+    (fetch สดทีละหุ้นทำที่ get_calendar_events/fetch_calendar_events ผ่าน endpoint ปกติ)"""
+    if not db_exists(base_dir):
+        return []
+    init_db(base_dir)
+    con = _connect(base_dir)
+    try:
+        q = "SELECT symbol, market, type, date, confidence, source, detail FROM calendar_events WHERE 1=1"
+        params = []
+        if from_date:
+            q += " AND date>=?"
+            params.append(from_date)
+        if market:
+            q += " AND market=?"
+            params.append(market.upper())
+        q += " ORDER BY date"
+        rows = con.execute(q, params).fetchall()
+    finally:
+        con.close()
+    return [{"symbol": s, "market": m, "type": t, "date": d, "confidence": c, "source": src, "detail": det}
+            for s, m, t, d, c, src, det in rows]
+
+
 def get_calendar_events(base_dir, sym, market=None, from_date=None):
     """คืน (rows, synced_at ล่าสุด) ของหุ้นตัวหนึ่งจาก DB local — default กรองเฉพาะวันที่ >=
     from_date (ปฏิทินย้อนหลังไม่มีประโยชน์ ต่างจากประวัติปันผลที่ต้องเก็บย้อนยาว)
@@ -692,6 +721,53 @@ def get_calendar_events(base_dir, sym, market=None, from_date=None):
     if not rows and synced_at is None:
         return None, None
     return [{"type": r[0], "date": r[1], "confidence": r[2], "source": r[3], "detail": r[4]} for r in rows], synced_at
+
+
+def save_mirror_ondemand(base_dir, sym, market, payload):
+    """เก็บ header (ราคา/return/RS/stage/sector ฯลฯ) ของหุ้น mirror US/HK นอกดัชนีหลักที่ดึงแบบ
+    on-demand ตอนเปิด Tearsheet — cache กัน fetch Yahoo ซ้ำทุกครั้งที่เปิดหน้าเดิมวันเดียวกัน
+    (ดู sources/mirror_ondemand.py) upsert ทับของเดิมเสมอ (ไม่เก็บประวัติ ต่างจาก dividends/
+    calendar_events)"""
+    init_db(base_dir)
+    sym = sym.upper().strip()
+    market = market.upper()
+    con = _connect(base_dir)
+    try:
+        now = datetime.now().isoformat()
+        con.execute(
+            "INSERT INTO mirror_ondemand(symbol, market, payload, synced_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(symbol, market) DO UPDATE SET payload=excluded.payload, synced_at=excluded.synced_at",
+            (sym, market, json.dumps(payload, ensure_ascii=False), now))
+        con.commit()
+    finally:
+        con.close()
+
+
+def get_mirror_ondemand(base_dir, sym, market, stale_days=1):
+    """คืน (payload, stale) ของหุ้น mirror on-demand ที่เคย cache ไว้ — (None, True) ถ้าไม่เคย
+    cache เลย stale=True เมื่อ synced_at เก่าเกิน stale_days (ราคาต้องสดกว่า calendar/dividends
+    เพราะผู้ใช้เปิดดูตรงๆ คาดหวังราคาวันนี้)"""
+    if not db_exists(base_dir):
+        return None, True
+    init_db(base_dir)
+    sym = sym.upper().strip()
+    market = market.upper()
+    con = _connect(base_dir)
+    try:
+        row = con.execute(
+            "SELECT payload, synced_at FROM mirror_ondemand WHERE symbol=? AND market=?",
+            (sym, market)).fetchone()
+    finally:
+        con.close()
+    if not row:
+        return None, True
+    payload, synced_at = row
+    stale = True
+    try:
+        stale = (datetime.now() - datetime.fromisoformat(synced_at)) > timedelta(days=stale_days)
+    except ValueError:
+        stale = True
+    return json.loads(payload), stale
 
 
 def compute_quarterly_growth(payload_yahoo_q):
@@ -1391,10 +1467,11 @@ def mirror_finnomena(base_dir, exchanges=("TH", "HK", "US"), limit=None,
     return {"ok": ok, "empty": empty, "fail": fail, "total": total}
 
 
-def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, callback=None):
-    """ดึงงบ Yahoo annual ('yahoo' source) ให้หุ้น mirror US/HK ที่เป็นสมาชิกดัชนีหลักเท่านั้น
-    (S&P500+Dow+NDX / HSI+HSCEI+HSTECH — ตัดสินใจ scope ไว้แบบนี้ใน PLAN_stock_study_suite.txt
-    เพราะ mirror ทั้งก้อนมีเป็นหมื่นตัว sync ทั้งหมดไม่ไหว) เก็บใต้ namespace 'FINN:{ex}:{name}'
+def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, callback=None):
+    """ดึงงบ Yahoo annual ('yahoo' source) ให้หุ้น mirror US/HK — เดิมจำกัดแค่สมาชิกดัชนีหลัก
+    (S&P500+Dow+NDX / HSI+HSCEI+HSTECH) ตอนนี้ผู้เรียกส่ง ticker ทั้ง mirror universe
+    (~5,108 ตัว จาก mirror_candidates) เข้ามาได้แล้ว — ใช้ limit คุมจำนวนต่อรอบแทน
+    เก็บใต้ namespace 'FINN:{ex}:{name}'
     เดียวกับ finnomena_q มิเรอร์ — **ไม่ใช้ namespace 'DR:'** เพราะพวกนี้ไม่ใช่ DR ที่มี NVDR
     ซื้อขายจริงในไทย (ใช้ is_dr=True แค่ตอนเรียก fetch_yahoo_full เพื่อให้ resolve yf ticker
     ถูกต้องตามตลาด — ดู docstring fetch_yahoo_full — แต่ upsert เก็บด้วย is_dr=False)
@@ -1402,7 +1479,12 @@ def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, callback=None):
     tickers_by_ex: {"US": [ticker, ...], "HK": [ticker4digit, ...]}
     ข้าม ticker ที่มี source='yahoo' อยู่แล้วไม่ว่า namespace ไหน (กัน sync ซ้ำของ 104 ตัว
     ที่ overlap กับ DR portfolio ที่ sync ไปแล้ว) — resume ได้เสมอเหมือน mirror_finnomena
+
+    limit: จำกัดจำนวนตัวที่ sync ต่อรอบ (สุ่มก่อนตัด — pattern เดียวกับ sync_dividends_batch)
+    กัน mirror ทั้งก้อนที่ยังไม่เคย sync เลยทำให้รอบแรกช้ามาก — ตัวที่เหลือ resume รอบถัดไปได้เอง
+    เพราะเช็คจาก 'have' (source='yahoo') เสมอ ไม่ fetch ซ้ำตัวที่ sync แล้ว
     คืน {"ok": n, "fail": n, "total": n, "skipped": n}"""
+    import random
     init_db(base_dir)
     con = _connect(base_dir)
     try:
@@ -1418,6 +1500,9 @@ def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, callback=None):
                 continue
             todo.append((ex, name))
     skipped = sum(len(v) for v in tickers_by_ex.values()) - len(todo)
+    if limit is not None and len(todo) > limit:
+        random.shuffle(todo)   # กันตัวท้ายรายชื่อ (HK ต่อท้าย US เสมอ) ไม่เคยถูก sync สักที
+        todo = todo[:limit]
     total = len(todo)
     ok = fail = 0
     consec_fail = 0
