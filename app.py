@@ -1690,7 +1690,9 @@ _DIVIDENDS_STALE_DAYS = 30   # ตามแผน PLAN_stock_study_suite.txt ง
 def get_dividends_endpoint(market, symbol):
     """ประวัติปันผล + สถิติ (streak/CAGR/YoY/ความถี่/yield รายปี) — เก็บใน financials.db
     (local-only) ดึงสดจาก yfinance ครั้งแรกหรือเมื่อข้อมูลเก่าเกิน 30 วัน, ?refresh=1 บังคับดึงสด
-    yield รายปีคำนวณได้เฉพาะหุ้นไทย (มีราคาปิดใน set_prices.db) — US/HK ยังไม่รองรับ (phase A)"""
+    yield รายปีคำนวณจากราคาปิดในเครื่อง — TH จาก set_prices.db, US จาก us_prices.db, HK จาก
+    hk_prices.db (เฉพาะสมาชิกดัชนีหลักที่มีราคาโหลดไว้แล้ว) DR ยังไม่รองรับ (ต้องมี price series
+    ในเครื่องของ underlying ก่อน ยังไม่มี local store แยกให้)"""
     from sources import dividend_stats
     from datetime import datetime as _dt, timedelta as _td
     mkt = (market or "TH").upper()
@@ -1722,6 +1724,20 @@ def get_dividends_endpoint(market, symbol):
     price_series = None
     if mkt in ("TH", "SET"):
         price_series = price_store.get_series(BASE_DIR, sym + ".BK")
+    elif mkt == "US":
+        from core import us_store
+        data = us_store.get_ohlc_series(BASE_DIR, sym)
+        if data:
+            price_series = {"dates": data["dates"], "closes": data["closes"]}
+    elif mkt == "HK":
+        from core import hk_store
+        # hk_prices.db เก็บ ticker แบบมี suffix ".HK" (ตรงกับ hk_index_metrics.json) ต่างจาก
+        # ตาราง dividends ที่เก็บรหัสดิบไม่มี suffix (ดู sync_dividends_batch/_mirror_sym) —
+        # ต้องแปลงกลับก่อนเสมอ ไม่งั้นจะหาราคาไม่เจอเงียบๆ (บั๊กคลาสเดียวกับ .HK suffix mismatch
+        # ที่เจอมาก่อนใน US/HK support ของ Tearsheet/Peer Compare)
+        data = hk_store.get_ohlc_series(BASE_DIR, sym.zfill(4) + ".HK")
+        if data:
+            price_series = {"dates": data["dates"], "closes": data["closes"]}
 
     stats = dividend_stats.compute_dividend_stats(rows, price_series=price_series)
     return jsonify({

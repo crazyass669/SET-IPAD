@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """sources/dividend_stats.py — คำนวณสถิติปันผลจากประวัติ ex-date/DPS (financials_store.get_dividends)
 
-Phase A (เริ่มแรก): DPS รายปี, streak, CAGR, YoY, ความถี่การจ่าย/ปี, yield รายปี (TH เท่านั้น
-ตอนนี้ — ต้องมี price_series จาก set_prices.db)
+Phase A (เริ่มแรก): DPS รายปี, streak, CAGR, YoY, ความถี่การจ่าย/ปี, yield รายปี (ต้องมี
+price_series จาก local price store — TH/US/HK รองรับแล้ว ดู /api/dividends ใน app.py, DR ยังไม่)
 ยังไม่ทำ (phase B): payout ratio จาก EPS Finnomena + ปรับ split (เสี่ยงผิดสุด ต้องมี
 split log ก่อน — ดู PLAN_stock_study_suite.txt งาน #5)
 """
