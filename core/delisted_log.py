@@ -10,6 +10,7 @@ set_prices.db — ต่างจาก run_log.py ที่เก็บแค�
 สะสมระยะยาว (เก็บวันที่ตรวจพบครั้งแรกไว้ถาวร ไม่ทับ)"""
 import json
 import os
+import time
 from datetime import datetime
 
 
@@ -42,7 +43,17 @@ def record_delisted(base_dir, symbol, market, reason, last_seen=None):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1, sort_keys=True)
-    os.replace(tmp, path)
+    # Windows: antivirus/OneDrive บางทีล็อคไฟล์ชั่วครู่ระหว่างที่เพิ่งเขียน .tmp เสร็จ
+    # (เจอจริงตอน build_mirror_snapshot เรียกฟังก์ชันนี้รัวๆ หลายพันครั้งติดกัน) — retry สั้นๆ
+    # ก่อนยอมแพ้ แทนที่จะ crash ทั้ง batch เพราะไฟล์ log ที่ไม่ critical นี้
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.2 * (attempt + 1))
 
 
 def read_log(base_dir):

@@ -25,6 +25,19 @@ def log(msg):
     print(f"[{datetime.now(_ICT).strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+# ── บันทึกผลรอบนี้ลง logs/update_status.json (กลไกเดียวกับ Quick Update/mirror) ──
+# ใช้ atexit แทน try/except ครอบทั้งไฟล์ เพราะสคริปต์นี้เป็นโค้ด top-level เรียงยาว
+# ไม่ได้อยู่ใน main() — atexit จับได้ทั้ง exception ที่หลุดออกมาและ sys.exit(1)
+# หมายเหตุ: บน GitHub Actions ไฟล์ logs/ เป็น local-only (.gitignore) ไม่ตามกลับมา —
+# ตัวนี้จึงมีผลกับ "รอบที่รันบนเครื่อง" เท่านั้น (ฝั่ง CI ใช้อีเมลแจ้ง workflow ล้มแทน)
+import atexit  # noqa: E402
+from core import run_log  # noqa: E402
+
+_bake_result = {"ok": False, "msg": "จบก่อนถึงบรรทัดสุดท้าย (exception / ถูกยกเลิกกลางคัน)"}
+atexit.register(lambda: run_log.record_run(
+    BASE_DIR, "static_bake", _bake_result["ok"], _bake_result["msg"]))
+
+
 # ── 1. อัปเดตราคา ────────────────────────────────────────────
 from core import store as price_store
 
@@ -210,6 +223,8 @@ for url, fname, required in SNAPSHOTS:
 
 if failures:
     log(f"❌ ไฟล์จำเป็นล้มเหลว: {failures}")
+    _bake_result["msg"] = f"ไฟล์จำเป็นล้มเหลว: {', '.join(failures)}"
     sys.exit(1)
 
+_bake_result.update(ok=True, msg=f"bake สำเร็จ {len(SNAPSHOTS)} endpoint")
 log("=== เสร็จทั้งหมด ===")

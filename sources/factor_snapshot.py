@@ -128,6 +128,9 @@ def _factors_for(base_dir, sym, is_dr, z_variant=None):
     # -> ค้าง (refresh ตอน rebuild snapshot ครั้งถัดไป) ไม่ใช่ราคาสดรายวินาที
     mc_row = (fq or {}).get("valuation", {}).get("Market Cap", {})
     mkt_cap = mc_row[max(mc_row)] if mc_row else None
+    # BVPS งวดล่าสุด (Finnomena "Book Value Per Share") — ใช้ทำ Graham Number/Justified P-B
+    # ในหน้า Tearsheet (ไม่ต้องเปิด series ทั้งหมด เอาแค่งวดล่าสุดพอ)
+    bvps = _last_ratio((fq or {}).get("valuation", {}).get("Book Value Per Share", {}))
     # Z' (ต้นฉบับ) สำหรับ DR/ต่างประเทศ, Z'' (emerging market) สำหรับหุ้นไทย
     z_variant = z_variant or ("Z" if is_dr else "Z2")
     if (not is_dr) and sym in _financial_sector_symbols(base_dir):
@@ -175,10 +178,16 @@ def _factors_for(base_dir, sym, is_dr, z_variant=None):
         "buyback": bq["buyback"], "ocf_neg_years": bq["ocf_neg_years"], "shares_out": bq["shares_out"],
         # --- valuation percentile (อิงราคางวดล่าสุดของ Finnomena) ---
         "pe_value": valp["pe"]["value"], "pe_percentile": valp["pe"]["percentile"],
-        "pe_median": valp["pe"]["median"],
+        "pe_median": valp["pe"]["median"], "pe_mean": valp["pe"].get("mean"), "pe_n": valp["pe"].get("n"),
         "pbv_value": valp["pbv"]["value"], "pbv_percentile": valp["pbv"]["percentile"],
+        "pbv_median": valp["pbv"]["median"], "pbv_mean": valp["pbv"].get("mean"), "pbv_n": valp["pbv"].get("n"),
         "ps_value": ps["value"], "ps_percentile": ps["percentile"],
+        "ps_median": ps.get("median"), "ps_mean": ps.get("mean"), "ps_n": ps.get("n"),
+        "ev_ebitda_value": valp["ev_ebitda"]["value"], "ev_ebitda_percentile": valp["ev_ebitda"]["percentile"],
+        "ev_ebitda_median": valp["ev_ebitda"]["median"], "ev_ebitda_mean": valp["ev_ebitda"].get("mean"),
         "div_yield": valp["div_yield"]["value"],
+        # --- BVPS งวดล่าสุด (Graham Number/Justified P-B ในหน้า Tearsheet) ---
+        "bvps": bvps,
         # --- ฤดูกาล (จากรายได้ Finnomena) ---
         "high_season_q": seas["high_q"] if seas else None,
         "low_season_q": seas["low_q"] if seas else None,
@@ -369,6 +378,13 @@ def _factors_from_finn(fq):
     pq = fs.compute_positive_streaks(fq)
     valp_pe = valp["pe"]["value"]
     rat = (fq or {}).get("ratios", {})
+    close_row = (fq or {}).get("valuation", {}).get("Close", {})
+    close_latest = _last_ratio(close_row)
+    # ไม่มีงบ Yahoo รายปีให้ใช้ EPS ที่รายงานจริง (ดู _latest_eps) — ประมาณจาก TTM PE
+    # เดียวกับที่ valp["pe"] ใช้อยู่แล้ว (close ล่าสุด ÷ PE) แม่นพอสำหรับ Graham Number
+    eps_ttm_est = round(close_latest / valp_pe, 4) if (close_latest and valp_pe and valp_pe > 0) else None
+    # BVPS งวดล่าสุด (Finnomena "Book Value Per Share") — Graham Number/Justified P-B
+    bvps = _last_ratio((fq or {}).get("valuation", {}).get("Book Value Per Share", {}))
     return {
         "roe15_streak_q": qs["roe15_streak_q"], "nm_hold_streak_q": qs["nm_hold_streak_q"],
         "rev_pos_streak_q": pq["rev_pos_streak_q"], "profit_pos_streak_q": pq["profit_pos_streak_q"],
@@ -397,10 +413,16 @@ def _factors_from_finn(fq):
         "margin_yoyq_delta": qg["margin_yoyq_delta"], "ttm_margin_delta": qg["ttm_margin_delta"],
         "ocf_ni_ratio": eq["ocf_ni_ratio"],
         # valuation percentile (เทียบอดีตตัวเอง)
-        "pe_value": valp["pe"]["value"], "pe_percentile": valp["pe"]["percentile"], "pe_median": valp["pe"]["median"],
+        "pe_value": valp["pe"]["value"], "pe_percentile": valp["pe"]["percentile"],
+        "pe_median": valp["pe"]["median"], "pe_mean": valp["pe"].get("mean"), "pe_n": valp["pe"].get("n"),
         "pbv_value": valp["pbv"]["value"], "pbv_percentile": valp["pbv"]["percentile"],
+        "pbv_median": valp["pbv"]["median"], "pbv_mean": valp["pbv"].get("mean"), "pbv_n": valp["pbv"].get("n"),
         "ps_value": ps["value"], "ps_percentile": ps["percentile"],
+        "ps_median": ps.get("median"), "ps_mean": ps.get("mean"), "ps_n": ps.get("n"),
+        "ev_ebitda_value": valp["ev_ebitda"]["value"], "ev_ebitda_percentile": valp["ev_ebitda"]["percentile"],
+        "ev_ebitda_median": valp["ev_ebitda"]["median"], "ev_ebitda_mean": valp["ev_ebitda"].get("mean"),
         "div_yield": valp["div_yield"]["value"],
+        "bvps": bvps, "eps_latest": eps_ttm_est, "eps_latest_date": None,
         "high_season_q": seas["high_q"] if seas else None,
         "low_season_q": seas["low_q"] if seas else None,
         "season_swing": seas["swing_pct"] if seas else None,

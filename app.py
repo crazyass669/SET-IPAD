@@ -1301,7 +1301,12 @@ def live_price(symbol):
     sym = symbol.upper().strip()
     is_dr = request.args.get("is_dr") == "1"
     market = request.args.get("market")
-    if is_dr:
+    yf_override = request.args.get("yf")
+    if yf_override:
+        # ผู้เรียกรู้ ticker จริงอยู่แล้ว (เช่น /api/tearsheet ที่ resolve DR/mirror ให้แล้ว)
+        # ข้าม resolve ซ้ำ กันเดาผิดสำหรับ US/HK mirror ที่ sym ดิบไม่มี suffix
+        yf_ticker = yf_override.upper().strip()
+    elif is_dr:
         yf_ticker, is_etf = dr_descriptions.resolve_yf_ticker(BASE_DIR, sym, market=market)
         if not yf_ticker:
             return jsonify({"sym": sym, "error": "ไม่ทราบตลาดของหุ้นนี้"}), 404
@@ -1662,9 +1667,22 @@ def get_financials_full(symbol):
         annual["synced_at"] = (q or {}).get("synced_at")
         return jsonify(annual)
 
+    def _with_quality(data):
+        # ติดป้ายเตือนถ้าราคา/BVPS ของ Finnomena ต่างจากแหล่งอิสระอื่น (ราคาจริงใน
+        # {market}_prices.db, BVPS คำนวณเองจากงบ Yahoo) เกินเกณฑ์ — ดู check_valuation_quality
+        # (เจอจริงว่า Finnomena มีข้อมูลค้างช่วงหุ้นมีปัญหา เช่น NWR/TSR) ไม่บล็อกการใช้งาน
+        # แค่ให้ UI โชว์คำเตือนก่อนผู้ใช้เอาไปตัดสินใจ
+        if data and source == "finnomena_q":
+            try:
+                data["valuation_quality"] = financials_store.check_valuation_quality(
+                    BASE_DIR, sym, data, market=market, is_dr=is_dr)
+            except Exception:
+                pass
+        return data
+
     data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr)
     if data:
-        return jsonify(data)
+        return jsonify(_with_quality(data))
 
     try:
         if source == "yahoo":
@@ -1680,7 +1698,7 @@ def get_financials_full(symbol):
 
     financials_store.upsert(BASE_DIR, sym, source, payload, is_dr=is_dr)
     data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr)
-    return jsonify(data)
+    return jsonify(_with_quality(data))
 
 
 _DIVIDENDS_STALE_DAYS = 30   # ตามแผน PLAN_stock_study_suite.txt งาน #5
@@ -2496,34 +2514,67 @@ def tearsheet(market, symbol):
         return jsonify({"error": f"ไม่รู้จักตลาด {mkt}"}), 400
 
     dr_symbol = None
+    lite = False          # cohort-free path สำหรับ DR underlying ตลาด JP/VN/SG/EU/TW/CN
+    lite_yf = None        # yf ticker จริงของ underlying (เช่น 2243.T) ใช้ทำลิงก์ภายนอก + ดึงราคา
+    lite_dr_sym = None    # DR sym (เช่น GSEMI) = key ของ factor ใน namespace DR:
     if mkt == "DR":
         from sources.dr_universe import load_dr_universe
         entry = next((e for e in load_dr_universe(BASE_DIR) if e["sym"] == sym), None)
         if not entry:
             return jsonify({"error": f"ไม่พบหุ้น DR {sym}"}), 404
         region = entry.get("region")
-        if region not in ("US", "HK"):
-            return jsonify({"error": f"หุ้น DR {sym} (underlying ตลาด {region or '?'}) ยังไม่รองรับ"
-                                      f" Tearsheet — รองรับเฉพาะ underlying ตลาด US/HK ตอนนี้"}), 501
         dr_symbol = sym
-        mkt = region
-        sym = entry["yf"].upper()
+        if region in ("US", "HK"):
+            mkt = region
+            sym = entry["yf"].upper()
+        elif region:
+            # ตลาดยังไม่มี price cohort ให้เทียบ RS — เปิด Tearsheet แบบ lite (งบ/F-Z/DCF/ปันผล
+            # /valuation ครบ, ไม่มี RS/เทียบเพื่อน) ดู mirror_ondemand.fetch_header_lite
+            lite = True
+            mkt = region
+            lite_yf = entry["yf"].upper()
+            lite_dr_sym = sym
+        else:
+            return jsonify({"error": f"หุ้น DR {sym} ไม่มีข้อมูล region — เปิด Tearsheet ไม่ได้"}), 501
 
-    th_map = _tearsheet_universe_map(mkt)
-    s = th_map.get(sym)
-    if not s and mkt != "TH":
-        # HK ใช้ "0700.HK" ในดัชนีหลัก (yfinance ticker ตรงๆ) แต่ mirror_candidates/fetch_header
-        # ต้องการรหัสดิบไม่มี suffix (ดู _mirror_sym) — ตัดก่อนเช็ค/ก่อนส่งเข้า yfinance เสมอ
-        raw_sym = _mirror_sym(mkt, sym)
-        if not any(name == raw_sym for ex, name, _sid in financials_store.mirror_candidates((mkt,))):
-            return jsonify({"error": f"ไม่พบหุ้น {sym} ในตลาด {mkt}"}), 404
+    if lite:
         from sources import mirror_ondemand
-        s = mirror_ondemand.fetch_header(BASE_DIR, mkt, raw_sym)
+        th_map = {}       # ไม่มี cohort/universe ของตลาดนี้ -> sector median = None
+        s = mirror_ondemand.fetch_header_lite(BASE_DIR, lite_yf, lite_dr_sym, mkt,
+                                              name_hint=entry.get("name"))
         if not s:
-            return jsonify({"error": f"ดึงราคาหุ้น {sym} ไม่สำเร็จ — ตรวจสอบชื่อย่ออีกครั้ง"
-                                      f" หรือหุ้นนี้อาจข้อมูลไม่พอคำนวณ (เพิ่ง IPO/เทรดเบาบาง)"}), 404
-    if not s:
-        return jsonify({"error": f"ไม่พบหุ้น {sym}"}), 404
+            return jsonify({"error": f"ดึงราคาหุ้น DR {lite_dr_sym} ({mkt}: {lite_yf}) ไม่สำเร็จ"
+                                      f" — Yahoo อาจไม่มีข้อมูล underlying ตัวนี้"}), 404
+    else:
+        th_map = _tearsheet_universe_map(mkt)
+        s = th_map.get(sym)
+        if not s and mkt != "TH":
+            # HK ใช้ "0700.HK" ในดัชนีหลัก (yfinance ticker ตรงๆ) แต่ mirror_candidates/fetch_header
+            # ต้องการรหัสดิบไม่มี suffix (ดู _mirror_sym) — ตัดก่อนเช็ค/ก่อนส่งเข้า yfinance เสมอ
+            raw_sym = _mirror_sym(mkt, sym)
+            if not any(name == raw_sym for ex, name, _sid in financials_store.mirror_candidates((mkt,))):
+                return jsonify({"error": f"ไม่พบหุ้น {sym} ในตลาด {mkt}"}), 404
+            from sources import mirror_ondemand
+            s = mirror_ondemand.fetch_header(BASE_DIR, mkt, raw_sym)
+            if not s:
+                return jsonify({"error": f"ดึงราคาหุ้น {sym} ไม่สำเร็จ — ตรวจสอบชื่อย่ออีกครั้ง"
+                                          f" หรือหุ้นนี้อาจข้อมูลไม่พอคำนวณ (เพิ่ง IPO/เทรดเบาบาง)"}), 404
+        if not s:
+            return jsonify({"error": f"ไม่พบหุ้น {sym}"}), 404
+
+    # ticker จริงสำหรับดึงราคาสดจาก Yahoo (ใช้แก้ Valuation Snapshot ให้เป็นราคาสด แทน
+    # ราคาสิ้นงวด/สิ้นวันของ snapshot) — DR ที่ resolve เป็น underlying แล้ว sym ตัวนี้คือ
+    # yf ticker เต็มอยู่แล้ว (มี .HK ต่อท้ายให้ถ้าเป็น HK) ส่วน US/HK ที่เข้าตรงๆ (ไม่ผ่าน DR)
+    # sym ยังเป็นรหัสดิบไม่มี suffix ต้องเติมเอง
+    if lite:
+        yf_symbol = lite_yf
+    elif dr_symbol and mkt in ("US", "HK"):
+        yf_symbol = sym
+    elif mkt == "TH":
+        yf_symbol = f"{sym}.BK"
+    else:
+        from sources import mirror_ondemand as _mo
+        yf_symbol = _mo._yf_ticker(mkt, sym)
 
     header = {
         "symbol": sym, "name": s.get("name"), "sector": s.get("sector"), "industry": s.get("industry"),
@@ -2540,11 +2591,21 @@ def tearsheet(market, symbol):
         "sparkline": (s.get("price_history") or [])[-260:],
     }
 
-    if mkt == "TH":
-        snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
+    if lite:
+        # factor มาจากงบ Yahoo ใน namespace DR: (is_dr=True) โดยตรง — ไม่มี mirror snapshot ของ
+        # ตลาดนี้ (JP/VN/ฯลฯ ไม่มี pipeline) คำนวณสดตัวเดียว (fetch_header_lite sync งบให้แล้ว)
+        snap_rows = {}
+        fkey = lite_dr_sym
+        f = factor_snapshot._factors_for(BASE_DIR, lite_dr_sym, is_dr=True) or {}
+        if f:
+            f.setdefault("div_cagr_5y", factor_snapshot._div_cagr_5y(BASE_DIR, lite_dr_sym, "DR"))
     else:
-        snap_rows = {r["symbol"]: r for r in factor_snapshot.get_mirror_snapshot(BASE_DIR, mkt)}
-    f = snap_rows.get(_mirror_sym(mkt, sym)) or {}
+        if mkt == "TH":
+            snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
+        else:
+            snap_rows = {r["symbol"]: r for r in factor_snapshot.get_mirror_snapshot(BASE_DIR, mkt)}
+        fkey = _mirror_sym(mkt, sym)
+        f = snap_rows.get(fkey) or {}
 
     def _label(pct):
         if pct is None:
@@ -2571,6 +2632,7 @@ def tearsheet(market, symbol):
         "pe": {
             "value": s.get("pe") if s.get("pe") is not None else f.get("pe_value"),
             "percentile": f.get("pe_percentile"), "label": _label(f.get("pe_percentile")),
+            "mean": f.get("pe_mean"), "median": f.get("pe_median"), "n": f.get("pe_n"),
             "sector_median": _sector_median(lambda sy: (th_map.get(sy) or {}).get("pe")
                                              if (th_map.get(sy) or {}).get("pe") is not None
                                              else (snap_rows.get(sy) or {}).get("pe_value")),
@@ -2578,6 +2640,7 @@ def tearsheet(market, symbol):
         "pbv": {
             "value": s.get("pbv") if s.get("pbv") is not None else f.get("pbv_value"),
             "percentile": f.get("pbv_percentile"), "label": _label(f.get("pbv_percentile")),
+            "mean": f.get("pbv_mean"), "median": f.get("pbv_median"), "n": f.get("pbv_n"),
             "sector_median": _sector_median(lambda sy: (th_map.get(sy) or {}).get("pbv")
                                              if (th_map.get(sy) or {}).get("pbv") is not None
                                              else (snap_rows.get(sy) or {}).get("pbv_value")),
@@ -2585,11 +2648,18 @@ def tearsheet(market, symbol):
         "ps": {
             "value": f.get("ps_value"), "percentile": f.get("ps_percentile"),
             "label": _label(f.get("ps_percentile")),
+            "mean": f.get("ps_mean"), "median": f.get("ps_median"), "n": f.get("ps_n"),
             "sector_median": _sector_median(lambda sy: (snap_rows.get(sy) or {}).get("ps_value")),
         },
         "div_yield": {
             "value": s.get("div_yield"),
             "sector_median": _sector_median(lambda sy: (th_map.get(sy) or {}).get("div_yield")),
+        },
+        "ev_ebitda": {
+            "value": f.get("ev_ebitda_value"), "percentile": f.get("ev_ebitda_percentile"),
+            "label": _label(f.get("ev_ebitda_percentile")),
+            "mean": f.get("ev_ebitda_mean"), "median": f.get("ev_ebitda_median"),
+            "sector_median": _sector_median(lambda sy: (snap_rows.get(sy) or {}).get("ev_ebitda_value")),
         },
     }
 
@@ -2628,7 +2698,8 @@ def tearsheet(market, symbol):
 
     # _mirror_sym ตัด suffix ".HK" ก่อนเสมอ — ตาราง dividends เก็บรหัสดิบไม่มี suffix
     # เหมือน factor_snapshot mirror (ดู sync_dividends_batch/get_dividends_endpoint)
-    div_rows, _div_synced = financials_store.get_dividends(BASE_DIR, _mirror_sym(mkt, sym), mkt)
+    # lite: dividends อยู่ใต้ market "DR" (key = DR sym) ถ้าเคย sync จากหน้าปันผล/batch
+    div_rows, _div_synced = financials_store.get_dividends(BASE_DIR, fkey, "DR" if lite else mkt)
     dividend = {
         "yield": s.get("div_yield"),
         "cagr_5y": f.get("div_cagr_5y"),
@@ -2638,7 +2709,8 @@ def tearsheet(market, symbol):
             div_rows, f.get("eps_latest"), f.get("eps_latest_date")),
     }
 
-    discount_rate_default = {"TH": 9.0, "US": 8.5, "HK": 9.5}[mkt]
+    # ตลาด lite (JP/VN/SG/EU/TW/CN) ยังไม่ตั้ง discount rate เฉพาะ — ใช้ 9.0 กลางๆ ปรับเองได้ใน UI
+    discount_rate_default = {"TH": 9.0, "US": 8.5, "HK": 9.5}.get(mkt, 9.0)
     dcf = {
         "fcf": fcf, "mkt_cap": mkt_cap, "net_cash": f.get("net_cash"), "price": s.get("price"),
         "rev_cagr": f.get("rev_cagr"), "profit_cagr": f.get("profit_cagr"),
@@ -2646,13 +2718,25 @@ def tearsheet(market, symbol):
         "discount_rate_default": discount_rate_default, "terminal_growth_default": 2.5,
     }
 
+    # เติมเครื่องมือประเมินมูลค่าทางเลือก (นอกจาก DCF) — PEG / Graham Number / DDM / Justified P-B
+    # คำนวณฝั่ง client ทั้งหมด (เหมือน DCF) ที่นี่แค่ส่งวัตถุดิบ + ค่าเริ่มต้นที่ผู้ใช้ปรับเองได้
+    growth_pct_default = f.get("profit_ttm_yoy")
+    if growth_pct_default is None:
+        growth_pct_default = f.get("profit_cagr")
+    valuation_models = {
+        "eps": f.get("eps_latest"), "bvps": f.get("bvps"), "roe": f.get("roe"),
+        "growth_pct_default": growth_pct_default,
+        "discount_rate_default": discount_rate_default, "terminal_growth_default": 2.5,
+    }
+
     meta_computed_at = (factor_snapshot.snapshot_meta(BASE_DIR).get("computed_at") if mkt == "TH"
                          else factor_snapshot.mirror_snapshot_meta(BASE_DIR).get("computed_at"))
     return jsonify({
         "symbol": sym, "market": mkt, "header": header, "valuation": valuation, "quality": quality,
-        "dividend": dividend, "dcf": dcf, "dr_symbol": dr_symbol,
+        "dividend": dividend, "dcf": dcf, "valuation_models": valuation_models, "dr_symbol": dr_symbol,
+        "lite": lite, "underlying_yf": lite_yf, "yf_symbol": yf_symbol,
         "meta": {"computed_at": meta_computed_at,
-                 "has_factors": _mirror_sym(mkt, sym) in snap_rows},
+                 "has_factors": bool(f) if lite else (_mirror_sym(mkt, sym) in snap_rows)},
     })
 
 
@@ -3681,6 +3765,28 @@ def _dh_business_age_hours(dt):
         d += timedelta(days=1)
     return max(total_h - weekend_h, 0.0)
 
+def _dh_oldest_mtime(paths):
+    """mtime ที่ "เก่าที่สุด" ในกลุ่มไฟล์ — ใช้กับชุดไฟล์ที่ควรถูกเขียนพร้อมกันในรอบเดียว
+    (เช่น data/*.json ที่ bake จาก run_static_update.py) ถ้าไฟล์ไหนตกรอบไป จะถูก
+    จับได้ทันทีแทนที่จะถูกกลบด้วยไฟล์อื่นที่สดกว่า · คืน (mtime, ชื่อไฟล์ที่เก่าสุด)
+    ถ้ามีไฟล์ไหนหายไปเลย คืน (None, ชื่อไฟล์นั้น)"""
+    oldest, oldest_name = None, None
+    for p in paths:
+        dt = _dh_mtime(p)
+        if dt is None:
+            return None, os.path.basename(p)
+        if oldest is None or dt < oldest:
+            oldest, oldest_name = dt, os.path.basename(p)
+    return oldest, oldest_name
+
+
+def _dh_quality_item(key, label, status, note, last_at=None):
+    """รายการเช็ค "คุณภาพ" (ไม่ใช่ความสด) — ไฟล์ถูกเขียนทับด้วยข้อมูลว่าง/พร่องจะยัง
+    ขึ้นเขียวถ้าดูแค่ mtime ตัวนี้เลยเปิดไฟล์อ่านจริงแล้วนับจำนวน/ดูวันล่าสุดข้างใน"""
+    return {"key": key, "label": label, "category": "คุณภาพข้อมูล (ไม่ใช่แค่ความสด)",
+            "last_at": last_at, "age_hours": None, "status": status, "note": note}
+
+
 def _dh_item(key, label, category, dt, warn_h, red_h,
              missing_note="ไม่พบไฟล์ / ยังไม่เคยอัพเดท", optional=False):
     age_h = _dh_age_hours(dt)
@@ -3728,6 +3834,14 @@ def data_health():
     items.append(_dh_item(
         "market_flow", "Capital Flow", "Flow/เจ้าของ",
         _dh_mtime(os.path.join(BASE_DIR, "market_flow_data.json")), 30, 96))
+
+    items.append(_dh_item(
+        "s50_flow", "S50 Futures Flow", "Flow/เจ้าของ",
+        _dh_mtime(_S50_FLOW_FILE), 30, 96))
+
+    items.append(_dh_item(
+        "bond_flow", "Bond Flow", "Flow/เจ้าของ",
+        _dh_mtime(_BOND_FLOW_FILE), 30, 96))
 
     items.append(_dh_item(
         "short_sales", "Short Sales", "Flow/เจ้าของ",
@@ -3861,6 +3975,136 @@ def data_health():
                       "financials.db/set_prices.db สร้างใหม่ไม่ได้ถ้า Finnomena ปิด API "
                       "หรือหุ้น delisted (ดู PLAN_universe_data_health.txt งาน 4)"))
 
+    # ── เว็บมือถือ (GitHub Pages) — ไฟล์ bake ใน data/ ────────────────────
+    # ก่อนหน้านี้ไม่มีการเช็คเลยสักไฟล์: ถ้า run_static_update.py / GitHub Actions
+    # ตายเงียบๆ หน้านี้จะเขียวหมดทั้งที่เว็บมือถือเสิร์ฟข้อมูลค้างไปเรื่อยๆ
+    _DATA_DIR = os.path.join(BASE_DIR, "data")
+    _bake_core = ["set_data.json", "breadth_1y.json", "indices_data.json",
+                  "market_flow.json", "nvdr_data.json", "short_sales.json",
+                  "insider_trades_30.json", "market_stats.json"]
+    _bake_at, _bake_which = _dh_oldest_mtime([os.path.join(_DATA_DIR, f) for f in _bake_core])
+    _bake_item = _dh_item(
+        "static_bake", "ข้อมูล bake เว็บมือถือ (data/*.json)", "เว็บมือถือ (GitHub Pages)",
+        _bake_at, 30, 96,
+        missing_note=f"ไม่พบ data/{_bake_which} — ยังไม่เคยรัน run_static_update.py")
+    if _bake_at is not None:
+        # แสดงชื่อไฟล์ที่เก่าสุดเสมอ ไม่ใช่เฉพาะตอนเตือน — เวลาไฟล์ตัวเดียวตกรอบ
+        # (เช่น endpoint นั้น error) จะเห็นได้ว่าเป็นตัวไหนโดยไม่ต้องไปไล่ดูโฟลเดอร์เอง
+        _bake_item["note"] = (f"เก่าสุด: {_bake_which} · เวลานี้คือ mtime ของสำเนาในเครื่อง "
+                              "(อัพเดทตอนรัน run_static_update.py เอง หรือ git pull "
+                              "หลัง GitHub Actions commit)")
+    items.append(_bake_item)
+
+    _bake_run = run_log.read_status(BASE_DIR).get("static_bake")
+    items.append(_dh_item(
+        "static_bake_run", "รอบรัน run_static_update.py ล่าสุด (ในเครื่อง)",
+        "เว็บมือถือ (GitHub Pages)",
+        _dh_parse(_bake_run.get("at")) if _bake_run else None, 30 * 24, 90 * 24,
+        missing_note="ยังไม่เคยรัน run_static_update.py ในเครื่องนี้ (ปกติรันบน GitHub "
+                      "Actions — logs/ เป็น local-only ไม่ตามมาจาก CI)", optional=True))
+    if _bake_run and not _bake_run.get("ok"):
+        for _it in items:
+            if _it["key"] == "static_bake_run":
+                _it["status"] = "red"
+                _it["note"] = f"⚠ รอบล่าสุดล้มเหลว: {str(_bake_run.get('message'))[:200]}"
+
+    # ── ไฟล์ประกอบอื่นๆ ที่หน้าเว็บใช้จริงแต่เดิมไม่มีใครเฝ้า ──────────────
+    items.append(_dh_item(
+        "set_history", "ประวัติราคา/สถิติย้อนหลัง (set_history.json)", "ราคา/เทคนิค",
+        _dh_mtime(HISTORY_FILE), 30 * 24, 90 * 24,
+        missing_note="ยังไม่เคยสร้าง set_history.json", optional=True))
+
+    items.append(_dh_item(
+        "fin_analytics_yahoo", "Analytics งบจาก Yahoo (financials_analytics_yahoo.json)",
+        "งบการเงิน",
+        _dh_mtime(os.path.join(_DATA_DIR, "financials_analytics_yahoo.json")),
+        100 * 24, 150 * 24, missing_note="ยังไม่เคยสร้าง", optional=True))
+
+    items.append(_dh_item(
+        "stock_valuation_stats", "P/E-P/BV รายตัว (stock_valuation_stats.json)", "Valuation",
+        _dh_mtime(os.path.join(_DATA_DIR, "stock_valuation_stats.json")), 45 * 24, 90 * 24))
+
+    # mirror_names.json = ชื่อบริษัท US/HK ที่ใช้โชว์ใน Screener+/Tearsheet — ถ้าไม่ rebuild
+    # หลัง mirror ได้หุ้นใหม่ ตัวใหม่จะโชว์แค่ ticker เปล่าๆ (ไม่พังแต่ดูไม่รู้เรื่อง)
+    items.append(_dh_item(
+        "mirror_names", "ชื่อบริษัท mirror US/HK (mirror_names.json)", "หุ้นเข้าใหม่/ถูกถอด",
+        _dh_mtime(os.path.join(BASE_DIR, "mirror_names.json")), 100 * 24, 200 * 24,
+        missing_note="ยังไม่เคยรัน build_mirror_names.py", optional=True))
+
+    items.append(_dh_item(
+        "dr_universe", "รายชื่อ DR/DRx (dr_universe_auto.json)", "หุ้นเข้าใหม่/ถูกถอด",
+        _dh_mtime(os.path.join(BASE_DIR, "dr_universe_auto.json")), 45 * 24, 90 * 24,
+        missing_note="ยังไม่เคยเช็คหุ้น DR ใหม่ในเครื่องนี้", optional=True))
+
+    items.append(_dh_item(
+        "dr_descriptions", "คำอธิบายบริษัท DR (dr_descriptions.json)", "หุ้นเข้าใหม่/ถูกถอด",
+        _dh_mtime(os.path.join(BASE_DIR, "dr_descriptions.json")), 180 * 24, 365 * 24,
+        missing_note="ยังไม่เคยดึงคำอธิบาย DR", optional=True))
+
+    # ── คุณภาพข้อมูล (เปิดไฟล์อ่านจริง ไม่ใช่แค่ mtime) ────────────────────
+    # ทุก item ข้างบนวัดแค่ "ถูกเขียนล่าสุดเมื่อไหร่" — ไฟล์ที่ถูกเขียนทับด้วยข้อมูล
+    # ว่าง/พร่อง (source เปลี่ยนรูปแบบ, parser คืน list ว่าง) จะยังขึ้นเขียวสนิท
+    try:
+        with open(os.path.join(BASE_DIR, "set_data.json"), encoding="utf-8") as f:
+            _sd = json.load(f)
+        _n_stocks = len(_sd.get("stocks") or [])
+        _q_status = "ok" if _n_stocks >= 800 else ("warn" if _n_stocks >= 500 else "red")
+        items.append(_dh_quality_item(
+            "q_set_data", "จำนวนหุ้นใน set_data.json", _q_status,
+            f"{_n_stocks} ตัว (ปกติ ~900-950 · <800 = เริ่มผิดปกติ, <500 = พร่องชัดเจน)",
+            last_at=_sd.get("data_as_of")))
+    except Exception as e:
+        items.append(_dh_quality_item(
+            "q_set_data", "จำนวนหุ้นใน set_data.json", "red", f"อ่านไฟล์ไม่ได้: {str(e)[:120]}"))
+
+    try:
+        _bake_sd_path = os.path.join(_DATA_DIR, "set_data.json")
+        _bake_mb = os.path.getsize(_bake_sd_path) / (1024 * 1024)
+        with open(_bake_sd_path, encoding="utf-8") as f:
+            _bsd = json.load(f)
+        _bn = len(_bsd.get("stocks") or [])
+        # ไฟล์ bake ถูก _slim_set_data() ตัดฟิลด์ออก เลยเล็กกว่าตัวเต็มมาก (~7MB vs 12MB)
+        # แต่ถ้าต่ำกว่า 1MB = แทบแน่นอนว่าเป็น payload ว่าง/พร่อง ไม่ใช่แค่ slim
+        _q2 = "ok" if (_bake_mb >= 1.0 and _bn >= 800) else ("warn" if _bn >= 500 else "red")
+        items.append(_dh_quality_item(
+            "q_bake_set_data", "ขนาด/ความครบของ data/set_data.json (เว็บมือถือ)", _q2,
+            f"{_bake_mb:.1f} MB · {_bn} ตัว (<1 MB หรือ <500 ตัว = payload ว่าง)",
+            last_at=_bsd.get("data_as_of")))
+    except Exception as e:
+        items.append(_dh_quality_item(
+            "q_bake_set_data", "ขนาด/ความครบของ data/set_data.json (เว็บมือถือ)", "red",
+            f"อ่านไฟล์ไม่ได้: {str(e)[:120]}"))
+
+    try:
+        with open(os.path.join(_DATA_DIR, "breadth_1y.json"), encoding="utf-8") as f:
+            _bd = json.load(f)
+        _bd_dates = _bd.get("dates") or []
+        _bd_last = _bd_dates[-1] if _bd_dates else None
+        if not _bd_last:
+            items.append(_dh_quality_item("q_breadth", "วันล่าสุดในข้อมูล breadth (เว็บมือถือ)",
+                                          "red", "ไม่มีวันที่ในไฟล์เลย (payload ว่าง)"))
+        else:
+            # _dh_parse รู้จักแค่ "%Y-%m-%d[ %H:%M[:%S]]" — ถ้ารูปแบบวันที่ในไฟล์เปลี่ยน
+            # (เช่นกลายเป็น ISO "…T00:00:00") จะได้ None แล้วอายุกลายเป็น 0 = เขียวสนิท
+            # ทั้งที่ข้อมูลอาจค้างมาเป็นเดือน — แยกเคส "อ่านวันที่ไม่ออก" ออกมาเตือนแทน
+            _bd_age_h = _dh_business_age_hours(_dh_parse(_bd_last))
+            if _bd_age_h is None:
+                items.append(_dh_quality_item(
+                    "q_breadth", "วันล่าสุดในข้อมูล breadth (เว็บมือถือ)", "warn",
+                    f"อ่านรูปแบบวันที่ไม่ออก: {str(_bd_last)[:40]!r} "
+                    f"(คาดว่า YYYY-MM-DD) · {len(_bd_dates)} จุด — เช็คความสดไม่ได้",
+                    last_at=_bd_last))
+            else:
+                _bd_days = _bd_age_h / 24
+                _q3 = "ok" if _bd_days < 5 else ("warn" if _bd_days < 14 else "red")
+                items.append(_dh_quality_item(
+                    "q_breadth", "วันล่าสุดในข้อมูล breadth (เว็บมือถือ)", _q3,
+                    f"ข้อมูลถึง {_bd_last} ({_bd_days:.0f} วันทำการก่อน) · {len(_bd_dates)} จุด",
+                    last_at=_bd_last))
+    except Exception as e:
+        items.append(_dh_quality_item("q_breadth", "วันล่าสุดในข้อมูล breadth (เว็บมือถือ)",
+                                      "red", f"อ่านไฟล์ไม่ได้: {str(e)[:120]}"))
+
     summary = {"ok": 0, "warn": 0, "red": 0, "na": 0}
     for it in items:
         summary[it["status"]] += 1
@@ -3880,11 +4124,13 @@ def data_health_ping():
     import ssl as _dh_ssl
     from concurrent.futures import ThreadPoolExecutor
 
-    def _ping(key, label, url, headers=None, timeout=6):
+    def _ping(key, label, url, headers=None, timeout=6, insecure=False):
         t0 = time.time()
         try:
             req = _dh_ur.Request(url, headers=headers or {"User-Agent": "Mozilla/5.0"})
-            ctx = _dh_ssl.create_default_context()
+            # insecure=True เฉพาะแหล่งที่โค้ดดึงจริงก็ข้าม verify อยู่แล้ว (siamchart) —
+            # ไม่งั้นปิงจะขึ้นแดงเพราะ cert ทั้งที่การดึงจริงยังทำงานได้ปกติ
+            ctx = _dh_ssl._create_unverified_context() if insecure else _dh_ssl.create_default_context()
             with _dh_ur.urlopen(req, context=ctx, timeout=timeout) as r:
                 code = r.getcode()
                 r.read(256)  # แค่พิสูจน์ว่า body มาจริง ไม่ต้องอ่านทั้งหมด
@@ -3905,6 +4151,12 @@ def data_health_ping():
         # TradingView ดึงข้อมูลจริงผ่าน WebSocket (ดู sources/tradingview.py) — ปิงนี้เช็คแค่
         # "เข้าถึงโดเมนได้ไหม" (เครือข่าย/บล็อก) ไม่ใช่การพิสูจน์ endpoint ข้อมูลเต็มรูปแบบ
         ("tradingview", "TradingView (reachability)", "https://www.tradingview.com/"),
+        # siamchart = แหล่งหลักของ Capital Flow (มี fallback ไป SET API ทางการอยู่แล้ว
+        # ดู _fetch_flow_siamchart) ปิงหน้าเดียวกับที่ดึงจริงเพื่อให้รู้ว่ากำลังใช้ fallback อยู่ไหม
+        ("siamchart", "siamchart (Capital Flow)", "https://siamchart.com/stock-summary/",
+         {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+          "Referer": "https://siamchart.com/"}, 8, True),
     ]
     with ThreadPoolExecutor(max_workers=len(targets)) as ex:
         results = list(ex.map(lambda t: _ping(*t), targets))

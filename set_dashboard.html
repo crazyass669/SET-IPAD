@@ -2997,8 +2997,9 @@
         </div>
         <span id="fin-mir-idx-note" style="font-size:11px;color:var(--text2)"></span>
       </div>
-      <!-- Auto-check/sync ดัชนี US กับ Wikipedia — คู่กับปุ่มเช็ค DR ในหน้า DR/DRx -->
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+      <!-- Auto-check/sync ดัชนี US กับ Wikipedia — คู่กับปุ่มเช็ค DR ในหน้า DR/DRx
+           ซ่อนเมื่อสลับไปแท็บ HK (ปุ่มพวกนี้แตะเฉพาะ us_index_membership.json) -->
+      <div id="fin-us-idx-actions" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
         <button class="filter-btn" id="us-idx-diff-btn" onclick="checkUSIndexUpdates()">🔍 เช็คหุ้นใหม่/ถูกถอดจากดัชนี
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:300px;text-align:left">
             <strong>💡 เช็คการเปลี่ยนแปลงดัชนี S&P 500 / Dow Jones / Nasdaq 100</strong><br><br>
@@ -3018,6 +3019,30 @@
         <span id="us-idx-diff-note" style="font-size:11px;color:var(--text2)"></span>
       </div>
       <div id="us-idx-diff-result" style="display:none;margin-bottom:12px"></div>
+
+      <!-- คู่แฝดฝั่ง HK (HSI/HSCEI/HSTECH) — endpoint มีมาตั้งแต่แรกแต่ยังไม่เคยมีปุ่มใน UI
+           โชว์เฉพาะแท็บ HK สลับกับ #fin-us-idx-actions ผ่าน _finMirBrowse() -->
+      <div id="fin-hk-idx-actions" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <button class="filter-btn" id="hk-idx-diff-btn" onclick="checkHKIndexUpdates()">🔍 เช็คหุ้นใหม่/ถูกถอดจากดัชนี
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:300px;text-align:left">
+            <strong>💡 เช็คการเปลี่ยนแปลงดัชนี HSI / HSCEI / HSTECH</strong><br><br>
+            เทียบรายชื่อ constituents สดจาก Wikipedia กับไฟล์ local
+            — ปุ่มนี้<span style="color:var(--yellow)">รายงานอย่างเดียว ไม่แก้ไฟล์ให้</span><br><br>
+            กด "🔄 ดึงเฉพาะที่ขาด/เก่า" ต่อเพื่ออัพเดทไฟล์ + ดึงงบของตัวใหม่ให้อัตโนมัติ
+          </div></span>
+        </button>
+        <button class="filter-btn" id="hk-idx-sync-btn" onclick="startHKIndexSync()">🔄 ดึงเฉพาะที่ขาด/เก่า (local)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Sync ดัชนี HK</strong><br>
+            ดึงรายชื่อ constituents ล่าสุดจาก Wikipedia มาแทนไฟล์ local ก่อน แล้วดึงงบการเงิน
+            (ผ่าน Yahoo Finance) เฉพาะ ticker ในดัชนีที่ยังไม่มีข้อมูลในระบบ หรือข้อมูลเก่าเกิน 7 วัน<br><br>
+            <span style="color:var(--text2)">ไฟล์เดียวกับที่หน้า "🇭🇰 หุ้น HK" และ Heatmap HK ใช้กรองดัชนี</span>
+          </div></span>
+        </button>
+        <span id="hk-idx-diff-note" style="font-size:11px;color:var(--text2)"></span>
+      </div>
+      <div id="hk-idx-diff-result" style="display:none;margin-bottom:12px"></div>
+
       <div id="fin-mir-list" style="display:flex;flex-wrap:wrap;gap:6px;max-height:230px;overflow-y:auto;padding:2px"></div>
     </div>
   </div>
@@ -3378,6 +3403,134 @@
     <div style="font-size:13px;font-weight:600;margin-bottom:8px">🕐 กดล่าสุด — Quick Update / Full Refresh</div>
     <div id="dh-last-runs-wrap" style="display:flex;gap:24px;flex-wrap:wrap;font-size:12px"></div>
   </div>
+
+  <!-- คู่มือลำดับการกดอัพเดท — สรุปจาก สรุป_ปุ่มอัพเดทข้อมูล.txt + คู่มือ-อัพเดทข้อมูล.txt
+       เปิดค้างไว้ (open) เพราะเป็นข้อมูลที่ต้องดูบ่อยตอนไม่แน่ใจว่าต้องกดอะไร -->
+  <details class="card" id="dh-order-guide" style="padding:14px 16px;margin-bottom:12px" open>
+    <summary style="font-size:13px;font-weight:600;cursor:pointer;list-style:none">
+      🧭 ลำดับการกดอัพเดท — อันไหนกดบ่อยแค่ไหน
+      <span style="font-weight:400;color:var(--text2);font-size:11px"> (คลิกเพื่อย่อ/ขยาย)</span>
+    </summary>
+
+    <div style="font-size:12px;line-height:1.75;margin-top:10px">
+
+      <div style="margin-bottom:14px">
+        <div style="font-weight:600;color:var(--green);margin-bottom:4px">📅 ทุกวันทำการ — หลัง 17:30 น.</div>
+        <div style="padding-left:14px">
+          <b>1. ⚡ Quick Update</b> <span style="color:var(--text2)">(~2-5 นาที · ปุ่มบนหัวจอ)</span><br>
+          <span style="color:var(--text2);padding-left:16px">ครอบคลุมในปุ่มเดียว: ราคาหุ้นไทย (เฉพาะช่องว่าง) · insider/ผู้ถือหุ้นใหญ่ ·
+          ดัชนีกลุ่ม · ราคา+RS/Stage หุ้นดัชนี US &amp; HK · short sales · NVDR</span><br>
+          <b>2. ⚡ อัปเดตราคา</b> <span style="color:var(--text2)">ในหน้า "DR / DRx" — เฉพาะวันที่จะดูหน้า DR</span><br>
+          <span style="color:var(--text2);padding-left:16px"><b>ต้องกดเอง</b> เพราะ Quick Update
+          <b>ไม่แตะ DR/DRx เลย</b> (ไม่ใช่แค่ช้ากว่า — ข้ามไปทั้งหมด) ลำดับไม่ผูกกับข้อ 1
+          กดก่อนหลังก็ได้ · ไม่ต้องกดถ้าวันนั้นไม่ได้เปิดหน้า DR</span>
+        </div>
+        <div style="color:var(--yellow);padding-left:14px;margin-top:4px">
+          ⚠ เลี่ยงช่วง 14:30-17:30 น. (Yahoo กำลัง sync ข้อมูลอาจไม่นิ่ง)
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px">
+        <div style="font-weight:600;color:var(--green);margin-bottom:4px">🗓️ เดือนละครั้ง — ต้นเดือน</div>
+        <div style="padding-left:14px">
+          <b>⟳ อัพเดทข้อมูล P/E &amp; P/BV</b> <span style="color:var(--text2)">ในหน้า "Valuation ตลาดหุ้น SET"</span><br>
+          <span style="color:var(--text2);padding-left:16px">ต้องโหลดไฟล์เองก่อน: SET.or.th → Market Data → Market Statistics →
+          P/E &amp; P/BV → เอา <b>Table_PE.xls</b> + <b>Table_PBV.xls</b> วางทับไฟล์เดิมในโฟลเดอร์
+          SET_Dashboard แล้วค่อยกดปุ่ม · ระบบเตือนให้เองทุกวันที่ 10</span><br>
+          <span style="color:var(--text2);padding-left:16px">ข้อมูลชุดนี้ช้ากว่าปัจจุบัน ~1 เดือนเป็นปกติ (ไม่ใช่ค้าง) —
+          ตารางข้างล่างจะเตือนเมื่อเก่ากว่า 2 เดือนขึ้นไป</span>
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px">
+        <div style="font-weight:600;color:var(--green);margin-bottom:4px">🔁 นานๆ ครั้ง — ทุก 2-3 เดือน หรือเมื่อสงสัยว่าข้อมูลเพี้ยน</div>
+        <div style="padding-left:14px">
+          <b>⟳ Full Refresh</b> <span style="color:var(--text2)">(20 นาที - 1.5 ชม. · ดึงราคาย้อนหลังทั้งหมด +
+          fundamentals ใหม่ทั้งกระดาน + DR/DRx เต็ม + Capital Flow)</span><br>
+          <b>📈 US Index Max</b> · <b>📈 HK Index Max</b>
+          <span style="color:var(--text2)">— backfill ประวัติยาวของหุ้นในดัชนี
+          ปกติ<b>ไม่ต้องกดประจำ</b> เพราะ Quick Update เติมช่องว่างรายวันให้อยู่แล้ว
+          กดเมื่อ: ตั้งระบบครั้งแรก, ดัชนีเปลี่ยนสมาชิก, หรืออยากได้ประวัติยาวขึ้น</span><br>
+          <b>🌐 Sync Mirror US/HK เต็ม</b>
+          <span style="color:var(--text2)">— ดึงราคา/metrics หุ้น mirror นอกดัชนีหลัก (~5,000 ตัว) ใช้เวลานาน
+          กดตอนอยากให้ Screener+ ครอบคลุมครบ</span>
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px">
+        <div style="font-weight:600;color:var(--green);margin-bottom:4px">📊 หลังงบไตรมาสออก (ก.พ. / พ.ค. / ส.ค. / พ.ย.) — กดในแอปได้</div>
+        <div style="padding-left:14px">
+          <b>🔄 อัพเดทงบการเงินทั้งหมด</b> <span style="color:var(--text2)">หน้า "งบการเงิน" — งบหุ้นไทย 3 แหล่ง
+          (Yahoo รายปี/รายไตรมาส + SET.or.th)</span><br>
+          <b>🔍 ตรวจสอบความครบถ้วน</b> <span style="color:var(--text2)">หน้าเดียวกัน — ดูว่าตัวไหนงบขาด ก่อน/หลัง sync</span><br>
+          <b>🔄 ดึงเฉพาะที่ขาด/เก่า</b> <span style="color:var(--text2)">หน้า "DR / DRx" — งบหุ้นแม่ของ DR
+          (เร็วกว่า 📥 ดึงทั้งหมด เพราะข้ามตัวที่เพิ่งดึงไป)</span><br>
+          <b>🔄 ดึงเฉพาะที่ขาด/เก่า</b> <span style="color:var(--text2)">หน้า "งบการเงิน" → แท็บต่างประเทศ (DR) →
+          ปุ่ม <b>US</b> — งบหุ้น S&amp;P500/Dow/Nasdaq 100</span><br>
+          <b>🔄 ดึงเฉพาะที่ขาด/เก่า</b> <span style="color:var(--text2)">หน้าเดียวกัน → ปุ่ม <b>HK</b>
+          — งบหุ้น HSI/HSCEI/HSTECH</span>
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px">
+        <div style="font-weight:600;color:var(--green);margin-bottom:4px">💻 หลังงบไตรมาส — รันใน command line (ครอบคลุมกว่าปุ่มในแอป)</div>
+        <div style="padding-left:14px;color:var(--text2)">
+          <code>python update_financials.py</code> — ครบสุดในคำสั่งเดียว:
+          เช็ค DR ใหม่ → งบหุ้นไทย → DR → US/HK ที่ค้นบ่อย → snapshot
+          <b>(แทนปุ่มในแอปทั้ง 4 ปุ่มข้างบนได้)</b><br>
+          <code>python mirror_finnomena.py force</code> แล้วต่อด้วย <code>python build_snapshot.py</code>
+          — ไตรมาสละครั้ง (ใช้เวลานาน แนะนำรันกลางคืน)<br>
+          <code>python build_mirror_names.py</code> — หลัง mirror ได้หุ้นใหม่ ไม่งั้นตัวใหม่โชว์แค่ ticker เปล่า
+          <div style="margin-top:8px">
+            <button class="filter-btn" onclick="toggleBtNote('dh-cli-note')" style="font-size:11px">🧑‍💻 ขยายความ — สอนสำหรับคนใช้งานไม่เป็น กดอ่าน</button>
+            <div id="dh-cli-note" style="display:none;margin-top:8px;padding:12px;background:#0d1117;border:1px solid var(--border);border-radius:8px"></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px">
+        <div style="font-weight:600;color:var(--green);margin-bottom:4px">🔍 เช็คหุ้นเข้าใหม่/ถูกถอด — ไตรมาสละครั้ง หรือเมื่อสงสัย</div>
+        <div style="padding-left:14px;color:var(--text2)">
+          <b style="color:var(--text)">การ์ด 🔍 ข้างล่างหน้านี้</b> — หุ้นไทย (เทียบ SET.or.th) + Mirror US/HK (เทียบ Finnomena)<br>
+          <b style="color:var(--text)">🔍 เช็คหุ้นใหม่/ถูกถอดจาก SET.or.th</b> หน้า "DR / DRx"
+          — เช็คให้อัตโนมัติตอนเปิดหน้าอยู่แล้ว กดเองเมื่ออยากยืนยัน<br>
+          <b style="color:var(--text)">🔍 เช็คหุ้นใหม่/ถูกถอดจากดัชนี</b> หน้า "งบการเงิน" → แท็บต่างประเทศ (DR)
+          — สลับปุ่ม <b>US</b> / <b>HK</b> เพื่อเช็คคนละชุดดัชนี (S&amp;P500/Dow/NDX · HSI/HSCEI/HSTECH)<br>
+          <b style="color:var(--text)">📖 ดึงคำอธิบายบริษัท DR</b> หน้า "DR / DRx"
+          — เฉพาะตอนมี DR ใหม่เข้ามา (cache 180 วัน ปกติไม่ต้องกด)
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px">
+        <div style="font-weight:600;color:#58a6ff;margin-bottom:4px">🤖 ทำงานเองอัตโนมัติ — ไม่ต้องกด</div>
+        <div style="padding-left:14px;color:var(--text2)">
+          <b>GitHub Actions 3 รอบ/วัน</b> (06:00 ทุกวัน · 13:10 และ 18:30 จันทร์-ศุกร์)
+          — อัพเดทข้อมูลของ<b>เวอร์ชันเว็บ/มือถือ</b> ไม่ใช่เครื่องนี้
+          (เครื่องนี้ยังต้องกด Quick Update เอง)<br>
+          <b>Heatmap US/HK</b> — ราคา cache 15 นาที · Market Cap cache 1 วัน หมดอายุแล้วดึงใหม่เอง
+          ปุ่มอัพเดทในหน้านั้นมีไว้บังคับดึงก่อนเวลาเท่านั้น<br>
+          <b>หน้า DR/DRx</b> — เช็คหุ้น DR เข้าใหม่/ถูกถอดให้ทุกครั้งที่เปิดหน้า<br>
+          <b>ข่าว / SEC Filings</b> — ดึงสดตอนกดค้นหา ไม่มีอะไรต้องอัพเดทล่วงหน้า
+        </div>
+      </div>
+
+      <div>
+        <div style="font-weight:600;color:var(--red);margin-bottom:4px">📦 อย่าลืม — เดือนละครั้ง</div>
+        <div style="padding-left:14px;color:var(--text2)">
+          <code>python backup_financials_offsite.py &lt;โฟลเดอร์ปลายทาง&gt;</code><br>
+          สำรอง financials.db / set_prices.db / sec_filings.db / delisted_log.json ไปไดรฟ์นอก
+          หรือโฟลเดอร์ที่ sync คลาวด์ — <b>ไฟล์พวกนี้สร้างใหม่ไม่ได้</b>ถ้า Finnomena ปิด API
+          หรือหุ้นถูกถอดไปแล้ว (ดูสถานะรายไฟล์ในการ์ด 📦 ข้างล่าง)
+        </div>
+      </div>
+
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);color:var(--text2);font-size:11px">
+        💡 ไม่แน่ใจว่าต้องกดอะไร → ดูตารางข้างล่างนี้: รายการที่ขึ้น 🟡/🔴 คือตัวที่ค้างจริง
+        ส่วน ⚪ คือยังไม่เคยใช้งานในเครื่องนี้ (ไม่ใช่ปัญหา) · เกณฑ์ทั้งหมดตัดวันเสาร์-อาทิตย์ออกแล้ว
+        จึงไม่ขึ้นเตือนหลอกทุกเช้าวันจันทร์
+      </div>
+    </div>
+  </details>
 
   <div id="dh-table-wrap"></div>
 

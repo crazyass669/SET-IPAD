@@ -2382,7 +2382,7 @@ def compute_ps(payload_finn_q, min_points=12):
     _days = _period_days
     mc = (payload_finn_q or {}).get("valuation", {}).get("Market Cap", {})
     rev = (payload_finn_q or {}).get("income", {}).get("Total Revenue", {})
-    none = {"value": None, "percentile": None, "median": None, "n": 0}
+    none = {"value": None, "percentile": None, "median": None, "mean": None, "n": 0}
     if not mc or not rev:
         return none
     ttm_by_date = _ttm_by_date(rev)
@@ -2408,13 +2408,15 @@ def compute_ps(payload_finn_q, min_points=12):
             ps.append((d, v / ttm))
     if len(ps) < min_points:
         return {"value": (round(ps[-1][1], 2) if ps else None), "percentile": None,
-                "median": None, "n": len(ps)}
+                "median": None, "mean": None, "n": len(ps)}
     series = [v for _, v in ps]
     latest = ps[-1][1]
     pct = round(sum(1 for v in series if v < latest) / len(series) * 100, 1)
     srt = sorted(series)
     med = srt[len(srt) // 2] if len(srt) % 2 else (srt[len(srt) // 2 - 1] + srt[len(srt) // 2]) / 2
-    return {"value": round(latest, 2), "percentile": pct, "median": round(med, 2), "n": len(series)}
+    avg = sum(series) / len(series)
+    return {"value": round(latest, 2), "percentile": pct, "median": round(med, 2),
+            "mean": round(avg, 2), "n": len(series)}
 
 
 def _ttm_pe_series(payload_finn_q):
@@ -2484,12 +2486,12 @@ def compute_valuation_percentile(payload_finn_q, min_points=12):
             series = val.get(name, {})
             pts = sorted((d, v) for d, v in series.items() if v is not None and v > 0)
         if pts and _stale(pts[-1][0]):
-            out[short] = {"value": None, "percentile": None, "median": None,
+            out[short] = {"value": None, "percentile": None, "median": None, "mean": None,
                           "n": len(pts), "stale": True}
             continue
         if len(pts) < min_points:
             out[short] = {"value": (pts[-1][1] if pts else None), "percentile": None,
-                          "median": None, "n": len(pts)}
+                          "median": None, "mean": None, "n": len(pts)}
             continue
         vals = [v for _, v in pts]
         latest = pts[-1][1]
@@ -2497,8 +2499,9 @@ def compute_valuation_percentile(payload_finn_q, min_points=12):
         pct = round(below / len(vals) * 100, 1)
         srt = sorted(vals)
         m = srt[len(srt) // 2] if len(srt) % 2 else (srt[len(srt)//2 - 1] + srt[len(srt)//2]) / 2
+        avg = sum(vals) / len(vals)
         out[short] = {"value": round(latest, 2), "percentile": pct,
-                      "median": round(m, 2), "n": len(vals)}
+                      "median": round(m, 2), "mean": round(avg, 2), "n": len(vals)}
     return out
 
 
@@ -2545,3 +2548,168 @@ def compare_sources(payload_yahoo, payload_set):
         "mismatches": mismatches,
         "checked_years": common_years,
     }
+
+
+_PRICE_DB_BY_MARKET = {"TH": "set_prices.db", "US": "us_prices.db", "HK": "hk_prices.db"}
+
+
+def _price_db_ticker(mkt, raw_sym):
+    if mkt == "TH":
+        return raw_sym + ".BK"
+    if mkt == "HK":
+        return (raw_sym.zfill(4) if raw_sym.isdigit() and len(raw_sym) < 4 else raw_sym) + ".HK"
+    return raw_sym   # US: bare ticker
+
+
+def _nearest_real_close(base_dir, mkt, raw_sym, date_str, max_gap_days=10):
+    """ราคาปิดจริงล่าสุดที่ <= date_str จาก {market}_prices.db (local) — คืน None ถ้าไม่มี DB/
+    ไม่มีราคา/ห่างจากวันที่ขอเกิน max_gap_days (กันเอาราคาเก่ามาเทียบกับงวดที่ห่างเกินไป)"""
+    db_name = _PRICE_DB_BY_MARKET.get(mkt)
+    if not db_name:
+        return None
+    path = os.path.join(base_dir, db_name)
+    if not os.path.exists(path):
+        return None
+    ticker = _price_db_ticker(mkt, raw_sym)
+    con = sqlite3.connect(path)
+    try:
+        row = con.execute(
+            "SELECT date, close FROM prices WHERE ticker=? AND date<=? ORDER BY date DESC LIMIT 1",
+            (ticker, date_str)).fetchone()
+    finally:
+        con.close()
+    if not row or row[1] is None or row[1] <= 0:
+        return None
+    gap = (datetime.fromisoformat(date_str[:10]) - datetime.fromisoformat(row[0][:10])).days
+    if gap > max_gap_days:
+        return None
+    return row[1]
+
+
+def _yahoo_bvps_series(base_dir, symbol, is_dr):
+    """BVPS = Stockholders Equity ÷ Ordinary Shares Number จากงบ Yahoo (yahoo_q ก่อน ตกไป yahoo)
+    ใช้เป็นแหล่งอิสระเทียบกับ 'Book Value Per Share' ดิบของ Finnomena"""
+    for src in ("yahoo_q", "yahoo"):
+        d = get(base_dir, symbol, src, is_dr=is_dr)
+        if not d:
+            continue
+        bal = d.get("balance", {}) or {}
+        eq = bal.get("Stockholders Equity") or bal.get("Common Stock Equity") or {}
+        shares = bal.get("Ordinary Shares Number") or bal.get("Share Issued") or {}
+        out = {}
+        for dt, e in eq.items():
+            s = shares.get(dt)
+            if e is not None and s and s > 0:
+                out[dt] = e / s
+        if out:
+            return out
+    return {}
+
+
+def check_valuation_quality(base_dir, symbol, payload, market=None, is_dr=False, recent_n=8):
+    """เช็คความน่าเชื่อถือของ Close/BVPS ใน payload finnomena_q แบบเบาๆ (ไม่บล็อกการใช้งาน แค่
+    ติดป้ายเตือน) — เทียบกับ 2 แหล่งอิสระที่มีอยู่แล้วในเครื่อง: ราคาปิดจริงจาก {set,us,hk}_prices.db
+    และ BVPS ที่คำนวณเองจากงบ Yahoo (Stockholders Equity ÷ shares)
+
+    เหตุผล: เจอจริงว่า Finnomena มีข้อมูลค้าง (ราคา/BVPS ไม่อัพเดทหลายไตรมาสติด) โดยเฉพาะหุ้นที่
+    กำลังมีปัญหา (equity ติดลบ/ใกล้ล้ม เช่น NWR/TSR) — ราคาที่ Finnomena เก็บอาจต่างจากราคาที่เทรด
+    จริงในตลาดหลายเท่าตัวโดยไม่มีสัญญาณเตือนใดๆ ทั้งที่ TH เรามีราคาจริงเก็บไว้ใน set_prices.db
+    อยู่แล้ว (ไม่ต้องดึงใหม่) จึงเทียบได้ฟรี ไม่กระทบ performance มาก (query เบาๆ per ไตรมาส)
+
+    เกณฑ์ threshold (15%/40%) กว้างพอเผื่อผลต่างปกติจากปัดเศษ/ฐานคำนวณต่างกัน (พิสูจน์จากเคส
+    BGRIM ~5% ถือว่าปกติ ไม่ติดป้าย) แต่จับได้กรณีที่ต่างเป็นสิบ/ร้อยเปอร์เซ็นต์แบบ NWR/TSR/BGRIM
+    บางไตรมาส (BVPS กระโดด 0.87->13x)"""
+    import bisect
+    warnings = []
+    val = (payload or {}).get("valuation", {}) or {}
+    close = val.get("Close", {}) or {}
+    bvps = val.get("Book Value Per Share", {}) or {}
+    if not close:
+        return {"checked": False, "warnings": []}
+
+    dates = sorted(close.keys())[-recent_n:]
+    # ทั้ง yahoo/yahoo_q และ {market}_prices.db เก็บด้วยรหัสดิบ ไม่มี namespace "FINN:TH:/HK:/US:"
+    # แบบ finnomena_q — ต้องตัด prefix ก่อนใช้ค้นหาข้าม source เสมอ
+    raw_sym = symbol.split(":")[-1] if symbol.startswith("FINN:") else symbol
+
+    # 1) ค่าค้าง (ซ้ำติดกัน >=3 ไตรมาส) — สัญญาณข้อมูลไม่อัพเดทตรงๆ ไม่ต้องพึ่งแหล่งอื่นเลย
+    def _frozen_runs(series_map):
+        runs, streak_val, streak_dates = [], None, []
+        for d in dates:
+            v = series_map.get(d)
+            if v is None:
+                if len(streak_dates) >= 3:
+                    runs.append((streak_val, list(streak_dates)))
+                streak_val, streak_dates = None, []
+                continue
+            if streak_val is not None and v == streak_val:
+                streak_dates.append(d)
+            else:
+                if len(streak_dates) >= 3:
+                    runs.append((streak_val, list(streak_dates)))
+                streak_val, streak_dates = v, [d]
+        if len(streak_dates) >= 3:
+            runs.append((streak_val, list(streak_dates)))
+        return runs
+
+    for v, ds in _frozen_runs(close):
+        warnings.append({"type": "stale_close",
+                          "detail": f"ราคาปิดค้างที่ {v} ติดต่อกัน {len(ds)} ไตรมาส ({ds[0]}..{ds[-1]}) — อาจไม่ใช่ราคาตลาดจริง",
+                          "dates": ds})
+    for v, ds in _frozen_runs(bvps):
+        warnings.append({"type": "stale_bvps",
+                          "detail": f"BVPS ค้างที่ {v} ติดต่อกัน {len(ds)} ไตรมาส ({ds[0]}..{ds[-1]})",
+                          "dates": ds})
+
+    # 2) เทียบราคาจริงจาก {market}_prices.db — ข้าม DR (ราคา DR บนตลาดไทยไม่จำเป็นต้องเท่า
+    # underlying เป๊ะ เทียบตรงๆ ไม่ได้)
+    if not is_dr:
+        mkt = (market or "TH").upper()
+        mismatches = []
+        for d in dates:
+            c = close.get(d)
+            if c is None or c <= 0:
+                continue
+            real = _nearest_real_close(base_dir, mkt, raw_sym, d)
+            if real is None:
+                continue
+            diff = abs(c - real) / real
+            if diff > 0.15:
+                mismatches.append((d, c, real, round(diff * 100, 1)))
+        if mismatches:
+            worst = max(mismatches, key=lambda x: x[3])
+            warnings.append({
+                "type": "price_mismatch",
+                "detail": f"ราคาปิดของ Finnomena ต่างจากราคาซื้อขายจริงเกิน 15% ใน {len(mismatches)} ไตรมาส "
+                          f"(หนักสุด {worst[0]}: Finnomena {worst[1]} vs จริง {worst[2]} ต่าง {worst[3]}%)",
+                "dates": [m[0] for m in mismatches],
+            })
+
+    # 3) เทียบ BVPS กับที่คำนวณเองจากงบ Yahoo
+    ybvps = _yahoo_bvps_series(base_dir, raw_sym, is_dr)
+    if ybvps:
+        ydates = sorted(ybvps.keys())
+        mismatches = []
+        for d in dates:
+            b = bvps.get(d)
+            if b is None:
+                continue
+            idx = bisect.bisect_right(ydates, d) - 1
+            if idx < 0:
+                continue
+            yv = ybvps[ydates[idx]]
+            if not yv:
+                continue
+            diff = abs(b - yv) / abs(yv)
+            if diff > 0.4:
+                mismatches.append((d, b, round(yv, 3), round(diff * 100, 1)))
+        if mismatches:
+            worst = max(mismatches, key=lambda x: x[3])
+            warnings.append({
+                "type": "bvps_mismatch",
+                "detail": f"BVPS ของ Finnomena ต่างจากที่คำนวณเองจากงบ Yahoo (equity÷shares) เกิน 40% ใน {len(mismatches)} ไตรมาส "
+                          f"(หนักสุด {worst[0]}: Finnomena {worst[1]} vs Yahoo {worst[2]} ต่าง {worst[3]}%)",
+                "dates": [m[0] for m in mismatches],
+            })
+
+    return {"checked": True, "warnings": warnings}

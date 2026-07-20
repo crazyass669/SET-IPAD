@@ -4944,10 +4944,49 @@ const _BT_NOTE_HTML = `
   <div style="color:var(--text2);margin-top:8px;font-size:11px">⚠ ข้อจำกัดเฉพาะส่วนนี้: universe เล็กแค่ 165 ตัว บางสูตรมีแค่ ~100-200 ครั้งที่เกิด (Breakout/Volume-spark) — <b>ตัวอย่างน้อยเกินจะเชื่อมั่นสูง</b> ระวังตีความเกินจริง · คละหลายตลาด/สกุลเงิน/เวลาเปิดตลาดต่างกัน (US/HK/JP/EU) อาจมี noise จาก timezone lag ปนอยู่ · ใช้ lag รายงานงบ 55 วัน (เผื่อกว้างกว่า US เพราะคละหลายตลาด)</div>
 </div>`;
 
+const _CLI_FIN_NOTE_HTML = `
+<div style="font-size:12px;line-height:1.75">
+  <div style="font-weight:700;font-size:13px;margin-bottom:6px">🧑‍💻 อัพเดทงบไตรมาส ผ่าน command line — ทำไมต้องรัน แล้วรันยังไง</div>
+  <div style="color:var(--text2);margin-bottom:10px">ทุกไตรมาส (ก.พ. / พ.ค. / ส.ค. / พ.ย.) บริษัทประกาศงบใหม่ — ข้อมูลนี้ไม่อัพเดทเองอัตโนมัติ ต้องสั่งดึงเอง ปุ่มในแอปด้านบนทำได้แค่บางส่วน ส่วน command line ครอบคลุมกว่าและเร็วกว่าเพราะรันครั้งเดียวจบ</div>
+
+  <div style="font-weight:600;margin-bottom:4px">วิธีเปิด command line (ครั้งแรก)</div>
+  <ol style="margin:0 0 10px 18px;padding:0;color:var(--text2)">
+    <li>เปิดโฟลเดอร์โปรเจกต์ (SET_Dashboard) ใน File Explorer</li>
+    <li>คลิกที่แถบ address bar ด้านบน (ที่โชว์ path ของโฟลเดอร์) พิมพ์ <code>cmd</code> แล้วกด Enter — จะเปิดหน้าต่างดำๆ ที่อยู่ในโฟลเดอร์นี้พอดี</li>
+    <li>พิมพ์คำสั่งทีละบรรทัดตามด้านล่าง กด Enter แล้วรอจนขึ้น ✅ หรือ "เสร็จ"</li>
+  </ol>
+
+  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#1f6feb22;color:#58a6ff;font-weight:600;margin-bottom:6px">① ทำทุกครั้งหลังงบออก — ใช้บ่อยสุด</div>
+  <div style="background:#161b22;border-radius:6px;padding:6px 10px;margin:4px 0"><code>python update_financials.py</code></div>
+  <div style="color:var(--text2);margin-bottom:8px">คำสั่งเดียวทำให้อัตโนมัติ: เช็ค DR ใหม่ → ดึงงบหุ้นไทยทุกตัว (Yahoo+SET+Finnomena รวมกับของเดิม ไม่ทับของเก่า) → ดึงงบ DR → รีเฟรชหุ้น US/HK ที่มีคนค้นบ่อยใน 90 วัน → คำนวณ factor snapshot ใหม่ให้หน้า Screener<br>
+  ใช้เวลาไม่กี่นาที เสร็จแล้ว<b>แค่กด refresh หน้าเว็บ</b> ไม่ต้อง restart อะไร</div>
+
+  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#3fb95022;color:#3fb950;font-weight:600;margin-bottom:6px">② ไตรมาสละครั้ง — ใช้เวลานาน แนะนำรันกลางคืน</div>
+  <div style="background:#161b22;border-radius:6px;padding:6px 10px;margin:4px 0"><code>python mirror_finnomena.py force</code></div>
+  <div style="background:#161b22;border-radius:6px;padding:6px 10px;margin:4px 0"><code>python build_snapshot.py</code></div>
+  <div style="color:var(--text2);margin-bottom:8px">คำสั่งแรกโหลดงบ "ทั้งตลาด" ไทย+ฮ่องกง+อเมริกา (ไม่ใช่แค่หุ้นที่มีคนค้น) เก็บลงฐานข้อมูล — ใช้เวลานานมาก หยุดกลางทางได้เสมอ (ปิดคอมได้เลย) รันใหม่จะข้ามตัวที่ทำแล้วและทำต่อจากเดิมให้เอง ก่อนเริ่มมันสำรอง financials.db ไว้ให้อัตโนมัติด้วย<br>
+  คำสั่งที่สอง<b>ต้องรันต่อเสมอ</b> — เป็นตัวคำนวณสรุปใหม่ให้หน้า Screener เห็นข้อมูลล่าสุด ถ้าลืม หน้า Screener จะยังโชว์ตัวเลขเก่า</div>
+
+  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#e3b34122;color:#e3b341;font-weight:600;margin-bottom:6px">③ ทำเฉพาะตอนมี mirror หุ้นใหม่</div>
+  <div style="background:#161b22;border-radius:6px;padding:6px 10px;margin:4px 0"><code>python build_mirror_names.py</code></div>
+  <div style="color:var(--text2);margin-bottom:8px">ดึง "ชื่อบริษัท" ของหุ้น US/HK ที่เพิ่งมีงบเข้ามาใหม่ — ไม่รันก็ไม่พัง แค่หุ้นตัวใหม่จะโชว์แค่ ticker เปล่าๆ ไม่มีชื่อเต็มตอนค้นหา ใช้เวลาไม่กี่วินาที</div>
+
+  <table style="border-collapse:collapse;font-size:11.5px;margin-top:8px;width:100%">
+    <tr style="color:var(--text2)"><td style="padding:2px 12px 2px 0">คำสั่ง</td><td style="padding:2px 12px 2px 0">ความถี่</td><td>เวลาที่ใช้</td></tr>
+    <tr><td style="padding:2px 12px 2px 0"><code>python update_financials.py</code></td><td style="padding:2px 12px 2px 0">ทุกครั้งหลังงบไตรมาสออก</td><td>ไม่กี่นาที</td></tr>
+    <tr><td style="padding:2px 12px 2px 0"><code>mirror_finnomena.py force</code> → <code>build_snapshot.py</code></td><td style="padding:2px 12px 2px 0">ไตรมาสละครั้ง</td><td>นานมาก (รันกลางคืน)</td></tr>
+    <tr><td style="padding:2px 12px 2px 0"><code>python build_mirror_names.py</code></td><td style="padding:2px 12px 2px 0">หลัง mirror เจอหุ้นใหม่</td><td>ไม่กี่วินาที</td></tr>
+  </table>
+
+  <div style="color:var(--text2);margin-top:8px;font-size:11px">⚠ ถ้าขึ้น error หรือค้างนานผิดปกติ ให้ก็อปข้อความ error มาถามได้ — ข้อมูลชุดนี้อยู่เฉพาะบนเครื่อง (financials.db) ห้ามขึ้น GitHub</div>
+</div>`;
+
+const _BT_NOTE_HTML_BY_ID = { 'dh-cli-note': _CLI_FIN_NOTE_HTML };
+
 function toggleBtNote(boxId) {
   const el = document.getElementById(boxId);
   if (!el) return;
-  if (!el.innerHTML) el.innerHTML = _BT_NOTE_HTML;
+  if (!el.innerHTML) el.innerHTML = _BT_NOTE_HTML_BY_ID[boxId] || _BT_NOTE_HTML;
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
@@ -5887,26 +5926,49 @@ function _tsValLabel(label) {
            expensive: ['แพงกว่าปกติ', 'var(--red)'] }[label] || ['—', 'var(--text2)'];
 }
 
-function _tsValTile(name, v) {
+function _tsValTile(name, v, key) {
   if (!v || v.value == null) {
     return `<div class="card" style="padding:10px 12px;flex:1;min-width:130px">
       <div style="font-size:10px;color:var(--text2)">${name}</div>
       <div style="font-size:18px;font-weight:700;color:var(--text2)">–</div></div>`;
   }
-  const pctText = v.percentile != null ? `เทียบตัวเอง 5 ปี: ${v.percentile}%ile` : '';
+  // v.n = จำนวนไตรมาสที่มีข้อมูลจริง (ประวัติ Finnomena ลึกสุด ~16 ปี ไม่ได้ตัดแค่ 5 ปีตายตัว)
+  // แสดงจำนวนปีจริงแทนคำว่า "5 ปี" เดิมที่ hardcode ไว้ผิด (พบจาก feedback ผู้ใช้)
+  const yrsText = v.n != null ? `${(v.n / 4).toFixed(1)} ปี` : '5 ปี';
+  const pctText = v.percentile != null ? `เทียบตัวเอง ${yrsText}: ${v.percentile}%ile` : '';
   const [lbl, lblColor] = v.percentile != null ? _tsValLabel(v.label) : ['', ''];
-  const medText = v.sector_median != null ? `กลาง sector ${v.sector_median}` : '';
+  const secMedText = v.sector_median != null ? `กลาง sector ${v.sector_median}` : '';
+  // เฉลี่ย/มัธยฐานของตัวเอง (ทั้งประวัติที่มี ไม่ใช่แค่ 5 ปี) — เหมือนที่โชว์ในแถบ
+  // "มูลค่าเทียบอดีตตัวเอง" หน้างบการเงิน
+  const ownStatText = (v.mean != null || v.median != null)
+    ? `เฉลี่ย ${v.mean != null ? v.mean : '—'} · มัธยฐาน ${v.median != null ? v.median : '—'}` : '';
+  const valId = key ? ` id="ts-val-${key}"` : '';
   return `<div class="card" style="padding:10px 12px;flex:1;min-width:130px">
     <div style="font-size:10px;color:var(--text2)">${name}</div>
-    <div style="font-size:18px;font-weight:700">${v.value}</div>
+    <div${valId} style="font-size:18px;font-weight:700">${v.value}</div>
     ${lbl ? `<div style="font-size:10.5px;font-weight:600;color:${lblColor}">${lbl}</div>` : ''}
     <div style="font-size:10px;color:var(--text2);margin-top:2px">${pctText}</div>
-    <div style="font-size:10px;color:var(--text2)">${medText}</div>
+    ${ownStatText ? `<div style="font-size:10px;color:var(--text2)">${ownStatText}</div>` : ''}
+    <div style="font-size:10px;color:var(--text2)">${secMedText}</div>
   </div>`;
 }
 
 function renderTearsheet(d) {
   const h = d.header, v = d.valuation, mkt = d.market || 'TH';
+  // lite = หุ้น DR ตลาดที่ยังไม่มี price cohort (JP/VN/SG/EU/TW/CN) — งบ/F-Z/DCF/ปันผล/valuation
+  // ครบ แต่ RS/เทียบเพื่อน/ข่าว/เอกสาร (TH/US/HK เท่านั้น) ไม่พร้อม -> โชว์ลิงก์ภายนอกแทน
+  const lite = !!d.lite, uyf = d.underlying_yf || '';
+  const liteBanner = lite ? `
+    <div class="card" style="padding:12px 16px;margin-bottom:12px;border-left:3px solid var(--yellow)">
+      <div style="font-size:12px;color:var(--text);line-height:1.65">
+        ℹ️ หุ้น DR ตลาด <b>${mkt}</b> — ตลาดนี้ยังไม่มีชุดราคาทั้งตลาดให้จัดอันดับ <b>RS</b> และ <b>เทียบเพื่อน</b> (แสดงเป็น “—”)
+        แต่ <b>งบการเงิน · F-Score · Z-Score · DCF · ปันผล · Valuation</b> ใช้ได้ครบตามปกติ
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <a class="filter-btn" href="https://finance.yahoo.com/quote/${encodeURIComponent(uyf)}" target="_blank" rel="noopener" style="text-decoration:none;font-size:12px;padding:6px 12px">📊 Yahoo Finance (${uyf}) ↗</a>
+        <a class="filter-btn" href="https://www.tradingview.com/chart/?symbol=${yfToTVSym(uyf)}&interval=D" target="_blank" rel="noopener" style="text-decoration:none;font-size:12px;padding:6px 12px">📈 TradingView ↗</a>
+      </div>
+    </div>` : '';
   const emaBadge = h.above_ema200 == null ? '—'
     : (h.above_ema50 && h.above_ema200 ? '📈 เหนือ 50/200' : h.above_ema200 ? 'เหนือ 200' : h.above_ema50 ? 'เหนือ 50' : '❌ ใต้ทั้งคู่');
   const momColor = h.rs_momentum > 0 ? 'var(--green)' : h.rs_momentum < 0 ? 'var(--red)' : 'var(--text2)';
@@ -5942,9 +6004,11 @@ function renderTearsheet(d) {
 
   const valuation = `
     <div class="card" style="padding:16px;margin-bottom:12px">
-      <div style="font-size:13px;font-weight:700;margin-bottom:10px">💰 Valuation Snapshot</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:10px">💰 Valuation Snapshot
+        <span id="ts-val-live-price" style="font-weight:400;font-size:11px;color:var(--text2)"></span>
+      </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
-        ${_tsValTile('PE', v.pe)}${_tsValTile('PBV', v.pbv)}${_tsValTile('P/S', v.ps)}${_tsValTile('ปันผล%', v.div_yield)}
+        ${_tsValTile('PE', v.pe, 'pe')}${_tsValTile('PBV', v.pbv, 'pbv')}${_tsValTile('P/S', v.ps, 'ps')}${_tsValTile('EV/EBITDA', v.ev_ebitda, 'ev_ebitda')}${_tsValTile('ปันผล%', v.div_yield)}
       </div>
     </div>`;
 
@@ -5976,7 +6040,9 @@ function renderTearsheet(d) {
 
   const seasonality = `<div id="ts-lts" style="margin-bottom:12px"></div>`;
 
-  const news = `
+  // ข่าว/เอกสารทางการ มีเฉพาะ TH/US/HK (endpoint/ลิงก์ผูกตลาดพวกนี้) — ตลาด lite ข้ามไป
+  // (banner ด้านบนมีลิงก์ Yahoo/TradingView ให้เข้าไปอ่านต่อแล้ว)
+  const news = lite ? '' : `
     <div class="card" style="padding:16px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div style="font-size:13px;font-weight:700">📰 ข่าวล่าสุด</div>
@@ -5986,7 +6052,7 @@ function renderTearsheet(d) {
     </div>`;
 
   const filLinksFn = mkt === 'US' ? _filLinksUS : mkt === 'HK' ? _filLinksHK : _filLinksTH;
-  const docs = `
+  const docs = lite ? '' : `
     <div class="card" style="padding:16px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div style="font-size:13px;font-weight:700">📑 เอกสารทางการ</div>
@@ -6001,7 +6067,14 @@ function renderTearsheet(d) {
     </div>`;
 
   const inWl = watchlist.includes(_tsWlKey(h.symbol));
-  const actionBar = `
+  // ปุ่ม _tsGoNews/_tsGoFilings/_tsGoPeer/_tsGoDividends พาไปหน้า TH/US/HK ที่ไม่รู้จักหุ้นตลาด
+  // lite (peer ตอบ 501, ข่าว/เอกสาร/ปันผลผูกตลาดพวกนั้น) — ตัดออก เหลือแค่กราฟ DR + Watchlist
+  const actionBar = lite ? `
+    <div class="card" style="padding:12px 16px;margin-bottom:12px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn-secondary" style="font-size:12.5px" onclick="closeTsOpenChart('${h.symbol}')">📈 กราฟเต็ม</button>
+      </div>
+    </div>` : `
     <div class="card" style="padding:12px 16px;margin-bottom:12px">
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-secondary" id="ts-wl-btn" style="font-size:12.5px" onclick="_tsToggleWl('${h.symbol}')">${inWl ? '⭐ อยู่ใน Watchlist แล้ว' : '☆ เพิ่มเข้า Watchlist'}</button>
@@ -6013,18 +6086,53 @@ function renderTearsheet(d) {
       </div>
     </div>`;
 
-  const calendarWeek = `<div id="ts-calendar"></div>`;
+  // ปฏิทิน/price analytics ผูกกับ pipeline ของ TH/US/HK — ตลาด lite ไม่มี ข้ามไป
+  const calendarWeek = lite ? '' : `<div id="ts-calendar"></div>`;
 
-  document.getElementById('ts-body').innerHTML = header + calendarWeek + actionBar + valuation + dcfHtml + quality + dividend + flow + seasonality + news + docs;
+  const altValHtml = _tsAltValHtml(d);
+
+  document.getElementById('ts-body').innerHTML = header + liteBanner + calendarWeek + actionBar + valuation + dcfHtml + altValHtml + quality + dividend + flow + seasonality + news + docs;
   requestAnimationFrame(() => {
     const canvas = document.getElementById('ts-spark');
     if (canvas && h.sparkline) drawSparkline(canvas, h.sparkline, h.ret_1y);
   });
   if (mkt === 'TH') _tsLoadFlow(h.symbol);
-  _tsLoadCalendarWeek(h.symbol, mkt);
-  _loadPriceAnalytics(h.symbol, 'ts-lts', () => _tsData?.symbol === h.symbol, mkt !== 'TH' ? h.symbol : null);
-  _tsLoadNews(h.symbol);
+  if (!lite) {
+    _tsLoadCalendarWeek(h.symbol, mkt);
+    _loadPriceAnalytics(h.symbol, 'ts-lts', () => _tsData?.symbol === h.symbol, mkt !== 'TH' ? h.symbol : null);
+    _tsLoadNews(h.symbol);
+  }
   _tsDcfRecalc();
+  _tsAltValRecalc();
+  _tsLoadLiveValuation(d, h);
+}
+
+// อัพเดท PE/PBV/P/S ใน "Valuation Snapshot" ให้ใช้ราคาสดจาก Yahoo แทนราคาสิ้นงวด/สิ้นวัน
+// ของ snapshot (เหมือนแนวคิดเดียวกับ _loadLiveValuationBand ในหน้างบการเงิน) — value ใหม่
+// = value เดิม × (ราคาสด ÷ ราคาที่ใช้คำนวณ value เดิม) เพราะ PE/PBV/PS ล้วนแปรผันตรงกับราคา
+// ที่ EPS/BVPS/revenue ต่อหุ้นคงที่ ไม่ต้องรู้ EPS/BVPS จริงก็คำนวณสัดส่วนได้ ส่วน percentile/
+// เฉลี่ย/มัธยฐาน (คำนวณจากประวัติ ไม่ผูกกับราคาวันนี้) คงไว้ตามเดิม
+function _tsLoadLiveValuation(d, h) {
+  const yfSym = d.yf_symbol;
+  const basePrice = h.price;
+  if (!yfSym || !basePrice) return;
+  fetch(`/api/live-price/${encodeURIComponent(d.symbol)}?yf=${encodeURIComponent(yfSym)}`)
+    .then(r => r.json()).then(res => {
+      if (_tsData?.symbol !== d.symbol) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
+      if (res.error || !res.price) return;
+      const live = res.price;
+      const priceEl = document.getElementById('ts-val-live-price');
+      if (priceEl) {
+        priceEl.textContent = `· ราคาล่าสุด (Yahoo): ${live.toLocaleString(undefined, {maximumFractionDigits: 2})} ${res.currency || ''}`;
+      }
+      const ratio = live / basePrice;
+      ['pe', 'pbv', 'ps'].forEach(key => {
+        const v = (d.valuation || {})[key];
+        const el = document.getElementById('ts-val-' + key);
+        if (!el || !v || v.value == null) return;
+        el.textContent = Math.round(v.value * ratio * 100) / 100;
+      });
+    }).catch(() => {});
 }
 
 // ---------- DCF (งาน #6): Reverse DCF เป็นหลัก + Forward DCF 3 ฉาก + sensitivity ----------
@@ -6049,6 +6157,7 @@ function _tsDcfHtml(dcf, price) {
   return `<div class="card" style="padding:16px;margin-bottom:12px">
     <div style="font-size:13px;font-weight:700;margin-bottom:4px">🎯 มูลค่าเหมาะสม (DCF)</div>
     <div style="font-size:10.5px;color:var(--text2);margin-bottom:10px">ประมาณการคร่าวๆ จาก FCF ปีล่าสุด — ไม่ใช่คำแนะนำซื้อ/ขาย ใช้เป็นจุดตั้งต้นคิดต่อเอง</div>
+    ${_dcfFormulaNoteHtml()}
     ${negNote}
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">
       <label style="font-size:11px;color:var(--text2)">Discount Rate %
@@ -6058,8 +6167,97 @@ function _tsDcfHtml(dcf, price) {
         <input id="ts-dcf-terminal" type="number" min="0" max="4" step="0.25" value="${dcf.terminal_growth_default}"
           class="scr-input" style="display:block;width:90px;margin-top:3px" oninput="_tsDcfRecalc()"></label>
     </div>
-    <div id="ts-dcf-body"></div>
+    <div style="font-size:10.5px;color:var(--text2);margin-bottom:12px">
+      ผลตอบแทนพันธบัตรรัฐบาล (อ้างอิงตั้ง Discount Rate):
+      <a href="https://www.thaibma.or.th/EN/Market/YieldCurve/Government.aspx" target="_blank" rel="noopener">ไทย (ThaiBMA)</a> ·
+      <a href="https://home.treasury.gov/resource-center/data-chart-center/interest-rates/TextView?type=daily_treasury_yield_curve&field_tdr_date_value=2026" target="_blank" rel="noopener">สหรัฐฯ (US Treasury, 1M-30Y)</a> ·
+      <a href="https://www.worldgovernmentbonds.com/country/united-states/" target="_blank" rel="noopener">US (worldgovernmentbonds, ล่าสุดอัตโนมัติ)</a>
+    </div>
+    <div id="ts-dcf-reverse"></div>
+
+    <div style="margin-bottom:14px">
+      <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Forward DCF — 3 ฉาก (ปี 1-5 โตตามอัตราที่กรอก ปี 6-10 ค่อยๆ ลดสู่ Terminal)</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;align-items:flex-end">
+        <label style="font-size:11px;color:var(--text2)">Bear %
+          <input id="ts-dcf-g-bear" type="number" step="0.5" value="${DCF_SCENARIO_DEFAULTS.bear}"
+            class="scr-input" style="display:block;width:80px;margin-top:3px" oninput="_tsDcfRecalc()"></label>
+        <label style="font-size:11px;color:var(--text2)">Base %
+          <input id="ts-dcf-g-base" type="number" step="0.5" value="${DCF_SCENARIO_DEFAULTS.base}"
+            class="scr-input" style="display:block;width:80px;margin-top:3px" oninput="_tsDcfRecalc()"></label>
+        <label style="font-size:11px;color:var(--text2)">Bull %
+          <input id="ts-dcf-g-bull" type="number" step="0.5" value="${DCF_SCENARIO_DEFAULTS.bull}"
+            class="scr-input" style="display:block;width:80px;margin-top:3px" oninput="_tsDcfRecalc()"></label>
+        <button class="btn" style="font-size:10.5px;padding:4px 8px" onclick="_tsDcfUseHistGrowth()"
+          title="ตั้ง Base = CAGR กำไร/รายได้ในอดีตของหุ้นตัวนี้ แล้วกระจาย Bear/Bull รอบๆ">ใช้ CAGR อดีต</button>
+      </div>
+      <div id="ts-dcf-forward"></div>
+    </div>
+
+    <div>
+      <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Sensitivity — Fair Value ต่อหุ้น (แถว=โตปี1-5 · คอลัมน์=Discount Rate)</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;align-items:flex-end">
+        <label style="font-size:11px;color:var(--text2)">แกนโต % (คั่นด้วยจุลภาค)
+          <input id="ts-dcf-sens-growth" type="text" value="${DCF_SENS_GROWTH_DEFAULT}"
+            class="scr-input" style="display:block;width:180px;margin-top:3px" oninput="_tsDcfRecalc()"></label>
+        <label style="font-size:11px;color:var(--text2)">แกน Discount % (คั่นด้วยจุลภาค)
+          <input id="ts-dcf-sens-disc" type="text" value="${DCF_SENS_DISC_DEFAULT}"
+            class="scr-input" style="display:block;width:180px;margin-top:3px" oninput="_tsDcfRecalc()"></label>
+      </div>
+      <div id="ts-dcf-sens"></div>
+    </div>
+
+    <div style="font-size:10px;color:var(--text2);margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">⚠ เป็นกรอบคิดคร่าวๆ ไม่ใช่คำแนะนำซื้อ/ขาย — ผลลัพธ์ไวมากต่อสมมติฐาน growth/discount rate ที่ใส่ ใช้ FCF ปีล่าสุด (ไม่ใช่ TTM หรือค่าเฉลี่ยหลายปี) หุ้นที่ FCF ผันผวน/เป็นวัฏจักรควรดูย้อนหลังหลายปีประกอบก่อนเชื่อตัวเลขนี้</div>
   </div>`;
+}
+
+// สรุปสูตรที่ใช้จริงในหน้านี้ ให้กดดูได้ (ไม่กางไว้ตลอดกันรก) — ต้องอัปเดตข้อความนี้เองถ้าแก้สูตรใน
+// _dcfPvOfStream/_dcfImpliedGrowth/_dcfForwardFairValuePerShare ด้านล่าง เพราะเป็น string คงที่ไม่ได้ derive จาก code
+function _dcfFormulaNoteHtml() {
+  return `<details style="margin-bottom:10px">
+    <summary style="cursor:pointer;font-size:11px;color:var(--text2)">📐 สูตรที่ใช้คำนวณ</summary>
+    <div style="font-size:11px;color:var(--text2);margin-top:8px;line-height:1.6">
+      <div style="margin-bottom:8px"><b style="color:var(--text)">ค่าตั้งต้น</b><br>
+        FCF₀ = Free Cash Flow ปีล่าสุด (งบ annual ไม่ใช่ TTM/ค่าเฉลี่ย) ·
+        EV = มูลค่าตลาด − เงินสดสุทธิ · shares = มูลค่าตลาด / ราคา</div>
+      <div style="margin-bottom:8px"><b style="color:var(--text)">PV ของกระแสเงินสด (10 ปี + Terminal)</b><br>
+        <code>CFₜ = CFₜ₋₁ × (1 + g(t))</code>, t = 1..10<br>
+        <code>PV = Σ CFₜ/(1+r)ᵗ + [CF₁₀×(1+g_term)/(r−g_term)] / (1+r)¹⁰</code><br>
+        Terminal Value ใช้สูตร Gordon Growth ธรรมดา</div>
+      <div style="margin-bottom:8px"><b style="color:var(--text)">Reverse DCF</b><br>
+        หา g คงที่ตลอด 10 ปีที่ทำให้ PV(g) = EV ด้วยวิธี bisection (ช่วงค้นหา −30% ถึง +60%)
+        แล้วเทียบกับ CAGR กำไร/รายได้ในอดีต</div>
+      <div style="margin-bottom:8px"><b style="color:var(--text)">Forward DCF (3 ฉาก)</b><br>
+        โตตามอัตราที่กรอกในปี 1-5 แล้วลดเชิงเส้นเข้าหา Terminal Growth ในปี 6-10:<br>
+        <code>g(t) = g₁₋₅</code> เมื่อ t ≤ 5, <code>g(t) = g₁₋₅ + (g_term − g₁₋₅)×(t−5)/5</code> เมื่อ t = 6..10<br>
+        <code>Fair Value/หุ้น = (PV + เงินสดสุทธิ) / shares</code></div>
+      <div>อัตราคิดลด (Discount Rate) และ Terminal Growth ปรับได้จากช่องด้านบน · Sensitivity ใช้สูตร Forward DCF เดิมคำนวณซ้ำในแต่ละช่องของตาราง</div>
+    </div>
+  </details>`;
+}
+
+// ค่าเริ่มต้นแบบคงที่ (ผู้ใช้กำหนดเอง) — เดิมคำนวณจาก CAGR อดีต ปุ่ม "ใช้ CAGR อดีต" ยังทำแบบเดิมได้
+const DCF_SCENARIO_DEFAULTS = { bear: 10, base: 15, bull: 25 };
+const DCF_SENS_GROWTH_DEFAULT = '5, 10, 15, 20, 25';
+const DCF_SENS_DISC_DEFAULT = '6, 7.5, 9, 10.5, 12';
+
+// แปลง "5, 10, 15" -> [5,10,15] (ทิ้งค่าที่ไม่ใช่ตัวเลข) ถ้าว่าง/พังหมดคืน fallback
+function _dcfParseAxis(raw, fallback) {
+  const vals = String(raw || '').split(',').map(s => parseFloat(s.trim())).filter(v => Number.isFinite(v));
+  return vals.length ? vals.slice(0, 8) : fallback;
+}
+
+// ตั้ง Base = CAGR อดีต แล้ว Bear/Bull = Base ∓ spread (สูตร spread เดิมก่อนเปลี่ยนมาเป็นกรอกเอง)
+function _tsDcfUseHistGrowth() {
+  const dcf = _tsData?.dcf;
+  const hist = dcf?.profit_cagr ?? dcf?.rev_cagr ?? null;
+  if (hist == null) { alert('หุ้นตัวนี้ไม่มี CAGR กำไร/รายได้ในอดีตให้ใช้'); return; }
+  const base = Math.max(-10, Math.min(hist, 25));
+  const spread = Math.max(4, Math.min(Math.abs(base) * 0.4, 12));
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v.toFixed(1); };
+  set('ts-dcf-g-bear', Math.max(-10, base - spread));
+  set('ts-dcf-g-base', base);
+  set('ts-dcf-g-bull', Math.min(25, base + spread));
+  _tsDcfRecalc();
 }
 
 function _dcfPvOfStream(fcf0, growthFn, r, years, terminalGrowth) {
@@ -6095,8 +6293,11 @@ function _dcfForwardFairValuePerShare(fcf0, r, g1_5, terminalGrowth, netCash, sh
 
 function _tsDcfRecalc() {
   const dcf = _tsData?.dcf;
-  const body = document.getElementById('ts-dcf-body');
-  if (!dcf || !body || dcf.is_financial_sector || dcf.fcf == null || !dcf.mkt_cap || !dcf.price) return;
+  const revBox = document.getElementById('ts-dcf-reverse');
+  const fwdBox = document.getElementById('ts-dcf-forward');
+  const sensBox = document.getElementById('ts-dcf-sens');
+  if (!dcf || !revBox || !fwdBox || !sensBox || dcf.is_financial_sector ||
+      dcf.fcf == null || !dcf.mkt_cap || !dcf.price) return;
   const rInput = document.getElementById('ts-dcf-discount'), tgInput = document.getElementById('ts-dcf-terminal');
   const r = (parseFloat(rInput?.value) || dcf.discount_rate_default) / 100;
   const tg = (parseFloat(tgInput?.value) || dcf.terminal_growth_default) / 100;
@@ -6126,15 +6327,18 @@ function _tsDcfRecalc() {
     </div>`;
   }
 
-  const baseHistRaw = histGrowth != null ? histGrowth : 5;
-  const baseHist = Math.max(-10, Math.min(baseHistRaw, 25));   // ค่าอ้างอิงฉาก Base + จุดกึ่งกลาง sensitivity
-  // สเปรดระหว่างฉาก (แต้มเปอร์เซ็นต์ ไม่ใช่ตัวคูณ) — กันไม่ให้ Bear/Base/Bull ไปชนเพดาน 25%/พื้น -10% พร้อมกัน
-  // เมื่อ CAGR ในอดีตสูง/ต่ำมาก (เช่น CPALL 28.6%, หรือหุ้นที่กำไรเพิ่งพลิกจากขาดทุน)
-  const spread = Math.max(4, Math.min(Math.abs(baseHist) * 0.4, 12));
+  // อัตราโตปี 1-5 ของแต่ละฉาก มาจากช่องกรอก (default 10/15/25) — ไม่ผูกกับ CAGR อดีตแล้ว
+  // ปุ่ม "ใช้ CAGR อดีต" ใน _tsDcfUseHistGrowth() เป็นทางลัดให้เติมค่าจากอดีตกลับเข้ามาเอง
+  const gOf = (id, dflt) => {
+    const v = parseFloat(document.getElementById(id)?.value);
+    return Number.isFinite(v) ? v : dflt;
+  };
   const scenarios = [
-    { key: 'bear', label: 'Bear', delta: -spread }, { key: 'base', label: 'Base', delta: 0 }, { key: 'bull', label: 'Bull', delta: spread },
+    { key: 'bear', label: 'Bear', gPct: gOf('ts-dcf-g-bear', DCF_SCENARIO_DEFAULTS.bear) },
+    { key: 'base', label: 'Base', gPct: gOf('ts-dcf-g-base', DCF_SCENARIO_DEFAULTS.base) },
+    { key: 'bull', label: 'Bull', gPct: gOf('ts-dcf-g-bull', DCF_SCENARIO_DEFAULTS.bull) },
   ].map(sc => {
-    const gPct = Math.max(-10, Math.min(baseHist + sc.delta, 25));
+    const gPct = sc.gPct;
     const fv = _dcfForwardFairValuePerShare(dcf.fcf, r, gPct / 100, tg, netCash, shares);
     const upside = fv != null ? (fv / price - 1) * 100 : null;
     return { ...sc, gPct, fv, upside };
@@ -6143,34 +6347,229 @@ function _tsDcfRecalc() {
     <tr><td style="font-weight:600">${sc.label}</td><td style="text-align:right">${sc.gPct.toFixed(1)}%</td>
       <td style="text-align:right">${sc.fv != null ? sc.fv.toFixed(2) : '—'}</td>
       <td style="text-align:right;color:${sc.upside > 0 ? 'var(--green)' : sc.upside < 0 ? 'var(--red)' : 'var(--text)'}">${sc.upside != null ? (sc.upside > 0 ? '+' : '') + sc.upside.toFixed(1) + '%' : '—'}</td></tr>`).join('');
-  const forwardHtml = `<div style="margin-bottom:14px">
-    <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Forward DCF — 3 ฉาก (ปี 1-5 โตตามอัตรา ปี 6-10 ค่อยๆ ลดสู่ Terminal)</div>
+  const histNote = histGrowth != null ? ` · CAGR กำไร/รายได้ในอดีต ${histGrowth.toFixed(1)}%/ปี` : '';
+  const forwardHtml = `
     <div style="overflow-x:auto"><table class="tbl" style="width:100%;max-width:440px">
       <thead><tr><th>ฉาก</th><th style="text-align:right">โต ปี1-5</th><th style="text-align:right">Fair Value</th><th style="text-align:right">Upside</th></tr></thead>
       <tbody>${scenRows}</tbody></table></div>
-    <div style="font-size:10.5px;color:var(--text2);margin-top:4px">ราคาปัจจุบัน ${price.toFixed(2)} · Base=CAGR กำไร/รายได้ในอดีต · Bear/Bull = Base ∓ ${spread.toFixed(1)}pp (cap 25%, floor -10%)</div>
-  </div>`;
+    <div style="font-size:10.5px;color:var(--text2);margin-top:4px">ราคาปัจจุบัน ${price.toFixed(2)}${histNote}</div>`;
 
-  const halfStep = spread / 2;
-  const growthAxis = [-2, -1, 0, 1, 2].map(k => Math.max(-10, Math.min(baseHist + k * halfStep, 25)));
-  const rAxis = [-2, -1, 0, 1, 2].map(d => r * 100 + d);
+  // แกน sensitivity มาจากช่องกรอก (default โต 5-25% / disc 6-12%) — ไม่ผูกกับ CAGR อดีตแล้ว
+  const growthAxis = _dcfParseAxis(document.getElementById('ts-dcf-sens-growth')?.value, [5, 10, 15, 20, 25]);
+  const rAxis = _dcfParseAxis(document.getElementById('ts-dcf-sens-disc')?.value, [6, 7.5, 9, 10.5, 12]);
+  const baseG = scenarios.find(s => s.key === 'base')?.gPct;
   const sensHead = `<tr><th>โต% \\ Disc%</th>${rAxis.map(rr => `<th style="text-align:right">${rr.toFixed(1)}</th>`).join('')}</tr>`;
   const sensRows = growthAxis.map(g => {
     const cells = rAxis.map(rr => {
       const rDec = rr / 100;
       const fv = _dcfForwardFairValuePerShare(dcf.fcf, rDec, g / 100, tg, netCash, shares);
-      const isBase = Math.abs(g - baseHist) < 0.01 && Math.abs(rr - r * 100) < 0.01;
+      // ไฮไลต์ช่องที่ตรงกับสมมติฐานหลักด้านบน (Base growth + Discount Rate ที่ตั้งไว้)
+      const isBase = baseG != null && Math.abs(g - baseG) < 0.01 && Math.abs(rr - r * 100) < 0.01;
       return `<td style="text-align:right;${isBase ? 'font-weight:700;background:var(--card2)' : ''}">${fv != null ? fv.toFixed(1) : '—'}</td>`;
     }).join('');
     return `<tr><td style="font-weight:600">${g.toFixed(1)}%</td>${cells}</tr>`;
   }).join('');
-  const sensHtml = `<div>
-    <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Sensitivity — Fair Value ต่อหุ้น (แถว=โตปี1-5 · คอลัมน์=Discount Rate)</div>
-    <div style="overflow-x:auto"><table class="tbl" style="font-size:11px">${sensHead}<tbody>${sensRows}</tbody></table></div>
-  </div>`;
+  const sensHtml = `<div style="overflow-x:auto"><table class="tbl" style="font-size:11px">${sensHead}<tbody>${sensRows}</tbody></table></div>`;
 
-  body.innerHTML = reverseHtml + forwardHtml + sensHtml +
-    `<div style="font-size:10px;color:var(--text2);margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">⚠ เป็นกรอบคิดคร่าวๆ ไม่ใช่คำแนะนำซื้อ/ขาย — ผลลัพธ์ไวมากต่อสมมติฐาน growth/discount rate ที่ใส่ ใช้ FCF ปีล่าสุด (ไม่ใช่ TTM หรือค่าเฉลี่ยหลายปี) หุ้นที่ FCF ผันผวน/เป็นวัฏจักรควรดูย้อนหลังหลายปีประกอบก่อนเชื่อตัวเลขนี้</div>`;
+  revBox.innerHTML = reverseHtml;
+  fwdBox.innerHTML = forwardHtml;
+  sensBox.innerHTML = sensHtml;
+}
+
+// ---------- มูลค่าเหมาะสมทางเลือก (นอกจาก DCF): PEG / Graham Number / DDM / Justified P-B ----------
+// ทั้ง 4 แบบคำนวณฝั่ง client จากวัตถุดิบใน d.valuation_models (+ d.valuation/d.quality/d.dividend
+// ที่มีอยู่แล้ว) — เหมือนแนวทาง DCF ด้านบน ทุกช่องแก้ค่าเองได้ (ค่าเริ่มต้นมาจาก snapshot ล่าสุด)
+function _altVerdictFromUpside(upsidePct) {
+  if (upsidePct == null) return null;
+  if (upsidePct >= 10) return 'cheap';
+  if (upsidePct <= -10) return 'expensive';
+  return 'normal';
+}
+
+function _altUpsideHtml(fair, price) {
+  if (fair == null || !price) return { fairText: '—', upsideHtml: '' };
+  const upside = (fair / price - 1) * 100;
+  const [lbl, lblColor] = _tsValLabel(_altVerdictFromUpside(upside));
+  const upsideColor = upside > 0 ? 'var(--green)' : upside < 0 ? 'var(--red)' : 'var(--text)';
+  return {
+    fairText: fair.toFixed(2),
+    upsideHtml: `<span style="color:${upsideColor}">${upside > 0 ? '+' : ''}${upside.toFixed(1)}%</span>
+      <span style="color:${lblColor};font-weight:600;margin-left:6px">${lbl}</span>`,
+  };
+}
+
+function _altPeg(pe, growthPct) {
+  if (pe == null || pe <= 0 || growthPct == null || growthPct <= 0) return null;
+  return pe / growthPct;
+}
+
+function _altGraham(eps, bvps) {
+  if (eps == null || eps <= 0 || bvps == null || bvps <= 0) return null;
+  return Math.sqrt(22.5 * eps * bvps);
+}
+
+function _altDdm(d0, rPct, gPct) {
+  if (d0 == null || d0 <= 0 || rPct == null || gPct == null || rPct <= gPct) return null;
+  const d1 = d0 * (1 + gPct / 100);
+  return d1 / ((rPct - gPct) / 100);
+}
+
+function _altJustifiedPb(roePct, rPct, gPct, bvps) {
+  if (roePct == null || rPct == null || gPct == null || bvps == null || bvps <= 0 || rPct <= gPct) return null;
+  const jpb = (roePct - gPct) / (rPct - gPct);
+  return jpb > 0 ? jpb * bvps : null;
+}
+
+function _tsAltValHtml(d) {
+  const vm = d.valuation_models;
+  if (!vm) return '';
+  const isFin = !!d.dcf?.is_financial_sector;
+  const finNote = isFin
+    ? `<div style="font-size:11px;color:var(--text2);margin-bottom:10px">💡 กลุ่มการเงิน — DCF ใช้ไม่ได้ (ดูด้านบน) แต่ <b>Justified P/B</b> ด้านล่างเหมาะกับกลุ่มนี้เป็นพิเศษ เพราะอิงส่วนของผู้ถือหุ้น/ROE ไม่ใช่ FCF</div>`
+    : '';
+  return `<div class="card" style="padding:16px;margin-bottom:12px">
+    <div style="font-size:13px;font-weight:700;margin-bottom:4px">📐 มูลค่าเหมาะสมทางเลือก</div>
+    <div style="font-size:10.5px;color:var(--text2);margin-bottom:10px">อีก 4 วิธีนอกจาก DCF — ทุกช่องแก้ค่าเองได้ (ค่าเริ่มต้นจากงบล่าสุด) ใช้เป็นจุดตั้งต้นคิดต่อ ไม่ใช่คำแนะนำซื้อ/ขาย</div>
+    ${finNote}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">
+      <div>
+        <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">PEG Ratio</div>
+        <label style="font-size:11px;color:var(--text2)">อัตราโตกำไร %/ปี
+          <input id="ts-alt-peg-growth" type="number" step="0.5" value="${vm.growth_pct_default ?? ''}"
+            class="scr-input" style="display:block;width:110px;margin-top:3px" oninput="_tsAltValRecalc()"></label>
+        <div id="ts-alt-peg-out" style="margin-top:8px"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Graham Number</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <label style="font-size:11px;color:var(--text2)">EPS
+            <input id="ts-alt-graham-eps" type="number" step="0.01" value="${vm.eps ?? ''}"
+              class="scr-input" style="display:block;width:90px;margin-top:3px" oninput="_tsAltValRecalc()"></label>
+          <label style="font-size:11px;color:var(--text2)">BVPS
+            <input id="ts-alt-graham-bvps" type="number" step="0.01" value="${vm.bvps ?? ''}"
+              class="scr-input" style="display:block;width:90px;margin-top:3px" oninput="_tsAltValRecalc()"></label>
+        </div>
+        <div id="ts-alt-graham-out" style="margin-top:8px"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">DDM (Gordon Growth)</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <label style="font-size:11px;color:var(--text2)">Discount Rate %
+            <input id="ts-alt-ddm-r" type="number" step="0.5" value="${vm.discount_rate_default ?? ''}"
+              class="scr-input" style="display:block;width:90px;margin-top:3px" oninput="_tsAltValRecalc()"></label>
+          <label style="font-size:11px;color:var(--text2)">โตปันผล %/ปี
+            <input id="ts-alt-ddm-g" type="number" step="0.5" value="${d.dividend?.cagr_5y ?? vm.terminal_growth_default ?? ''}"
+              class="scr-input" style="display:block;width:90px;margin-top:3px" oninput="_tsAltValRecalc()"></label>
+        </div>
+        <div id="ts-alt-ddm-out" style="margin-top:8px"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Justified P/B</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <label style="font-size:11px;color:var(--text2)">ROE %
+            <input id="ts-alt-jpb-roe" type="number" step="0.5" value="${vm.roe ?? ''}"
+              class="scr-input" style="display:block;width:80px;margin-top:3px" oninput="_tsAltValRecalc()"></label>
+          <label style="font-size:11px;color:var(--text2)">Cost of Equity %
+            <input id="ts-alt-jpb-r" type="number" step="0.5" value="${vm.discount_rate_default ?? ''}"
+              class="scr-input" style="display:block;width:90px;margin-top:3px" oninput="_tsAltValRecalc()"></label>
+          <label style="font-size:11px;color:var(--text2)">โต %
+            <input id="ts-alt-jpb-g" type="number" step="0.5" value="${vm.terminal_growth_default ?? ''}"
+              class="scr-input" style="display:block;width:80px;margin-top:3px" oninput="_tsAltValRecalc()"></label>
+          <label style="font-size:11px;color:var(--text2)">BVPS
+            <input id="ts-alt-jpb-bvps" type="number" step="0.01" value="${vm.bvps ?? ''}"
+              class="scr-input" style="display:block;width:90px;margin-top:3px" oninput="_tsAltValRecalc()"></label>
+        </div>
+        <div id="ts-alt-jpb-out" style="margin-top:8px"></div>
+      </div>
+    </div>
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer;font-size:11px;color:var(--text2)">📐 สูตรที่ใช้คำนวณ</summary>
+      <div style="font-size:11px;color:var(--text2);margin-top:8px;line-height:1.6">
+        <div style="margin-bottom:6px"><b style="color:var(--text)">PEG</b> = PE ÷ อัตราโตกำไร% (&lt;1 ถูกกว่าที่โต, &gt;2 แพงกว่าที่โต — กฎง่ายๆ ไม่ใช่กฎตายตัว)</div>
+        <div style="margin-bottom:6px"><b style="color:var(--text)">Graham Number</b> = √(22.5 × EPS × BVPS) — เพดานมูลค่าแบบอนุรักษ์นิยมของ Benjamin Graham เหมาะกับหุ้น value/กำไร-สินทรัพย์เป็นบวกสม่ำเสมอ</div>
+        <div style="margin-bottom:6px"><b style="color:var(--text)">DDM (Gordon Growth)</b> = D₀×(1+g) ÷ (r−g) — D₀ = ปันผลปัจจุบัน (ราคา×Yield) เหมาะกับหุ้นปันผลสม่ำเสมอ (แบงก์/REIT/สาธารณูปโภค) ต้องมี r &gt; g</div>
+        <div>Justified P/B = (ROE−g) ÷ (r−g) แล้ว × BVPS = Fair Value — เหมาะกับกลุ่มการเงินที่ DCF ใช้ไม่ได้ ต้องมี r &gt; g</div>
+      </div>
+    </details>
+  </div>`;
+}
+
+function _tsAltValRecalc() {
+  const d = _tsData;
+  const vm = d?.valuation_models;
+  if (!vm) return;
+  const price = d.header?.price;
+  const pe = d.valuation?.pe?.value;
+
+  // PEG
+  const pegOut = document.getElementById('ts-alt-peg-out');
+  if (pegOut) {
+    const growth = parseFloat(document.getElementById('ts-alt-peg-growth')?.value);
+    const peg = _altPeg(pe, Number.isFinite(growth) ? growth : null);
+    if (peg == null) {
+      pegOut.innerHTML = `<div class="empty" style="padding:2px 0;font-size:11.5px">ข้อมูลไม่พอ (ต้องมี PE และอัตราโตเป็นบวก)</div>`;
+    } else {
+      const [lbl, lblColor] = peg < 1 ? _tsValLabel('cheap') : peg > 2 ? _tsValLabel('expensive') : _tsValLabel('normal');
+      pegOut.innerHTML = `<div style="font-size:20px;font-weight:800">${peg.toFixed(2)}</div>
+        <div style="font-size:11px;color:${lblColor};font-weight:600">${lbl}</div>
+        <div style="font-size:10.5px;color:var(--text2)">PE ${pe != null ? pe.toFixed(2) : '—'}</div>`;
+    }
+  }
+
+  // Graham Number
+  const grahamOut = document.getElementById('ts-alt-graham-out');
+  if (grahamOut) {
+    const eps = parseFloat(document.getElementById('ts-alt-graham-eps')?.value);
+    const bvps = parseFloat(document.getElementById('ts-alt-graham-bvps')?.value);
+    const fair = _altGraham(Number.isFinite(eps) ? eps : null, Number.isFinite(bvps) ? bvps : null);
+    if (fair == null || !price) {
+      grahamOut.innerHTML = `<div class="empty" style="padding:2px 0;font-size:11.5px">ข้อมูลไม่พอ (ต้องมี EPS และ BVPS เป็นบวก)</div>`;
+    } else {
+      const { fairText, upsideHtml } = _altUpsideHtml(fair, price);
+      grahamOut.innerHTML = `<div style="font-size:20px;font-weight:800">${fairText}</div>
+        <div style="font-size:11px">${upsideHtml}</div>
+        <div style="font-size:10.5px;color:var(--text2);margin-top:2px">ราคาปัจจุบัน ${price.toFixed(2)}</div>`;
+    }
+  }
+
+  // DDM
+  const ddmOut = document.getElementById('ts-alt-ddm-out');
+  if (ddmOut) {
+    const divYield = d.dividend?.yield;
+    const d0 = (divYield != null && price) ? price * divYield / 100 : null;
+    const r = parseFloat(document.getElementById('ts-alt-ddm-r')?.value);
+    const g = parseFloat(document.getElementById('ts-alt-ddm-g')?.value);
+    const fair = _altDdm(d0, Number.isFinite(r) ? r : null, Number.isFinite(g) ? g : null);
+    if (fair == null || !price) {
+      ddmOut.innerHTML = `<div class="empty" style="padding:2px 0;font-size:11.5px">${!d0 ? 'หุ้นนี้ไม่จ่ายปันผล/ไม่มีข้อมูล Yield' : 'Discount Rate ต้องมากกว่าอัตราโตปันผล'}</div>`;
+    } else {
+      const { fairText, upsideHtml } = _altUpsideHtml(fair, price);
+      ddmOut.innerHTML = `<div style="font-size:20px;font-weight:800">${fairText}</div>
+        <div style="font-size:11px">${upsideHtml}</div>
+        <div style="font-size:10.5px;color:var(--text2);margin-top:2px">D₀ = ${d0 != null ? d0.toFixed(2) : '—'}/หุ้น</div>`;
+    }
+  }
+
+  // Justified P/B
+  const jpbOut = document.getElementById('ts-alt-jpb-out');
+  if (jpbOut) {
+    const roe = parseFloat(document.getElementById('ts-alt-jpb-roe')?.value);
+    const r = parseFloat(document.getElementById('ts-alt-jpb-r')?.value);
+    const g = parseFloat(document.getElementById('ts-alt-jpb-g')?.value);
+    const bvpsRaw = parseFloat(document.getElementById('ts-alt-jpb-bvps')?.value);
+    const bvps = Number.isFinite(bvpsRaw) ? bvpsRaw : vm.bvps;
+    const fair = _altJustifiedPb(Number.isFinite(roe) ? roe : null, Number.isFinite(r) ? r : null,
+      Number.isFinite(g) ? g : null, bvps);
+    if (fair == null || !price) {
+      jpbOut.innerHTML = `<div class="empty" style="padding:2px 0;font-size:11.5px">ข้อมูลไม่พอ (ต้องมี ROE, BVPS และ Cost of Equity &gt; อัตราโต)</div>`;
+    } else {
+      const { fairText, upsideHtml } = _altUpsideHtml(fair, price);
+      const curPb = d.valuation?.pbv?.value;
+      jpbOut.innerHTML = `<div style="font-size:20px;font-weight:800">${fairText}</div>
+        <div style="font-size:11px">${upsideHtml}</div>
+        <div style="font-size:10.5px;color:var(--text2);margin-top:2px">Justified P/B ${(fair / bvps).toFixed(2)}×${curPb != null ? ` (ปัจจุบัน ${curPb}×)` : ''}</div>`;
+    }
+  }
 }
 
 // hk_index_metrics.json เก็บ symbol แบบ "0700.HK" (ให้ chart/header ใช้ตรงๆ) แต่ endpoint
@@ -6252,7 +6651,7 @@ function _tsGoFin(sym) {
     document.getElementById('fin-sym-set').value = sym;
   } else {
     setFinTab('dr', document.getElementById('fin-tab-dr-btn'));
-    _finMirMarket = mkt;
+    _finMirSelectMarket(mkt);
     document.getElementById('fin-sym-dr').value = _tsRawSym(sym);
   }
   setTimeout(searchFinancials, 150);
@@ -6266,7 +6665,7 @@ function _tsGoDividends(sym) {
     document.getElementById('fin-sym-set').value = sym;
   } else {
     setFinTab('dr', document.getElementById('fin-tab-dr-btn'));
-    _finMirMarket = mkt;
+    _finMirSelectMarket(mkt);
     document.getElementById('fin-sym-dr').value = _tsRawSym(sym);
   }
   setFinView('dividends', document.getElementById('fin-view-div-btn'));
@@ -6448,6 +6847,9 @@ async function _tsLoadInsider(sym) {
 
 function closeTsOpenChart(sym) {
   const mkt = _tsData?.market || 'TH';
+  // lite (DR ตลาด JP/VN/ฯลฯ): sym เป็น DR sym ไม่ใช่ ticker ไทย/US — เปิด DR chart modal เดิม
+  // (หุ้นอยู่ใน _drData อยู่แล้วเพราะผู้ใช้เข้ามาจากหน้า DR)
+  if (_tsData?.lite && _tsData?.dr_symbol) { openDRChartModal(_tsData.dr_symbol); return; }
   if (mkt === 'US') openUsChartModal(sym);
   else if (mkt === 'HK') openHkChartModal(sym);
   else openChartModal(sym);
@@ -6936,15 +7338,29 @@ window.addEventListener('scroll', () => {
 function _positionBtnNote(wrap) {
   const note = wrap.querySelector(':scope > .btn-note');
   if (!note) return;
-  const nw = note.offsetWidth || parseFloat(getComputedStyle(note).width) || 220;
   const r = wrap.getBoundingClientRect();
-  const wouldBeLeftEdge = r.right - nw;   // ตำแหน่งซ้ายสุดของกล่องถ้าใช้ right:0 ปกติ
-  note.style.right = wouldBeLeftEdge < 8 ? (8 - wouldBeLeftEdge) * -1 + 'px' : '0';
+  const nw = note.offsetWidth || parseFloat(getComputedStyle(note).width) || 220;
+  const nh = note.offsetHeight || 0;
+  // ดีไซน์เดิมคือขอบขวากล่องตรงกับขอบขวาปุ่ม (right:0) — คงไว้ แล้วหนีบไม่ให้ล้นสองข้าง
+  const left = Math.max(8, Math.min(r.right - nw, window.innerWidth - nw - 8));
+  // ปกติเปิดลงล่าง ถ้าที่ไม่พอ (ปุ่มอยู่ครึ่งล่างจอ เช่น filter Stage กลางหน้า) เปิดขึ้นบนแทน
+  let top = r.bottom + 6;
+  if (nh && top + nh > window.innerHeight - 8) top = Math.max(8, r.top - nh - 6);
+  note.style.left = left + 'px';
+  note.style.top = top + 'px';
+  note.style.right = 'auto';
+  note.style.setProperty('--btn-note-arrow',
+    Math.max(10, Math.min(r.left + r.width / 2 - left, nw - 10)) + 'px');
 }
 document.addEventListener('mouseover', e => {
   const wrap = e.target.closest('.btn-wrap');
   if (wrap) _positionBtnNote(wrap);
 });
+// fixed ไม่ขยับตามปุ่มเอง — ถ้า scroll ขณะกล่องเปิดอยู่ (nav เลื่อนแนวนอน หรือหน้าเลื่อน
+// จนปุ่ม Stage ขยับ) ต้องคำนวณใหม่ ไม่งั้นกล่องค้างอยู่ที่เดิมแยกจากปุ่ม
+window.addEventListener('scroll', () => {
+  document.querySelectorAll('.btn-wrap:hover, .btn-wrap.tt-open').forEach(_positionBtnNote);
+}, true);
 // จอสัมผัส: ไม่มี hover จริง (iOS จำลอง hover ตอนแตะครั้งแรกแบบไม่เสถียร) — เพิ่ม
 // tap-toggle ชัดเจนแทน ไม่ต้อง stopPropagation เพราะอยากให้ onclick เดิมของปุ่ม (กรอง/รีเฟรช) ทำงานควบคู่ไปด้วย
 document.addEventListener('click', e => {
@@ -7444,23 +7860,29 @@ async function _fetchLongHistory() {
 }
 
 // เปิด/ปิดปุ่ม "เทียบเพื่อน"/"ดูสรุปเต็ม" ตาม _cmStock ปัจจุบัน — หุ้น DR ที่ underlying
-// ไม่ใช่ตลาด US/HK (JP/SG/TW/VN/EU/CN ~55 ตัว) ยังไม่มี cohort ให้เทียบ RS/sector
-// (backend ตอบ 501 เสมอ ดู /api/tearsheet, /api/peer-compare) — ปิดปุ่มไว้เลยกันกดแล้วเจอ error
+// ไม่ใช่ตลาด US/HK (JP/SG/TW/VN/EU/CN ~63 ตัว) ยังไม่มี cohort ให้จัดอันดับ RS/เทียบ sector
+// -> ปุ่ม "เทียบเพื่อน" ยังปิด (backend /api/peer-compare ตอบ 501) แต่ Tearsheet เปิดได้แล้ว
+// แบบ lite (งบ/F-Z/DCF/ปันผล/valuation ครบ ไม่มี RS/peer — ดู fetch_header_lite ใน backend)
 // เรียกทุกครั้งที่เปิด modal (ทุกประเภทหุ้น) เพราะปุ่มใช้ element เดียวกันข้าม modal ทุกตัว
 function _cmSyncPeerTearsheetButtons() {
   const peerBtn = document.getElementById('cm-peer-btn');
   const tsBtn = document.getElementById('cm-tearsheet-btn');
   if (!peerBtn || !tsBtn) return;
   const isDr = !!_cmStock?._isDR;
-  const unsupported = isDr && _cmStock.region !== 'US' && _cmStock.region !== 'HK';
-  [peerBtn, tsBtn].forEach(btn => {
-    btn.disabled = unsupported;
-    btn.style.opacity = unsupported ? '0.4' : '';
-    btn.style.cursor = unsupported ? 'not-allowed' : 'pointer';
-    btn.title = unsupported
-      ? `หุ้น DR underlying ตลาด ${_cmStock.region || '?'} ยังไม่รองรับ — รองรับเฉพาะ underlying ตลาด US/HK`
-      : (btn === peerBtn ? 'เทียบกับเพื่อนร่วม sector' : 'ดูสรุปเต็ม (Tearsheet)');
+  const nonCohort = isDr && _cmStock.region !== 'US' && _cmStock.region !== 'HK';
+  // Peer ปิดเมื่อ nonCohort, Tearsheet เปิดเสมอ (lite รองรับทุกตลาด DR แล้ว)
+  const cfg = [[peerBtn, nonCohort], [tsBtn, false]];
+  cfg.forEach(([btn, off]) => {
+    btn.disabled = off;
+    btn.style.opacity = off ? '0.4' : '';
+    btn.style.cursor = off ? 'not-allowed' : 'pointer';
   });
+  peerBtn.title = nonCohort
+    ? `หุ้น DR underlying ตลาด ${_cmStock.region || '?'} ยังไม่มี cohort ให้เทียบเพื่อน — เปิด "ดูสรุปเต็ม" ได้ (งบ/F-Z/DCF/ปันผล)`
+    : 'เทียบกับเพื่อนร่วม sector';
+  tsBtn.title = nonCohort
+    ? `ดูสรุปเต็มแบบ lite (งบ/F-Score/Z-Score/DCF/ปันผล — ตลาด ${_cmStock.region} ยังไม่มี RS/เทียบเพื่อน)`
+    : 'ดูสรุปเต็ม (Tearsheet)';
 }
 
 // เช็คซ้ำว่าปุ่ม "งบการเงิน" ควรโผล่ไหม — เรียกทั้งตอนเปิด modal ปกติ และตอน
@@ -7873,7 +8295,10 @@ function _loadFinTVWidget(sym, tvSym) {
 function _loadLiveValuationBand(d, isDr, market, idPrefix = '', stillCurrent = () => _finData?.sym === d.sym) {
   const peCur = document.getElementById(idPrefix + 'peband-cur');
   const pbvCur = document.getElementById(idPrefix + 'pbvband-cur');
-  if (!peCur && !pbvCur) return;   // bands ไม่ได้ render (ข้อมูลไม่พอ)
+  const psCur = document.getElementById(idPrefix + 'psband-cur');
+  const hasLineChart = document.getElementById(idPrefix + 'pe-line') || document.getElementById(idPrefix + 'pbv-line')
+    || document.getElementById(idPrefix + 'ps-line');
+  if (!peCur && !pbvCur && !psCur && !hasLineChart) return;   // ไม่มีอะไรให้แปะราคาสด (ข้อมูลไม่พอ)
   const q = market ? `?market=${encodeURIComponent(market)}` : '';
   const sep = isDr ? (q ? '&' : '?') : '';
   const url = `/api/live-price/${encodeURIComponent(d.sym)}${isDr ? q + sep + 'is_dr=1' : ''}`;
@@ -7887,13 +8312,21 @@ function _loadLiveValuationBand(d, isDr, market, idPrefix = '', stillCurrent = (
     }
     const val = d.valuation || {};
     const inc = d.income || {};
+    const { pe, pbv, ps } = _finValuationSeries(d);   // ชุดเดียวกับที่ใช้วาดกราฟเส้นตอนแรก
+    const closeSeries = _finSeries(val['Close']);
     // PE สด: price ÷ TTM EPS จริง (ไม่ใช่เทคนิคย้อนหา EPS โดยนัยจาก field PE ของ
     // Finnomena เหมือนเดิม — เพราะรู้แล้วว่า field นั้นบางงวดคำนวณผิด ดู _ttmPeSeries)
     const ttmEps = _ttmEpsLast(inc['Basic EPS']);
-    if (ttmEps) _patchBandValue(idPrefix + 'peband', price / ttmEps, true);
+    const peLive = ttmEps ? price / ttmEps : null;
+    if (peLive != null) _patchBandValue(idPrefix + 'peband', peLive, true);
+    _patchLineChart(idPrefix + 'pe-line', pe, peLive, true);
     // PBV: ไม่มีปัญหาแบบ PE ใช้เทคนิคย้อนหา BVPS โดยนัยจาก field ของ Finnomena ได้ตามเดิม
-    const closeSeries = _finSeries(val['Close']);
-    _patchBand(idPrefix + 'pbvband', _finSeries(val['PBV']), closeSeries, price, true);
+    const pbvLive = _patchBand(idPrefix + 'pbvband', pbv, closeSeries, price, true);
+    _patchLineChart(idPrefix + 'pbv-line', pbv, pbvLive, false);
+    // PS: เทคนิคเดียวกับ PBV — ย้อนหา "รายได้ต่อหุ้นโดยนัย" จาก (Close งวดล่าสุด, PS งวดล่าสุด)
+    // แล้วคูณราคาสดเข้าไป (ps คำนวณเองจาก Market Cap ÷ TTM Revenue ดู _psSeries)
+    const psLive = _patchBand(idPrefix + 'psband', ps, closeSeries, price, true);
+    _patchLineChart(idPrefix + 'ps-line', ps, psLive, true);
   }).catch(() => {});
 }
 
@@ -7920,8 +8353,11 @@ function _patchBandValue(idPrefix, liveVal, lowerIsCheap) {
   tickEl.style.boxShadow = `0 0 3px ${col}`;
 }
 
-function _patchBand(idPrefix, ratioSeries, closeSeries, livePrice, lowerIsCheap) {
-  if (!ratioSeries.length || !closeSeries.length) return;
+// ย้อนหา "ตัวหารโดยนัย" (BVPS/รายได้ต่อหุ้น ฯลฯ) จาก (Close งวดล่าสุด, ratio งวดล่าสุด)
+// แล้วคูณราคาสดเข้าไป — คืนค่า liveVal เฉยๆ (ไม่แตะ DOM) ให้ผู้เรียกไปแปะทั้งแถบเกจ
+// และกราฟเส้นต่อได้ คืน null ถ้าข้อมูลไม่พอ
+function _liveRatioValue(ratioSeries, closeSeries, livePrice) {
+  if (!ratioSeries.length || !closeSeries.length) return null;
   // ratioSeries/closeSeries กรอง null แยกฟิลด์กันมาจาก _finSeries — งวดล่าสุดของแต่ละ
   // ชุดอาจเป็นคนละวันที่กัน (เช่น มี Close แต่ PBV งวดนั้นยังไม่ออก) ต้องหาวันที่ล่าสุด
   // ที่ "มีทั้งคู่" ก่อน ไม่งั้น BVPS โดยนัยจะเอาราคาปิดงวดหนึ่งไปหารตัวคูณอีกงวดหนึ่ง
@@ -7931,9 +8367,30 @@ function _patchBand(idPrefix, ratioSeries, closeSeries, livePrice, lowerIsCheap)
     const o = ratioSeries[i];
     if (closeByDate.has(o.d)) { lastRatio = o.v; lastClose = closeByDate.get(o.d); break; }
   }
-  if (!lastClose || !lastRatio) return;
-  const liveVal = livePrice * lastRatio / lastClose;   // = livePrice / BVPS โดยนัย
-  _patchBandValue(idPrefix, liveVal, lowerIsCheap);
+  if (!lastClose || !lastRatio) return null;
+  return livePrice * lastRatio / lastClose;   // = livePrice / BVPS โดยนัย
+}
+
+function _patchBand(idPrefix, ratioSeries, closeSeries, livePrice, lowerIsCheap) {
+  const liveVal = _liveRatioValue(ratioSeries, closeSeries, livePrice);
+  if (liveVal != null) _patchBandValue(idPrefix, liveVal, lowerIsCheap);
+  return liveVal;
+}
+
+// แปะจุด "ปัจจุบัน" ของกราฟเส้นย้อนหลัง (PE/PBV/PS) ด้วยราคาสดจาก Yahoo แทนงวด
+// Finnomena ล่าสุด แล้ว redraw ใหม่ทั้ง canvas (เหมือน _patchBandValue แต่สำหรับกราฟเส้น
+// แทนแถบเกจ) — stats (avg/std/thresholds) คำนวณใหม่จากชุดข้อมูลที่รวมจุดสดแล้ว
+function _patchLineChart(canvasId, series, liveVal, isPE) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !series.length || liveVal == null) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const lastDate = series[series.length - 1].d;
+  const merged = (lastDate === today ? series.slice(0, -1) : series).concat([{ d: today, v: liveVal }]);
+  const stats = _seriesStats(merged);
+  if (!stats) return;
+  const display = _winsorizeSeriesForDisplay(merged);
+  drawValChart(canvasId, display.map(o => o.d), display.map(o => o.v), stats.thresholds, stats);
+  setupValHover(canvasId, stats.thresholds, stats.avg, isPE, stats.std);
 }
 
 function startDRDescriptionSync() {
@@ -8537,6 +8994,7 @@ function _loadCmFinBand(sym, qs, fetchSym = sym) {
       if (_cmStock?.symbol !== sym) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
       if (d.error) return;
       box.innerHTML = _finTrendSection(d, 'finnomena_q', 'cm-');
+      _drawFinTrendCharts(d, 'cm-');
       if (!IS_STATIC) {
         const isDr = !!(_cmStock?._isDR || _cmStock?._isUSIdx || _cmStock?._isHKIdx);
         const market = _cmStock?._isUSIdx ? 'US' : _cmStock?._isHKIdx ? 'HK'
@@ -9057,11 +9515,19 @@ let _finMirMarket = 'US';
 let _finIndexData = null;      // {SP500:[...], DOW:[...], NDX:[...]} รายชื่อ ticker ในดัชนี (โหลดครั้งเดียว)
 let _finMirIndex = 'ALL';      // ตัวกรองดัชนีปัจจุบัน (ใช้เฉพาะแท็บ US)
 const FIN_IDX_LABEL = { SP500: 'S&P 500', DOW: 'Dow Jones', NDX: 'Nasdaq 100' };
+const FIN_HK_IDX_LABEL = { HSI: 'Hang Seng (HSI)', HSCEI: 'HSCEI', HSTECH: 'Hang Seng TECH' };
 
 function _finMirName(mk, sym) {
   return (_finMirNames && _finMirNames[mk] && _finMirNames[mk][sym])
     || (mk === 'US' && _finIndexData && _finIndexData.extra_names && _finIndexData.extra_names[sym])
     || '';
+}
+
+// สลับตลาด US/HK จากที่อื่นนอกปุ่มแท็บ (ลิงก์จาก Tearsheet / Heatmap HK) — เดิมแต่ละที่
+// เซ็ต _finMirMarket + toggle class เองซ้ำๆ ทำให้ลืมอัพเดทส่วนที่เพิ่มมาทีหลัง (แถวปุ่ม
+// เช็ค/sync ดัชนี) รวมมาเรียก _finMirBrowse ทางเดียวกันหมดจะไม่หลุดอีก
+function _finMirSelectMarket(mk) {
+  _finMirBrowse(mk, document.getElementById(mk === 'HK' ? 'fin-mir-hk' : 'fin-mir-us'));
 }
 
 // เรียกดูรายชื่อหุ้น US/HK ที่มีข้อมูล (ในแท็บต่างประเทศ) — คลิกเพื่อโหลดงบ
@@ -9070,8 +9536,24 @@ function _finMirBrowse(mk, btn) {
   document.querySelectorAll('#fin-mir-us,#fin-mir-hk').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   // ตัวกรองดัชนี (S&P500/Dow/Nasdaq100) มีเฉพาะหุ้น US — ซ่อนแถวนี้เมื่อดู HK และเคลียร์ตัวกรอง
+  // ต้องระบุ 'flex' ตรงๆ ไม่ใช่ '' — แถวนี้ตั้ง display:flex ไว้ใน inline style การเซ็ต ''
+  // เป็นการ "ลบ" inline display ทิ้ง แล้วตกกลับไปเป็น block ตาม default ของ <div>
+  // ทำให้ปุ่มกรองดัชนีเรียงตกบรรทัดหลังสลับไป HK แล้วกลับมา US
   const idxRow = document.getElementById('fin-mir-idx-row');
-  if (idxRow) idxRow.style.display = mk === 'US' ? '' : 'none';
+  if (idxRow) idxRow.style.display = mk === 'US' ? 'flex' : 'none';
+  // ปุ่มเช็ค/sync ดัชนีเป็นคนละไฟล์กันคนละตลาด (us_index_membership.json vs hk_...)
+  // — สลับให้โชว์เฉพาะของตลาดที่ดูอยู่ เดิมแถว US โผล่ค้างตอนสลับไป HK
+  const usAct = document.getElementById('fin-us-idx-actions');
+  const hkAct = document.getElementById('fin-hk-idx-actions');
+  if (usAct) usAct.style.display = mk === 'US' ? 'flex' : 'none';
+  if (hkAct) hkAct.style.display = mk === 'HK' ? 'flex' : 'none';
+  // ผลเช็คของตลาดเดิมไม่เกี่ยวกับตลาดใหม่ — เก็บทิ้งไม่ให้ค้างสับสน
+  ['us-idx-diff-result', 'hk-idx-diff-result'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.style.display = 'none';
+  });
+  ['us-idx-diff-note', 'hk-idx-diff-note'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.textContent = '';
+  });
   if (mk !== 'US' && _finMirIndex !== 'ALL') _finMirSetIndex('ALL', document.getElementById('fin-mir-idx-all'));
   else _finMirRender();
 }
@@ -9163,20 +9645,67 @@ async function checkUSIndexUpdates() {
   }
 }
 
-function _renderUSIndexDiff(d) {
-  const box = document.getElementById('us-idx-diff-result');
+// ใช้ร่วมกันทั้ง US (SP500/DOW/NDX) และ HK (HSI/HSCEI/HSTECH) — response shape จาก
+// us_index_membership.diff_membership / hk_index_membership.diff_membership เหมือนกันทุก field
+function _renderIndexDiff(boxId, keys, labels, d) {
+  const box = document.getElementById(boxId);
   box.style.display = 'block';
-  const rows = ['SP500', 'DOW', 'NDX'].map(k => {
+  const rows = keys.map(k => {
     const newArr = (d.new || {})[k] || [], remArr = (d.removed || {})[k] || [];
     if (!newArr.length && !remArr.length) return '';
     return `
     <div style="margin-bottom:10px">
-      <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">${FIN_IDX_LABEL[k]} — สด ${d.live_counts?.[k] ?? '—'} ตัว · local ${d.local_counts?.[k] ?? '—'} ตัว${d.mirror_gap?.[k] != null ? ` · ${d.mirror_gap[k]} ตัวไม่มีงบ Finnomena (ใช้ Yahoo)` : ''}</div>
+      <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">${labels[k]} — สด ${d.live_counts?.[k] ?? '—'} ตัว · local ${d.local_counts?.[k] ?? '—'} ตัว${d.mirror_gap?.[k] != null ? ` · ${d.mirror_gap[k]} ตัวไม่มีงบ Finnomena (ใช้ Yahoo)` : ''}</div>
       ${newArr.length ? `<div style="font-size:11.5px;color:var(--green)">🆕 เพิ่มเข้าดัชนี: ${newArr.join(', ')}</div>` : ''}
       ${remArr.length ? `<div style="font-size:11.5px;color:var(--red)">🗑 ถูกถอดจากดัชนี: ${remArr.join(', ')}</div>` : ''}
     </div>`;
   }).join('');
   box.innerHTML = rows || '<div class="empty" style="padding:16px;color:var(--text2)">ไม่มีการเปลี่ยนแปลง</div>';
+}
+
+function _renderUSIndexDiff(d) {
+  _renderIndexDiff('us-idx-diff-result', ['SP500', 'DOW', 'NDX'], FIN_IDX_LABEL, d);
+}
+
+// เช็ค/sync ดัชนี HK — โครงเดียวกับฝั่ง US เป๊ะ (endpoint /api/hk-index-check-updates +
+// /api/hk-index-sync มีมาตั้งแต่แรกแต่ไม่เคยมีปุ่มเรียก) ต่างแค่ไม่ต้องรีเฟรช _finIndexData
+// เพราะตัวกรองดัชนีในรายการ browse ยังเป็นของ US อย่างเดียว
+async function checkHKIndexUpdates() {
+  const btn  = document.getElementById('hk-idx-diff-btn');
+  const note = document.getElementById('hk-idx-diff-note');
+  const box  = document.getElementById('hk-idx-diff-result');
+  btn.disabled = true;
+  note.textContent = 'กำลังเช็คกับ Wikipedia...';
+  box.style.display = 'none';
+  try {
+    const r = await fetch('/api/hk-index-check-updates');
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    const addedN = Object.values(d.new || {}).reduce((a, v) => a + v.length, 0);
+    const removedN = Object.values(d.removed || {}).reduce((a, v) => a + v.length, 0);
+    note.textContent = addedN || removedN
+      ? `พบความเปลี่ยนแปลง ${addedN} ตัวใหม่ / ${removedN} ตัวถูกถอด — กด "🔄 ดึงเฉพาะที่ขาด/เก่า" เพื่ออัพเดท`
+      : 'ไฟล์ local ตรงกับ Wikipedia อยู่แล้ว ไม่มีการเปลี่ยนแปลง';
+    _renderIndexDiff('hk-idx-diff-result', ['HSI', 'HSCEI', 'HSTECH'], FIN_HK_IDX_LABEL, d);
+  } catch (e) {
+    note.textContent = '';
+    box.style.display = 'block';
+    box.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function startHKIndexSync() {
+  _startJob('/api/hk-index-sync', 'hk-idx-sync-btn', '🔄 ดึงเฉพาะที่ขาด/เก่า (local)',
+    { min_age_days: 7 }, () => {
+      document.getElementById('hk-idx-diff-note').textContent = '';
+      document.getElementById('hk-idx-diff-result').style.display = 'none';
+      // hk_index_membership.json + financials.db เปลี่ยนแล้วบน server — โหลด mirror list
+      // ใหม่ก่อน re-render (ตัวใหม่ที่เพิ่งดึงงบมาจะได้โผล่ในรายการ browse)
+      fetch('/api/mirror-symbols').then(r => r.json()).then(d => { _finDrMirrorSyms = d || {}; _finMirRender(); }).catch(() => {});
+      fetch('/api/mirror-names').then(r => r.json()).then(d => { _finMirNames = d || {}; _finMirRender(); }).catch(() => {});
+    });
 }
 
 function startUSIndexSync() {
@@ -10486,10 +11015,7 @@ function _hkHmGoFin() {
   // _finMirMarket ที่ค้างอยู่ (default US) เดา yf ticker ผิดตลาด (ดู _loadCmFin ที่ทำแบบเดียวกัน)
   const sym = _hkHmPopupSym.replace(/\.HK$/i, '');
   document.getElementById('hm-popup').style.display = 'none';
-  _finMirMarket = 'HK';
-  document.querySelectorAll('#fin-mir-us,#fin-mir-hk').forEach(b => b.classList.remove('active'));
-  const hkBtn = document.getElementById('fin-mir-hk');
-  if (hkBtn) hkBtn.classList.add('active');
+  _finMirSelectMarket('HK');
   location.hash = '#fin/dr/' + sym;
 }
 
@@ -11798,17 +12324,63 @@ function _annualPeSeries(epsRow, closeRow) {
   return out;
 }
 
+// TTM Revenue (ผลรวม Total Revenue 4 ไตรมาสท้ายสุด) — ใช้คำนวณ PS ด้านล่าง
+function _ttmRevenueSeries(revRow) {
+  const items = _finSeries(revRow);
+  if (items.length < 4) return [];
+  const out = [];
+  for (let i = 3; i < items.length; i++) {
+    const ttm = items[i - 3].v + items[i - 2].v + items[i - 1].v + items[i].v;
+    if (ttm > 0) out.push({ d: items[i].d, v: ttm });
+  }
+  return out;
+}
+
+// PS (Price to Sales) = Market Cap ÷ TTM Revenue — Finnomena ไม่มี field PS ตรงๆ คำนวณเอง
+// เหมือนแนวคิด compute_ps() ฝั่ง backend (financials_store.py) ผูกกับวันที่ Market Cap
+// (ถี่กว่า/สดกว่าวันปิดงบ) หา TTM revenue ล่าสุดที่ ≤ วันนั้น ข้ามถ้าห่างเกิน ~400 วัน
+// (รายได้หยุดอัพเดทนานเกินปี — เอามาหารราคาสดจะหลอกตา)
+function _psSeries(mcRow, revRow) {
+  const mc = _finSeries(mcRow);
+  const ttmRev = _ttmRevenueSeries(revRow);
+  if (!mc.length || !ttmRev.length) return [];
+  const out = [];
+  let j = -1;
+  for (const o of mc) {
+    while (j + 1 < ttmRev.length && ttmRev[j + 1].d <= o.d) j++;
+    if (j < 0 || o.v == null || o.v <= 0) continue;
+    const gapDays = (new Date(o.d) - new Date(ttmRev[j].d)) / 86400000;
+    if (gapDays > 400) continue;
+    out.push({ d: o.d, v: o.v / ttmRev[j].v });
+  }
+  return out;
+}
+
 // แถบ valuation band: min | p25 | median | p75 | max + จุดค่าปัจจุบัน
-// winsorize: หนีบค่าที่หลุดช่วง p1-p99 เข้ามาที่ขอบเขต (ไม่ทิ้งจุดข้อมูล แค่ลดความ
-// สุดโต่ง) — เก็บไว้เป็นเซฟตี้เน็ตกันจุดโดดเดี่ยวที่เพี้ยนจริงๆ (ไม่ใช่ตัวแก้หลัก
-// ของปัญหา PE Finnomena ที่แก้ด้วย TTM EPS ด้านบนแล้ว) ลาก mean/std/min/max
-// ของทั้งชุดข้อมูลเพี้ยนไปด้วย ถ้าไม่ตัดก่อน (เหมือนหลักการ _sane() ที่ใช้ใน
-// factor_snapshot.py ฝั่ง backend สำหรับ ratio อื่นๆ)
+// winsorize: หนีบค่าที่หลุดขอบเขตปกติเข้ามา (ไม่ทิ้งจุดข้อมูล แค่ลดความสุดโต่ง) — เก็บไว้
+// เป็นเซฟตี้เน็ตกันจุดโดดเดี่ยวที่เพี้ยนจริงๆ ลาก mean/std/min/max ของทั้งชุดข้อมูลเพี้ยนไป
+// ด้วยถ้าไม่ตัดก่อน (เหมือนหลักการ _sane() ที่ใช้ใน factor_snapshot.py ฝั่ง backend)
+//
+// สถิติตลาด (SET/mai รายเดือน 600+ จุด) ยังใช้ p1/p99 index-based เดิม — ที่ n ขนาดนั้น
+// round(0.01×(n-1)) ตัดได้จริง ตรงกับตัวอย่างที่อธิบายไว้ใน _PE_BAND_NOTE_HTML ด้านล่าง
+// (PE mai 937x -> ~429x) แต่ข้อมูลรายหุ้น (8-67 จุดต่อ PE/PBV/PS) ใช้สูตรเดียวกันไม่ได้ —
+// round(0.01×(n-1)) ปัดลง index 0/ท้ายเสมอที่ n<~51 (ไม่ตัดอะไรเลย) ทำให้ปีที่ EPS/รายได้
+// ใกล้ศูนย์พอดี (near-breakeven) พุ่งเป็นร้อยเท่าแบบไม่ถูกกรอง ลาก avg/std เพี้ยนหนัก
+// (พิสูจน์จริง: PE เฉลี่ยหลุดไป 64x ทั้งที่ median 12x) — ที่ n<51 จึงสลับไปใช้ Tukey fence
+// (median±3×IQR) แทน ซึ่ง Q1/Q3 (floor-based ไม่ใช่ round) นิยามได้มั่นคงไม่ว่า n จะเล็กแค่ไหน
 function _winsorize(vals) {
   if (vals.length < 8) return vals;
   const sorted = [...vals].sort((a, b) => a - b);
-  const q = p => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))];
-  const lo = q(0.01), hi = q(0.99);
+  const n = sorted.length;
+  if (n >= 51) {
+    const q = p => sorted[Math.min(n - 1, Math.max(0, Math.round(p * (n - 1))))];
+    const lo = q(0.01), hi = q(0.99);
+    return vals.map(v => Math.min(hi, Math.max(lo, v)));
+  }
+  const q = p => sorted[Math.min(n - 1, Math.max(0, Math.floor(p * (n - 1))))];
+  const q1 = q(0.25), q3 = q(0.75), iqr = q3 - q1;
+  const lo = Math.max(sorted[0], q1 - 3 * iqr);
+  const hi = Math.min(sorted[n - 1], q3 + 3 * iqr);
   return vals.map(v => Math.min(hi, Math.max(lo, v)));
 }
 
@@ -11825,22 +12397,27 @@ const _PE_BAND_NOTE_HTML = `
   ทำไมไม่ใช้แค่ "ค่าเฉลี่ย"? เพราะถ้ามีงวดไหนราคาพุ่งผิดปกติ ค่าเฉลี่ยจะถูกลากเพี้ยนไปด้วย
   แต่ p25/p75 สนใจแค่ "ตำแหน่ง" ในแถวเรียง ไม่ถูกกระทบง่ายๆ<hr>
   <b>ต่ำสุด / สูงสุด ที่โชว์ ≠ ค่าสุดขั้วจริงในประวัติศาสตร์</b><br><br>
-  ก่อนคำนวณ ระบบตัดขอบ 1% บนและล่างทิ้งก่อน (เรียกว่า winsorize) กันเดือน/ปีที่ข้อมูล
-  ผิดปกติสุดๆ (เช่น วิกฤตเศรษฐกิจ หรือช่วงกำไรทั้งตลาดใกล้ศูนย์) มาลากแถบทั้งเส้นให้ผิดสัดส่วน
-  จนมองไม่เห็นความต่างของ 99% ที่เหลือ<br><br>
+  ก่อนคำนวณ ระบบตัดขอบค่าที่สุดโต่งผิดปกติออกก่อน (เรียกว่า winsorize) กันเดือน/ปี/ไตรมาสที่
+  ข้อมูลผิดปกติสุดๆ (เช่น วิกฤตเศรษฐกิจ หรือช่วงกำไร/รายได้ใกล้ศูนย์พอดี) มาลากแถบทั้งเส้นให้
+  ผิดสัดส่วนจนมองไม่เห็นความต่างของข้อมูลส่วนใหญ่ที่เหลือ<br><br>
   เช่น PE mai เคยพุ่งสูงสุดจริงถึง <b>937x</b> (ก.ค. 2546) แต่ตัดขอบ 1% ออกแล้ว "สูงสุด" ที่โชว์
   จะเหลือแค่ <b>~429x</b> — ไม่ได้ผิด แค่คนละความหมาย: ตัวที่โชว์คือ <b>"ขอบบนของ 99% ของเวลาทั้งหมด"</b>
-  ไม่ใช่ตัวเลขสูงสุดที่เคยเกิดขึ้นจริงตัวเดียว`;
+  ไม่ใช่ตัวเลขสูงสุดที่เคยเกิดขึ้นจริงตัวเดียว (ข้อมูลตลาดรวมมีจุดข้อมูลเยอะพอให้ตัดแบบ
+  percentile ได้ตรงๆ) ส่วนกราฟ <b>รายหุ้น</b> ที่มีข้อมูลแค่หลักสิบไตรมาส ใช้เกณฑ์ตัดขอบที่
+  เหมาะกับชุดข้อมูลเล็ก (median ± ส่วนเบี่ยงเบนของควอร์ไทล์) แทน หลักการเดียวกันคือกันจุด
+  โดดเดี่ยวที่ผิดปกติมาลากค่าเฉลี่ย/แกนกราฟให้เพี้ยน`;
 
 function _svgBand(series, label, lowerIsCheap, idPrefix) {
   const vals = _winsorize(series.map(o => o.v).filter(v => v > 0)).sort((a, b) => a - b);
   if (vals.length < 8) return `<div style="font-size:12px;color:var(--text2)">${label}: ข้อมูลไม่พอ (${vals.length} งวด)</div>`;
   const q = p => vals[Math.min(vals.length - 1, Math.floor(p * (vals.length - 1)))];
   const lo = vals[0], hi = vals[vals.length - 1], med = q(0.5), p25 = q(0.25), p75 = q(0.75);
+  const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
   // งวดล่าสุดก็ต้อง winsorize ด้วยขอบเดียวกับ lo/hi ไม่งั้น "ปัจจุบัน" อาจโชว์เกิน
   // "สูงสุด" ที่ตัดขอบไปแล้ว (ขัดกับคำอธิบาย _PE_BAND_NOTE_HTML ด้านบน)
   const cur = Math.min(hi, Math.max(lo, series[series.length - 1].v));
   const pos = Math.max(0, Math.min(100, (cur - lo) / (hi - lo || 1) * 100));
+  const meanPos = Math.max(0, Math.min(100, (mean - lo) / (hi - lo || 1) * 100));
   // สีจุด: ถูก=เขียว แพง=แดง (สำหรับ PE/PBV ที่ต่ำ=ถูก)
   const cheap = lowerIsCheap ? cur <= p25 : cur >= p75;
   const rich = lowerIsCheap ? cur >= p75 : cur <= p25;
@@ -11853,11 +12430,12 @@ function _svgBand(series, label, lowerIsCheap, idPrefix) {
   return `<div style="margin:6px 0"${idPrefix ? ` data-lo="${lo}" data-hi="${hi}" data-p25="${p25}" data-p75="${p75}" data-lower-cheap="${lowerIsCheap ? 1 : 0}"` : ''}>
     <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2)">
       <span><b style="color:var(--text)">${label}</b> ปัจจุบัน <b${curId} style="color:${col}">${f(cur)}</b></span>
-      <span>มัธยฐาน ${f(med)} · ต่ำสุด ${f(lo)} · สูงสุด ${f(hi)}</span>
+      <span>เฉลี่ย <span style="color:#58a6ff">${f(mean)}</span> · มัธยฐาน ${f(med)} · ต่ำสุด ${f(lo)} · สูงสุด ${f(hi)}</span>
     </div>
     <div style="position:relative;height:12px;margin-top:3px;border-radius:6px;background:linear-gradient(90deg,#3fb95055,#d9932e55,#f8514955)">
       <div style="position:absolute;left:${(p25 - lo) / (hi - lo || 1) * 100}%;top:0;bottom:0;width:1px;background:var(--text2)"></div>
       <div style="position:absolute;left:${(p75 - lo) / (hi - lo || 1) * 100}%;top:0;bottom:0;width:1px;background:var(--text2)"></div>
+      <div style="position:absolute;left:${meanPos}%;top:-3px;bottom:-3px;width:0;border-left:1.5px dashed #58a6ff" title="ค่าเฉลี่ย ${f(mean)}"></div>
       <div${tickId} style="position:absolute;left:${pos}%;top:-2px;width:2px;height:16px;background:${col};box-shadow:0 0 3px ${col}"></div>
     </div>
   </div>`;
@@ -11948,6 +12526,89 @@ function _finSeasonalityBlock(rev) {
   </div>`;
 }
 
+// ชุดข้อมูล valuation ย้อนหลัง (PE/PBV/PS) จากงบไตรมาส — ใช้ทั้งแถบเกจ (_svgBand) และ
+// กราฟเส้นย้อนหลังแบบเดียวกับหน้า Valuation ตลาด (ดู _drawFinTrendCharts ด้านล่าง)
+// แยกออกมาจาก _finTrendSectionImpl เพื่อให้เรียกคำนวณซ้ำได้ตอน draw กราฟ (หลัง DOM
+// มี canvas element แล้ว) โดยไม่ต้อง parse ทั้ง section ใหม่
+function _finValuationSeries(d) {
+  const inc = d.income || {}, val = d.valuation || {};
+  const pe = _annualPeSeries(inc['Basic EPS'], val['Close']);
+  const pbv = _finSeries(val['PBV']);
+  const ps = _psSeries(val['Market Cap'], inc['Total Revenue'] || inc['Operating Revenue']);
+  return { pe, pbv, ps };
+}
+
+// avg/std (population, หลัง winsorize กันค่าเพี้ยนสุดโต่งเหมือน _sigmaBandHtml) + p25/median/p75
+// สำหรับกราฟเส้นย้อนหลัง — ต้องมี >=8 จุดถึงจะมีนัยยะ (เหมือนเกณฑ์ของ _svgBand)
+function _seriesStats(series) {
+  const raw = (series || []).map(o => o.v).filter(v => v > 0);
+  if (raw.length < 8) return null;
+  const vals = _winsorize(raw);
+  const n = vals.length;
+  const avg = vals.reduce((a, b) => a + b, 0) / n;
+  const variance = vals.reduce((a, b) => a + (b - avg) * (b - avg), 0) / n;
+  const std = Math.sqrt(variance);
+  const sorted = [...vals].sort((a, b) => a - b);
+  const q = p => sorted[Math.min(n - 1, Math.floor(p * (n - 1)))];
+  return { avg, std, current: series[series.length - 1].v, thresholds: [q(0.25), q(0.5), q(0.75)] };
+}
+
+// หนีบค่าที่จะ "พล็อต" บนกราฟเส้นด้วย fence เดียวกับ _seriesStats/_svgBand (ไม่ใช่แค่ตอน
+// คำนวณ avg/std) — ไม่งั้นแกน Y ยังต้องยืดไปหาจุดสุดขั้วดิบอยู่ดี (dataMax ที่ยังไม่ตัด) ทำให้
+// เส้นค่าจริงส่วนใหญ่แบนติดขอบล่างเหมือนเดิม แม้ avg/std จะถูกต้องแล้วก็ตาม จุดที่ถูกหนีบ
+// จะโชว์ค่าที่ถูกหนีบตอน hover ด้วย (ไม่ใช่ค่าจริงดิบ) — trade-off เดียวกับที่ _svgBand
+// ทำกับจุด "ปัจจุบัน" อยู่แล้ว (_patchBandValue หนีบเข้า lo/hi เสมอ)
+function _winsorizeSeriesForDisplay(series) {
+  const positive = series.map(o => o.v).filter(v => v > 0);
+  if (positive.length < 8) return series;
+  const clipped = _winsorize(positive);
+  let i = 0;
+  return series.map(o => o.v > 0 ? { d: o.d, v: clipped[i++] } : o);
+}
+
+// คำเตือนเมื่อ Close/BVPS ของ Finnomena (ที่ใช้เป็นฐาน PE/PBV/PS band+กราฟเส้นทั้งหมด) ต่างจาก
+// แหล่งอิสระอื่น (ราคาจริงใน {market}_prices.db, BVPS คำนวณเองจากงบ Yahoo) เกินเกณฑ์ หรือค้าง
+// ไม่อัพเดทหลายไตรมาสติด — คำนวณไว้แล้วฝั่ง backend (financials_store.check_valuation_quality)
+// แปะมาใน d.valuation_quality เฉพาะตอน source=finnomena_q (ดู /api/financials-full)
+// เจอจริงกับหุ้นที่ equity ติดลบ/ใกล้ล้ม เช่น NWR/TSR — ราคาที่ Finnomena เก็บอาจต่างจากราคา
+// เทรดจริงหลายเท่าตัวโดยไม่มีสัญญาณเตือนใดๆ ถ้าไม่เช็คแบบนี้
+function _valuationQualityBanner(d) {
+  const q = d.valuation_quality;
+  if (!q || !q.warnings || !q.warnings.length) return '';
+  const items = q.warnings.map(w => `<li style="margin:2px 0">${w.detail}</li>`).join('');
+  return `<div style="margin:2px 0 8px;padding:7px 10px;border:1px solid #dca03255;background:#dca03214;color:#dca032;border-radius:6px;font-size:11.5px;line-height:1.5">
+    ⚠ <b>ข้อมูลราคา/BVPS ของ Finnomena บางไตรมาสอาจไม่น่าเชื่อถือ</b> — ตรวจกับแหล่งอื่นแล้วต่างกันเกินเกณฑ์ปกติ ควรเทียบกับแหล่งอื่นก่อนใช้ตัดสินใจ:
+    <ul style="margin:4px 0 0;padding-left:18px">${items}</ul>
+  </div>`;
+}
+
+function _finLineChartBlock(title, canvasId) {
+  return `<div style="margin-top:12px">
+    <div style="font-size:11px;color:var(--text2);margin-bottom:2px">${title}</div>
+    <canvas id="${canvasId}" style="width:100%;height:180px"></canvas>
+  </div>`;
+}
+
+// วาดกราฟเส้น PE/PBV/PS ย้อนหลังรายหุ้น ด้วย engine เดียวกับกราฟ P/E ระดับตลาด
+// (drawValChart/setupValHover — ดู loadValDailyBox/renderValuation) ต้องเรียกหลัง
+// box.innerHTML ใส่ _finTrendSection ลง DOM แล้วเท่านั้น (ต้องมี <canvas> ให้เกาะ)
+function _drawFinTrendCharts(d, idPrefix = '') {
+  try {
+    const { pe, pbv, ps } = _finValuationSeries(d);
+    const draw = (series, canvasId, isPE) => {
+      const canvas = document.getElementById(canvasId);
+      const stats = _seriesStats(series);
+      if (!canvas || !stats) return;
+      const display = _winsorizeSeriesForDisplay(series);
+      drawValChart(canvasId, display.map(o => o.d), display.map(o => o.v), stats.thresholds, stats);
+      setupValHover(canvasId, stats.thresholds, stats.avg, isPE, stats.std);
+    };
+    draw(pe, idPrefix + 'pe-line', true);
+    draw(pbv, idPrefix + 'pbv-line', false);
+    draw(ps, idPrefix + 'ps-line', true);
+  } catch (e) { /* กราฟเสริมเท่านั้น ห้ามพังหน้าหลัก */ }
+}
+
 function _finTrendSection(d, source, idPrefix = '') {
   try { return _finTrendSectionImpl(d, source, idPrefix); }
   catch (e) { return ''; }   // กันพลาด — กราฟเสริมเท่านั้น ห้ามทำให้ตารางงบพัง
@@ -11978,7 +12639,7 @@ function _finTrendSectionImpl(d, source, idPrefix = '') {
   // กับรายปี (เฉพาะปีที่ปิดครบ 4 ไตรมาส) แล้วรายปีแม่นกว่า — ตรงกับเว็บอ้างอิงเกือบ
   // เป๊ะ เพราะตัดความผันผวนของไตรมาสเดี่ยวๆ ออกไป · PBV ไม่มีปัญหานี้ ใช้ field ของ
   // Finnomena ตรงๆ ได้ตามเดิม
-  const pe = _annualPeSeries(inc['Basic EPS'], val['Close']), pbv = _finSeries(val['PBV']);
+  const { pe, pbv, ps } = _finValuationSeries(d);
   const span = rev.length ? `${rev[0].d.slice(0,7)} – ${rev[rev.length-1].d.slice(0,7)} (${rev.length} ไตรมาส)` : '';
 
   const chart = (title, svg, sub) => svg ? `
@@ -11987,12 +12648,17 @@ function _finTrendSectionImpl(d, source, idPrefix = '') {
       ${svg}
     </div>` : '';
 
-  const bands = (pe.length >= 8 || pbv.length >= 8) ? `
+  const bands = (pe.length >= 8 || pbv.length >= 8 || ps.length >= 8) ? `
     <div style="margin-top:10px">
-      <div style="font-size:11px;color:var(--accent);font-weight:600;margin-bottom:2px">มูลค่าเทียบอดีตตัวเอง (PE/PBV band)${_tipIconHtml(_PE_BAND_NOTE_HTML)} <span id="${idPrefix}fin-live-price" style="font-weight:400;color:var(--text2)"></span></div>
+      <div style="font-size:11px;color:var(--accent);font-weight:600;margin-bottom:2px">มูลค่าเทียบอดีตตัวเอง (PE/PBV/PS band)${_tipIconHtml(_PE_BAND_NOTE_HTML)} <span id="${idPrefix}fin-live-price" style="font-weight:400;color:var(--text2)"></span></div>
+      ${_valuationQualityBanner(d)}
       ${pe.length ? _svgBand(pe, 'PE', true, idPrefix + 'peband') + _sigmaBandHtml(pe.map(o => o.v).filter(v => v > 0)) : ''}
       ${pbv.length ? _svgBand(pbv, 'PBV', true, idPrefix + 'pbvband') + _sigmaBandHtml(pbv.map(o => o.v).filter(v => v > 0)) : ''}
-      <div style="font-size:10px;color:var(--text2);margin-top:2px">เขียว = ถูกกว่าอดีต (≤ p25) · แดง = แพงกว่าอดีต (≥ p75) · ขีดคือ p25/p75 · ฐานข้อมูลย้อนหลัง PE คำนวณจาก Close ÷ EPS รวมรายปีเอง (ไม่ใช้ field PE ของ Finnomena ตรงๆ — บางงวดเก่าคำนวณผิดจาก EPS ไตรมาสเดียว) · "ปัจจุบัน" ใช้ TTM ล่าสุด × ราคาสดจาก Yahoo · PBV ใช้ field ของ Finnomena โดยตรง</div>
+      ${ps.length ? _svgBand(ps, 'PS', true, idPrefix + 'psband') + _sigmaBandHtml(ps.map(o => o.v).filter(v => v > 0)) : ''}
+      <div style="font-size:10px;color:var(--text2);margin-top:2px">เขียว = ถูกกว่าอดีต (≤ p25) · แดง = แพงกว่าอดีต (≥ p75) · ขีดทึบคือ p25/p75 · เส้นประฟ้าคือค่าเฉลี่ย · ฐานข้อมูลย้อนหลัง PE คำนวณจาก Close ÷ EPS รวมรายปีเอง (ไม่ใช้ field PE ของ Finnomena ตรงๆ — บางงวดเก่าคำนวณผิดจาก EPS ไตรมาสเดียว) · PS คำนวณจาก Market Cap ÷ TTM Revenue เอง (Finnomena ไม่มี field PS ตรงๆ) · "ปัจจุบัน" ใช้ TTM ล่าสุด × ราคาสดจาก Yahoo · PBV ใช้ field ของ Finnomena โดยตรง</div>
+      ${pe.length >= 8 ? _finLineChartBlock('แนวโน้ม PE ย้อนหลัง (เทียบเฉลี่ย ± σ)', idPrefix + 'pe-line') : ''}
+      ${pbv.length >= 8 ? _finLineChartBlock('แนวโน้ม PBV ย้อนหลัง (เทียบเฉลี่ย ± σ)', idPrefix + 'pbv-line') : ''}
+      ${ps.length >= 8 ? _finLineChartBlock('แนวโน้ม PS ย้อนหลัง (เทียบเฉลี่ย ± σ)', idPrefix + 'ps-line') : ''}
     </div>` : '';
 
   return `<div class="card" style="margin-top:12px;background:var(--card2)">
@@ -12014,6 +12680,7 @@ function _finTrendSectionImpl(d, source, idPrefix = '') {
 // งบการเงินฉบับเต็ม (ทุก field) — tab Yahoo Finance / SET.or.th
 // ============================================================
 let _finFullShowAll = false;   // false = เฉพาะรายการหลัก, true = ทุก field
+let _finViewMode = 'table';    // 'table' = ตารางตัวเลข, 'chart' = กราฟแนวโน้มรายบรรทัด
 
 // กลุ่ม field เฉพาะของ Finnomena (ratios/valuation รายไตรมาส) — hl:1 = โชว์ทั้งสองโหมด
 const FIN_FINN_RATIO_GROUP = [{ group: 'อัตราส่วนการเงิน (Finnomena)', rows: [
@@ -12047,9 +12714,44 @@ function setFinPctMode(mode, btn) {
   if (_finData) _renderFinancialsFull(_finData, _finRenderSource);
 }
 
+function setFinViewMode(mode, btn) {
+  _finViewMode = mode;
+  document.querySelectorAll('#fin-view-table-btn,#fin-view-chart-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (_finData) _renderFinancialsFull(_finData, _finRenderSource);
+}
+
+// แถวเดียวในโหมดกราฟ — เส้น sparkline (เก่า→ใหม่) + ค่าล่าสุด + %เปลี่ยนแปลงตลอดช่วงที่แสดง
+// สีเส้น: ค่าล่าสุด ≥ ค่าแรกสุด = เขียว (โตขึ้น/ดีขึ้น) · น้อยกว่า = แดง (ลดลง)
+function _finRowChart(label, colLabels, vals, isRatioKey) {
+  const series = vals.map((v, i) => ({ d: colLabels[i], v })).filter(o => o.v != null && !isNaN(o.v));
+  if (series.length < 2) return '';
+  const first = series[0].v, last = series[series.length - 1].v;
+  const up = last >= first;
+  const color = up ? '#3fb950' : '#f85149';
+  const lastText = isRatioKey ? last.toFixed(2) : _finFmt(last);
+  const pctChange = first !== 0 ? (last - first) / Math.abs(first) * 100 : null;
+  const pctHtml = pctChange != null
+    ? `<span style="color:${color};font-size:11px;font-weight:600">${pctChange >= 0 ? '+' : ''}${pctChange.toFixed(1)}%</span>`
+    : '';
+  return `
+  <div style="padding:8px 8px 10px;border-bottom:1px solid var(--border)">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:2px">
+      <div style="font-size:12px;flex:1;min-width:160px">${label}</div>
+      <div style="font-size:13px;font-weight:600">${lastText}</div>
+      ${pctHtml}
+    </div>
+    <div style="font-size:10px;color:var(--text2);display:flex;justify-content:space-between">
+      <span>${series[0].d}</span><span>${series[series.length - 1].d}</span>
+    </div>
+    ${_svgBars(series, { height: 60, qoq: true, pos: '#3fb950', neg: '#f85149' })}
+  </div>`;
+}
+
 function _finFullTable(title, cols, colLabels, groups, rows, getVal, isRatio, showAll, noPctCols, hideGroupHdr, pctOffset) {
   const skipPct = noPctCols || new Set();
   const offset = pctOffset || 1;   // 1 = เทียบคอลัมน์ก่อนหน้า (QoQ/รายปี) · 4 = เทียบไตรมาสเดียวกันปีก่อน (YoY)
+  const isChart = _finViewMode === 'chart';
   const headerCells = colLabels.map(c => `<th class="r" style="min-width:90px;white-space:nowrap">${c}</th>`).join('');
   let bodyHtml = '';
   let shown = 0;
@@ -12064,11 +12766,19 @@ function _finFullTable(title, cols, colLabels, groups, rows, getVal, isRatio, sh
     // ชื่อกลุ่มจะซ้ำกับ title ของตาราง (เช่น "อัตราส่วนการเงิน (Ratios)" + "อัตราส่วนการเงิน (Finnomena)")
     // hideGroupHdr = ตารางงบ Finnomena (income/balance/cashflow) มี field น้อย 4-5 แถว
     //                หัวกลุ่มย่อยไม่จำเป็น รกตา — ซ่อนทั้งหมด แต่คงไว้ในโหมด Yahoo ที่ข้อมูลเยอะ
-    if (dataRows.length > 1 && groups.length > 1 && !hideGroupHdr) {   // มีหลายแถว+หลายกลุ่มถึงจะมีหัวกลุ่ม
-      bodyHtml += `<tr><td colspan="${cols.length+1}" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--blue);background:var(--card2);padding:6px 8px">${g.group}</td></tr>`;
+    const showGroupHdr = dataRows.length > 1 && groups.length > 1 && !hideGroupHdr;   // มีหลายแถว+หลายกลุ่มถึงจะมีหัวกลุ่ม
+    if (showGroupHdr) {
+      bodyHtml += isChart
+        ? `<div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--blue);background:var(--card2);padding:6px 8px;margin-top:6px">${g.group}</div>`
+        : `<tr><td colspan="${cols.length+1}" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--blue);background:var(--card2);padding:6px 8px">${g.group}</td></tr>`;
     }
     dataRows.forEach(r => {
       const vals = cols.map(c => getVal(r.key, c));
+      if (isChart) {
+        const rowChart = _finRowChart(_finLabel(r.key), colLabels, vals, isRatio(r.key));
+        if (rowChart) { bodyHtml += rowChart; shown++; }
+        return;
+      }
       shown++;
       const cells = vals.map((v, i) => {
         const prevIdx = i - offset;
@@ -12087,6 +12797,13 @@ function _finFullTable(title, cols, colLabels, groups, rows, getVal, isRatio, sh
     });
   });
   if (!shown) return '';
+  if (isChart) {
+    return `
+    <div style="margin-top:16px">
+      <div style="font-size:13px;font-weight:600;color:var(--blue);margin-bottom:6px">${title}</div>
+      <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">${bodyHtml}</div>
+    </div>`;
+  }
   return `
   <div style="margin-top:16px">
     <div style="font-size:13px;font-weight:600;color:var(--blue);margin-bottom:6px">${title}</div>
@@ -12142,6 +12859,10 @@ function _renderFinancialsFull(d, source) {
       <div class="filter-row" style="gap:0;margin:0">
         <button class="filter-btn${_finFullShowAll ? '' : ' active'}" id="fin-view-hl-btn"  onclick="setFinFullShowAll(false,this)" style="border-radius:6px 0 0 6px;font-size:11px;padding:5px 10px">เฉพาะรายการหลัก</button>
         <button class="filter-btn${_finFullShowAll ? ' active' : ''}" id="fin-view-all-btn" onclick="setFinFullShowAll(true,this)"  style="border-radius:0 6px 6px 0;font-size:11px;padding:5px 10px">ทุก field</button>
+      </div>
+      <div class="filter-row" style="gap:0;margin:0" title="สลับมุมมองตาราง/กราฟแนวโน้มรายบรรทัด">
+        <button class="filter-btn${_finViewMode === 'chart' ? '' : ' active'}" id="fin-view-table-btn" onclick="setFinViewMode('table',this)" style="border-radius:6px 0 0 6px;font-size:11px;padding:5px 10px">📋 ตาราง</button>
+        <button class="filter-btn${_finViewMode === 'chart' ? ' active' : ''}" id="fin-view-chart-btn" onclick="setFinViewMode('chart',this)" style="border-radius:0 6px 6px 0;font-size:11px;padding:5px 10px">📈 กราฟ</button>
       </div>
       ${isQ ? `
       <div class="filter-row" style="gap:0;margin:0" title="QoQ = เทียบไตรมาสก่อนหน้า · YoY = เทียบไตรมาสเดียวกันของปีก่อน (ตัดผลฤดูกาลออก)">
@@ -12278,6 +12999,7 @@ function _renderFinancialsFull(d, source) {
     _loadFinDescription(d.sym, _finTab === 'dr' ? tvMarket : 'TH');
     if (_finTab === 'dr' && !IS_STATIC) _loadFinTVLink(d.sym, tvMarket);
     if (_finTab === 'set') _loadPriceAnalyticsFin(d.sym);
+    _drawFinTrendCharts(d);
     if (isFinn && !IS_STATIC) _loadLiveValuationBand(d, _finTab === 'dr', tvMarket);
     return;
   }
@@ -13139,7 +13861,7 @@ async function pingDataSources() {
   btn.disabled = true;
   btn.textContent = '📡 กำลังปิง...';
   box.style.display = 'block';
-  box.innerHTML = '<div class="empty" style="padding:12px">กำลังยิงทดสอบ SET.or.th / Yahoo / Finnomena / TradingView...</div>';
+  box.innerHTML = '<div class="empty" style="padding:12px">กำลังยิงทดสอบ SET.or.th / Yahoo / Finnomena / TradingView / siamchart...</div>';
   try {
     const r = await fetch('/api/data-health-ping');
     const d = await r.json();
@@ -15127,10 +15849,18 @@ function drawValChart(canvasId, dates, vals, thresholds, stats) {
   const current = stats.current;
 
   const validVals = vals.filter(v => v !== null);
-  const sdMax = avg + 3.2 * std;
-  const sdMin = Math.max(0, avg - 3.2 * std);
   const dataMax = Math.max(...validVals);
   const dataMin = Math.max(0, Math.min(...validVals));
+  const dataRange = dataMax - dataMin || dataMax || 1;
+  // ผูกขอบแกนกับช่วงข้อมูลจริงเป็นหลัก ไม่ปล่อยให้ avg±3.2σ ลาก scale ทั้งกราฟตรงๆ —
+  // ชุดข้อมูลรายหุ้น (8-67 จุด) เจอ _winsorize (ตัดขอบ p1/p99) แทบไม่ตัด outlier เลยที่ n
+  // เล็ก (round(p×(n-1)) ปัดลง index ต้น/ท้ายเองที่ n<~51) ปีที่ EPS/รายได้ใกล้ศูนย์พอดี
+  // (near-breakeven) เลยพุ่งเป็นร้อยเท่าแบบไม่ถูกกรอง ลาก avg/std เพี้ยน (เจอจริง PE เฉลี่ย
+  // 64x ทั้งที่ median 12x) ทำให้แกนยืดจนเส้นราคาจริงแบนติดขอบล่าง — clamp sdMax/sdMin ไม่ให้
+  // ยื่นเกินช่วงข้อมูลจริง +30% (เส้น/พื้นที่ ±σ ยังวาดจาก avg/std จริงเหมือนเดิม แค่ไม่ปล่อย
+  // ให้มันกำหนด scale ของแกน)
+  const sdMax = Math.min(avg + 3.2 * std, dataMax + dataRange * 0.3);
+  const sdMin = Math.max(0, avg - 3.2 * std, dataMin - dataRange * 0.3);
   const minV = Math.min(dataMin * 0.9, sdMin);
   const maxV = Math.max(dataMax * 1.02, sdMax);
   const scaleY = v => pad.t + ch - ((v - minV) / (maxV - minV)) * ch;
@@ -15250,12 +15980,15 @@ function _valZoneNameFull(v, thresholds, isPE) {
 
 function setupValHover(canvasId, thresholds, avg, isPE, std) {
   const canvas = document.getElementById(canvasId);
-  if (!canvas || canvas._hoverSet) return;
-  canvas._hoverSet = true;
+  if (!canvas) return;
+  // อัพเดท threshold/avg/std ทุกครั้งที่เรียก (เช่น หลังแก้จุด "ปัจจุบัน" เป็นราคาสด)
+  // แต่ผูก event listener แค่ครั้งเดียว กันซ้อนกันหลาย handler ตอน redraw ซ้ำ
   canvas._thresholds = thresholds;
   canvas._avg = avg;
   canvas._std = std || 1;
   canvas._isPE = isPE;
+  if (canvas._hoverSet) return;
+  canvas._hoverSet = true;
 
   const tip = document.createElement('div');
   tip.style.cssText = [

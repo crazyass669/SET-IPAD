@@ -163,6 +163,21 @@ def validate_stocks(stocks, data_as_of=None):
     }
 
 
+def classify_stage(above_ema200, ema200_slope_pct):
+    """Weinstein Stage (1 Basing / 2 Advancing / 3 Distribution / 4 Declining) จาก
+    ตำแหน่งเทียบ EMA200 + ความชัน EMA200 — เป็นสูตรต่อหุ้นตัวเดียวล้วน ไม่พึ่ง cohort/RS
+    (ใช้ทั้งใน rank_rs และใน mirror_ondemand.fetch_header_lite ที่ไม่ได้ผ่าน rank_rs)"""
+    if above_ema200 is None or ema200_slope_pct is None:
+        return None
+    if above_ema200 and ema200_slope_pct >= 0:
+        return 2   # Advancing
+    if above_ema200 and ema200_slope_pct < 0:
+        return 3   # Distribution / Topping
+    if (not above_ema200) and ema200_slope_pct >= -1.5:
+        return 1   # Basing
+    return 4       # Declining
+
+
 def rank_rs(stocks):
     def _ok(s):
         return s.get("dq", {}).get("rs_eligible", True)
@@ -186,19 +201,7 @@ def rank_rs(stocks):
 
     # Weinstein Stage จาก above_ema200 + ema200_slope_pct
     for s in stocks:
-        above = s.get("above_ema200")
-        slope = s.get("ema200_slope_pct")
-        if above is None or slope is None:
-            s["stage"] = None
-            continue
-        if above and slope >= 0:
-            s["stage"] = 2   # Advancing
-        elif above and slope < 0:
-            s["stage"] = 3   # Distribution / Topping
-        elif not above and slope >= -1.5:
-            s["stage"] = 1   # Basing
-        else:
-            s["stage"] = 4   # Declining
+        s["stage"] = classify_stage(s.get("above_ema200"), s.get("ema200_slope_pct"))
 
     return stocks
 

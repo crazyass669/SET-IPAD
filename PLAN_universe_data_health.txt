@@ -222,7 +222,60 @@
   เก็บไว้ — การใช้งานจริงในสูตร backtest เป็นงานแยกที่ยังไม่ได้ทำ ถ้าต้องการ
   ให้บอกได้ ขอบเขตคือ point-in-time membership filter ในสคริปต์ backtest)
 
-  ทุกงานในแผนนี้เสร็จครบแล้ว (งาน 1-5) — เหลือแค่ 2 action ที่ต้องทำเอง ↓
+[งาน 6] 🩺 อุดช่องโหว่ Data Health รอบสอง   [เสร็จ 2026-07-21]
+  ตรวจพบว่า /api/data-health เดิมเช็ค 18 รายการ แต่ยังไม่ครบเทียบ inventory ส่วนที่ 4
+  ตอนนี้เป็น 31 รายการ — ที่เพิ่ม:
+  (1) เว็บมือถือ (bake data/*.json) — เดิมไม่มีการเช็คเลยสักไฟล์ ถ้า Actions ตาย
+      เงียบๆ หน้านี้จะเขียวหมดทั้งที่มือถือเสิร์ฟข้อมูลค้าง · item "static_bake" ใช้
+      mtime ที่ "เก่าที่สุด" ใน 8 ไฟล์หลัก (_dh_oldest_mtime) ไม่ใช่ไฟล์ใหม่สุด —
+      ไฟล์ตัวเดียวตกรอบจะไม่ถูกกลบ + โชว์ชื่อไฟล์ที่เก่าสุดเสมอ
+  (2) s50_flow + bond_flow (30/96 ชม. เท่า market_flow) — เดิมใช้จริงแต่ไม่มีใครเฝ้า
+  (3) run_static_update.py เรียก run_log.record_run("static_bake") แล้ว ผ่าน atexit
+      (สคริปต์เป็น top-level ยาว ไม่มี main() — atexit จับได้ทั้ง exception และ
+      sys.exit(1)) → ขึ้น banner แดงเหมือนกลไกอื่น + item "static_bake_run"
+      ยังคงไม่ครอบฝั่ง CI (logs/ เป็น local-only) ตามเหตุผลเดิมในงาน 3
+  (4) set_history, financials_analytics_yahoo, stock_valuation_stats, mirror_names,
+      dr_universe_auto, dr_descriptions
+  (5) หมวดใหม่ "คุณภาพข้อมูล" — เปิดไฟล์อ่านจริง ไม่ใช่แค่ mtime (ไฟล์ที่ถูกเขียนทับ
+      ด้วย payload ว่างเดิมขึ้นเขียวสนิท): จำนวนหุ้นใน set_data.json (<800 warn,
+      <500 red) · ขนาด+จำนวนหุ้นใน data/set_data.json · วันล่าสุดในไฟล์ breadth
+  (6) ping เพิ่ม siamchart (แหล่งหลัก Capital Flow) — ต้องส่ง Referer + ข้าม cert
+      verify ให้ตรงกับ _fetch_flow_siamchart ไม่งั้นขึ้นแดงหลอกทั้งที่ดึงได้จริง
+
+  ทดสอบแล้ว: /api/data-health คืน 31 items (30 ok + 1 na) ไม่ error ·
+  /api/data-health-ping ทั้ง 5 แหล่งตอบ 200 (siamchart 224ms) ·
+  จำลอง record static_bake ล้มเหลว → item เป็นแดง + โผล่ใน /api/update-status
+  failed (banner) ถูกต้อง แล้วคืนค่า logs/update_status.json เดิม
+  ไม่ต้องแก้ dashboard.js ฝั่งตาราง — render ตาม category แบบ generic อยู่แล้ว
+
+[งาน 7] 🇭🇰 ปุ่มเช็ค/sync ดัชนี HK ใน UI (ให้สมมาตรกับ US)   [เสร็จ 2026-07-21]
+  เจอตอนไล่ตรวจว่าโน้ต "ลำดับการกดอัพเดท" ตกหล่นปุ่มไหนบ้าง: /api/hk-index-check-updates
+  + /api/hk-index-sync มีครบใน app.py ตั้งแต่แรก (response shape เหมือน US ทุก field)
+  แต่ไม่เคยมีปุ่มเรียกใน UI — ฝั่ง US มีทั้ง 2 ปุ่ม
+  ทำแล้ว: แถว #fin-hk-idx-actions (🔍 เช็ค + 🔄 ดึงเฉพาะที่ขาด/เก่า) ในหน้างบการเงิน
+    แท็บต่างประเทศ · checkHKIndexUpdates() + startHKIndexSync() ใน dashboard.js
+  รวมโค้ดที่ซ้ำ: _renderUSIndexDiff เดิม -> _renderIndexDiff(boxId, keys, labels, d)
+    ใช้ร่วมกันทั้ง 2 ตลาด (US เรียกผ่าน wrapper เดิม ไม่กระทบผู้เรียกอื่น)
+
+  แก้บั๊กที่เจอระหว่างทาง 3 จุด (มีอยู่เดิม ไม่ได้เกิดจากงานนี้):
+  (ก) แถวปุ่มเช็ค/sync ดัชนี US โผล่ค้างตอนสลับไปแท็บ HK (ไม่มี logic ซ่อน) — ตอนนี้
+      _finMirBrowse() สลับ #fin-us-idx-actions/#fin-hk-idx-actions ให้ตามตลาด
+      + เคลียร์ผลเช็คของตลาดเดิมไม่ให้ค้างสับสน
+  (ข) idxRow.style.display = '' (เซ็ตค่าว่าง = ลบ inline display ทิ้ง) ทำให้แถวกรอง
+      ดัชนีตกกลับเป็น block ตาม default ของ <div> ปุ่มเรียงตกบรรทัดหลังสลับ HK->US
+      แก้เป็น 'flex' ตรงๆ (ยืนยันด้วย Playwright: สูง 26px -> 26px เท่าเดิม)
+  (ค) 3 จุดที่เซ็ต _finMirMarket + toggle class เองซ้ำๆ (_hkHmGoFin, _tsGoFin,
+      _tsGoDividends) ไม่ได้อัพเดทแถวปุ่มที่เพิ่มมาทีหลัง — รวมเป็น
+      _finMirSelectMarket(mk) เรียก _finMirBrowse ทางเดียว จะไม่หลุดอีกเวลาเพิ่มของใหม่
+
+  ทดสอบจริงผ่าน Playwright: สลับแท็บ US<->HK แถวปุ่มถูกต้องทุกทิศทาง · กด 🔍 เช็ค HK
+  ยิง Wikipedia สดสำเร็จ (ตอบ "ไฟล์ local ตรงกับ Wikipedia อยู่แล้ว") ปุ่มกลับมากดได้
+  · _finMirSelectMarket('HK') สลับ UI ครบ · ไม่มี JS error
+
+  หมายเหตุ: ยังไม่ได้ทำปุ่มกรองดัชนี HSI/HSCEI/HSTECH ในรายการ browse (ฝั่ง US มี
+  S&P500/Dow/NDX) — คนละงานกับที่ตกลงไว้ ทำต่อได้ถ้าต้องการ
+
+  ทุกงานในแผนนี้เสร็จครบแล้ว (งาน 1-7) — เหลือแค่ 2 action ที่ต้องทำเอง ↓
 
   *** Action ที่ต้องทำเอง (ไม่ใช่โค้ด) ***
   1. รัน python backup_financials_offsite.py <ปลายทางจริงของคุณ> ครั้งแรก
