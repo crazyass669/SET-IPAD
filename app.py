@@ -2502,6 +2502,13 @@ def tearsheet(market, symbol):
         "z_excluded_reason": z_reason,
     }
 
+    dividend = {
+        "yield": s.get("div_yield"),
+        "cagr_5y": f.get("div_cagr_5y"),
+        "growth_streak_y": f.get("div_growth_streak_y"),
+        "coverage": f.get("dividend_coverage"),
+    }
+
     discount_rate_default = {"TH": 9.0, "US": 8.5, "HK": 9.5}[mkt]
     dcf = {
         "fcf": fcf, "mkt_cap": mkt_cap, "net_cash": f.get("net_cash"), "price": s.get("price"),
@@ -2514,7 +2521,7 @@ def tearsheet(market, symbol):
                          else factor_snapshot.mirror_snapshot_meta(BASE_DIR).get("computed_at"))
     return jsonify({
         "symbol": sym, "market": mkt, "header": header, "valuation": valuation, "quality": quality,
-        "dcf": dcf,
+        "dividend": dividend, "dcf": dcf,
         "meta": {"computed_at": meta_computed_at,
                  "has_factors": _mirror_sym(mkt, sym) in snap_rows},
     })

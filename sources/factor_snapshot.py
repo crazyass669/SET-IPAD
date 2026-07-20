@@ -21,6 +21,7 @@ import time
 from datetime import datetime
 
 from sources import financials_store as fs
+from sources import dividend_stats
 from core import delisted_log
 
 TABLE = "factor_snapshot"
@@ -228,6 +229,9 @@ def build_snapshot(base_dir, callback=None):
                 name = (e.get("name") if e else None) or sym
             else:
                 market, name = "TH", sym
+            # div_cagr_5y ต้องรู้ market ก่อนถึงจะ lookup ตาราง dividends ถูก (DR ใช้ region
+            # เช่น US/HK ไม่ใช่ 'DR' — ดู loadDividendsView ฝั่ง frontend ที่ผูก market เดียวกัน)
+            f["div_cagr_5y"] = _div_cagr_5y(base_dir, sym, market)
             rows.append((sym, 1 if is_dr else 0, market, name, f))
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -289,6 +293,17 @@ def _calc_peg(pe, growth_pct):
     if pe is None or growth_pct is None or pe <= 0 or not (1 <= growth_pct <= 200):
         return None
     return round(pe / growth_pct, 2)
+
+
+def _div_cagr_5y(base_dir, sym, market):
+    """CAGR ปันผล 5 ปี จากตาราง dividends (financials_store.get_dividends, ดึงมาแล้วจากงาน #5
+    Dividend History — snapshot ไม่ fetch สดเอง แค่คำนวณจากที่มีอยู่แล้วใน DB) คืน None ถ้ายังไม่เคย
+    sync ปันผลของหุ้นตัวนี้ (ต้องเปิดหน้าปันผลของหุ้นนั้นอย่างน้อยครั้งนึงก่อน หรือรอ batch fetch)"""
+    rows, _synced = fs.get_dividends(base_dir, sym, market)
+    if not rows:
+        return None
+    stats = dividend_stats.compute_dividend_stats(rows)
+    return stats["cagr_5y_pct"] if stats else None
 
 
 def _sane(v, lo, hi):
@@ -436,6 +451,9 @@ def build_mirror_snapshot(base_dir, exchanges=("US", "HK"), min_quarters=12, min
                     f = _factors_for(base_dir, name, is_dr=True)
                 if f is None:
                     f = _factors_from_finn(fq)
+                # div_cagr_5y ไม่ต้องพึ่งงบ Yahoo — คำนวณจากตาราง dividends (name/ex ตรงกับ
+                # namespace ที่ loadDividendsView ฝั่ง frontend ใช้อยู่แล้วเสมอสำหรับ mirror)
+                f["div_cagr_5y"] = _div_cagr_5y(base_dir, name, ex)
                 recs.append((name, ex, f))
                 if callback and len(recs) % 200 == 0:
                     callback(ex, len(recs), name)

@@ -503,12 +503,18 @@ def get_dividends(base_dir, sym, market=None):
 
 
 def _fetch_set_corporate_actions(sym):
-    """XD/AGM/สิทธิต่างๆ ที่ประกาศทางการจาก SET.or.th — /api/set/stock/<sym>/corporate-action
+    """XD/XM/XB ที่ประกาศทางการจาก SET.or.th — /api/set/stock/<sym>/corporate-action
     (internal API เดียวกับ set_api.py, ไม่มีสัญญา — พบตอนสำรวจ 2026-07-20) หุ้นไทยเท่านั้น
-    แปลงเป็น calendar_events แถวเดียวต่อ 1 เหตุการณ์: caType='XD' -> 'xd' (ex-date) + 'pay'
-    (payment date, ถ้ามี) — ข้อมูลนี้เป็นของจริงที่ประกาศแล้วเสมอ (ไม่ใช่ประมาณการ) จึงถือว่า
-    confidence='confirmed' เสมอ ต่างจาก earnings ที่มาจาก yfinance (ดู fetch_earnings_calendar)
-    ยังไม่รองรับ caType อื่น (XM ประชุมผู้ถือหุ้น, XB สิทธิจองซื้อ ฯลฯ) — ตาม scope เฟส A"""
+    แปลงเป็น calendar_events แถวเดียวต่อ 1 เหตุการณ์ — ข้อมูลนี้เป็นของจริงที่ประกาศแล้วเสมอ
+    (ไม่ใช่ประมาณการ) จึงถือว่า confidence='confirmed' เสมอ ต่างจาก earnings ที่มาจาก yfinance
+    (ดู fetch_earnings_calendar)
+
+    caType='XD' (เงินปันผล/สิทธิผู้ถือหุ้นทั่วไป) -> 'xd' (ex-date) + 'pay' (payment date ถ้ามี)
+    caType='XM' (นัดประชุมผู้ถือหุ้น) -> 'xm' ที่ meetingDate (วันประชุมจริง — สำคัญกว่า xdate/
+    record date ที่เป็นแค่วันตัดสิทธิ์เข้าประชุม ไม่ใช่วันที่ต้องทำอะไรจริง) ข้ามถ้าไม่มี meetingDate
+    caType='XB' (สิทธิจองซื้อหุ้นเพิ่มทุน/บริษัทในเครือ) -> 'xb' ที่ xdate (ex-rights date — ต้องถือ
+    หุ้นก่อนวันนี้ถึงจะได้สิทธิ์) + 'xb_pay' ที่ paymentDate ถ้ามี (วันชำระค่าจองซื้อ — แยก type จาก
+    'pay' ของ XD เพราะ key ซ้ำ (symbol,market,type,date) จะชนกันถ้าวันที่บังเอิญตรงกัน)"""
     from sources.set_api import _bootstrap_headers, _get_json
     import urllib.parse
 
@@ -516,18 +522,41 @@ def _fetch_set_corporate_actions(sym):
     d = _get_json(ctx, hdr, f"/api/set/stock/{urllib.parse.quote(sym)}/corporate-action")
     out = []
     for row in (d or []):
-        if row.get("caType") != "XD":
-            continue
-        dps = row.get("dividend")
-        detail = f"เงินปันผล {dps} บาท/หุ้น" if dps is not None else "สิทธิประโยชน์ XD"
-        xdate = (row.get("xdate") or "")[:10]
-        if xdate:
-            out.append({"type": "xd", "date": xdate, "confidence": "confirmed",
+        ca = row.get("caType")
+        if ca == "XD":
+            dps = row.get("dividend")
+            detail = f"เงินปันผล {dps} บาท/หุ้น" if dps is not None else "สิทธิประโยชน์ XD"
+            xdate = (row.get("xdate") or "")[:10]
+            if xdate:
+                out.append({"type": "xd", "date": xdate, "confidence": "confirmed",
+                            "source": "set.or.th", "detail": detail})
+            pay_date = (row.get("paymentDate") or "")[:10]
+            if pay_date:
+                out.append({"type": "pay", "date": pay_date, "confidence": "confirmed",
+                            "source": "set.or.th", "detail": detail})
+        elif ca == "XM":
+            meeting_date = (row.get("meetingDate") or "")[:10]
+            if not meeting_date:
+                continue   # ไม่มีวันประชุมจริง = ยังไม่มีประโยชน์ต่อปฏิทิน
+            agenda = (row.get("agenda") or "").strip()
+            if len(agenda) > 80:
+                agenda = agenda[:80] + "…"
+            detail = (row.get("meetingType") or "ประชุมผู้ถือหุ้น") + (f" — {agenda}" if agenda else "")
+            out.append({"type": "xm", "date": meeting_date, "confidence": "confirmed",
                         "source": "set.or.th", "detail": detail})
-        pay_date = (row.get("paymentDate") or "")[:10]
-        if pay_date:
-            out.append({"type": "pay", "date": pay_date, "confidence": "confirmed",
-                        "source": "set.or.th", "detail": detail})
+        elif ca == "XB":
+            ratio = row.get("ratio")
+            detail = row.get("benefitType") or "สิทธิจองซื้อหลักทรัพย์"
+            if ratio:
+                detail += f" (อัตราส่วน {ratio})"
+            xdate = (row.get("xdate") or "")[:10]
+            if xdate:
+                out.append({"type": "xb", "date": xdate, "confidence": "confirmed",
+                            "source": "set.or.th", "detail": detail})
+            pay_date = (row.get("paymentDate") or "")[:10]
+            if pay_date:
+                out.append({"type": "xb_pay", "date": pay_date, "confidence": "confirmed",
+                            "source": "set.or.th", "detail": "ชำระค่าจองซื้อ — " + detail})
     return out
 
 

@@ -4682,6 +4682,8 @@ const FS_FILTERS = [
     tip: '<strong>อัตราปันผล</strong><br>เงินปันผลต่อปี ÷ ราคา (จากงวดล่าสุดของ Finnomena)<br><br>เช่น ใส่ <b>3</b> = ปันผล ≥ 3%/ปี · ใส่ <b>5</b> = High Dividend<br><span style="color:var(--text2)">หุ้นที่หยุดจ่ายเกิน ~2 ไตรมาสจะไม่มีค่า (กันค่าเก่าค้างหลอกตา) · yield สูงผิดปกติ (&gt;15%) มักเป็นปันผลพิเศษครั้งเดียว ตรวจงบก่อนเชื่อ</span>' },
   { k: 'div_growth_streak_y', label: 'ปันผลโตติดกัน ≥', unit: 'ปี', cmp: 'gte',
     tip: '<strong>ปันผลเพิ่มต่อเนื่อง (Dividend Growth)</strong><br>จำนวนปีติดกันที่เงินปันผลต่อหุ้น (DPS ≈ yield × ราคา ณ งวด) สูงกว่าปีก่อน — ปีที่งดจ่ายถือว่าตัด streak<br><br>เช่น ใส่ <b>3</b> = ปันผลโตมาแล้ว 3 ปีติด<br><span style="color:var(--text2)">จากประวัติ Finnomena ~16 ปี · ใช้ได้ทุก universe</span>' },
+  { k: 'div_cagr_5y',         label: 'ปันผล CAGR 5ปี ≥', unit: '%', cmp: 'gte',
+    tip: '<strong>CAGR ปันผล 5 ปี (ทบต้นต่อปี)</strong><br>คำนวณจากประวัติ ex-date/DPS จริง (yfinance ปรับ split ให้แล้ว — ดูหน้า "💵 ปันผล" ในงบการเงิน)<br><br>เช่น ใส่ <b>5</b> = ปันผลต่อหุ้นโตเฉลี่ยทบต้น ≥ 5%/ปี<br><span style="color:var(--text2)">⚠ ต้องเคยเปิดหน้าปันผลของหุ้นนั้นอย่างน้อยครั้งนึงก่อนถึงจะมีค่า (ยังไม่ผูก batch fetch อัตโนมัติ) · ไม่มีค่า = ยังไม่เคย sync หรือประวัติ &lt;5 ปีครบ</span>' },
   { k: 'dividend_coverage',   label: 'FCF คุ้มปันผล ≥', unit: 'เท่า', cmp: 'gte',
     tip: '<strong>FCF คุ้มปันผล</strong><br>Free Cash Flow ÷ เงินปันผลที่จ่าย (จาก Yahoo)<br><br>เช่น ใส่ <b>1.5</b> = FCF จ่ายปันผลไหวสบายๆ 1.5 เท่า (ปันผลยั่งยืน)' },
   { g: 'ฤดูกาล (Seasonality)' },
@@ -4960,6 +4962,7 @@ const FS_COLS = [
   { k: 'peg', label: 'PEG', tip: 'PE ÷ กำไรโต TTM — เขียว ≤1 (GARP)' },
   { k: 'pbv_value', label: 'PBV' },
   { k: 'div_yield', label: 'ปันผล%', tip: 'อัตราปันผลต่อปี — เขียว ≥3%' },
+  { k: 'div_cagr_5y', label: 'ปันผลCAGR5ปี%', tip: 'CAGR ปันผล 5 ปี จากประวัติ ex-date จริง — เขียว ≥5% · แดง <0% (ปันผลหด) · ต้องเคยเปิดหน้า "💵 ปันผล" ของหุ้นนั้นมาก่อนถึงจะมีค่า' },
   { k: 'ps_percentile', label: 'P/S%ile', tip: 'P/S เทียบอดีตตัวเอง — เขียว ≤25 · แดง ≥75' },
   { k: 'high_season_q', label: 'ไฮซีซั่น', sep: true, tip: 'ไตรมาสที่รายได้สูงสุดตามฤดูกาล (จากประวัติ ~16 ปี)' },
   { k: 'quarters_available', label: 'งบ(Q)', tip: 'จำนวนงบไตรมาสที่มีในระบบ (มาก = ประวัติยาว น่าเชื่อถือกว่า)' },
@@ -4983,6 +4986,7 @@ const FS_COL_CLR = {
   ps_percentile:       v => v <= 25 ? 'var(--green)' : (v >= 75 ? 'var(--red)' : ''),
   peg:                 v => v <= 1 ? 'var(--green)' : (v > 2 ? 'var(--red)' : ''),
   div_yield:           v => v >= 3 ? 'var(--green)' : '',
+  div_cagr_5y:         v => v >= 5 ? 'var(--green)' : (v < 0 ? 'var(--red)' : ''),
 };
 const FS_MKT_BADGE = { TH: '#58a6ff', US: '#3fb950', HK: '#e3b341', DR: '#3fb950' };
 
@@ -5741,6 +5745,7 @@ function renderTearsheet(d) {
   const dcfHtml = _tsDcfHtml(d.dcf, h.price);
 
   const quality = _tsQualityHtml(d.quality, h.symbol);
+  const dividend = _tsDividendHtml(d.dividend, h.symbol);
 
   // NVDR/insider (ร.59/246-2)/short sales เป็นข้อมูลเฉพาะตลาดหุ้นไทย — US/HK ไม่มีแนวคิดนี้
   const flow = mkt !== 'TH' ? '' : `
@@ -5802,12 +5807,15 @@ function renderTearsheet(d) {
       </div>
     </div>`;
 
-  document.getElementById('ts-body').innerHTML = header + actionBar + valuation + dcfHtml + quality + flow + seasonality + news + docs;
+  const calendarWeek = `<div id="ts-calendar"></div>`;
+
+  document.getElementById('ts-body').innerHTML = header + calendarWeek + actionBar + valuation + dcfHtml + quality + dividend + flow + seasonality + news + docs;
   requestAnimationFrame(() => {
     const canvas = document.getElementById('ts-spark');
     if (canvas && h.sparkline) drawSparkline(canvas, h.sparkline, h.ret_1y);
   });
   if (mkt === 'TH') _tsLoadFlow(h.symbol);
+  _tsLoadCalendarWeek(h.symbol, mkt);
   _loadPriceAnalytics(h.symbol, 'ts-lts', () => _tsData?.symbol === h.symbol, mkt !== 'TH' ? h.symbol : null);
   _tsLoadNews(h.symbol);
   _tsDcfRecalc();
@@ -6102,6 +6110,67 @@ function _tsQualityHtml(q, sym) {
       ${fzHtml}
     </div>
   </div>`;
+}
+
+// การ์ดย่อประวัติปันผล (จุดผูกงาน #5 Dividend History — เลขเดียวกับที่หน้า "💵 ปันผล" คำนวณ
+// ไม่คำนวณซ้ำเอง แค่แสดง 4 ตัวย่อ + ลิงก์ไปหน้าเต็ม) ไม่โชว์การ์ดถ้าไม่มีข้อมูลอะไรเลย (ยังไม่เคย
+// sync ปันผลของหุ้นตัวนี้)
+function _tsDividendHtml(d, sym) {
+  if (!d) return '';
+  if (d.yield == null && d.cagr_5y == null && d.growth_streak_y == null && d.coverage == null) return '';
+  const tile = (label, val, color) => `<div style="text-align:center;flex:1;min-width:88px">
+    <div style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">${label}</div>
+    <div style="font-size:15px;font-weight:700;color:${color || 'var(--text)'}">${val}</div></div>`;
+  const cagrC = d.cagr_5y == null ? '' : d.cagr_5y >= 5 ? 'var(--green)' : d.cagr_5y < 0 ? 'var(--red)' : '';
+  const covC = d.coverage == null ? '' : d.coverage >= 1 ? 'var(--green)' : 'var(--red)';
+  return `<div class="card" style="padding:16px;margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:700">💵 ปันผลย่อ</div>
+      <a href="#" onclick="_tsGoDividends('${sym}');return false" style="font-size:11px;color:var(--blue)">ดูประวัติเต็ม →</a>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${tile('Yield%', d.yield != null ? d.yield.toFixed(2) : '—', '')}
+      ${tile('CAGR 5ปี%', d.cagr_5y != null ? d.cagr_5y.toFixed(2) : '—', cagrC)}
+      ${tile('โตติดกัน(ปี)', d.growth_streak_y ?? '—', '')}
+      ${tile('FCF คุ้ม(เท่า)', d.coverage != null ? d.coverage.toFixed(2) : '—', covC)}
+    </div>
+  </div>`;
+}
+
+// การ์ด "สัปดาห์นี้" (จุดผูกงาน #4 Calendar — reuse endpoint/badge เดียวกับหน้า "📅 ปฏิทิน" ตรงๆ
+// ไม่ปั้น logic ใหม่) ดึงเฉพาะหุ้นตัวนี้ตัวเดียว (ต่างจากหน้าปฏิทินที่ดึงทั้ง Watchlist) กรอง
+// เหตุการณ์ที่อยู่ในช่วง [วันนี้, วันนี้+7] แล้วโชว์เป็นแบนเนอร์เล็กใต้ header — ไม่โชว์อะไรเลยถ้า
+// ไม่มี event ในสัปดาห์นี้ (เงียบๆ ไม่ใช่ error)
+async function _tsLoadCalendarWeek(sym, mkt) {
+  const el = document.getElementById('ts-calendar');
+  if (!el) return;
+  try {
+    const r = await fetch(`/api/calendar-events/${mkt}/${encodeURIComponent(sym)}`);
+    const d = await r.json();
+    if (_tsData?.symbol !== sym || !document.getElementById('ts-calendar')) return;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const limit = new Date(today.getTime() + 7 * 86400000);
+    const events = (d.events || [])
+      .map(e => ({ ...e, _dt: new Date(e.date + 'T00:00:00') }))
+      .filter(e => e._dt >= today && e._dt <= limit)
+      .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+    if (!events.length) { el.innerHTML = ''; return; }
+    const rows = events.map(e => {
+      const dLeft = Math.round((e._dt - today) / 86400000);
+      const dayLabel = dLeft === 0 ? 'วันนี้' : `อีก ${dLeft} วัน`;
+      return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:3px 0;font-size:12px">
+        <span>${_CAL_TYPE_BADGE[e.type] || e.type}</span>
+        <span style="font-weight:600">${e.date}</span>
+        <span style="color:var(--text2);font-size:11px">(${dayLabel})</span>
+        ${e.detail ? `<span style="color:var(--text2);font-size:11px">${e.detail}</span>` : ''}
+        <span style="color:${_CAL_CONF_COLOR[e.confidence] || 'var(--text2)'};font-size:11px;margin-left:auto">${_CAL_CONF_LABEL[e.confidence] || e.confidence}</span>
+      </div>`;
+    }).join('');
+    el.innerHTML = `<div class="card" style="padding:12px 16px;margin-bottom:12px;border-left:3px solid var(--blue)">
+      <div style="font-size:13px;font-weight:700;margin-bottom:6px">📅 สัปดาห์นี้</div>
+      ${rows}
+    </div>`;
+  } catch (e) { /* เงียบไว้ — ไม่บล็อกหน้าหลักถ้าปฏิทินโหลดไม่สำเร็จ */ }
 }
 
 function _tsLoadFlow(sym) {
@@ -11141,7 +11210,8 @@ async function loadCalendarPage(refresh) {
   _calRenderFromCache();
 }
 
-const _CAL_TYPE_BADGE = { earnings: '📊 งบ', xd: '💵 XD', pay: '💰 จ่ายปันผล' };
+const _CAL_TYPE_BADGE = { earnings: '📊 งบ', xd: '💵 XD', pay: '💰 จ่ายปันผล',
+  xm: '🗳️ ประชุมผู้ถือหุ้น', xb: '📜 สิทธิจองซื้อ (XB)', xb_pay: '💳 ชำระค่าจองซื้อ' };
 const _CAL_CONF_LABEL = { confirmed: 'ยืนยันแล้ว', estimated: 'ประมาณการ', guessed: 'คาดการณ์' };
 const _CAL_CONF_COLOR = { confirmed: 'var(--green)', estimated: 'var(--blue)', guessed: 'var(--text2)' };
 
@@ -11186,7 +11256,7 @@ function _calRenderFromCache() {
       </table>
     </div>
     <div style="font-size:11px;color:var(--text2);margin-top:10px">
-      📊 งบ = ประมาณการจาก yfinance (อาจเลื่อน/คลาดเคลื่อน) · 💵 XD/💰 จ่ายปันผล = ประกาศทางการจาก SET.or.th (หุ้นไทยเท่านั้น) ·
+      📊 งบ = ประมาณการจาก yfinance (อาจเลื่อน/คลาดเคลื่อน) · 💵 XD/💰 จ่ายปันผล/🗳️ ประชุมผู้ถือหุ้น/📜 สิทธิจองซื้อ = ประกาศทางการจาก SET.or.th (หุ้นไทยเท่านั้น) ·
       หุ้น DR/US/HK เห็นเฉพาะวันประกาศงบประมาณการ · ยังไม่มีมุมมองปฏิทินรายเดือน (list เท่านั้นตอนนี้)
     </div>`;
 }
