@@ -2829,13 +2829,23 @@
 <div id="page-calendar" class="page">
   <div class="page-title">📅 ปฏิทินงบ/ปันผล</div>
   <div class="page-sub">วันประกาศงบ (yfinance ประมาณการ) + XD/จ่ายปันผล (SET.or.th ทางการ) ของหุ้นใน Watchlist —
-    เฟส A: เฉพาะหุ้นใน Watchlist เท่านั้น (ยังไม่รองรับ DR + ยังไม่มีมุมมองปฏิทินรายเดือน) local-only</div>
+    เฟส A: เฉพาะหุ้นใน Watchlist เท่านั้น local-only</div>
   <div class="card" style="padding:14px 16px;margin-bottom:12px">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn active" id="cal-view-list" onclick="_calSetView('list',this)">📋 รายการ</button>
+        <button class="filter-btn" id="cal-view-grid" onclick="_calSetView('grid',this)">🗓️ ปฏิทินเดือน</button>
+      </div>
+      <div class="filter-row" style="gap:0;margin:0" id="cal-range-row">
         <button class="filter-btn active" id="cal-range-7" onclick="_calSetRange(7,this)" style="border-radius:6px 0 0 6px">7 วันข้างหน้า</button>
         <button class="filter-btn" id="cal-range-30" onclick="_calSetRange(30,this)">30 วันข้างหน้า</button>
         <button class="filter-btn" id="cal-range-all" onclick="_calSetRange(365,this)" style="border-radius:0 6px 6px 0">ทั้งหมดที่มีข้อมูล</button>
+      </div>
+      <div class="filter-row" style="gap:6px;margin:0;display:none;align-items:center" id="cal-month-nav">
+        <button class="filter-btn" onclick="_calMonthNav(-1)">◀</button>
+        <span id="cal-month-label" style="font-weight:700;font-size:13px;min-width:110px;text-align:center;display:inline-block"></span>
+        <button class="filter-btn" onclick="_calMonthNav(1)">▶</button>
+        <button class="filter-btn" onclick="_calMonthNav(0,true)">วันนี้</button>
       </div>
       <button class="filter-btn" style="font-size:12px;margin-left:auto" onclick="loadCalendarPage(true)">🔄 ดึงข้อมูลใหม่ทั้งหมด</button>
     </div>

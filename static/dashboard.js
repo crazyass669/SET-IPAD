@@ -11164,11 +11164,29 @@ function _renderDividendsView(d, sym, market, hint) {
 // งาน #4 Calendar — เฟส A: เฉพาะหุ้นใน Watchlist (ดู PLAN_stock_study_suite.txt งาน #4 —
 // "อย่า fetch ทั้ง universe ตั้งแต่แรก จะโดน rate limit")
 let _calRangeDays = 7;
+let _calView = 'list';           // 'list' | 'grid'
+let _calMonthCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
 function _calSetRange(days, btn) {
   _calRangeDays = days;
   document.querySelectorAll('#cal-range-7,#cal-range-30,#cal-range-all').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
+  _calRenderFromCache();
+}
+
+function _calSetView(view, btn) {
+  _calView = view;
+  document.querySelectorAll('#cal-view-list,#cal-view-grid').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('cal-range-row').style.display = view === 'list' ? 'flex' : 'none';
+  document.getElementById('cal-month-nav').style.display = view === 'grid' ? 'flex' : 'none';
+  _calRenderFromCache();
+}
+
+function _calMonthNav(delta, toToday) {
+  _calMonthCursor = toToday
+    ? new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+    : new Date(_calMonthCursor.getFullYear(), _calMonthCursor.getMonth() + delta, 1);
   _calRenderFromCache();
 }
 
@@ -11215,18 +11233,33 @@ const _CAL_TYPE_BADGE = { earnings: '📊 งบ', xd: '💵 XD', pay: '💰 จ
 const _CAL_CONF_LABEL = { confirmed: 'ยืนยันแล้ว', estimated: 'ประมาณการ', guessed: 'คาดการณ์' };
 const _CAL_CONF_COLOR = { confirmed: 'var(--green)', estimated: 'var(--blue)', guessed: 'var(--text2)' };
 
+// รวม event ทุกหุ้นใน _calCache เป็น flat list เดียว ไม่กรองวันที่ (ตัวกรองช่วง/เดือนทำแยกที่
+// _calRenderList/_calRenderGrid) — ใช้ร่วมกันทั้ง 2 มุมมอง กันเขียน merge logic ซ้ำ
+function _calFlatEvents() {
+  const flat = [];
+  _calCache.forEach(it => it.events.forEach(e => {
+    flat.push({ ...e, symbol: it.display, market: it.market });
+  }));
+  flat.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  return flat;
+}
+
 function _calRenderFromCache() {
   const box = document.getElementById('cal-result');
   if (!box) return;
+  if (_calView === 'grid') { _calRenderGrid(); return; }
+  _calRenderList();
+}
+
+function _calRenderList() {
+  const box = document.getElementById('cal-result');
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const limit = new Date(today.getTime() + _calRangeDays * 86400000);
 
-  const flat = [];
-  _calCache.forEach(it => it.events.forEach(e => {
+  const flat = _calFlatEvents().filter(e => {
     const dt = new Date(e.date + 'T00:00:00');
-    if (dt >= today && dt <= limit) flat.push({ ...e, symbol: it.display, market: it.market });
-  }));
-  flat.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+    return dt >= today && dt <= limit;
+  });
 
   if (flat.length === 0) {
     box.innerHTML = `<div class="empty" style="padding:24px">ไม่มีเหตุการณ์ใน ${_calRangeDays} วันข้างหน้าสำหรับหุ้นใน Watchlist</div>`;
@@ -11257,8 +11290,74 @@ function _calRenderFromCache() {
     </div>
     <div style="font-size:11px;color:var(--text2);margin-top:10px">
       📊 งบ = ประมาณการจาก yfinance (อาจเลื่อน/คลาดเคลื่อน) · 💵 XD/💰 จ่ายปันผล/🗳️ ประชุมผู้ถือหุ้น/📜 สิทธิจองซื้อ = ประกาศทางการจาก SET.or.th (หุ้นไทยเท่านั้น) ·
-      หุ้น DR/US/HK เห็นเฉพาะวันประกาศงบประมาณการ · ยังไม่มีมุมมองปฏิทินรายเดือน (list เท่านั้นตอนนี้)
+      หุ้น DR/US/HK เห็นเฉพาะวันประกาศงบประมาณการ
     </div>`;
+}
+
+const _CAL_TYPE_ICON = { earnings: '📊', xd: '💵', pay: '💰', xm: '🗳️', xb: '📜', xb_pay: '💳' };
+const _CAL_WEEKDAY_TH = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
+const _CAL_MONTH_TH = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+  'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+
+// มุมมองปฏิทินรายเดือน (grid) — backend คืนเฉพาะ event ตั้งแต่วันนี้เป็นต้นไปเสมอ (ดู
+// /api/calendar-events, from_date=today_iso) ดังนั้นเดือนย้อนหลังจะว่างเปล่าเสมอโดยดีไซน์
+// (ไม่ใช่บั๊ก — ปฏิทินสนใจแต่อนาคตตามสโคปเดิมของงาน #4) เดือนปัจจุบัน/อนาคตใช้ _calCache เดิม
+// ไม่ fetch เพิ่ม (cache มีเหตุการณ์ล่วงหน้าเต็มปีอยู่แล้วจาก loadCalendarPage)
+function _calRenderGrid() {
+  const box = document.getElementById('cal-result');
+  const year = _calMonthCursor.getFullYear(), month = _calMonthCursor.getMonth();
+  const label = document.getElementById('cal-month-label');
+  if (label) label.textContent = `${_CAL_MONTH_TH[month]} ${year + 543}`;
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const byDate = {};
+  _calFlatEvents().forEach(e => { (byDate[e.date] = byDate[e.date] || []).push(e); });
+
+  const head = _CAL_WEEKDAY_TH.map(w => `<th style="padding:6px;font-size:11px;color:var(--text2)">${w}</th>`).join('');
+
+  box.innerHTML = `
+    <div class="card" style="padding:12px;overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;table-layout:fixed">
+        <thead><tr>${head}</tr></thead>
+        <tbody>${_calGridRows(year, month, byDate, today)}</tbody>
+      </table>
+    </div>
+    <div style="font-size:11px;color:var(--text2);margin-top:10px">
+      📊 งบ = ประมาณการจาก yfinance (อาจเลื่อน/คลาดเคลื่อน) · 💵 XD/💰 จ่ายปันผล/🗳️ ประชุมผู้ถือหุ้น/📜 สิทธิจองซื้อ = ประกาศทางการจาก SET.or.th (หุ้นไทยเท่านั้น) ·
+      เดือนย้อนหลังจะไม่มีข้อมูล (ปฏิทินเก็บเฉพาะเหตุการณ์อนาคตตามดีไซน์)
+    </div>`;
+}
+
+function _calGridRows(year, month, byDate, today) {
+  const firstOfMonth = new Date(year, month, 1);
+  const startWeekday = firstOfMonth.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const totalCells = Math.ceil((startWeekday + daysInMonth) / 7) * 7;
+
+  let html = '';
+  for (let row = 0; row < totalCells / 7; row++) {
+    html += '<tr>';
+    for (let col = 0; col < 7; col++) {
+      const i = row * 7 + col;
+      const dayNum = i - startWeekday + 1;
+      if (dayNum < 1 || dayNum > daysInMonth) { html += `<td style="background:var(--bg2);opacity:.3;border:1px solid var(--border)"></td>`; continue; }
+      const cellDate = new Date(year, month, dayNum);
+      const iso = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+      const isToday = cellDate.getTime() === today.getTime();
+      const dayEvents = byDate[iso] || [];
+      const chips = dayEvents.slice(0, 3).map(e =>
+        `<div title="${e.symbol} ${(e.detail || '').replace(/"/g, '')}" style="font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 3px;margin-top:2px;border-radius:3px;background:var(--bg2)">
+          ${_CAL_TYPE_ICON[e.type] || '•'} ${e.symbol}
+        </div>`).join('');
+      const more = dayEvents.length > 3 ? `<div style="font-size:9px;color:var(--text2)">+${dayEvents.length - 3} อื่นๆ</div>` : '';
+      html += `<td style="vertical-align:top;padding:4px;height:76px;max-width:120px;border:1px solid var(--border);${isToday ? 'background:color-mix(in srgb, var(--blue) 12%, transparent)' : ''}">
+        <div style="font-size:11px;font-weight:${isToday ? '700' : '400'};color:${isToday ? 'var(--blue)' : 'var(--text2)'}">${dayNum}</div>
+        ${chips}${more}
+      </td>`;
+    }
+    html += '</tr>';
+  }
+  return html;
 }
 
 function _finFmt(v) {
