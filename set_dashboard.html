@@ -119,6 +119,15 @@
       </div>
     </div>
     <div class="btn-wrap">
+      <button class="refresh-btn" id="mirror-yahoo-sync-btn" onclick="startMirrorYahooIndexSync()">🌐 Sync Mirror US/HK เต็ม</button>
+      <div class="btn-note">
+        <b>🌐 Sync งบ Yahoo Mirror US/HK — ทั้ง universe</b><br>
+        ดึงงบ Yahoo annual ให้หุ้น mirror US/HK ทั้งหมด (~5,108 ตัว ไม่ใช่แค่ดัชนีหลัก)<br>
+        📦 ปลดล็อก F-Score/Z-Score/FCF/มูลค่าตลาดใน Screener+ ให้ครบทุกตัว<br>
+        ⏱ กดมือเป็นครั้งคราว ใช้เวลานาน (เป็นชั่วโมง) — Full Refresh sync ให้เองทีละ 300 ตัวอยู่แล้ว
+      </div>
+    </div>
+    <div class="btn-wrap">
       <button class="refresh-btn" id="restart-btn" onclick="restartServer()"
         style="background:#6e40c9;color:#fff">↺ Restart</button>
       <div class="btn-note" style="width:180px">
@@ -2793,11 +2802,16 @@
         <option value="">— เลือก Sector ตรง ๆ —</option>
       </select>
     </div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <span style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">คอลัมน์</span>
-      <button class="filter-btn active" id="peer-preset-valuation" onclick="setPeerPreset('valuation',this)">💰 Valuation</button>
-      <button class="filter-btn" id="peer-preset-quality" onclick="setPeerPreset('quality',this)">🩺 คุณภาพ</button>
-      <button class="filter-btn" id="peer-preset-growth" onclick="setPeerPreset('growth',this)">📈 Growth</button>
+      <button class="filter-btn active" id="peer-preset-valuation" onclick="setPeerPreset('valuation',this)" title="PE / PBV / P/S / ปันผล% / PEG">💰 Valuation</button>
+      <button class="filter-btn" id="peer-preset-quality" onclick="setPeerPreset('quality',this)" title="ROE / ROA / Gross Margin / Net Margin / D-E / Interest Coverage / OCF-NI / F-Score / Z-Score">🩺 คุณภาพ</button>
+      <button class="filter-btn" id="peer-preset-growth" onclick="setPeerPreset('growth',this)" title="CAGR รายได้/กำไร / TTM YoY / Revenue Streak / Growth Score / Rule of 40">📈 Growth</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">มุมมอง</span>
+      <button class="filter-btn active" id="peer-view-table" onclick="setPeerViewMode('table',this)" title="ตารางเทียบทุกตัวในกลุ่ม พร้อมสีไล่ตาม percentile ต่อคอลัมน์">📋 ตาราง</button>
+      <button class="filter-btn" id="peer-view-scatter" onclick="setPeerViewMode('scatter',this)" title="กระจายจุด PE (แกน X) × ROE (แกน Y) เทียบกับเส้นค่ากลางของกลุ่ม">📊 Scatter PE×ROE</button>
     </div>
   </div>
   <div id="peer-meta" style="font-size:12px;color:var(--text2);margin-bottom:8px"></div>
@@ -2828,13 +2842,24 @@
 <!-- PAGE: CALENDAR -->
 <div id="page-calendar" class="page">
   <div class="page-title">📅 ปฏิทินงบ/ปันผล</div>
-  <div class="page-sub">วันประกาศงบ (yfinance ประมาณการ) + XD/จ่ายปันผล (SET.or.th ทางการ) ของหุ้นใน Watchlist —
-    เฟส A: เฉพาะหุ้นใน Watchlist เท่านั้น local-only</div>
+  <div class="page-sub">วันประกาศงบ (yfinance ประมาณการ) + XD/จ่ายปันผล (SET.or.th ทางการ) —
+    เลือกขอบเขตได้ด้านล่าง: เฉพาะ Watchlist (default) / ทั้งหมดที่มีข้อมูลในเครื่อง / ตามตลาด — local-only</div>
   <div class="card" style="padding:14px 16px;margin-bottom:12px">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <div class="filter-row" style="gap:0;margin:0" id="cal-scope-row">
+        <button class="filter-btn active" id="cal-scope-watchlist" onclick="_calSetScope('watchlist',this)" style="border-radius:6px 0 0 6px" title="เฉพาะหุ้นใน Watchlist เท่านั้น">⭐ Watchlist</button>
+        <button class="filter-btn" id="cal-scope-all" onclick="_calSetScope('all',this)" title="ทุกหุ้นที่เคยดึงปฏิทินไว้ในเครื่อง ไม่ fetch สด">🗃️ ทั้งหมดที่มีข้อมูล</button>
+        <button class="filter-btn" id="cal-scope-market" onclick="_calSetScope('market',this)" style="border-radius:0 6px 6px 0" title="กรองตามตลาด จากข้อมูลที่มีในเครื่อง">🌐 ตามตลาด</button>
+      </div>
+      <div class="filter-row" style="gap:0;margin:0;display:none" id="cal-scope-market-row">
+        <button class="filter-btn active" onclick="_calSetScopeMarket('TH',this)" style="border-radius:6px 0 0 6px">TH</button>
+        <button class="filter-btn" onclick="_calSetScopeMarket('US',this)">US</button>
+        <button class="filter-btn" onclick="_calSetScopeMarket('HK',this)">HK</button>
+        <button class="filter-btn" onclick="_calSetScopeMarket('DR',this)" style="border-radius:0 6px 6px 0">DR</button>
+      </div>
       <div class="filter-row" style="gap:0;margin:0">
-        <button class="filter-btn active" id="cal-view-list" onclick="_calSetView('list',this)">📋 รายการ</button>
-        <button class="filter-btn" id="cal-view-grid" onclick="_calSetView('grid',this)">🗓️ ปฏิทินเดือน</button>
+        <button class="filter-btn active" id="cal-view-list" onclick="_calSetView('list',this)" title="แสดงเป็นรายการเรียงตามวันที่ พร้อมตัวกรองช่วงเวลา">📋 รายการ</button>
+        <button class="filter-btn" id="cal-view-grid" onclick="_calSetView('grid',this)" title="แสดงเป็นปฏิทินรายเดือน เลื่อนดูเดือนก่อน/ถัดไปได้">🗓️ ปฏิทินเดือน</button>
       </div>
       <div class="filter-row" style="gap:0;margin:0" id="cal-range-row">
         <button class="filter-btn active" id="cal-range-7" onclick="_calSetRange(7,this)" style="border-radius:6px 0 0 6px">7 วันข้างหน้า</button>
@@ -2847,7 +2872,7 @@
         <button class="filter-btn" onclick="_calMonthNav(1)">▶</button>
         <button class="filter-btn" onclick="_calMonthNav(0,true)">วันนี้</button>
       </div>
-      <button class="filter-btn" style="font-size:12px;margin-left:auto" onclick="loadCalendarPage(true)">🔄 ดึงข้อมูลใหม่ทั้งหมด</button>
+      <button class="filter-btn" id="cal-refresh-btn" style="font-size:12px;margin-left:auto" onclick="loadCalendarPage(true)">🔄 ดึงข้อมูลใหม่ทั้งหมด</button>
     </div>
   </div>
   <div id="cal-result"><div class="empty" style="padding:24px">กำลังโหลด...</div></div>

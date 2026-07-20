@@ -350,6 +350,11 @@ function startHkIndexFullRefresh() {
   _startJob("/api/hk-index-full-refresh", "hk-index-refresh-btn", "📈 HK Index Max", null, checkDataHealthBadge);
 }
 
+function startMirrorYahooIndexSync() {
+  if (!confirm('ดึงงบ Yahoo annual ให้หุ้น mirror US/HK ทั้ง universe (~5,108 ตัว)?\n\nใช้เวลานานมาก (เป็นชั่วโมง) — ปลดล็อก F-Score/Z-Score/FCF/มูลค่าตลาดใน Screener+ ให้ครบทุกตัว')) return;
+  _startJob("/api/mirror-yahoo-index-sync", "mirror-yahoo-sync-btn", "🌐 Sync Mirror US/HK เต็ม", null, checkDataHealthBadge);
+}
+
 async function restartServer() {
   if (!confirm('ยืนยันการ Restart Server?\n\nหน้าเว็บจะ reload อัตโนมัติหลัง server พร้อม')) return;
   const btn = document.getElementById('restart-btn');
@@ -4644,6 +4649,11 @@ const FS_FILTERS = [
     tip: '<strong>อัตรากำไรขั้นต้น</strong><br>กำไรขั้นต้น ÷ รายได้<br><br>เช่น ใส่ <b>30</b> = margin ขั้นต้น ≥ 30% (ยิ่งสูง = อำนาจตั้งราคาดี)' },
   { k: 'ocf_ni_ratio',        label: 'คุณภาพกำไร OCF/NI ≥', unit: 'เท่า', cmp: 'gte',
     tip: '<strong>คุณภาพกำไร (OCF/NI)</strong><br>กระแสเงินสดดำเนินงาน ÷ กำไรสุทธิ (สะสม 4 ไตรมาส)<br><br>เช่น ใส่ <b>0.8</b> = เงินสดเข้าจริง ≥ 80% ของกำไร<br><span style="color:var(--text2)">ต่ำกว่า 0.8 = กำไรโตแต่เงินไม่เข้า (จับหุ้นแต่งบัญชี)</span>' },
+  { k: 'f_score',             label: 'F-Score ≥', unit: '/9', cmp: 'gte',
+    tip: '<strong>Piotroski F-Score (0-9)</strong><br>คะแนนรวม 9 ข้อ ความสามารถทำกำไร/งบดุล/ประสิทธิภาพ ยิ่งสูงยิ่งดี<br><br>เช่น ใส่ <b>7</b> = ผ่านอย่างน้อย 7 ใน 9 ข้อ<br><span style="color:var(--text2)">ต้องมีงบ Yahoo annual ครบถึงจะคำนวณได้ — หุ้น US/HK นอกพอร์ตส่วนใหญ่ยังไม่มีค่า (มีเฉพาะตัวที่เคยเปิดดูหรือ sync แล้ว)</span>' },
+  { k: 'z_zone',              label: 'Z-Score โซน', cmp: 'eq',
+    options: [{ v: 'safe', label: '🟢 ปลอดภัย' }, { v: 'grey', label: '🟡 เทา' }, { v: 'distress', label: '🔴 เสี่ยง' }],
+    tip: '<strong>Altman Z-Score โซนความเสี่ยงล้มละลาย</strong><br>ปลอดภัย/เทา/เสี่ยง ตามเกณฑ์ Z (DR) หรือ Z\'\' emerging market (ไทย)<br><br><span style="color:var(--text2)">ไม่มีค่าสำหรับกลุ่มการเงิน (ธนาคาร/ประกัน) เพราะสูตร Altman ใช้ไม่ได้กับงบดุลกลุ่มนี้ — ตัดออกจากผลลัพธ์เสมอเมื่อกรองด้วยตัวนี้ · ต้องมีงบ Yahoo annual ครบถึงจะคำนวณได้เหมือน F-Score</span>' },
   { g: 'งบดุล / ความเสี่ยง' },
   { k: 'de_ratio',            label: 'D/E ≤', unit: 'เท่า', cmp: 'lte', def: 2, nullOk: true,
     tip: '<strong>D/E (หนี้สินต่อทุน)</strong><br>หนี้สินรวมที่มีดอกเบี้ย ÷ ส่วนผู้ถือหุ้น<br><br>เช่น ใส่ <b>1</b> = หนี้ไม่เกินทุน (ยิ่งต่ำยิ่งปลอดภัย)<br><span style="color:var(--text2)">🛡 risk filter — ช่องว่างเปล่า = ไม่กรอง (เลข <b>2</b> จางๆ ในช่องเป็นแค่ค่าแนะนำ พิมพ์เองถึงจะเปิดใช้) · ไม่มีข้อมูล = ไม่ตัด<br>หมายเหตุ: ไทย/DR ใช้ Yahoo (หนี้มีดอกเบี้ย) แต่ US/HK นอกพอร์ตใช้ Finnomena ซึ่งนิยามต่างกัน — ตัวเลขเทียบข้าม universe ตรงๆ ไม่ได้</span>' },
@@ -4752,7 +4762,7 @@ const FS_PRESETS = [
 const FS_YAHOO_ONLY = new Set(['rev_cagr', 'profit_streak', 'rule_of_40', 'growth_percentile',
   'interest_coverage', 'cash_cycle', 'goodwill_ratio', 'ocf_neg_years', 'shares_chg_yoy',
   'net_cash_positive', 'buyback', 'dividend_coverage',
-  'pe_sector_pctile', 'roe_sector_pctile']);
+  'pe_sector_pctile', 'roe_sector_pctile', 'f_score', 'z_zone']);
 
 // filter สายราคา (rs/ema200/52w high/rvol) — มีข้อมูลจริงเฉพาะหุ้น US ที่อยู่ใน
 // S&P500+Dow+NDX (~518 ตัว, overlay จาก us_index_metrics.json ใน app.py) ตัวอื่น
@@ -4953,6 +4963,8 @@ const FS_COLS = [
   { k: 'roa', label: 'ROA%' },
   { k: 'net_margin', label: 'NM%', tip: 'อัตรากำไรสุทธิ' },
   { k: 'ocf_ni_ratio', label: 'OCF/NI', tip: 'คุณภาพกำไร: เงินสดเข้าจริง ÷ กำไร (TTM) — เขียว ≥1 · ส้ม <0.8' },
+  { k: 'f_score', label: 'F-Score', tip: 'Piotroski F-Score 0-9 — เขียว 8-9 · แดง 0-3' },
+  { k: 'z_zone', label: 'Z-Score', tip: 'Altman Z-Score โซนความเสี่ยงล้มละลาย — ไม่มีค่า = กลุ่มการเงิน หรือยังไม่มีงบ Yahoo' },
   { k: 'de_ratio', label: 'D/E', tip: 'หนี้ต่อทุน — แดง >2' },
   { k: 'profit_yoy_q', label: 'กำไรYoY%', sep: true, tip: 'กำไรไตรมาสล่าสุด เทียบไตรมาสเดียวกันปีก่อน' },
   { k: 'profit_ttm_yoy', label: 'กำไรTTM%', tip: 'กำไรรวม 4 ไตรมาสล่าสุด เทียบปีก่อน (เรียบกว่า YoY งวดเดียว)' },
@@ -4978,6 +4990,7 @@ const FS_COL_CLR = {
   roa:                 v => v < 0 ? 'var(--red)' : '',
   net_margin:          v => v < 0 ? 'var(--red)' : '',
   ocf_ni_ratio:        v => v >= 1 ? 'var(--green)' : (v < 0 ? 'var(--red)' : (v < 0.8 ? '#e8a33d' : '')),
+  f_score:             v => v >= 8 ? 'var(--green)' : (v >= 6 ? '#7ee787' : (v >= 4 ? '#d29922' : 'var(--red)')),
   de_ratio:            v => v > 2 ? 'var(--red)' : '',
   profit_yoy_q:        _fsPosNeg,
   profit_ttm_yoy:      _fsPosNeg,
@@ -5010,6 +5023,13 @@ function buildFsFilterUI() {
     const tip = f.tip ? ` <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:250px">${f.tip}</div></span>` : '';
     if (f.cmp === 'bool') {
       return `<div class="scr-group"><label class="scr-check" style="margin-top:16px"><input type="checkbox" id="fsen-${f.k}" onchange="runFscreener()"> <span>${f.label}</span>${tip}</label></div>`;
+    }
+    if (f.cmp === 'eq' && f.options) {
+      const opts = f.options.map(o => `<option value="${o.v}">${o.label}</option>`).join('');
+      return `<div class="scr-group"><label class="scr-label" for="fsin-${f.k}">${f.label}${tip}</label>
+        <select class="scr-input" id="fsin-${f.k}" onchange="runFscreener()">
+          <option value="">— ทั้งหมด —</option>${opts}
+        </select></div>`;
     }
     if (f.range) {
       // filter แบบช่วง (min-max): ช่องซ้าย = ขั้นต่ำ (≥), ช่องขวา = ไม่เกิน (≤) เสมอ
@@ -5135,6 +5155,11 @@ function _fsReadConds() {
       if (en && en.checked) conds.push({ k: f.k, cmp: 'bool' });
       return;
     }
+    if (f.cmp === 'eq') {
+      const sel = document.getElementById('fsin-' + f.k);
+      if (sel && sel.value !== '') conds.push({ k: f.k, cmp: 'eq', v: sel.value });
+      return;
+    }
     const el = document.getElementById('fsin-' + f.k);
     if (el && el.value !== '') {   // ช่องว่าง = ไม่กรอง
       const v = parseFloat(el.value);
@@ -5211,6 +5236,7 @@ function runFscreener() {
     for (const c of conds) {
       const val = r[c.k];
       if (c.cmp === 'bool') { if (!val) return false; continue; }
+      if (c.cmp === 'eq') { if (val !== c.v) return false; continue; }
       if (val == null || isNaN(val)) {
         if (c.nullOk) continue;   // risk filter: ไม่มีข้อมูล = ไม่ตัด (ตัดเฉพาะตัวที่รู้ว่าแย่)
         return false;             // filter ปกติ: ไม่มีข้อมูล = ตัดออกเมื่อกรองด้วยเงื่อนไขนั้น
@@ -5247,6 +5273,7 @@ function _fsFmt(v, key) {
   if (v == null || (typeof v === 'number' && isNaN(v))) return '<span style="color:var(--text2)">–</span>';
   if (typeof v === 'string') return v;
   if (key === 'high_season_q') return 'Q' + v;   // ไตรมาสไฮซีซั่น
+  if (key === 'f_score') return Math.round(v) + '/9';
   if (key === 'profit_accel_streak' || key === 'quarters_available' ||
       key === 'roe15_streak_q' || key === 'rs') return Math.round(v);
   if (key === 'pct_off_high52' || key === 'profit_yoy_q' || key === 'profit_ttm_yoy') {
@@ -5288,6 +5315,14 @@ function renderFsTable(rows) {
       } else if (c.k === 'market') {
         const cc = FS_MKT_BADGE[r.market] || 'var(--text2)';
         v = `<span style="background:${cc}22;color:${cc};padding:1px 7px;border-radius:4px;font-size:10.5px;font-weight:600">${r.market || '—'}</span>`;
+      } else if (c.k === 'z_zone') {
+        const zoneColor = { safe: 'var(--green,#2ea043)', grey: '#d29922', distress: 'var(--red,#da3633)' }[r.z_zone] || '';
+        const zoneLabel = { safe: 'ปลอดภัย', grey: 'เทา', distress: 'เสี่ยง' }[r.z_zone];
+        v = zoneLabel
+          ? `<span title="${_zScoreTooltip(r.z_variant, r.z_zone, zoneLabel)}" style="color:${zoneColor};font-weight:600;cursor:help">${zoneLabel}</span>`
+          : (r.z_excluded_reason
+              ? `<span title="${r.z_excluded_reason}" style="color:var(--text2);cursor:help">–</span>`
+              : '<span style="color:var(--text2)">–</span>');
       } else {
         const raw = r[c.k];
         const clr = FS_COL_CLR[c.k];
@@ -5329,6 +5364,7 @@ function exportFscreenerCSV() {
 // ============================================================
 let _peerRows = [], _peerMedian = null, _peerMeta = null;
 let _peerPreset = 'valuation';
+let _peerViewMode = 'table';
 
 const PEER_COLS = {
   valuation: [
@@ -5340,7 +5376,7 @@ const PEER_COLS = {
   ],
   quality: [
     { k: 'roe',               label: 'ROE%',    lowerBetter: false, tip: 'ผลตอบแทนต่อส่วนผู้ถือหุ้น' },
-    { k: 'roa',                label: 'ROA%',    lowerBetter: false },
+    { k: 'roa',                label: 'ROA%',    lowerBetter: false, tip: 'ผลตอบแทนต่อสินทรัพย์รวม' },
     { k: 'gross_margin',       label: 'GM%',     lowerBetter: false, tip: 'อัตรากำไรขั้นต้น' },
     { k: 'net_margin',         label: 'NM%',     lowerBetter: false, tip: 'อัตรากำไรสุทธิ' },
     { k: 'de_ratio',           label: 'D/E',     lowerBetter: true,  tip: 'หนี้สินต่อทุน' },
@@ -5355,7 +5391,7 @@ const PEER_COLS = {
     { k: 'rev_ttm_yoy',     label: 'RevTTM%',      lowerBetter: false, tip: 'รายได้ TTM เทียบปีก่อน' },
     { k: 'profit_ttm_yoy',  label: 'ProfitTTM%',   lowerBetter: false, tip: 'กำไร TTM เทียบปีก่อน' },
     { k: 'revenue_streak',  label: 'RevStreak(ปี)', lowerBetter: false, tip: 'รายได้โตต่อเนื่องกี่ปี' },
-    { k: 'growth_score',    label: 'GrowthScore',  lowerBetter: false },
+    { k: 'growth_score',    label: 'GrowthScore',  lowerBetter: false, tip: 'สกอร์รวมความแข็งแรงของการเติบโต (รวมหลายปัจจัยข้างต้น)' },
     { k: 'rule_of_40',      label: 'Rule of 40',   lowerBetter: false, tip: 'รายได้โต% + Net Margin% — ≥40 ดี' },
   ],
 };
@@ -5377,6 +5413,7 @@ function setPeerMarket(mkt, btn) {
   const sel = document.getElementById('peer-sector-select');
   if (sel) { sel.innerHTML = '<option value="">— เลือก Sector ตรง ๆ —</option>'; sel.dataset.built = ''; }
   document.getElementById('peer-meta').textContent = '';
+  _peerDestroyScatterChart();
   document.getElementById('peer-results').innerHTML = '<div class="empty">พิมพ์ชื่อหุ้นหรือเลือก Sector เพื่อเริ่มเทียบ</div>';
   _peerBuildDatalist();
   _peerBuildSectorSelect();
@@ -5404,13 +5441,24 @@ async function _peerBuildDatalist() {
     } catch { return; }
   }
   const stocks = (_peerMarket === 'US' ? _usData : _hkData)?.stocks || [];
-  const key = _peerMarket + ':' + stocks.length;
+  const mirror = (await _loadMirrorSymbols())[_peerMarket] || [];
+  const key = _peerMarket + ':' + stocks.length + ':' + mirror.length;
   if (dl.dataset.key === key) return;
   dl.innerHTML = '';
   const frag = document.createDocumentFragment();
+  const seen = new Set();
   stocks.forEach(s => {
+    seen.add(s.symbol);
     const o = document.createElement('option');
     o.value = s.symbol; o.label = s.name || s.symbol;
+    frag.appendChild(o);
+  });
+  // หุ้น mirror นอกดัชนีหลัก — sector ดึงแบบ on-demand ตอนเลือกจริง (ดู /api/peer-compare)
+  mirror.forEach(rawSym => {
+    const sym = _peerMarket === 'HK' ? rawSym + '.HK' : rawSym;
+    if (seen.has(sym)) return;
+    const o = document.createElement('option');
+    o.value = sym;
     frag.appendChild(o);
   });
   dl.appendChild(frag);
@@ -5441,15 +5489,30 @@ function setPeerPreset(preset, btn) {
   _peerPreset = preset;
   document.querySelectorAll('#page-peer .filter-btn[id^="peer-preset-"]').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
-  if (_peerRows.length) renderPeerTable();
+  if (_peerRows.length) renderPeerResults();
 }
 
-function loadPeerCompare(symArg) {
+function setPeerViewMode(mode, btn) {
+  _peerViewMode = mode;
+  document.querySelectorAll('#page-peer .filter-btn[id^="peer-view-"]').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (_peerRows.length) renderPeerResults();
+}
+
+function renderPeerResults() {
+  if (_peerViewMode === 'scatter') renderPeerScatter();
+  else renderPeerTable();
+}
+
+function loadPeerCompare(symArg, marketOverride) {
   const sym = (symArg || document.getElementById('peer-sym').value || '').toUpperCase().trim();
   if (!sym) return;
   document.getElementById('peer-sym').value = sym;
   document.getElementById('peer-sector-select').value = '';
-  _peerFetch(`/api/peer-compare?market=${_peerMarket}&symbol=${encodeURIComponent(sym)}`);
+  // marketOverride: ใช้ตอนเปิดจาก modal หุ้น DR (ดู openPeerFromModal) — fetch แรกต้องส่ง
+  // market='DR' ให้ backend resolve DR sym เป็น underlying เอง ต่างจาก _peerMarket ที่เป็นแค่
+  // แท็บ UI (US/HK) ปกติ ครั้งถัดไป (ขยายกลุ่ม/ค้นใหม่) กลับไปใช้ _peerMarket ตามเดิม
+  _peerFetch(`/api/peer-compare?market=${marketOverride || _peerMarket}&symbol=${encodeURIComponent(sym)}`);
 }
 
 function loadPeerCompareBySector() {
@@ -5471,6 +5534,7 @@ function _peerWiden() {
 async function _peerFetch(url) {
   const box = document.getElementById('peer-results');
   const meta = document.getElementById('peer-meta');
+  _peerDestroyScatterChart();
   box.innerHTML = '<div class="empty">กำลังโหลด...</div>';
   meta.textContent = '';
   try {
@@ -5483,7 +5547,7 @@ async function _peerFetch(url) {
     _peerRows = d.rows;
     _peerMedian = d.median;
     _peerMeta = d.meta;
-    renderPeerTable();
+    renderPeerResults();
   } catch (e) {
     box.innerHTML = '<div class="empty" style="color:var(--red)">โหลดไม่สำเร็จ: ' + e.message + '</div>';
   }
@@ -5506,6 +5570,7 @@ function _peerFmt(v) {
 }
 
 function renderPeerTable() {
+  _peerDestroyScatterChart();
   const cols = PEER_COLS[_peerPreset];
   const rows = _peerRows;
   const baseSym = _peerMeta && _peerMeta.base_symbol;
@@ -5575,6 +5640,114 @@ function renderPeerTable() {
        <thead><tr>${head}</tr></thead><tbody>${bodyRows.join('')}</tbody></table></div>`;
 }
 
+// Scatter PE (แกน X) × ROE (แกน Y) — จตุภาคอิงเส้นค่ากลาง (median) ของกลุ่มเพื่อน
+// บนซ้าย (PE ต่ำ, ROE สูง) = ถูกและมีคุณภาพสูง → เขียว
+// ล่างขวา (PE สูง, ROE ต่ำ) = แพงและคุณภาพต่ำ → แดง · อีกสองจตุภาคเป็นกลาง (เทา)
+let _peerScatterChartInst = null;
+
+function _peerDestroyScatterChart() {
+  if (_peerScatterChartInst) { _peerScatterChartInst.destroy(); _peerScatterChartInst = null; }
+}
+
+function renderPeerScatter() {
+  _peerDestroyScatterChart();
+  const rows = _peerRows;
+  const baseSym = _peerMeta && _peerMeta.base_symbol;
+
+  const pts = rows
+    .filter(r => typeof r.pe === 'number' && typeof r.roe === 'number')
+    .map(r => ({ x: r.pe, y: r.roe, symbol: r.symbol, isBase: r.symbol === baseSym }));
+
+  if (pts.length < 2) {
+    document.getElementById('peer-results').innerHTML =
+      '<div class="empty">หุ้นในกลุ่มนี้มีข้อมูล PE และ ROE ไม่พอสำหรับวาด Scatter (ต้องมีอย่างน้อย 2 ตัว)</div>';
+    return;
+  }
+
+  const peVals = pts.map(p => p.x), roeVals = pts.map(p => p.y);
+  const medianOf = arr => {
+    const s = [...arr].sort((a, b) => a - b);
+    const n = s.length;
+    return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+  };
+  const medPe = (_peerMedian && typeof _peerMedian.pe === 'number') ? _peerMedian.pe : medianOf(peVals);
+  const medRoe = (_peerMedian && typeof _peerMedian.roe === 'number') ? _peerMedian.roe : medianOf(roeVals);
+
+  const zoneColor = p => {
+    if (p.x <= medPe && p.y >= medRoe) return '#3fb950';   // ถูก+คุณภาพสูง
+    if (p.x >= medPe && p.y <= medRoe) return '#f85149';   // แพง+คุณภาพต่ำ
+    return '#8b949e';                                       // จตุภาคกลาง
+  };
+
+  document.getElementById('peer-results').innerHTML =
+    `<div style="font-size:11px;color:var(--text2);margin-bottom:8px">
+       เส้นประ = ค่ากลาง (median) PE และ ROE ของกลุ่มเพื่อน ·
+       <span style="color:#3fb950">●</span> ถูกกว่าเพื่อน+ROE สูงกว่า &nbsp;
+       <span style="color:#f85149">●</span> แพงกว่าเพื่อน+ROE ต่ำกว่า &nbsp;
+       <span style="color:#8b949e">●</span> จตุภาคกลาง
+     </div>
+     <div style="position:relative;height:420px;border:1px solid var(--border);border-radius:8px;padding:8px">
+       <canvas id="peer-scatter-chart"></canvas>
+     </div>`;
+
+  const canvas = document.getElementById('peer-scatter-chart');
+  const medianLinesPlugin = {
+    id: 'peerMedianLines',
+    afterDraw(chart) {
+      const { ctx, chartArea, scales } = chart;
+      if (!chartArea) return;
+      const xPix = scales.x.getPixelForValue(medPe);
+      const yPix = scales.y.getPixelForValue(medRoe);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(139,148,158,0.5)';
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1;
+      if (xPix >= chartArea.left && xPix <= chartArea.right) {
+        ctx.beginPath(); ctx.moveTo(xPix, chartArea.top); ctx.lineTo(xPix, chartArea.bottom); ctx.stroke();
+      }
+      if (yPix >= chartArea.top && yPix <= chartArea.bottom) {
+        ctx.beginPath(); ctx.moveTo(chartArea.left, yPix); ctx.lineTo(chartArea.right, yPix); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  };
+
+  _peerScatterChartInst = new Chart(canvas, {
+    type: 'scatter',
+    data: {
+      datasets: [{
+        label: 'หุ้นในกลุ่ม',
+        data: pts,
+        backgroundColor: pts.map(p => zoneColor(p)),
+        borderColor: pts.map(p => p.isBase ? '#58a6ff' : zoneColor(p)),
+        borderWidth: pts.map(p => p.isBase ? 3 : 1),
+        pointRadius: pts.map(p => p.isBase ? 9 : 6),
+        pointHoverRadius: pts.map(p => p.isBase ? 11 : 8),
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const p = ctx.raw;
+              return `${p.symbol}: PE ${p.x.toFixed(2)} · ROE ${p.y.toFixed(2)}%`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { title: { display: true, text: 'PE (เท่า)' }, grid: { color: 'rgba(139,148,158,0.15)' } },
+        y: { title: { display: true, text: 'ROE (%)' }, grid: { color: 'rgba(139,148,158,0.15)' } },
+      }
+    },
+    plugins: [medianLinesPlugin]
+  });
+}
+
 function closePeerAndOpenChart(sym) {
   if (_peerMarket === 'US') openUsChartModal(sym);
   else if (_peerMarket === 'HK') openHkChartModal(sym);
@@ -5584,20 +5757,38 @@ function closePeerAndOpenChart(sym) {
 function openPeerFromModal() {
   if (!_cmStock) return;
   closeChartModal();
-  const mkt = _cmStock._isUSIdx ? 'US' : _cmStock._isHKIdx ? 'HK' : 'TH';
+  // หุ้น DR (_isDR) fetch แรกต้องส่ง market='DR' ตรงๆ ให้ backend resolve เป็น underlying
+  // US/HK เอง (DR sym อาจไม่ตรงกับ yf ticker จริง เช่น DR "APPL" -> underlying "APP" — เดา
+  // ผิดตัวได้ถ้าส่ง market=US ตรงๆ) ส่วนแท็บ UI/datalist ยังตั้งเป็น US/HK ตามปกติ (field
+  // 'region' จาก dr_universe บอกตลาด underlying คร่าวๆ) เพราะหลังจากนี้ resolved market/symbol
+  // จาก response (meta.market/base_symbol) จะเป็น US/HK ตรงแล้ว ปุ่ม "ขยายกลุ่ม" ครั้งถัดไปเลย
+  // ใช้ _peerMarket ปกติได้
+  const isDr = !!_cmStock._isDR;
+  const tabMkt = isDr ? (_cmStock.region === 'HK' ? 'HK' : 'US') : (_cmStock._isUSIdx ? 'US' : _cmStock._isHKIdx ? 'HK' : 'TH');
   const btn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'peer'"));
   showPage('peer', btn);
-  setPeerMarket(mkt, document.getElementById('peer-tab-' + mkt.toLowerCase()));
-  loadPeerCompare(_cmStock.symbol);
+  setPeerMarket(tabMkt, document.getElementById('peer-tab-' + tabMkt.toLowerCase()));
+  loadPeerCompare(_cmStock.symbol, isDr ? 'DR' : null);
 }
 
 // ============================================================
 // TEARSHEET — 📋 หุ้น 1 ตัว ครบในหน้าเดียว (งาน #1 ของ PLAN_stock_study_suite.txt — ครบทุกเฟส)
-// รองรับ TH (ทุกหุ้น) + US/HK (เฉพาะสมาชิกดัชนีหลัก S&P500+Dow+NDX / HSI+HSCEI+HSTECH — scope
-// ที่ตัดสินใจไว้ตอนต่อ US/HK support เพราะ mirror universe ทั้งก้อนไม่มีราคารายวัน/sector)
+// รองรับ TH (ทุกหุ้น) + US/HK ทั้ง mirror universe — สมาชิกดัชนีหลัก (S&P500+Dow+NDX/
+// HSI+HSCEI+HSTECH) ใช้ราคา/RS ที่คำนวณไว้ล่วงหน้า ส่วนหุ้นอื่นดึงแบบ on-demand ตอนเปิดดู
+// (ดู sources/mirror_ondemand.py) — ช่อง input เป็น free-text อยู่แล้ว พิมพ์ตัวที่ไม่อยู่ใน
+// datalist ก็ค้นได้ ตรงนี้แค่ขยาย autocomplete ให้ครอบคลุมด้วย (merge /api/mirror-symbols)
 // ============================================================
 let _tsData = null;
 let _tsMarket = 'TH';
+let _mirrorSymbolsCache = null;
+
+async function _loadMirrorSymbols() {
+  if (_mirrorSymbolsCache) return _mirrorSymbolsCache;
+  try {
+    _mirrorSymbolsCache = await (await fetch('/api/mirror-symbols')).json();
+    return _mirrorSymbolsCache;
+  } catch { return {}; }   // ไม่ assign cache — ให้ครั้งถัดไป retry ใหม่แทนที่จะค้าง {} ตลอดไป
+}
 
 function initTearsheetPage() {
   initFinPage();
@@ -5639,27 +5830,42 @@ async function _tsBuildDatalist() {
   }
   const data = _tsMarket === 'US' ? _usData : _hkData;
   const stocks = data?.stocks || [];
-  const key = _tsMarket + ':' + stocks.length;
+  const mirror = (await _loadMirrorSymbols())[_tsMarket] || [];
+  const key = _tsMarket + ':' + stocks.length + ':' + mirror.length;
   if (dl.dataset.key === key) return;
   dl.innerHTML = '';
   const frag = document.createDocumentFragment();
+  const seen = new Set();
   stocks.forEach(s => {
+    seen.add(s.symbol);
     const o = document.createElement('option');
     o.value = s.symbol; o.label = s.name || s.symbol;
+    frag.appendChild(o);
+  });
+  // หุ้น mirror นอกดัชนีหลัก — ไม่มีชื่อบริษัทเก็บไว้ (เบา ไม่คุ้มดึงชื่อสดแค่ autocomplete)
+  // เติม ".HK" ให้ตรง convention เดียวกับสมาชิกดัชนีหลัก (backend ตัดออกเองก่อน lookup เสมอ)
+  mirror.forEach(rawSym => {
+    const sym = _tsMarket === 'HK' ? rawSym + '.HK' : rawSym;
+    if (seen.has(sym)) return;
+    const o = document.createElement('option');
+    o.value = sym;
     frag.appendChild(o);
   });
   dl.appendChild(frag);
   dl.dataset.key = key;
 }
 
-async function loadTearsheet(symArg) {
+async function loadTearsheet(symArg, marketOverride) {
   const sym = (symArg || document.getElementById('ts-sym').value || '').toUpperCase().trim();
   if (!sym) return;
   document.getElementById('ts-sym').value = sym;
   const box = document.getElementById('ts-body');
   box.innerHTML = '<div class="empty">กำลังโหลด...</div>';
   try {
-    const r = await fetch(`/api/tearsheet/${_tsMarket}/${encodeURIComponent(sym)}`);
+    // marketOverride: ใช้ตอนเปิดจาก modal หุ้น DR (ดู openTearsheetFromModal) — ต้องส่ง
+    // market='DR' ให้ backend resolve DR sym เป็น underlying US/HK เอง (DR sym อาจไม่ตรงกับ
+    // yf ticker จริง) ต่างจาก _tsMarket ที่เป็นแค่แท็บ UI ปกติ
+    const r = await fetch(`/api/tearsheet/${marketOverride || _tsMarket}/${encodeURIComponent(sym)}`);
     const d = await r.json();
     if (d.error) { box.innerHTML = `<div class="empty">${d.error}</div>`; return; }
     _tsData = d;
@@ -5921,43 +6127,46 @@ function _tsDcfRecalc() {
   }
 
   const baseHistRaw = histGrowth != null ? histGrowth : 5;
-  const baseHist = Math.max(-10, Math.min(baseHistRaw, 25));   // ใช้เป็นค่าอ้างอิงไฮไลท์ฉาก Base/sensitivity เท่านั้น
+  const baseHist = Math.max(-10, Math.min(baseHistRaw, 25));   // ค่าอ้างอิงฉาก Base + จุดกึ่งกลาง sensitivity
+  // สเปรดระหว่างฉาก (แต้มเปอร์เซ็นต์ ไม่ใช่ตัวคูณ) — กันไม่ให้ Bear/Base/Bull ไปชนเพดาน 25%/พื้น -10% พร้อมกัน
+  // เมื่อ CAGR ในอดีตสูง/ต่ำมาก (เช่น CPALL 28.6%, หรือหุ้นที่กำไรเพิ่งพลิกจากขาดทุน)
+  const spread = Math.max(4, Math.min(Math.abs(baseHist) * 0.4, 12));
   const scenarios = [
-    { key: 'bear', label: 'Bear', mult: 0.5 }, { key: 'base', label: 'Base', mult: 1.0 }, { key: 'bull', label: 'Bull', mult: 1.5 },
+    { key: 'bear', label: 'Bear', delta: -spread }, { key: 'base', label: 'Base', delta: 0 }, { key: 'bull', label: 'Bull', delta: spread },
   ].map(sc => {
-    // clamp หลังคูณ mult เสมอ — clamp ก่อนคูณจะทำให้ Base/Bull ชนเพดาน 25% พร้อมกันเมื่อ CAGR ในอดีตสูง (เช่น CPALL 28.6%)
-    const gPct = Math.max(-10, Math.min(baseHistRaw * sc.mult, 25));
+    const gPct = Math.max(-10, Math.min(baseHist + sc.delta, 25));
     const fv = _dcfForwardFairValuePerShare(dcf.fcf, r, gPct / 100, tg, netCash, shares);
     const upside = fv != null ? (fv / price - 1) * 100 : null;
     return { ...sc, gPct, fv, upside };
   });
   const scenRows = scenarios.map(sc => `
-    <tr><td style="font-weight:600">${sc.label}</td><td>${sc.gPct.toFixed(1)}%</td>
-      <td>${sc.fv != null ? sc.fv.toFixed(2) : '—'}</td>
-      <td style="color:${sc.upside > 0 ? 'var(--green)' : sc.upside < 0 ? 'var(--red)' : 'var(--text)'}">${sc.upside != null ? (sc.upside > 0 ? '+' : '') + sc.upside.toFixed(1) + '%' : '—'}</td></tr>`).join('');
+    <tr><td style="font-weight:600">${sc.label}</td><td style="text-align:right">${sc.gPct.toFixed(1)}%</td>
+      <td style="text-align:right">${sc.fv != null ? sc.fv.toFixed(2) : '—'}</td>
+      <td style="text-align:right;color:${sc.upside > 0 ? 'var(--green)' : sc.upside < 0 ? 'var(--red)' : 'var(--text)'}">${sc.upside != null ? (sc.upside > 0 ? '+' : '') + sc.upside.toFixed(1) + '%' : '—'}</td></tr>`).join('');
   const forwardHtml = `<div style="margin-bottom:14px">
     <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Forward DCF — 3 ฉาก (ปี 1-5 โตตามอัตรา ปี 6-10 ค่อยๆ ลดสู่ Terminal)</div>
-    <div style="overflow-x:auto"><table class="data-table" style="font-size:12px;width:100%;max-width:440px">
-      <thead><tr><th>ฉาก</th><th>โต ปี1-5</th><th>Fair Value</th><th>Upside</th></tr></thead>
+    <div style="overflow-x:auto"><table class="tbl" style="width:100%;max-width:440px">
+      <thead><tr><th>ฉาก</th><th style="text-align:right">โต ปี1-5</th><th style="text-align:right">Fair Value</th><th style="text-align:right">Upside</th></tr></thead>
       <tbody>${scenRows}</tbody></table></div>
-    <div style="font-size:10.5px;color:var(--text2);margin-top:4px">ราคาปัจจุบัน ${price.toFixed(2)} · Bear=0.5× Base=1× Bull=1.5× ของ CAGR กำไร/รายได้ในอดีต (cap 25%, floor -10%)</div>
+    <div style="font-size:10.5px;color:var(--text2);margin-top:4px">ราคาปัจจุบัน ${price.toFixed(2)} · Base=CAGR กำไร/รายได้ในอดีต · Bear/Bull = Base ∓ ${spread.toFixed(1)}pp (cap 25%, floor -10%)</div>
   </div>`;
 
-  const growthAxis = [0.5, 0.75, 1.0, 1.25, 1.5].map(m => Math.max(-10, Math.min(baseHistRaw * m, 25)));
+  const halfStep = spread / 2;
+  const growthAxis = [-2, -1, 0, 1, 2].map(k => Math.max(-10, Math.min(baseHist + k * halfStep, 25)));
   const rAxis = [-2, -1, 0, 1, 2].map(d => r * 100 + d);
-  const sensHead = `<tr><th>โต% \\ Disc%</th>${rAxis.map(rr => `<th>${rr.toFixed(1)}</th>`).join('')}</tr>`;
+  const sensHead = `<tr><th>โต% \\ Disc%</th>${rAxis.map(rr => `<th style="text-align:right">${rr.toFixed(1)}</th>`).join('')}</tr>`;
   const sensRows = growthAxis.map(g => {
     const cells = rAxis.map(rr => {
       const rDec = rr / 100;
       const fv = _dcfForwardFairValuePerShare(dcf.fcf, rDec, g / 100, tg, netCash, shares);
       const isBase = Math.abs(g - baseHist) < 0.01 && Math.abs(rr - r * 100) < 0.01;
-      return `<td style="${isBase ? 'font-weight:700;background:var(--card2)' : ''}">${fv != null ? fv.toFixed(1) : '—'}</td>`;
+      return `<td style="text-align:right;${isBase ? 'font-weight:700;background:var(--card2)' : ''}">${fv != null ? fv.toFixed(1) : '—'}</td>`;
     }).join('');
     return `<tr><td style="font-weight:600">${g.toFixed(1)}%</td>${cells}</tr>`;
   }).join('');
   const sensHtml = `<div>
     <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Sensitivity — Fair Value ต่อหุ้น (แถว=โตปี1-5 · คอลัมน์=Discount Rate)</div>
-    <div style="overflow-x:auto"><table class="data-table" style="font-size:11px">${sensHead}<tbody>${sensRows}</tbody></table></div>
+    <div style="overflow-x:auto"><table class="tbl" style="font-size:11px">${sensHead}<tbody>${sensRows}</tbody></table></div>
   </div>`;
 
   body.innerHTML = reverseHtml + forwardHtml + sensHtml +
@@ -6066,7 +6275,7 @@ function _tsGoDividends(sym) {
 
 function _tsQualityHtml(q, sym) {
   if (!q) return '';
-  const tile = (label, val, color) => `<div style="text-align:center;flex:1;min-width:88px">
+  const tile = (label, val, color, tip) => `<div title="${tip || ''}" style="text-align:center;flex:1;min-width:88px${tip ? ';cursor:help' : ''}">
     <div style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">${label}</div>
     <div style="font-size:15px;font-weight:700;color:${color || 'var(--text)'}">${val}</div></div>`;
   const roeC = q.roe == null ? '' : q.roe >= 15 ? 'var(--green)' : q.roe < 0 ? 'var(--red)' : '';
@@ -6102,11 +6311,11 @@ function _tsQualityHtml(q, sym) {
       <a href="#" onclick="_tsGoFin('${sym}');return false" style="font-size:11px;color:var(--blue)">ดูงบเต็ม 8 ไตรมาส →</a>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      ${tile('ROE%', q.roe ?? '—', roeC)}
-      ${tile('D/E', q.de_ratio ?? '—', deC)}
-      ${tile('Gross Margin%', q.gross_margin ?? '—', '')}
-      ${tile('FCF Yield%', q.fcf_yield ?? '—', fcfC)}
-      ${tile('Div Coverage', q.dividend_coverage != null ? q.dividend_coverage.toFixed(2) : '—', covC)}
+      ${tile('ROE%', q.roe ?? '—', roeC, 'ผลตอบแทนต่อส่วนผู้ถือหุ้น — เขียว ≥15% (ดี) · แดง <0% (ขาดทุน)')}
+      ${tile('D/E', q.de_ratio ?? '—', deC, 'หนี้สินต่อทุน — แดง >2 เท่า (หนี้สูง เสี่ยงเรื่องสภาพคล่อง)')}
+      ${tile('Gross Margin%', q.gross_margin ?? '—', '', 'อัตรากำไรขั้นต้น — ยิ่งสูงยิ่งมี pricing power')}
+      ${tile('FCF Yield%', q.fcf_yield ?? '—', fcfC, 'กระแสเงินสดอิสระ ÷ มูลค่าตลาด — เขียว ≥5% (ดี) · แดง <0% (เผาเงินสด)')}
+      ${tile('Div Coverage', q.dividend_coverage != null ? q.dividend_coverage.toFixed(2) : '—', covC, 'FCF ÷ เงินปันผลที่จ่ายทั้งปี — เขียว ≥1 เท่า (FCF พอจ่ายปันผล) · แดง <1 เท่า (จ่ายเกินตัว)')}
       ${fzHtml}
     </div>
   </div>`;
@@ -6119,7 +6328,7 @@ function _tsDividendHtml(d, sym) {
   if (!d) return '';
   if (d.yield == null && d.cagr_5y == null && d.growth_streak_y == null && d.coverage == null
       && d.payout_ratio_pct == null) return '';
-  const tile = (label, val, color) => `<div style="text-align:center;flex:1;min-width:88px">
+  const tile = (label, val, color, tip) => `<div title="${tip || ''}" style="text-align:center;flex:1;min-width:88px${tip ? ';cursor:help' : ''}">
     <div style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">${label}</div>
     <div style="font-size:15px;font-weight:700;color:${color || 'var(--text)'}">${val}</div></div>`;
   const cagrC = d.cagr_5y == null ? '' : d.cagr_5y >= 5 ? 'var(--green)' : d.cagr_5y < 0 ? 'var(--red)' : '';
@@ -6131,11 +6340,11 @@ function _tsDividendHtml(d, sym) {
       <a href="#" onclick="_tsGoDividends('${sym}');return false" style="font-size:11px;color:var(--blue)">ดูประวัติเต็ม →</a>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      ${tile('Yield%', d.yield != null ? d.yield.toFixed(2) : '—', '')}
-      ${tile('CAGR 5ปี%', d.cagr_5y != null ? d.cagr_5y.toFixed(2) : '—', cagrC)}
-      ${tile('โตติดกัน(ปี)', d.growth_streak_y ?? '—', '')}
-      ${tile('FCF คุ้ม(เท่า)', d.coverage != null ? d.coverage.toFixed(2) : '—', covC)}
-      ${tile('Payout Ratio', d.payout_ratio_pct != null ? d.payout_ratio_pct.toFixed(1) + '%' : '—', payoutC)}
+      ${tile('Yield%', d.yield != null ? d.yield.toFixed(2) : '—', '', 'อัตราปันผลต่อปี ÷ ราคาปัจจุบัน')}
+      ${tile('CAGR 5ปี%', d.cagr_5y != null ? d.cagr_5y.toFixed(2) : '—', cagrC, 'อัตราการเติบโตของเงินปันผลเฉลี่ยต่อปี ย้อนหลัง 5 ปี — เขียว ≥5% (โตดี) · แดง <0% (ลดลง)')}
+      ${tile('โตติดกัน(ปี)', d.growth_streak_y ?? '—', '', 'จำนวนปีติดต่อกันที่เงินปันผลเพิ่มขึ้นหรือคงที่ (ไม่ลด)')}
+      ${tile('FCF คุ้ม(เท่า)', d.coverage != null ? d.coverage.toFixed(2) : '—', covC, 'FCF ÷ เงินปันผลที่จ่ายทั้งปี — เขียว ≥1 เท่า (FCF พอจ่ายปันผล) · แดง <1 เท่า (จ่ายเกินตัว)')}
+      ${tile('Payout Ratio', d.payout_ratio_pct != null ? d.payout_ratio_pct.toFixed(1) + '%' : '—', payoutC, 'DPS ÷ EPS งวดล่าสุด — เขียว ≤60% (ยังเหลือกำไรสะสม) · แดง >100% (จ่ายเกินกำไรที่หาได้)')}
     </div>
   </div>`;
 }
@@ -6247,11 +6456,14 @@ function closeTsOpenChart(sym) {
 function openTearsheetFromModal() {
   if (!_cmStock) return;
   closeChartModal();
-  const mkt = _cmStock._isUSIdx ? 'US' : _cmStock._isHKIdx ? 'HK' : 'TH';
+  // หุ้น DR (_isDR) fetch แรกส่ง market='DR' ให้ backend resolve underlying เอง (ดู
+  // openPeerFromModal ด้านบนสำหรับเหตุผลเดียวกัน) แท็บ UI ยังตั้งเป็น US/HK ตามปกติ
+  const isDr = !!_cmStock._isDR;
+  const mkt = isDr ? (_cmStock.region === 'HK' ? 'HK' : 'US') : (_cmStock._isUSIdx ? 'US' : _cmStock._isHKIdx ? 'HK' : 'TH');
   const btn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'tearsheet'"));
   showPage('tearsheet', btn);
   setTsMarket(mkt, document.getElementById('ts-tab-' + mkt.toLowerCase()));
-  loadTearsheet(_cmStock.symbol);
+  loadTearsheet(_cmStock.symbol, isDr ? 'DR' : null);
 }
 
 // ============================================================
@@ -7231,6 +7443,26 @@ async function _fetchLongHistory() {
   }
 }
 
+// เปิด/ปิดปุ่ม "เทียบเพื่อน"/"ดูสรุปเต็ม" ตาม _cmStock ปัจจุบัน — หุ้น DR ที่ underlying
+// ไม่ใช่ตลาด US/HK (JP/SG/TW/VN/EU/CN ~55 ตัว) ยังไม่มี cohort ให้เทียบ RS/sector
+// (backend ตอบ 501 เสมอ ดู /api/tearsheet, /api/peer-compare) — ปิดปุ่มไว้เลยกันกดแล้วเจอ error
+// เรียกทุกครั้งที่เปิด modal (ทุกประเภทหุ้น) เพราะปุ่มใช้ element เดียวกันข้าม modal ทุกตัว
+function _cmSyncPeerTearsheetButtons() {
+  const peerBtn = document.getElementById('cm-peer-btn');
+  const tsBtn = document.getElementById('cm-tearsheet-btn');
+  if (!peerBtn || !tsBtn) return;
+  const isDr = !!_cmStock?._isDR;
+  const unsupported = isDr && _cmStock.region !== 'US' && _cmStock.region !== 'HK';
+  [peerBtn, tsBtn].forEach(btn => {
+    btn.disabled = unsupported;
+    btn.style.opacity = unsupported ? '0.4' : '';
+    btn.style.cursor = unsupported ? 'not-allowed' : 'pointer';
+    btn.title = unsupported
+      ? `หุ้น DR underlying ตลาด ${_cmStock.region || '?'} ยังไม่รองรับ — รองรับเฉพาะ underlying ตลาด US/HK`
+      : (btn === peerBtn ? 'เทียบกับเพื่อนร่วม sector' : 'ดูสรุปเต็ม (Tearsheet)');
+  });
+}
+
 // เช็คซ้ำว่าปุ่ม "งบการเงิน" ควรโผล่ไหม — เรียกทั้งตอนเปิด modal ปกติ และตอน
 // loadFinAnalytics() โหลดเสร็จช้าระหว่างที่ modal เปิดค้างอยู่แล้ว (กันเคสที่ปุ่มหาย)
 function _refreshCmFinButton() {
@@ -7275,6 +7507,7 @@ function openDRChartModal(sym) {
   ].join('');
 
   _cmStock = { ...s, symbol: s.sym, price_history: null, _isDR: true };
+  _cmSyncPeerTearsheetButtons();
   _cmTf = '1y';
   _cmHistoryData = null;
   _cmVolumeData  = null;
@@ -7373,6 +7606,7 @@ function openUsChartModal(symbol) {
   ].join('');
 
   _cmStock = { ...s, price_history: s.price_history, _isDR: false, _isUSIdx: true };
+  _cmSyncPeerTearsheetButtons();
   _cmTf = '1y';
   // เว้น _cmHistoryData ไว้ null (ต่างจาก price_history ที่วาด preview ทันที) —
   // ให้แท็บ 5Y/Max ยังทำงาน (setCmTf เช็ค !_cmHistoryData ก่อนไปดึงประวัติเต็มจาก
@@ -7452,6 +7686,7 @@ function openHkChartModal(symbol) {
   ].join('');
 
   _cmStock = { ...s, price_history: s.price_history, _isDR: false, _isUSIdx: false, _isHKIdx: true };
+  _cmSyncPeerTearsheetButtons();
   _cmTf = '1y';
   _cmHistoryData = null;
   _cmVolumeData  = s.vol_history || null;
@@ -7775,6 +8010,7 @@ function openChartModal(symbol) {
   ].join('');
 
   _cmStock = s;
+  _cmSyncPeerTearsheetButtons();
   _cmTf = '1y';
   _cmHistoryData = null;
   _cmVolumeData  = null;
@@ -11108,20 +11344,20 @@ async function loadDividendsView(sym, market, hint, refresh) {
 function _renderDividendsView(d, sym, market, hint) {
   const years = d.years || [];
   const maxDps = Math.max(0.0001, ...years.map(y => y.dps));
-  const tile = (label, val, suffix) => `
-    <div style="flex:1;min-width:110px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+  const tile = (label, val, suffix, tip) => `
+    <div title="${tip || ''}" style="flex:1;min-width:110px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px${tip ? ';cursor:help' : ''}">
       <div style="font-size:11px;color:var(--text2)">${label}</div>
       <div style="font-size:17px;font-weight:600;margin-top:2px">${val == null ? '—' : val + (suffix || '')}</div>
     </div>`;
   const summary = `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
-      ${tile('จ่ายต่อเนื่อง', d.streak_paid_years, ' ปี')}
-      ${tile('เพิ่ม/คงที่ต่อเนื่อง', d.streak_nondecreasing_years, ' ปี')}
-      ${tile('CAGR 5 ปี', d.cagr_5y_pct, '%')}
-      ${tile('CAGR 10 ปี', d.cagr_10y_pct, '%')}
-      ${tile('YoY ล่าสุด', d.yoy_growth_pct, '%')}
-      ${tile('ความถี่/ปี', d.events_per_year, ' ครั้ง')}
-      ${tile('Payout Ratio', d.payout_ratio_pct, '%')}
+      ${tile('จ่ายต่อเนื่อง', d.streak_paid_years, ' ปี', 'จำนวนปีติดต่อกันล่าสุดที่มีการจ่ายเงินปันผล (ไม่ขาดปีไหนเลย)')}
+      ${tile('เพิ่ม/คงที่ต่อเนื่อง', d.streak_nondecreasing_years, ' ปี', 'จำนวนปีติดต่อกันที่ DPS ต่อปีไม่ลดลง (เพิ่มขึ้นหรือเท่าเดิม)')}
+      ${tile('CAGR 5 ปี', d.cagr_5y_pct, '%', 'อัตราการเติบโตของ DPS เฉลี่ยต่อปี ย้อนหลัง 5 ปี')}
+      ${tile('CAGR 10 ปี', d.cagr_10y_pct, '%', 'อัตราการเติบโตของ DPS เฉลี่ยต่อปี ย้อนหลัง 10 ปี')}
+      ${tile('YoY ล่าสุด', d.yoy_growth_pct, '%', 'DPS ปีล่าสุดเทียบปีก่อนหน้า')}
+      ${tile('ความถี่/ปี', d.events_per_year, ' ครั้ง', 'จำนวนครั้งที่จ่ายเงินปันผลโดยเฉลี่ยต่อปี (เช่น 4 = จ่ายรายไตรมาส)')}
+      ${tile('Payout Ratio', d.payout_ratio_pct, '%', 'DPS ปีล่าสุด ÷ EPS งวดล่าสุด — ยิ่งต่ำยิ่งเหลือกำไรสะสมมาก, >100% = จ่ายเกินกำไรที่หาได้')}
     </div>`;
 
   const bars = years.map(y => {
@@ -11195,7 +11431,33 @@ function _calMonthNav(delta, toToday) {
   _calRenderFromCache();
 }
 
-let _calCache = [];   // [{symbol, market, display, events:[...]}]
+let _calCache = [];   // flat: [{symbol(display), market, type, date, confidence, source, detail}]
+
+// ตัวกรองขอบเขต — เฟส A เดิมล็อกตายตัวที่ watchlist เท่านั้น ตอนนี้เพิ่มเลือกได้ 3 แบบ (ดู
+// PLAN_stock_study_suite.txt งาน #4 ช่วง "Filter: watchlist-only (default ON) / ทั้งหมดที่มี
+// ข้อมูล / ตลาด") — 'all'/'market' อ่านจาก local cache ล้วนๆ ผ่าน /api/calendar-events-all
+// ไม่ fetch สดจาก yfinance/SET เลย กันโดน rate limit ตามที่แผนเตือนไว้ ("อย่า fetch ทั้ง
+// universe ตั้งแต่แรก") ดังนั้นปุ่ม "ดึงข้อมูลใหม่" ใช้ได้เฉพาะ scope watchlist
+let _calScope = 'watchlist';   // 'watchlist' | 'all' | 'market'
+let _calScopeMarket = 'TH';
+
+function _calSetScope(scope, btn) {
+  _calScope = scope;
+  document.querySelectorAll('#cal-scope-watchlist,#cal-scope-all,#cal-scope-market').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const marketRow = document.getElementById('cal-scope-market-row');
+  if (marketRow) marketRow.style.display = scope === 'market' ? 'flex' : 'none';
+  const refreshBtn = document.getElementById('cal-refresh-btn');
+  if (refreshBtn) refreshBtn.style.display = scope === 'watchlist' ? '' : 'none';
+  loadCalendarPage();
+}
+
+function _calSetScopeMarket(mkt, btn) {
+  _calScopeMarket = mkt;
+  document.querySelectorAll('#cal-scope-market-row .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadCalendarPage();
+}
 
 // prefix เดียวกับ watchlist ทั้งระบบ: ไม่มี prefix = TH, DR:/US:/HK: = ตลาดนั้น
 // (ดู renderWatchlist ใน dashboard.js) — DR ส่ง market='DR' ไป backend (resolve_yf_ticker
@@ -11213,24 +11475,48 @@ function _calResolveWatchlist() {
   return { list: out };
 }
 
+// display แบบเดียวกับ _calResolveWatchlist แต่ใช้กับ event ที่มาจาก /api/calendar-events-all
+// (ทั้ง universe local ไม่ใช่แค่ watchlist) เพื่อให้ป้ายตลาดในตารางเหมือนกันทุก scope
+function _calDisplayFor(market, symbol) {
+  return market === 'DR' ? 'DR:' + symbol : symbol;
+}
+
 async function loadCalendarPage(refresh) {
   const box = document.getElementById('cal-result');
-  const { list } = _calResolveWatchlist();
-  if (list.length === 0) {
-    box.innerHTML = `<div class="empty" style="padding:24px">Watchlist ว่าง — ไปหน้า Watchlist เพื่อเพิ่มหุ้นก่อน</div>`;
-    return;
-  }
-  box.innerHTML = `<div class="empty" style="padding:24px">กำลังดึงปฏิทิน ${list.length} หุ้น...</div>`;
-  const qs = refresh ? '?refresh=1' : '';
-  const results = await Promise.all(list.map(async it => {
+
+  if (_calScope === 'watchlist') {
+    const { list } = _calResolveWatchlist();
+    if (list.length === 0) {
+      box.innerHTML = `<div class="empty" style="padding:24px">Watchlist ว่าง — ไปหน้า Watchlist เพื่อเพิ่มหุ้นก่อน หรือสลับตัวกรองด้านบนเป็น "ทั้งหมดที่มีข้อมูล"</div>`;
+      _calCache = [];
+      return;
+    }
+    box.innerHTML = `<div class="empty" style="padding:24px">กำลังดึงปฏิทิน ${list.length} หุ้น...</div>`;
+    const qs = refresh ? '?refresh=1' : '';
+    const results = await Promise.all(list.map(async it => {
+      try {
+        const r = await fetch(`/api/calendar-events/${it.market}/${encodeURIComponent(it.symbol)}${qs}`);
+        const d = await r.json();
+        return (d.events || []).map(e => ({ ...e, symbol: it.display, market: it.market }));
+      } catch (e) { return []; }
+    }));
+    _calCache = results.flat();
+  } else {
+    box.innerHTML = `<div class="empty" style="padding:24px">กำลังโหลดปฏิทิน...</div>`;
+    const qs = _calScope === 'market' ? `?market=${_calScopeMarket}` : '';
     try {
-      const r = await fetch(`/api/calendar-events/${it.market}/${encodeURIComponent(it.symbol)}${qs}`);
+      const r = await fetch(`/api/calendar-events-all${qs}`);
       const d = await r.json();
-      return { ...it, events: d.events || [] };
-    } catch (e) { return { ...it, events: [] }; }
-  }));
-  _calCache = results;
+      _calCache = (d.events || []).map(e => ({ ...e, symbol: _calDisplayFor(e.market, e.symbol) }));
+    } catch (e) { _calCache = []; }
+  }
   _calRenderFromCache();
+}
+
+function _calScopeEmptyLabel() {
+  if (_calScope === 'watchlist') return 'สำหรับหุ้นใน Watchlist';
+  if (_calScope === 'market') return `สำหรับตลาด ${_calScopeMarket}`;
+  return '(ทั้งหมดที่มีข้อมูลในเครื่อง)';
 }
 
 const _CAL_TYPE_BADGE = { earnings: '📊 งบ', xd: '💵 XD', pay: '💰 จ่ายปันผล',
@@ -11238,15 +11524,10 @@ const _CAL_TYPE_BADGE = { earnings: '📊 งบ', xd: '💵 XD', pay: '💰 จ
 const _CAL_CONF_LABEL = { confirmed: 'ยืนยันแล้ว', estimated: 'ประมาณการ', guessed: 'คาดการณ์' };
 const _CAL_CONF_COLOR = { confirmed: 'var(--green)', estimated: 'var(--blue)', guessed: 'var(--text2)' };
 
-// รวม event ทุกหุ้นใน _calCache เป็น flat list เดียว ไม่กรองวันที่ (ตัวกรองช่วง/เดือนทำแยกที่
-// _calRenderList/_calRenderGrid) — ใช้ร่วมกันทั้ง 2 มุมมอง กันเขียน merge logic ซ้ำ
+// เรียง _calCache (flat อยู่แล้ว ไม่ว่า scope ไหน) ตามวันที่ ไม่กรองวันที่ (ตัวกรองช่วง/เดือน
+// ทำแยกที่ _calRenderList/_calRenderGrid) — ใช้ร่วมกันทั้ง 2 มุมมอง กันเขียน merge logic ซ้ำ
 function _calFlatEvents() {
-  const flat = [];
-  _calCache.forEach(it => it.events.forEach(e => {
-    flat.push({ ...e, symbol: it.display, market: it.market });
-  }));
-  flat.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
-  return flat;
+  return [..._calCache].sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
 }
 
 function _calRenderFromCache() {
@@ -11267,7 +11548,7 @@ function _calRenderList() {
   });
 
   if (flat.length === 0) {
-    box.innerHTML = `<div class="empty" style="padding:24px">ไม่มีเหตุการณ์ใน ${_calRangeDays} วันข้างหน้าสำหรับหุ้นใน Watchlist</div>`;
+    box.innerHTML = `<div class="empty" style="padding:24px">ไม่มีเหตุการณ์ใน ${_calRangeDays} วันข้างหน้า ${_calScopeEmptyLabel()}</div>`;
     return;
   }
   const rows = flat.map(e => {
