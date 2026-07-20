@@ -1739,10 +1739,31 @@ def get_dividends_endpoint(market, symbol):
         if data:
             price_series = {"dates": data["dates"], "closes": data["closes"]}
 
+    # Payout Ratio (DPS÷EPS) — EPS มาจาก factor_snapshot (คำนวณไว้แล้วตอน build_snapshot/
+    # build_mirror_snapshot, ดู factor_snapshot._latest_eps) เลือก snapshot table ให้ตรงตลาด
+    eps_value = eps_date = None
+    try:
+        if mkt in ("TH", "SET"):
+            snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
+        elif mkt == "DR":
+            snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=True)}
+        elif mkt in ("US", "HK"):
+            snap_rows = {r["symbol"]: r for r in factor_snapshot.get_mirror_snapshot(BASE_DIR, mkt)}
+        else:
+            snap_rows = {}
+        f = snap_rows.get(sym)
+        if f:
+            eps_value, eps_date = f.get("eps_latest"), f.get("eps_latest_date")
+    except Exception:
+        pass
+    payout_ratio_pct = dividend_stats.compute_payout_ratio(rows, eps_value, eps_date)
+
     stats = dividend_stats.compute_dividend_stats(rows, price_series=price_series)
     return jsonify({
         "symbol": sym, "market": mkt, "synced_at": synced_at, "stale": stale,
-        "fetch_error": fetch_error, **(stats or {}),
+        "fetch_error": fetch_error,
+        "payout_ratio_pct": payout_ratio_pct, "eps_latest": eps_value, "eps_latest_date": eps_date,
+        **(stats or {}),
     })
 
 
@@ -2403,6 +2424,7 @@ def tearsheet(market, symbol):
     market=TH: universe ทั้งหมด (set_data.json) · market=US/HK: เฉพาะสมาชิกดัชนีหลัก
     (us_index_metrics.json/hk_index_metrics.json) — หุ้น mirror ตัวอื่นนอกดัชนีหลักยังไม่มี
     ราคารายวัน/sector เก็บไว้ ยังไม่รองรับ (501 พร้อมข้อความบอกเหตุผล)"""
+    from sources import dividend_stats
     mkt = market.upper()
     sym = symbol.upper().strip()
     if mkt not in ("TH", "US", "HK"):
@@ -2517,11 +2539,16 @@ def tearsheet(market, symbol):
         "z_excluded_reason": z_reason,
     }
 
+    # _mirror_sym ตัด suffix ".HK" ก่อนเสมอ — ตาราง dividends เก็บรหัสดิบไม่มี suffix
+    # เหมือน factor_snapshot mirror (ดู sync_dividends_batch/get_dividends_endpoint)
+    div_rows, _div_synced = financials_store.get_dividends(BASE_DIR, _mirror_sym(mkt, sym), mkt)
     dividend = {
         "yield": s.get("div_yield"),
         "cagr_5y": f.get("div_cagr_5y"),
         "growth_streak_y": f.get("div_growth_streak_y"),
         "coverage": f.get("dividend_coverage"),
+        "payout_ratio_pct": dividend_stats.compute_payout_ratio(
+            div_rows, f.get("eps_latest"), f.get("eps_latest_date")),
     }
 
     discount_rate_default = {"TH": 9.0, "US": 8.5, "HK": 9.5}[mkt]

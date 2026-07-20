@@ -34,6 +34,26 @@ def _nearest_close_on_or_before(dates, closes, target_iso):
     return closes[best] if best is not None else None
 
 
+def compute_payout_ratio(rows, eps_value, eps_date):
+    """Payout Ratio (%) = DPS ของปีเดียวกับปีที่ปิดงวด EPS ล่าสุด ÷ EPS ล่าสุด × 100
+
+    ตั้งใจ **ไม่ปรับ split เอง** ต่างจากแผนเดิม (PLAN_stock_study_suite.txt งาน #5 เฟส B บอกว่า
+    เสี่ยงผิดสุดถ้าไม่มี split log) — ใช้ EPS จากงบ Yahoo (sources.factor_snapshot._latest_eps)
+    ที่รายงาน ณ จำนวนหุ้นของงวดนั้นอยู่แล้วเสมอ เทียบกับ DPS ปีปฏิทินเดียวกับวันที่ปิดงวด (ไม่ใช่
+    ปีปัจจุบัน — กันหุ้นที่ปิดงวดการเงินไม่ตรง ธ.ค. เช่น AAPL ปิดงวด ก.ย.) ทั้งคู่จึงอยู่ในช่วง
+    เวลาเดียวกัน ไม่มีปัญหา split-adjustment ต่างกันแบบที่แผนเดิมกังวล (เทียบข้อมูลย้อนหลังหลายปี
+    ถึงจะมีความเสี่ยงนั้น ตัวนี้เทียบแค่งวดล่าสุดงวดเดียว)
+
+    คืน None ถ้าไม่มี EPS, EPS<=0 (ขาดทุน — payout ratio ไม่มีความหมาย), หรือไม่มี DPS ปีนั้นเลย"""
+    if not rows or eps_value is None or eps_value <= 0 or not eps_date:
+        return None
+    year = str(eps_date)[:4]
+    dps_year = sum(r["dps"] for r in rows if r["ex_date"][:4] == year)
+    if dps_year <= 0:
+        return None
+    return round(dps_year / eps_value * 100, 1)
+
+
 def compute_dividend_stats(rows, price_series=None, current_year=None):
     """rows: [{ex_date, dps}] เรียงตามวันที่ (ผลจาก financials_store.get_dividends)
     price_series: {"dates": [...], "closes": [...]} จาก core.store.get_series (optional —

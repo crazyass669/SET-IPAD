@@ -6117,12 +6117,14 @@ function _tsQualityHtml(q, sym) {
 // sync ปันผลของหุ้นตัวนี้)
 function _tsDividendHtml(d, sym) {
   if (!d) return '';
-  if (d.yield == null && d.cagr_5y == null && d.growth_streak_y == null && d.coverage == null) return '';
+  if (d.yield == null && d.cagr_5y == null && d.growth_streak_y == null && d.coverage == null
+      && d.payout_ratio_pct == null) return '';
   const tile = (label, val, color) => `<div style="text-align:center;flex:1;min-width:88px">
     <div style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">${label}</div>
     <div style="font-size:15px;font-weight:700;color:${color || 'var(--text)'}">${val}</div></div>`;
   const cagrC = d.cagr_5y == null ? '' : d.cagr_5y >= 5 ? 'var(--green)' : d.cagr_5y < 0 ? 'var(--red)' : '';
   const covC = d.coverage == null ? '' : d.coverage >= 1 ? 'var(--green)' : 'var(--red)';
+  const payoutC = d.payout_ratio_pct == null ? '' : d.payout_ratio_pct > 100 ? 'var(--red)' : d.payout_ratio_pct <= 60 ? 'var(--green)' : '';
   return `<div class="card" style="padding:16px;margin-bottom:12px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div style="font-size:13px;font-weight:700">💵 ปันผลย่อ</div>
@@ -6133,6 +6135,7 @@ function _tsDividendHtml(d, sym) {
       ${tile('CAGR 5ปี%', d.cagr_5y != null ? d.cagr_5y.toFixed(2) : '—', cagrC)}
       ${tile('โตติดกัน(ปี)', d.growth_streak_y ?? '—', '')}
       ${tile('FCF คุ้ม(เท่า)', d.coverage != null ? d.coverage.toFixed(2) : '—', covC)}
+      ${tile('Payout Ratio', d.payout_ratio_pct != null ? d.payout_ratio_pct.toFixed(1) + '%' : '—', payoutC)}
     </div>
   </div>`;
 }
@@ -11118,6 +11121,7 @@ function _renderDividendsView(d, sym, market, hint) {
       ${tile('CAGR 10 ปี', d.cagr_10y_pct, '%')}
       ${tile('YoY ล่าสุด', d.yoy_growth_pct, '%')}
       ${tile('ความถี่/ปี', d.events_per_year, ' ครั้ง')}
+      ${tile('Payout Ratio', d.payout_ratio_pct, '%')}
     </div>`;
 
   const bars = years.map(y => {
@@ -11155,8 +11159,9 @@ function _renderDividendsView(d, sym, market, hint) {
         </table>
       </div>
       <div style="font-size:11px;color:var(--text2);margin-top:10px">
-        ปันผลปรับตาม stock split แล้ว (yfinance) · payout ratio เทียบ EPS ยังไม่รองรับ (phase ถัดไป) ·
-        yield รายปีคำนวณได้เฉพาะหุ้นไทยตอนนี้
+        ปันผลปรับตาม stock split แล้ว (yfinance) · Payout Ratio = DPS ปีล่าสุด ÷ EPS งวดล่าสุด
+        (${d.eps_latest_date || '—'}) จากงบ Yahoo — ไม่มีค่าถ้าขาดทุนหรือไม่มีข้อมูล EPS ·
+        yield รายปีรองรับ TH/US/HK (DR ยังไม่รองรับ — ไม่มี local price store ให้ underlying)
       </div>
     </div>`;
 }

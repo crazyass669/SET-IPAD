@@ -120,6 +120,8 @@ def _factors_for(base_dir, sym, is_dr, z_variant=None):
     # (endpoint จะ refine ด้วย pe_live สดสำหรับหุ้นไทยอีกชั้น)
     peg = _calc_peg(valp["pe"]["value"], tg["profit_ttm_yoy"])
 
+    eps = _latest_eps(y)
+
     # F-Score / Z-Score — ต้องใช้งบ Yahoo รายปี (มีอยู่แล้วจาก y ด้านบน)
     fscore = fs.compute_fscore(y)
     # mkt_cap สดใช้ราคางวดล่าสุดของ Finnomena (เหมือน valuation percentile ด้านบน)
@@ -188,8 +190,27 @@ def _factors_for(base_dir, sym, is_dr, z_variant=None):
         "z_score": zscore["z_score"], "z_variant": zscore["z_variant"],
         "z_zone": zscore["z_zone"], "z_as_of": zscore["z_as_of"],
         "z_excluded_reason": zscore.get("z_excluded_reason"),
+        # --- EPS ปีล่าสุดที่รายงาน (สำหรับ Payout Ratio = DPS÷EPS — ดู _latest_eps) ---
+        "eps_latest": eps["value"], "eps_latest_date": eps["as_of"],
     }
     return f
+
+
+def _latest_eps(payload_yahoo):
+    """EPS งวดปีล่าสุดที่รายงานจริงจากงบ Yahoo (Diluted ก่อน, fallback Basic) — ใช้คำนวณ
+    Payout Ratio (DPS÷EPS) ที่ /api/dividends โดยตั้งใจ **ไม่ใช้ EPS ของ Finnomena + ปรับ split
+    เอง** ตามแผนเดิม (PLAN_stock_study_suite.txt งาน #5 เฟส B) เพราะเสี่ยงผิดสูง — ต้องมี split
+    log แยกต่างหากที่ยังไม่มีในระบบ (ดู memory stock-study-suite-progress) EPS ของ Yahoo ที่นี่
+    ปลอดภัยกว่าเพราะเป็นตัวเลขที่รายงาน ณ จำนวนหุ้นของงวดนั้นอยู่แล้วเสมอ (ไม่ต้องปรับ split ย้อนหลัง
+    เอง) และมาจากงบชุดเดียวกับที่ dividends table ใช้อ้างอิง (ทั้งคู่ผ่าน yfinance/resolve_yf_ticker)
+    คืน {"value": float|None, "as_of": "YYYY-MM-DD"|None}"""
+    inc = (payload_yahoo or {}).get("income", {})
+    row = inc.get("Diluted EPS") or inc.get("Basic EPS")
+    if not row:
+        return {"value": None, "as_of": None}
+    d = max(row.keys())
+    v = row.get(d)
+    return {"value": v, "as_of": d[:10] if isinstance(d, str) else d}
 
 
 def build_snapshot(base_dir, callback=None):
