@@ -1709,10 +1709,9 @@ def get_dividends_endpoint(market, symbol):
     if force or rows is None or stale:
         try:
             fresh = financials_store.fetch_dividends(sym, market=mkt)
-            if fresh:
-                financials_store.save_dividends(BASE_DIR, sym, mkt, fresh)
-                rows, synced_at = financials_store.get_dividends(BASE_DIR, sym, mkt)
-                stale = False
+            financials_store.save_dividends(BASE_DIR, sym, mkt, fresh)   # เขียน synced_at เสมอแม้ fresh=[]
+            rows, synced_at = financials_store.get_dividends(BASE_DIR, sym, mkt)
+            stale = False
         except Exception as e:
             fetch_error = str(e)
 
@@ -4069,6 +4068,31 @@ def _run_refresh(period="max"):
         except Exception as e:
             print(f"[FullRefresh] Capital Flow error: {e}")
             warnings.append(f"Capital Flow ล้มเหลว: {e}")
+
+        # Batch fetch ประวัติปันผล (งาน #5 เฟส B) — เดิม fetch สดเฉพาะตอนเปิดหน้า "💵 ปันผล"
+        # ทีละตัวเท่านั้น ทำให้ div_cagr_5y ใน Screener+/Tearsheet ว่างเปล่าเกือบทั้ง universe
+        # จำกัด limit=500/รอบกัน Full Refresh ยืดยาวเกินไป — ตัวที่เหลือ resume เองรอบถัดไป
+        # เพราะ sync_dividends_batch ข้าม (symbol,market) ที่ sync ไปแล้วภายใน 30 วันเสมอ
+        try:
+            def _div_cb(current, total, msg):
+                _update(current=90 + int(current / max(total, 1) * 8), total=100, message=msg)
+
+            from sources import us_index_metrics, hk_index_metrics
+            us_syms = [s["symbol"] for s in us_index_metrics.load_local(BASE_DIR).get("stocks", [])]
+            hk_syms = [s["symbol"].replace(".HK", "") for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", [])]
+            div_result = financials_store.sync_dividends_batch(
+                BASE_DIR,
+                {"TH": _financials_universe(), "DR": _dr_financials_universe(),
+                 "US": us_syms, "HK": hk_syms},
+                min_age_days=30, limit=500, callback=_div_cb)
+            if div_result["ok"] or div_result["fail"]:
+                _update(message="Batch fetch ปันผลเสร็จ — กำลัง rebuild factor snapshot...")
+                factor_snapshot.build_snapshot(BASE_DIR)
+                factor_snapshot.build_mirror_snapshot(BASE_DIR, exchanges=("US", "HK"))
+                _fin_analytics_cache.clear()
+        except Exception as e:
+            print(f"[FullRefresh] Batch dividends error: {e}")
+            warnings.append(f"Batch fetch ปันผลล้มเหลว: {e}")
 
         final_msg = "เสร็จแล้ว!" if not warnings else "เสร็จแล้ว (มีบางส่วนล้มเหลว: " + "; ".join(warnings) + ")"
         _update(running=False, done=True, message=final_msg)

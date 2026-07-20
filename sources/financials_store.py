@@ -464,18 +464,31 @@ def fetch_dividends(sym, market=None):
     return out
 
 
+def _dividends_meta_key(sym, market):
+    return f"dividends_synced:{market}:{sym}"
+
+
 def save_dividends(base_dir, sym, market, rows):
-    """เก็บ/merge ประวัติปันผลลง DB (upsert ทีละแถวตาม ex_date — ไม่ลบของเก่าที่ยัง valid)"""
+    """เก็บ/merge ประวัติปันผลลง DB (upsert ทีละแถวตาม ex_date — ไม่ลบของเก่าที่ยัง valid)
+    เก็บ synced_at ต่อ symbol ลงตาราง meta เสมอ **แม้ rows ว่าง** (หุ้นที่ไม่เคยจ่ายปันผลเลยเป็น
+    เรื่องปกติ ไม่ใช่ไม่เคย sync) — เหมือนบั๊กที่แก้ไปแล้วใน save_calendar_events (ดู
+    _calendar_meta_key) ไม่งั้น get_dividends จะมองว่า "ไม่เคย sync" ตลอดกาลแล้วดึงสดซ้ำทุกครั้ง"""
     init_db(base_dir)
     sym = sym.upper().strip()
     market = (market or "TH").upper()
     con = _connect(base_dir)
     try:
         now = datetime.now().isoformat()
-        con.executemany(
-            "INSERT INTO dividends(symbol, market, ex_date, dps, synced_at) VALUES (?,?,?,?,?) "
-            "ON CONFLICT(symbol, market, ex_date) DO UPDATE SET dps=excluded.dps, synced_at=excluded.synced_at",
-            [(sym, market, r["ex_date"], r["dps"], now) for r in rows]
+        if rows:
+            con.executemany(
+                "INSERT INTO dividends(symbol, market, ex_date, dps, synced_at) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(symbol, market, ex_date) DO UPDATE SET dps=excluded.dps, synced_at=excluded.synced_at",
+                [(sym, market, r["ex_date"], r["dps"], now) for r in rows]
+            )
+        con.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_dividends_meta_key(sym, market), now)
         )
         con.commit()
     finally:
@@ -483,7 +496,10 @@ def save_dividends(base_dir, sym, market, rows):
 
 
 def get_dividends(base_dir, sym, market=None):
-    """คืน (rows, synced_at ล่าสุด) ของหุ้นตัวหนึ่งจาก DB local — None ถ้ายังไม่เคย sync"""
+    """คืน (rows, synced_at ล่าสุด) ของหุ้นตัวหนึ่งจาก DB local
+    คืน (None, None) ต่อเมื่อ 'ไม่เคย sync จริงๆ' เท่านั้น — ถ้า sync แล้วแต่ไม่มีปันผลเลย
+    คืน ([], synced_at) เพื่อไม่ให้ caller ดึงสดซ้ำ (synced_at มาจาก meta table ไม่ใช่ max(rows)
+    เพราะ rows อาจว่างตอนหุ้นไม่เคยจ่ายปันผล)"""
     if not db_exists(base_dir):
         return None, None
     init_db(base_dir)   # กัน DB เก่าที่ยังไม่มีตาราง dividends (เพิ่มเข้ามาทีหลัง financials/meta)
@@ -494,11 +510,13 @@ def get_dividends(base_dir, sym, market=None):
         rows = con.execute(
             "SELECT ex_date, dps, synced_at FROM dividends WHERE symbol=? AND market=? ORDER BY ex_date",
             (sym, market)).fetchall()
+        meta_row = con.execute(
+            "SELECT value FROM meta WHERE key=?", (_dividends_meta_key(sym, market),)).fetchone()
     finally:
         con.close()
-    if not rows:
+    synced_at = meta_row[0] if meta_row else (max(r[2] for r in rows) if rows else None)
+    if not rows and synced_at is None:
         return None, None
-    synced_at = max(r[2] for r in rows)
     return [{"ex_date": r[0], "dps": r[1]} for r in rows], synced_at
 
 
@@ -1438,6 +1456,87 @@ def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, callback=None):
                 callback(done, total, f"Yahoo mirror index {done}/{total} | ok={ok} fail={fail}")
 
     print(f"[MirrorYahooIndex] จบ: ok={ok} fail={fail} total={total} skipped={skipped}")
+    return {"ok": ok, "fail": fail, "total": total, "skipped": skipped}
+
+
+def sync_dividends_batch(base_dir, symbols_by_market, workers=4, min_age_days=30, limit=None, callback=None):
+    """ดึงประวัติปันผล (fetch_dividends) ให้หลายหุ้นพร้อมกันแบบ throttled — จุดผูก "Batch fetch
+    ปันผล" ของงาน #5 เฟส B (เดิม fetch สดเฉพาะตอนเปิดหน้า "💵 ปันผล" ทีละตัวเท่านั้น ทำให้
+    div_cagr_5y ใน factor_snapshot ว่างเปล่าเกือบทั้ง universe)
+
+    symbols_by_market: {"TH": [...], "DR": [...], "US": [...], "HK": [...]} — ผู้เรียกเป็นคน
+    ประกอบ universe (ดู _financials_universe/_dr_financials_universe/us_index_metrics/
+    hk_index_metrics ใน app.py) ฟังก์ชันนี้ไม่รู้จัก universe เอง
+
+    min_age_days: ข้าม (symbol, market) ที่ synced_at ใน meta table ใหม่กว่า N วัน (ใช้
+    _dividends_meta_key เดียวกับ save_dividends/get_dividends — resume ได้เสมอเหมือน
+    sync_mirror_yahoo_index/sync_all ไม่ใช่ fetch ซ้ำทุกตัวทุกรอบ Full Refresh)
+
+    limit: จำกัดจำนวนตัวที่ fetch ต่อรอบ (ตัด todo หลังกรอง min_age_days แล้ว) — universe
+    รวม TH+DR+US/HK ดัชนีหลัก ~2,300 ตัว รอบแรกที่ยังไม่มีใคร sync เลยจะช้ามากถ้าไม่จำกัด
+    ตั้งไว้กันไม่ให้ Full Refresh ยืดยาวเกินไปรอบเดียว — ตัวที่เหลือ resume ต่อได้ในรอบถัดไป
+    เพราะ meta table เก็บ progress ไว้แล้วเสมอ (ไม่ต้องเรียงตามลำดับเดิม)
+
+    Throttle เบากว่า sync_mirror_yahoo_index (gate=2 ไม่ใช่ 3) เพราะ fetch_dividends เป็น
+    endpoint yfinance คนละตัว (.dividends) ไม่เคยวัด rate-limit threshold มาก่อน — เผื่อไว้ก่อน
+    คืน {"ok": n, "fail": n, "total": n, "skipped": n}"""
+    import random
+    init_db(base_dir)
+    con = _connect(base_dir)
+    try:
+        synced_map = {r[0][len("dividends_synced:"):]: r[1]
+                      for r in con.execute("SELECT key, value FROM meta WHERE key LIKE 'dividends_synced:%'")}
+    finally:
+        con.close()
+
+    cutoff = datetime.now() - timedelta(days=min_age_days)
+    todo = []
+    for market, syms in symbols_by_market.items():
+        for sym in syms:
+            sym = sym.upper().strip()
+            ts = synced_map.get(f"{market}:{sym}")
+            if ts:
+                try:
+                    if datetime.fromisoformat(ts) >= cutoff:
+                        continue
+                except ValueError:
+                    pass
+            todo.append((market, sym))
+    skipped = sum(len(v) for v in symbols_by_market.values()) - len(todo)
+    if limit is not None and len(todo) > limit:
+        random.shuffle(todo)   # กันตัวท้ายรายชื่อ (เช่น HK ที่ต่อท้าย TH/DR/US เสมอ) ไม่เคยถูก sync สักที
+        todo = todo[:limit]
+    total = len(todo)
+    ok = fail = 0
+    gate = threading.Semaphore(2)
+
+    def _one(market, sym):
+        with gate:
+            try:
+                rows = fetch_dividends(sym, market=market)
+            except Exception:
+                time.sleep(1.0)
+                rows = fetch_dividends(sym, market=market)
+            finally:
+                time.sleep(0.3)
+        save_dividends(base_dir, sym, market, rows)
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex_pool:
+        futures = {ex_pool.submit(_one, market, sym): (market, sym) for market, sym in todo}
+        for f in as_completed(futures):
+            market, sym = futures[f]
+            done += 1
+            try:
+                f.result()
+                ok += 1
+            except Exception as e:
+                fail += 1
+                print(f"[DividendsBatch] {market}:{sym} ล้มเหลว: {str(e)[:80]}")
+            if callback and (done % 20 == 0 or done == total):
+                callback(done, total, f"Batch fetch ปันผล {done}/{total} | ok={ok} fail={fail}")
+
+    print(f"[DividendsBatch] จบ: ok={ok} fail={fail} total={total} skipped={skipped}")
     return {"ok": ok, "fail": fail, "total": total, "skipped": skipped}
 
 
