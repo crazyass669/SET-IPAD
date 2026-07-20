@@ -1770,6 +1770,18 @@ def get_dividends_endpoint(market, symbol):
 _CALENDAR_STALE_DAYS = 7   # ปฏิทินเปลี่ยนเร็วกว่าปันผล (ประกาศใหม่ได้ตลอด) — sync ถี่กว่า
 
 
+@app.route("/api/calendar-events-all")
+def get_all_calendar_events_endpoint():
+    """ปฏิทินรวมทุกหุ้นที่เคย sync ไว้ใน local DB (ไม่ใช่แค่ watchlist) — ใช้กับตัวกรอง
+    "ทั้งหมดที่มีข้อมูล"/"ตามตลาด" หน้า 📅 ปฏิทิน อ่านจาก cache เท่านั้น ไม่ fetch สด (เบา ไม่มี
+    rate-limit risk) ?market=TH|US|HK|DR กรองเฉพาะตลาดนั้น ไม่ส่ง = ทุกตลาด"""
+    from datetime import date as _date
+    market = request.args.get("market")
+    today_iso = _date.today().isoformat()
+    events = financials_store.get_all_calendar_events(BASE_DIR, from_date=today_iso, market=market)
+    return jsonify({"events": events})
+
+
 @app.route("/api/calendar-events/<market>/<symbol>")
 def get_calendar_events_endpoint(market, symbol):
     """ปฏิทิน XD/pay (SET.or.th, หุ้นไทยเท่านั้น, confirmed) + earnings (yfinance, ทุกตลาด,
@@ -2151,6 +2163,10 @@ def factor_screener():
                     if not v:
                         return False
                     continue
+                if cmp == "eq":
+                    if v != c.get("v"):
+                        return False
+                    continue
                 if v is None or isinstance(v, str):
                     # nullOk (risk filter ชุดตัดความเสี่ยง): ไม่มีข้อมูล = ผ่าน
                     # (ตัดเฉพาะตัวที่ 'รู้ว่าแย่' ไม่ใช่ตัวที่ไม่มีข้อมูล)
@@ -2260,8 +2276,14 @@ def peer_compare():
     ?sector=...&level=...  : เลือกกลุ่มตรง ๆ ไม่ต้องมีหุ้นตั้งต้น
     ?level=sector|industry : ชั้นการจัดกลุ่ม (default sector) — auto ขยับเป็น industry เอง
                               ถ้ากลุ่ม sector มีสมาชิก < 4 ตัว (percentile ไม่มีนัยยะ)
-    ?market=TH|US|HK       : default TH · US/HK เฉพาะสมาชิกดัชนีหลัก (us/hk_index_metrics.json
-                              ~623 ตัว) — mirror ตัวอื่นนอกดัชนีหลักไม่มี sector เก็บไว้ ยังไม่รองรับ
+    ?market=TH|US|HK|DR    : default TH · US/HK สมาชิกดัชนีหลัก (us/hk_index_metrics.json
+                              ~623 ตัว) ใช้ sector ที่มีอยู่แล้ว · ถ้า symbol ที่ระบุเป็นหุ้น
+                              mirror นอกดัชนีหลัก ดึง sector แบบ on-demand ให้ตัวนั้นแล้ว pin
+                              เข้ากลุ่ม sector เดียวกัน (peer ที่เห็นยังจำกัดแค่สมาชิกดัชนีหลัก
+                              เท่านั้น — ยังไม่มี sector ของหุ้นอื่นนอกดัชนีแบบ bulk) · DR:
+                              resolve symbol เป็น underlying US/HK ผ่าน dr_universe ก่อน
+                              (ต้องระบุ symbol เสมอ, ไม่รองรับ sector โดยตรง — region อื่นที่ไม่ใช่
+                              US/HK ยัง 501)
                               level เป็น 'sector' อย่างเดียวเสมอ (index metrics มีแค่ชั้นเดียว
                               ไม่มี industry ย่อยแบบ set_data.json)
 
@@ -2272,12 +2294,45 @@ def peer_compare():
     if level not in ("sector", "industry"):
         level = "sector"
     mkt = (request.args.get("market") or "TH").upper()
-    if mkt not in ("TH", "US", "HK"):
+    if mkt not in ("TH", "US", "HK", "DR"):
         mkt = "TH"
+
+    dr_symbol = None
+    if mkt == "DR":
+        if not symbol:
+            return jsonify({"rows": [], "median": None, "count": 0,
+                            "meta": {"note": "market=DR ต้องระบุ symbol เสมอ"}})
+        from sources.dr_universe import load_dr_universe
+        entry = next((e for e in load_dr_universe(BASE_DIR) if e["sym"] == symbol), None)
+        if not entry:
+            return jsonify({"rows": [], "median": None, "count": 0,
+                            "meta": {"note": f"ไม่พบหุ้น DR {symbol}"}})
+        region = entry.get("region")
+        if region not in ("US", "HK"):
+            return jsonify({"rows": [], "median": None, "count": 0,
+                            "meta": {"note": f"หุ้น DR {symbol} (underlying ตลาด {region or '?'})"
+                                             f" ยังไม่รองรับ — รองรับเฉพาะ underlying ตลาด US/HK"}}), 501
+        dr_symbol = symbol
+        mkt = region
+        symbol = entry["yf"].upper()
+
     if mkt != "TH":
         level = "sector"   # index metrics มีแค่ sector ชั้นเดียว ไม่มี industry ให้ widen
 
     th_map = _tearsheet_universe_map(mkt)
+    ondemand_note = None
+    if symbol and mkt != "TH" and symbol not in th_map:
+        # HK ใช้ "0700.HK" ในดัชนีหลักแต่ mirror_candidates/fetch_header ต้องการรหัสดิบ (ดู
+        # _mirror_sym) — ตัดก่อนเช็ค/ก่อนส่งเข้า yfinance เสมอ
+        raw_symbol = _mirror_sym(mkt, symbol)
+        if any(name == raw_symbol for ex, name, _sid in financials_store.mirror_candidates((mkt,))):
+            from sources import mirror_ondemand
+            hdr = mirror_ondemand.fetch_header(BASE_DIR, mkt, raw_symbol)
+            if hdr and hdr.get("sector"):
+                th_map = dict(th_map)   # สำเนา local — ไม่แก้ dict ที่ _tearsheet_universe_map คืนมา
+                th_map[symbol] = hdr
+                ondemand_note = (f"{symbol} ไม่ใช่สมาชิกดัชนีหลัก — sector ดึงแบบ on-demand,"
+                                  f" peer ที่เห็นยังจำกัดแค่สมาชิกดัชนีหลักเท่านั้น")
     if not th_map:
         return jsonify({"rows": [], "median": None, "count": 0,
                         "meta": {"note": f"ไม่มีข้อมูล universe ของตลาด {mkt}"}})
@@ -2377,7 +2432,8 @@ def peer_compare():
     return jsonify({
         "rows": rows, "median": median, "count": len(rows),
         "meta": {"level": level, "group": group_key, "widened": widened,
-                 "base_symbol": symbol or None, "market": mkt, "computed_at": computed_at},
+                 "base_symbol": symbol or None, "market": mkt, "computed_at": computed_at,
+                 "ondemand_note": ondemand_note, "dr_symbol": dr_symbol},
     })
 
 
@@ -2421,21 +2477,52 @@ def tearsheet(market, symbol):
     input แบบเบา รวมใน call เดียว ส่วนหนัก (เงินทุน/ฤดูกาล/ข่าว) ให้หน้าเรียก endpoint เดิมแยกเอง
     async (/api/financials-analytics, /api/insider-trades, /api/price-analytics, /api/stock-news ฯลฯ)
 
-    market=TH: universe ทั้งหมด (set_data.json) · market=US/HK: เฉพาะสมาชิกดัชนีหลัก
-    (us_index_metrics.json/hk_index_metrics.json) — หุ้น mirror ตัวอื่นนอกดัชนีหลักยังไม่มี
-    ราคารายวัน/sector เก็บไว้ ยังไม่รองรับ (501 พร้อมข้อความบอกเหตุผล)"""
+    market=TH: universe ทั้งหมด (set_data.json) · market=US/HK: สมาชิกดัชนีหลัก
+    (us_index_metrics.json/hk_index_metrics.json) ใช้ราคา/RS ที่คำนวณไว้ล่วงหน้าแล้ว ส่วนหุ้น
+    mirror อื่นนอกดัชนีหลัก (~4,485 ตัว) ดึงแบบ on-demand ตรงนี้ (sources/mirror_ondemand.py —
+    ราคา 2 ปีย้อนหลัง + sector จาก Yahoo สด, cache ไว้ 1 วัน, ไม่มี pipeline ราคารายวันถาวร)
+    404 ถ้าไม่ใช่สมาชิก mirror universe เลย (กัน junk ticker ยิง Yahoo ฟรี) หรือดึงราคา
+    ไม่สำเร็จ (ticker ผิด/ข้อมูลไม่พอ)
+
+    market=DR: สัญลักษณ์ DR (เช่น AAPL, APPL — รหัส underlying ตาม field 'sym' ใน dr_universe
+    ไม่ใช่รหัส DR ตัวจริงอย่าง AAPL01/APPL03) — resolve เป็น underlying US/HK ตัวจริงผ่าน
+    dr_universe (field 'yf'/'region') แล้ววิ่งต่อผ่าน flow US/HK ปกติทั้งหมด (สมาชิกดัชนีหลัก/
+    on-demand เหมือนเดิม) รองรับเฉพาะ underlying ตลาด US/HK เท่านั้น (region อื่น เช่น JP/VN/EU
+    ยังไม่มี cohort ให้เทียบ RS — 501)"""
     from sources import dividend_stats
     mkt = market.upper()
     sym = symbol.upper().strip()
-    if mkt not in ("TH", "US", "HK"):
+    if mkt not in ("TH", "US", "HK", "DR"):
         return jsonify({"error": f"ไม่รู้จักตลาด {mkt}"}), 400
+
+    dr_symbol = None
+    if mkt == "DR":
+        from sources.dr_universe import load_dr_universe
+        entry = next((e for e in load_dr_universe(BASE_DIR) if e["sym"] == sym), None)
+        if not entry:
+            return jsonify({"error": f"ไม่พบหุ้น DR {sym}"}), 404
+        region = entry.get("region")
+        if region not in ("US", "HK"):
+            return jsonify({"error": f"หุ้น DR {sym} (underlying ตลาด {region or '?'}) ยังไม่รองรับ"
+                                      f" Tearsheet — รองรับเฉพาะ underlying ตลาด US/HK ตอนนี้"}), 501
+        dr_symbol = sym
+        mkt = region
+        sym = entry["yf"].upper()
 
     th_map = _tearsheet_universe_map(mkt)
     s = th_map.get(sym)
+    if not s and mkt != "TH":
+        # HK ใช้ "0700.HK" ในดัชนีหลัก (yfinance ticker ตรงๆ) แต่ mirror_candidates/fetch_header
+        # ต้องการรหัสดิบไม่มี suffix (ดู _mirror_sym) — ตัดก่อนเช็ค/ก่อนส่งเข้า yfinance เสมอ
+        raw_sym = _mirror_sym(mkt, sym)
+        if not any(name == raw_sym for ex, name, _sid in financials_store.mirror_candidates((mkt,))):
+            return jsonify({"error": f"ไม่พบหุ้น {sym} ในตลาด {mkt}"}), 404
+        from sources import mirror_ondemand
+        s = mirror_ondemand.fetch_header(BASE_DIR, mkt, raw_sym)
+        if not s:
+            return jsonify({"error": f"ดึงราคาหุ้น {sym} ไม่สำเร็จ — ตรวจสอบชื่อย่ออีกครั้ง"
+                                      f" หรือหุ้นนี้อาจข้อมูลไม่พอคำนวณ (เพิ่ง IPO/เทรดเบาบาง)"}), 404
     if not s:
-        if mkt != "TH":
-            return jsonify({"error": f"ไม่พบหุ้น {sym} ในดัชนีหลัก ({mkt}) — Tearsheet รองรับเฉพาะ"
-                                      f" สมาชิก S&P500+Dow+NDX (US) / HSI+HSCEI+HSTECH (HK) ตอนนี้"}), 404
         return jsonify({"error": f"ไม่พบหุ้น {sym}"}), 404
 
     header = {
@@ -2563,7 +2650,7 @@ def tearsheet(market, symbol):
                          else factor_snapshot.mirror_snapshot_meta(BASE_DIR).get("computed_at"))
     return jsonify({
         "symbol": sym, "market": mkt, "header": header, "valuation": valuation, "quality": quality,
-        "dividend": dividend, "dcf": dcf,
+        "dividend": dividend, "dcf": dcf, "dr_symbol": dr_symbol,
         "meta": {"computed_at": meta_computed_at,
                  "has_factors": _mirror_sym(mkt, sym) in snap_rows},
     })
@@ -4019,25 +4106,29 @@ def mirror_sync_new():
     return jsonify({"ok": True})
 
 
-def _run_mirror_yahoo_index_sync():
+def _mirror_yahoo_tickers_by_ex():
+    """ticker ของ mirror universe US/HK ที่ 'ใช้งานได้จริง' (~5,108 ตัว — ผ่านเกณฑ์คุณภาพ
+    เดียวกับที่ factor_snapshot.build_mirror_snapshot ใช้กรอง Screener+ อยู่แล้ว: มีงบ Finnomena
+    >= 12 ไตรมาส + มี PE ในประวัติจริง ไม่ใช่ OTC/delisted) จัดกลุ่ม {"US":[...], "HK":[...]}
+    ให้ sync_mirror_yahoo_index ใช้ตรงๆ — **ไม่ใช่** financials_store.mirror_candidates()
+    ดิบ (~31,000 ตัว รวม OTC/foreign-share ขยะที่ไม่คุ้ม sync งบ Yahoo ให้เลย)"""
+    return factor_snapshot.get_mirror_symbols(BASE_DIR)
+
+
+def _run_mirror_yahoo_index_sync(limit=None):
     """งาน #1/#3 US/HK support (PLAN_stock_study_suite.txt) — sync งบ Yahoo annual ให้หุ้น
-    mirror US/HK เฉพาะสมาชิกดัชนีหลัก (S&P500+Dow+NDX จาก us_index_metrics.json / HSI+HSCEI+
-    HSTECH จาก hk_index_metrics.json — ~623 ตัว ไม่ใช่ mirror ทั้งก้อนที่มีเป็นพันตัว) แล้ว
-    rebuild factor_snapshot_mirror ให้ Tearsheet/Peer Compare/F-Score-Z-Score เห็นข้อมูลใหม่"""
+    mirror US/HK ทั้ง universe (~5,108 ตัว จาก mirror_candidates ไม่ใช่แค่สมาชิกดัชนีหลัก
+    ~623 ตัวเหมือนเดิม) แล้ว rebuild factor_snapshot_mirror ให้ Screener+/Tearsheet/Peer
+    Compare/F-Score-Z-Score เห็นข้อมูลใหม่ — limit=None (ปุ่มกดมือ "ทั้ง universe") ปล่อยรัน
+    จนครบ ยาวได้เป็นชั่วโมง, limit=300 (เรียกจาก Full Refresh) resume เองทุกรอบ"""
     try:
-        from sources import us_index_metrics, hk_index_metrics
-        us_syms = [s["symbol"] for s in us_index_metrics.load_local(BASE_DIR).get("stocks", [])]
-        # hk_index_metrics เก็บ symbol แบบ "0700.HK" (สำหรับ yfinance เรียกตรงๆ) แต่
-        # namespace mirror ('FINN:HK:0700', ทั้ง finnomena_q เดิมและที่จะ sync yahoo เพิ่ม)
-        # ใช้รหัสดิบ 4 หลักไม่มี suffix — ต้องตัด ".HK" ออกก่อนเสมอ ไม่งั้น fetch_yahoo_full
-        # จะไปสร้าง ticker ผิดเป็น "0700.HK.HK" (ยิงพลาดทุกตัว — เจอบั๊กนี้ตอนรันจริงรอบแรก)
-        hk_syms = [s["symbol"].replace(".HK", "") for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", [])]
+        tickers_by_ex = _mirror_yahoo_tickers_by_ex()
 
         def cb(current, total, msg):
             _update(current=current, total=total, message=msg)
 
         result = financials_store.sync_mirror_yahoo_index(
-            BASE_DIR, {"US": us_syms, "HK": hk_syms}, callback=cb)
+            BASE_DIR, tickers_by_ex, limit=limit, callback=cb)
 
         _update(message="Sync งบเสร็จ — กำลัง rebuild factor snapshot mirror...")
         mirror_counts = factor_snapshot.build_mirror_snapshot(BASE_DIR, exchanges=("US", "HK"))
@@ -4054,13 +4145,15 @@ def _run_mirror_yahoo_index_sync():
 
 @app.route("/api/mirror-yahoo-index-sync", methods=["POST"])
 def mirror_yahoo_index_sync():
-    """เริ่ม sync งบ Yahoo annual ของหุ้น US/HK ดัชนีหลัก (งาน US/HK support) — job เดียวกับ
-    ระบบ progress bar เดิม (ใช้ _state/_lock ร่วมกับ /api/refresh, /api/mirror-sync-new)"""
+    """เริ่ม sync งบ Yahoo annual ของหุ้น US/HK ทั้ง mirror universe (~5,108 ตัว, งาน US/HK
+    support) — job เดียวกับระบบ progress bar เดิม (ใช้ _state/_lock ร่วมกับ /api/refresh,
+    /api/mirror-sync-new) กดมือเป็นครั้งคราว ใช้เวลานาน (ชั่วโมง) ต่างจากที่ Full Refresh
+    เรียกเองแบบ limit=300/รอบ"""
     with _lock:
         if _state["running"]:
             return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
         _state.update(running=True, done=False, error=None,
-                      current=0, total=0, message="กำลังเริ่ม sync งบ Yahoo หุ้น US/HK ดัชนีหลัก...")
+                      current=0, total=0, message="กำลังเริ่ม sync งบ Yahoo หุ้น US/HK ทั้ง mirror universe...")
     threading.Thread(target=_run_mirror_yahoo_index_sync, daemon=True).start()
     return jsonify({"ok": True})
 
@@ -4112,6 +4205,22 @@ def _run_refresh(period="max"):
             print(f"[FullRefresh] Capital Flow error: {e}")
             warnings.append(f"Capital Flow ล้มเหลว: {e}")
 
+        # Sync งบ Yahoo annual mirror US/HK ทั้ง universe (~5,108 ตัว, ขยายจากเดิมที่จำกัดแค่
+        # สมาชิกดัชนีหลัก ~623 ตัว) — limit=300/รอบกัน Full Refresh ยืดยาวเกินไป resume เองรอบ
+        # ถัดไปเพราะ sync_mirror_yahoo_index ข้ามตัวที่มี source='yahoo' อยู่แล้วเสมอ ไม่ rebuild
+        # mirror snapshot เองตรงนี้ — รวมกับผลของ batch dividends ด้านล่าง rebuild ทีเดียว
+        mirror_yahoo_changed = False
+        try:
+            def _myc_cb(current, total, msg):
+                _update(current=80 + int(current / max(total, 1) * 8), total=100, message=msg)
+
+            myc_result = financials_store.sync_mirror_yahoo_index(
+                BASE_DIR, _mirror_yahoo_tickers_by_ex(), limit=300, callback=_myc_cb)
+            mirror_yahoo_changed = bool(myc_result["ok"] or myc_result["fail"])
+        except Exception as e:
+            print(f"[FullRefresh] Mirror Yahoo sync error: {e}")
+            warnings.append(f"Sync งบ Yahoo mirror US/HK ล้มเหลว: {e}")
+
         # Batch fetch ประวัติปันผล (งาน #5 เฟส B) — เดิม fetch สดเฉพาะตอนเปิดหน้า "💵 ปันผล"
         # ทีละตัวเท่านั้น ทำให้ div_cagr_5y ใน Screener+/Tearsheet ว่างเปล่าเกือบทั้ง universe
         # จำกัด limit=500/รอบกัน Full Refresh ยืดยาวเกินไป — ตัวที่เหลือ resume เองรอบถัดไป
@@ -4128,8 +4237,8 @@ def _run_refresh(period="max"):
                 {"TH": _financials_universe(), "DR": _dr_financials_universe(),
                  "US": us_syms, "HK": hk_syms},
                 min_age_days=30, limit=500, callback=_div_cb)
-            if div_result["ok"] or div_result["fail"]:
-                _update(message="Batch fetch ปันผลเสร็จ — กำลัง rebuild factor snapshot...")
+            if div_result["ok"] or div_result["fail"] or mirror_yahoo_changed:
+                _update(message="Batch fetch เสร็จ — กำลัง rebuild factor snapshot...")
                 factor_snapshot.build_snapshot(BASE_DIR)
                 factor_snapshot.build_mirror_snapshot(BASE_DIR, exchanges=("US", "HK"))
                 _fin_analytics_cache.clear()
