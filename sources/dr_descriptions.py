@@ -62,6 +62,7 @@ def resolve_yf_ticker(base_dir, sym, market=None):
                 (อิง currency ของงบที่โหลดอยู่แล้ว):
       US -> symbol ตรงๆ (mirror US ใช้ ticker เดียวกับ Yahoo อยู่แล้ว)
       HK -> zero-pad เป็น 4 หลัก + '.HK' (ธรรมเนียม Yahoo สำหรับหุ้น HK)
+      JP -> symbol + '.T' (ธรรมเนียม Yahoo สำหรับหุ้น JP/TSE)
     คืน None ถ้าหาไม่ได้เลย"""
     sym = sym.upper().strip()
     if market in ("TH", "SET"):
@@ -74,6 +75,8 @@ def resolve_yf_ticker(base_dir, sym, market=None):
         return sym, False
     if market == "HK":
         return sym.zfill(4) + ".HK", False
+    if market == "JP":
+        return sym + ".T", False
     return None, False
 
 
@@ -100,7 +103,7 @@ def fetch_one(base_dir, sym, market=None, force=False, max_age_days=180):
         return {**cached, "yf": yf_ticker}, None
 
     if not yf_ticker:
-        return None, "ไม่ทราบตลาดของหุ้นนี้ (ระบุ market=US หรือ HK)"
+        return None, "ไม่ทราบตลาดของหุ้นนี้ (ระบุ market=US, HK หรือ JP)"
     if is_etf:
         return None, "เป็น ETF/กองทุน — ไม่มี business description"
 
