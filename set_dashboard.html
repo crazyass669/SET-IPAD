@@ -67,8 +67,12 @@
   <button class="nav-btn" onclick="showPage('hk-stocks',this)" title="หุ้น HK — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Hang Seng Index · Hang Seng TECH · Hang Seng China Enterprises (ราคา OHLC ใน hk_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US)">🇭🇰 หุ้น HK</button>
   <button class="nav-btn" onclick="showPage('hk-heatmap',this)" title="Heatmap HSI / HSTECH / HSCEI (หุ้น HK) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้">🗺️ Heatmap HK</button>
   <button class="nav-btn" onclick="showPage('hk-rotation',this)" title="HK Rotation — RRG ของหุ้น HK แต่ละตัว เทียบกับค่าเฉลี่ยดัชนี/sector ที่เลือก">🔄 HK Rotation</button>
+  <button class="nav-btn" onclick="showPage('jp-stocks',this)" title="หุ้น JP — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Nikkei 225 (ราคา OHLC ใน jp_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US/HK) — มี Tearsheet/เทียบเพื่อน/งบการเงินครบแล้ว">🇯🇵 หุ้น JP</button>
+  <button class="nav-btn" onclick="showPage('jp-heatmap',this)" title="Heatmap Nikkei 225 (หุ้น JP) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้">🗺️ Heatmap JP</button>
+  <button class="nav-btn" onclick="showPage('jp-rotation',this)" title="JP Rotation — RRG ของหุ้น JP แต่ละตัว เทียบกับค่าเฉลี่ย sector ที่เลือก">🔄 JP Rotation</button>
   <button class="nav-btn" onclick="showPage('stock-news',this)" title="ข่าวรายหุ้น — รวมประกาศ SET.or.th + Yahoo Finance + Google News ในหน้าเดียว แค่พิมพ์ชื่อย่อหุ้น">📰 ข่าวหุ้น</button>
   <button class="nav-btn" onclick="showPage('filings',this)" title="งบ &amp; รายงานทางการ — รวมลิงก์เอกสารต้นทาง (56-1 One Report / 10-K / Annual Report HKEX) + เว็บสรุปงบ + prompt วิเคราะห์ 13 ข้อ แค่พิมพ์ชื่อย่อหุ้น">📑 รายงานทางการ</button>
+  <button class="nav-btn" onclick="showPage('hedge',this)" title="Hedge Holdings — การถือครองของ superinvestors/hedge funds (13F จาก Dataroma รายไตรมาส) หาหุ้นที่หลายกองถือซ้ำกัน (consensus/overlap) เพื่ออ้างอิงการเลือกหุ้น · local-only">🐋 Hedge Holdings</button>
   <button class="nav-btn" onclick="showPage('data-health',this)" title="Data Health — ความสดของทุกไฟล์/DB ที่ dashboard ใช้ในจอเดียว + ปิงแหล่งข้อมูลภายนอก (local-only)">🩺 Data Health<span id="dh-nav-badge" class="dh-nav-badge" style="display:none"></span></button>
   <div class="nav-right">
     <!-- Market Regime Light — % หุ้นเหนือ EMA200 (3 โซนจากผล backtest) -->
@@ -116,6 +120,16 @@
         📦 เก็บลง hk_prices.db (แยกจาก set_prices.db/us_prices.db)<br>
         ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
         <span id="hk-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
+      </div>
+    </div>
+    <div class="btn-wrap">
+      <button class="refresh-btn" id="jp-index-refresh-btn" onclick="startJpIndexFullRefresh()">📈 JP Index Max</button>
+      <div class="btn-note">
+        <b>📈 JP Index Max — Nikkei 225</b><br>
+        ดึงราคา OHLC ย้อนหลัง<b>สูงสุด</b>ทั้ง ~225 ตัว<br>
+        📦 เก็บลง jp_prices.db (แยกจาก set_prices.db/us_prices.db/hk_prices.db)<br>
+        ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
+        <span id="jp-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
       </div>
     </div>
     <div class="btn-wrap">
@@ -2742,6 +2756,36 @@
   </div>
 </div>
 
+<!-- PAGE: JP ROTATION — ก็อปโครงจาก page-hk-rotation ต่างแค่ดัชนีเดียว (Nikkei 225 ทั้งหมด)
+     ไม่มีปุ่มสลับดัชนี — reuse drawRotationScatter ตัวเดิม 100% -->
+<div id="page-jp-rotation" class="page">
+  <div class="page-title">🔄 JP Rotation</div>
+  <div class="page-sub" id="jprot-subtitle">RRG ของหุ้น JP แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
+  <div id="jprot-gate" class="empty" style="display:none;padding:24px"></div>
+  <div id="jprot-body" style="display:none">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
+      <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn active" id="jprot-tf-long" onclick="setJpRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
+        <button class="filter-btn" id="jprot-tf-short" onclick="setJpRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+      </div>
+      <select id="jprot-sector" onchange="renderJpRotation()" style="font-size:13px"></select>
+      <div class="filter-row" style="gap:0;margin:0" title="เทียบราคาแต่ละตัวกับค่าเฉลี่ยของทั้งดัชนี หรือเฉพาะ sector ที่เลือก (มีผลเมื่อเลือก sector เจาะจง ไม่ใช่ 'ทุก Sector')">
+        <button class="filter-btn active" id="jprot-bm-index" onclick="setJpRotBenchmark('index',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">เทียบดัชนี</button>
+        <button class="filter-btn" id="jprot-bm-sector" onclick="setJpRotBenchmark('sector',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">เทียบ Sector</button>
+      </div>
+      <span id="jprot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
+    </div>
+    <div class="card" style="padding:8px">
+      <canvas id="jp-rotation-map" style="width:100%;display:block"></canvas>
+    </div>
+    <div id="jp-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
+    <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
+      🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
+      🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
+    </div>
+  </div>
+</div>
+
 <!-- PAGE: FUNDAMENTAL SCREENER (Screener+) -->
 <div id="page-fscreener" class="page">
   <div class="page-title">🔬 Fundamental Screener</div>
@@ -2789,7 +2833,8 @@
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <button class="filter-btn active" id="peer-tab-th" onclick="setPeerMarket('TH',this)" style="border-radius:6px 0 0 6px;min-width:90px">🇹🇭 ไทย</button>
       <button class="filter-btn" id="peer-tab-us" onclick="setPeerMarket('US',this)" style="border-radius:0;min-width:90px">🇺🇸 US</button>
-      <button class="filter-btn" id="peer-tab-hk" onclick="setPeerMarket('HK',this)" style="border-radius:0 6px 6px 0;min-width:90px">🇭🇰 HK</button>
+      <button class="filter-btn" id="peer-tab-hk" onclick="setPeerMarket('HK',this)" style="border-radius:0;min-width:90px">🇭🇰 HK</button>
+      <button class="filter-btn" id="peer-tab-jp" onclick="setPeerMarket('JP',this)" style="border-radius:0 6px 6px 0;min-width:90px">🇯🇵 JP</button>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <input id="peer-sym" list="peer-datalist" class="scr-input" style="width:200px;font-size:13px"
@@ -2826,7 +2871,8 @@
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <button class="filter-btn active" id="ts-tab-th" onclick="setTsMarket('TH',this)" style="border-radius:6px 0 0 6px;min-width:96px">🇹🇭 ไทย</button>
       <button class="filter-btn" id="ts-tab-us" onclick="setTsMarket('US',this)" style="border-radius:0;min-width:96px">🇺🇸 US</button>
-      <button class="filter-btn" id="ts-tab-hk" onclick="setTsMarket('HK',this)" style="border-radius:0 6px 6px 0;min-width:96px">🇭🇰 HK</button>
+      <button class="filter-btn" id="ts-tab-hk" onclick="setTsMarket('HK',this)" style="border-radius:0;min-width:96px">🇭🇰 HK</button>
+      <button class="filter-btn" id="ts-tab-jp" onclick="setTsMarket('JP',this)" style="border-radius:0 6px 6px 0;min-width:96px">🇯🇵 JP</button>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <input id="ts-sym" list="ts-datalist" class="scr-input" style="width:200px;font-size:13px"
@@ -2981,7 +3027,8 @@
         <span style="font-size:12px;color:var(--text2)">📋 เรียกดูหุ้นทั้งตลาดที่มีข้อมูล:</span>
         <div class="filter-row" style="gap:0;margin:0">
           <button class="filter-btn active" id="fin-mir-us" onclick="_finMirBrowse('US',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:4px 12px">🇺🇸 US</button>
-          <button class="filter-btn" id="fin-mir-hk" onclick="_finMirBrowse('HK',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:4px 12px">🇭🇰 HK</button>
+          <button class="filter-btn" id="fin-mir-hk" onclick="_finMirBrowse('HK',this)" style="font-size:12px;padding:4px 12px">🇭🇰 HK</button>
+          <button class="filter-btn" id="fin-mir-jp" onclick="_finMirBrowse('JP',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:4px 12px">🇯🇵 JP</button>
         </div>
         <input id="fin-mir-filter" class="scr-input" style="width:170px;font-size:12px" placeholder="กรองรหัส เช่น NV, 07" oninput="_finMirRender()">
         <span id="fin-mir-count" style="font-size:11px;color:var(--text2)"></span>
@@ -3042,6 +3089,28 @@
         <span id="hk-idx-diff-note" style="font-size:11px;color:var(--text2)"></span>
       </div>
       <div id="hk-idx-diff-result" style="display:none;margin-bottom:12px"></div>
+
+      <!-- คู่แฝดฝั่ง JP (Nikkei 225) — โชว์เฉพาะแท็บ JP สลับกับ HK/US ผ่าน _finMirBrowse() -->
+      <div id="fin-jp-idx-actions" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <button class="filter-btn" id="jp-idx-diff-btn" onclick="checkJPIndexUpdates()">🔍 เช็คหุ้นใหม่/ถูกถอดจากดัชนี
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:300px;text-align:left">
+            <strong>💡 เช็คการเปลี่ยนแปลงดัชนี Nikkei 225</strong><br><br>
+            เทียบรายชื่อ constituents สดจาก ja.wikipedia กับไฟล์ local
+            — ปุ่มนี้<span style="color:var(--yellow)">รายงานอย่างเดียว ไม่แก้ไฟล์ให้</span><br><br>
+            กด "🔄 ดึงเฉพาะที่ขาด/เก่า" ต่อเพื่ออัพเดทไฟล์ + ดึงงบของตัวใหม่ให้อัตโนมัติ
+          </div></span>
+        </button>
+        <button class="filter-btn" id="jp-idx-sync-btn" onclick="startJPIndexSync()">🔄 ดึงเฉพาะที่ขาด/เก่า (local)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Sync ดัชนี JP</strong><br>
+            ดึงรายชื่อ constituents ล่าสุดจาก ja.wikipedia มาแทนไฟล์ local ก่อน แล้วดึงงบการเงิน
+            (ผ่าน Yahoo Finance) เฉพาะ ticker ในดัชนีที่ยังไม่มีข้อมูลในระบบ หรือข้อมูลเก่าเกิน 7 วัน<br><br>
+            <span style="color:var(--text2)">ไฟล์เดียวกับที่หน้า "🇯🇵 หุ้น JP" ใช้กรองดัชนี</span>
+          </div></span>
+        </button>
+        <span id="jp-idx-diff-note" style="font-size:11px;color:var(--text2)"></span>
+      </div>
+      <div id="jp-idx-diff-result" style="display:none;margin-bottom:12px"></div>
 
       <div id="fin-mir-list" style="display:flex;flex-wrap:wrap;gap:6px;max-height:230px;overflow-y:auto;padding:2px"></div>
     </div>
@@ -3224,6 +3293,34 @@
   </div>
 </div>
 
+<div id="page-jp-stocks" class="page">
+  <div class="page-title">🇯🇵 หุ้น JP — Nikkei 225</div>
+  <div class="page-sub">RS / Stage / 52W High / Momentum / EMA — คำนวณสูตรเดียวกับหุ้นไทย/US/HK (core/metrics.py) จากราคา OHLC ใน jp_prices.db · อัพเดทตอนกด Quick Update หรือปุ่ม 📈 JP Index Max · รายชื่อสมาชิกจาก ja.wikipedia (日経平均株価) · Phase 1: ยังไม่มี Tearsheet/เทียบเพื่อน/งบการเงิน mirror</div>
+
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+    <div class="filter-row" style="gap:0;margin:0" id="jp-view-btns">
+      <button class="filter-btn active" data-view="all"      onclick="setJpView('all',this)"      style="border-radius:6px 0 0 6px">ทั้งหมด</button>
+      <button class="filter-btn"        data-view="rs80"     onclick="setJpView('rs80',this)">RS 80+</button>
+      <button class="filter-btn"        data-view="stage2"   onclick="setJpView('stage2',this)" title="Stage 2 — เหนือ EMA200 + EMA200 ชันขึ้น (Weinstein)">Stage 2 ✅</button>
+      <button class="filter-btn"        data-view="nearhigh" onclick="setJpView('nearhigh',this)" title="ห่างจาก 52-week high ไม่เกิน 5%">ใกล้ 52W High</button>
+      <button class="filter-btn"        data-view="momentum" onclick="setJpView('momentum',this)" title="RS momentum เป็นบวก — RS ปัจจุบันสูงกว่า 4 สัปดาห์ก่อน">Momentum นำ</button>
+      <button class="filter-btn"        data-view="ema200"   onclick="setJpView('ema200',this)"   style="border-radius:0 6px 6px 0">เหนือ EMA200</button>
+    </div>
+    <input id="jp-search" class="scr-input" style="width:150px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="renderJpTable()">
+    <select id="jp-sector-filter" class="scr-input" style="width:170px;font-size:12px" onchange="renderJpTable()"><option value="ALL">ทุก Sector</option></select>
+    <span id="jp-count" style="font-size:11px;color:var(--text2)"></span>
+  </div>
+
+  <div id="jp-breadth-strip" class="grid-4" style="margin-bottom:12px"></div>
+
+  <div class="card" style="padding:0;overflow-x:auto" id="jp-stocks-wrap">
+    <table class="tbl" id="jp-stocks-tbl">
+      <thead><tr id="jp-thead"></tr></thead>
+      <tbody id="jp-stocks-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
 <div id="page-us-heatmap" class="page">
   <div class="page-title">Heatmap ดัชนี US</div>
   <div class="page-sub">ขนาดกล่อง = มูลค่าตลาด (Market Cap) · สี = % เปลี่ยนแปลง — ข้อมูลจาก Yahoo Finance สด</div>
@@ -3292,6 +3389,38 @@
 
   <div id="hk-hm-box" style="position:relative;width:100%;height:640px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
     <div id="hk-hm-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">กำลังโหลด heatmap (ครั้งแรกอาจใช้เวลา ~30-60 วิ)...</div>
+  </div>
+</div>
+
+<!-- PAGE: JP INDEX HEATMAP — ก็อปโครงจาก page-hk-heatmap ทั้งหมด ต่างแค่ดัชนีเดียว (Nikkei 225
+     ทั้งหมด) ไม่มีปุ่มสลับดัชนี, endpoint /api/jp-index-heatmap, popup ใช้ตัวแปร/handler แยก
+     (_jpHmPopupSym) เพราะ popup DOM #hm-popup ใช้ร่วมกันแค่ตัว element ไม่ใช่ state -->
+<div id="page-jp-heatmap" class="page">
+  <div class="page-title">Heatmap Nikkei 225</div>
+  <div class="page-sub">ขนาดกล่อง = มูลค่าตลาด (Market Cap) · สี = % เปลี่ยนแปลง — % เปลี่ยนแปลงจากราคาใน jp_prices.db (อัพเดททุกวันตอน Quick Update), Market Cap ดึงสดจาก Yahoo Finance</div>
+
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+    <div class="filter-row" style="gap:0;margin:0">
+      <button class="filter-btn active" id="jp-hm-period-1d" onclick="setJpHeatmapPeriod('chg_1d',this)" style="border-radius:6px 0 0 6px;min-width:56px" title="% เปลี่ยนแปลงวันนี้">1D</button>
+      <button class="filter-btn" id="jp-hm-period-1w" onclick="setJpHeatmapPeriod('chg_1w',this)" style="border-radius:0 6px 6px 0;min-width:56px" title="% เปลี่ยนแปลง 5 วันทำการล่าสุด">1W</button>
+    </div>
+    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer;user-select:none">
+      <input type="checkbox" id="jp-hm-sector-toggle" checked onchange="_renderJpHeatmap(_jpHmData)"> จัดกลุ่มตาม Sector
+    </label>
+    <input id="jp-hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderJpHeatmap(_jpHmData)">
+    <button class="filter-btn" id="jp-hm-refresh-btn" onclick="loadJpHeatmapPage(true)" title="บังคับดึง market cap สดจาก Yahoo Finance ใหม่ทั้งชุด (ข้าม cache 1 วันของ server) — ปกติไม่ต้องกด">⚡ อัพเดท Market Cap</button>
+    <span id="jp-hm-note" style="font-size:11px;color:var(--text2)"></span>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:11px;color:var(--text2)">
+    <span>-3%</span>
+    <div style="width:180px;height:10px;border-radius:4px;background:linear-gradient(to right, rgb(248,81,73), rgb(33,38,45), rgb(63,185,80))"></div>
+    <span>+3%</span>
+    <span style="margin-left:4px">(สีเข้มขึ้นตามขนาด % คลิปที่ ±3%)</span>
+  </div>
+
+  <div id="jp-hm-box" style="position:relative;width:100%;height:640px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+    <div id="jp-hm-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">กำลังโหลด heatmap (ครั้งแรกอาจใช้เวลา ~30-60 วิ)...</div>
   </div>
 </div>
 
@@ -3380,7 +3509,113 @@
     <div id="fil-recent" style="display:none;margin-top:10px;font-size:12px"></div>
   </div>
 
-  <div id="fil-result"></div>
+</div>
+
+<!-- PAGE: HEDGE HOLDINGS — การถือครองของ superinvestors/hedge funds (13F จาก Dataroma)
+     หาหุ้นที่หลายกองถือซ้ำกัน (consensus/overlap) · cache: data/hedge_holdings.json -->
+<div id="page-hedge" class="page">
+  <div class="page-title">🐋 Hedge Holdings — Superinvestors (13F)</div>
+  <div class="page-sub">
+    การถือครองล่าสุดของกองทุน/นักลงทุนดัง (ยื่นแบบ 13F ต่อ SEC รายไตรมาส ดีเลย์ ~45 วัน · ที่มา
+    <a href="https://www.dataroma.com/m/managers.php" target="_blank" rel="noopener" style="color:var(--blue)">Dataroma</a>)
+    — เลือกหลายกองแล้วดู <b>หุ้นที่ถือซ้ำกัน (consensus/overlap)</b> เพื่ออ้างอิงการหาหุ้น
+  </div>
+
+  <div class="card" style="padding:12px 16px;margin-bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <button class="btn-primary" id="hedge-refresh-btn" onclick="startHedgeRefresh()">⟳ อัพเดท Hedge Holdings</button>
+    <span id="hedge-status" style="font-size:12px;color:var(--text2)">—</span>
+    <div class="btn-note" style="max-width:340px">
+      <b>⟳ อัพเดท Hedge Holdings</b><br>
+      ขูดการถือครองทุกกอง (~84 กอง) จาก Dataroma ใหม่<br>
+      ⏱ ใช้เวลา ~2–4 นาที · ข้อมูล 13F เปลี่ยนแค่รายไตรมาส กดเดือนละครั้งพอ
+    </div>
+  </div>
+
+  <!-- แท็บย่อย -->
+  <div class="card" style="padding:10px 16px;margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <div style="display:flex">
+      <button class="filter-btn active" id="hedge-tab-overlap" onclick="setHedgeTab('overlap',this)" style="border-radius:6px 0 0 6px;min-width:150px">🎯 หุ้นถือซ้ำ (Consensus)</button>
+      <button class="filter-btn" id="hedge-tab-heatmap" onclick="setHedgeTab('heatmap',this)" style="border-radius:0;min-width:130px" title="Heatmap — ขนาดกล่อง = จำนวนกองที่ถือ (ownership count), สีเข้ม = ยิ่งหลายกอง">🗺️ Heatmap</button>
+      <button class="filter-btn" id="hedge-tab-soldout" onclick="setHedgeTab('soldout',this)" style="border-radius:0;min-width:150px" title="หุ้นที่กองขายทิ้งหมด (full exit) ในไตรมาสล่าสุด — ต่างจาก Reduce ที่ยังถือเหลืออยู่">🔴 ขายทิ้งหมด (Sold Out)</button>
+      <button class="filter-btn" id="hedge-tab-managers" onclick="setHedgeTab('managers',this)" style="border-radius:0 6px 6px 0;min-width:130px">📋 รายชื่อกอง</button>
+    </div>
+    <span id="hedge-sel-count" style="font-size:12px;color:var(--text2)"></span>
+  </div>
+
+  <!-- TAB: MANAGERS -->
+  <div id="hedge-view-managers" style="display:none">
+    <div class="card" style="padding:10px 16px;margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <input id="hedge-mgr-search" class="scr-input" style="width:220px;font-size:13px" placeholder="ค้นชื่อกอง..." oninput="renderHedgeManagers()">
+      <button class="filter-btn" onclick="hedgeSelectAll(true)">☑ เลือกทุกกอง</button>
+      <button class="filter-btn" onclick="hedgeSelectAll(false)">☐ ล้างการเลือก</button>
+      <span style="font-size:11.5px;color:var(--text2)">ติ๊กเลือกกองที่จะนำไปเทียบใน "หุ้นถือซ้ำ"</span>
+    </div>
+    <div id="hedge-managers-list"></div>
+  </div>
+
+  <!-- TAB: OVERLAP -->
+  <div id="hedge-view-overlap">
+    <div class="card" style="padding:10px 16px;margin-bottom:10px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:12px;color:var(--fg)">ถืออย่างน้อย
+        <select id="hedge-min-funds" class="scr-input" style="width:70px;font-size:13px" onchange="renderHedgeOverlap()">
+          <option value="2">2</option><option value="3" selected>3</option>
+          <option value="4">4</option><option value="5">5</option>
+          <option value="6">6</option><option value="8">8</option><option value="10">10</option>
+        </select> กอง
+      </label>
+      <label style="font-size:12px;color:var(--fg)">การเคลื่อนไหว
+        <select id="hedge-activity-filter" class="scr-input" style="width:180px;font-size:13px" onchange="renderHedgeOverlap()">
+          <option value="all">ทั้งหมด</option>
+          <option value="buy">🟢 เฉพาะมีกองซื้อ/เพิ่ม</option>
+          <option value="sell">🔴 เฉพาะมีกองลด/ขาย</option>
+        </select>
+      </label>
+      <input id="hedge-ov-search" class="scr-input" style="width:180px;font-size:13px" placeholder="ค้น ticker/ชื่อ..." oninput="renderHedgeOverlap()">
+      <span id="hedge-ov-hint" style="font-size:11.5px;color:var(--text2)"></span>
+      <button class="filter-btn" id="hedge-fetch-btn" onclick="startHedgeFetchMissing()"
+        title="ดึงราคา+งบ+factor ของหุ้นในตารางนี้ที่ยังไม่มีในคลัง เข้า mirror_ondemand เพื่อเปิด Tearsheet/เทียบเพื่อน/Screener+ ได้"
+        style="margin-left:auto;border-color:#1f6feb;color:#58a6ff">⬇️ ดึงหุ้นที่ยังไม่มีเข้าคลัง <span id="hedge-missing-count"></span></button>
+    </div>
+    <div id="hedge-overlap-result"></div>
+  </div>
+
+  <!-- TAB: HEATMAP — ขนาดกล่อง = ownership count, สี = ความเข้มตามจำนวนกอง -->
+  <div id="hedge-view-heatmap" style="display:none">
+    <div class="card" style="padding:10px 16px;margin-bottom:10px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:12px;color:var(--fg)">ระบายสีตาม
+        <select id="hedge-hm-color" class="scr-input" style="width:180px;font-size:13px" onchange="renderHedgeHeatmap()">
+          <option value="count">จำนวนกองที่ถือ (consensus)</option>
+          <option value="cost">ส่วนต่างจากต้นทุนกูรู (%)</option>
+        </select>
+      </label>
+      <input id="hedge-hm-search" class="scr-input" style="width:180px;font-size:13px" placeholder="ค้น ticker..." oninput="renderHedgeHeatmap()">
+      <span id="hedge-hm-hint" style="font-size:11.5px;color:var(--text2)"></span>
+      <span id="hedge-hm-legend" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
+    </div>
+    <div id="hedge-hm-box" style="position:relative;width:100%;height:640px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden"></div>
+  </div>
+
+  <!-- TAB: SOLD OUT — หุ้นที่กองขายทิ้งหมด (full exit) ในไตรมาสล่าสุด ต่างจาก Reduce ที่ยังถือ -->
+  <div id="hedge-view-soldout" style="display:none">
+    <div class="card" style="padding:10px 16px;margin-bottom:10px;font-size:11.5px;color:var(--text2);line-height:1.6">
+      💡 นับเฉพาะกองที่ <b style="color:#d1242f">ขายทิ้งหมด (full exit)</b> ไตรมาสล่าสุด — ต่างจาก "ลด/ขาย" ในแท็บ Consensus
+      ที่รวม "Reduce" (ลดบางส่วนแต่ยังถืออยู่) ด้วย หุ้นที่นี่กองนั้นๆ <b>ไม่มีในพอร์ตแล้ว</b>
+    </div>
+    <div class="card" style="padding:10px 16px;margin-bottom:10px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:12px;color:var(--fg)">ถืออย่างน้อย
+        <select id="hedge-so-min-funds" class="scr-input" style="width:70px;font-size:13px" onchange="renderHedgeSoldOut()">
+          <option value="1">1</option><option value="2" selected>2</option>
+          <option value="3">3</option><option value="4">4</option><option value="5">5</option>
+        </select> กองขายทิ้ง
+      </label>
+      <input id="hedge-so-search" class="scr-input" style="width:180px;font-size:13px" placeholder="ค้น ticker/ชื่อ..." oninput="renderHedgeSoldOut()">
+      <span id="hedge-so-hint" style="font-size:11.5px;color:var(--text2)"></span>
+    </div>
+    <div id="hedge-soldout-result"></div>
+  </div>
+
+  <!-- DETAIL PANEL (กอง / หุ้น) — โผล่เมื่อคลิก -->
+  <div id="hedge-detail" style="display:none"></div>
 </div>
 
 <!-- PAGE: DATA HEALTH — ความสดของทุกไฟล์/DB ที่ dashboard ใช้ + ปิงแหล่งข้อมูลภายนอก

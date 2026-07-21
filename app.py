@@ -50,6 +50,10 @@ _US_INDEX_DIFF_CACHE_TTL = 6 * 3600
 _hk_index_diff_cache: dict = {}
 _HK_INDEX_DIFF_CACHE_TTL = 6 * 3600
 
+# JP index (Nikkei 225) diff-check cache — เทียบ ja.wikipedia กับไฟล์ local ไว้ 6 ชั่วโมง
+_jp_index_diff_cache: dict = {}
+_JP_INDEX_DIFF_CACHE_TTL = 6 * 3600
+
 # Heatmap cache (mkt_cap + % เปลี่ยนแปลงรายวันของหุ้นในแต่ละดัชนี) — แยก slot ต่อดัชนี
 # TTL สั้นกว่า cache อื่นเพราะ % เปลี่ยนแปลงต้องสดพอสมควร แต่ไม่สดเกินจนต้องยิง Yahoo ทุกครั้งที่เปิดหน้า
 _heatmap_cache: dict = {}
@@ -59,6 +63,11 @@ _HEATMAP_CACHE_TTL = 15 * 60
 # ที่มีอยู่แล้ว (ไม่ยิง Yahoo สด) เลยไม่จำเป็นต้องสั้นเท่า US — ใช้ TTL เดียวกันเผื่ออนาคต
 _hk_heatmap_cache: dict = {}
 _HK_HEATMAP_CACHE_TTL = 15 * 60
+
+# Heatmap JP cache — ดัชนีเดียว (NIKKEI225) ต่างจาก US/HK ที่มีหลายดัชนีให้เลือก แต่ pattern
+# เดียวกับ HK (chg_1d/chg_1w จาก jp_prices.db ในเครื่อง, mkt_cap ยิง Yahoo สด cache แยก)
+_jp_heatmap_cache: dict = {}
+_JP_HEATMAP_CACHE_TTL = 15 * 60
 
 # ข่าวรายหุ้น (รวม SET.or.th + Yahoo + Google News) — cache ต่อ (symbol, is_dr) 15 นาที
 # ข่าวไม่ต้องสดวินาทีต่อวินาที แต่ก็ไม่ควรยิง 3 แหล่งซ้ำทุกครั้งที่พิมพ์ค้นหา
@@ -105,6 +114,27 @@ def _load_hk_mktcap_cache():
 
 def _save_hk_mktcap_cache(data):
     p = _hk_mktcap_cache_path()
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, p)
+
+
+def _jp_mktcap_cache_path():
+    return os.path.join(BASE_DIR, "data", "jp_heatmap_mktcap_cache.json")
+
+
+def _load_jp_mktcap_cache():
+    try:
+        with open(_jp_mktcap_cache_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_jp_mktcap_cache(data):
+    p = _jp_mktcap_cache_path()
     os.makedirs(os.path.dirname(p), exist_ok=True)
     tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -1225,6 +1255,235 @@ def get_hk_history(symbol):
     return jsonify({"dates": data["dates"], "closes": data["closes"], "volumes": data["volumes"]})
 
 
+@app.route("/api/jp-index-full-refresh", methods=["POST"])
+def jp_index_full_refresh():
+    """ดึงราคา OHLC ย้อนหลังสูงสุด (period=max) ของสมาชิกดัชนี Nikkei 225 (~225 ตัว)
+    ลง jp_prices.db — ปุ่มแยกต่างหาก ใช้เฉพาะกดมือ (ดู hk_index_full_refresh)"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=0, message="กำลังเริ่มดึงราคา JP Index ย้อนหลังสูงสุด...")
+    threading.Thread(target=_run_jp_index_full_refresh, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _run_jp_index_full_refresh():
+    try:
+        from sources import jp_index_membership
+        from sources.yahoo import fetch_all_batch
+        from core import jp_store
+
+        tickers = jp_index_membership.all_tickers(BASE_DIR)
+        if not tickers:
+            raise ValueError("ไม่พบรายชื่อดัชนี JP ใน data/jp_index_membership.json — รัน sync ก่อน")
+
+        def cb(current, total, msg):
+            _update(current=current, total=total, message=msg)
+
+        data = fetch_all_batch(tickers, callback=cb, period="max")
+        _update(current=len(tickers) - 1, total=len(tickers),
+                message=f"กำลังบันทึก {len(data)} ตัวลง jp_prices.db (หลายนาที อย่าเพิ่งปิด)...")
+        jp_store.init_db(BASE_DIR)
+        jp_store.upsert_bars(BASE_DIR, data)
+
+        missing = len(tickers) - len(data)
+        msg = f"เสร็จแล้ว! ดึงราคา JP Index ย้อนหลังสูงสุด {len(data)}/{len(tickers)} ตัว"
+        if missing:
+            msg += f" (ขาด {missing} ตัว)"
+        _update(running=False, done=True, message=msg)
+        run_log.record_run(BASE_DIR, "jp_index_full_refresh", True, msg)
+    except Exception as e:
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        run_log.record_run(BASE_DIR, "jp_index_full_refresh", False, str(e))
+
+    try:
+        from sources import jp_index_metrics
+        n_metrics = jp_index_metrics.build(BASE_DIR)
+        print(f"[JP Index] rebuilt metrics: {n_metrics} ticker")
+    except Exception as e:
+        print(f"[JP Index] metrics build error: {e}")
+
+
+def _run_jp_index_gap_update(progress_cb=None):
+    from sources import jp_index_membership
+    from core import jp_store
+    return _run_index_gap_update(jp_index_membership, jp_store, "JP", "JP Index", progress_cb)
+
+
+@app.route("/api/jp-index-metrics")
+def jp_index_metrics_route():
+    """RS/EMA/Stage/52W ของสมาชิกดัชนี Nikkei 225 (cache — คำนวณล่วงหน้าตอน Quick Update /
+    JP Index Max ที่ sources/jp_index_metrics.py ดู field ที่ได้ที่
+    set_data_fetcher.process_stock() + core.metrics.rank_rs() — เหมือนหุ้นไทย/US/HK ทุกประการ
+    ต่างแค่ field เสริม in_nikkei225 สำหรับกรองตามดัชนี"""
+    from sources import jp_index_metrics
+    return jsonify(jp_index_metrics.load_local(BASE_DIR))
+
+
+@app.route("/api/jp-history/<symbol>")
+def get_jp_history(symbol):
+    """ส่ง full price history ของหุ้นดัชนี JP (Nikkei 225) จาก jp_prices.db — ใช้เติมกราฟ
+    5Y/Max ใน chart modal (ตัวเดียวกับ /api/us-history/hk-history แค่คนละ DB)"""
+    from core import jp_store
+    ticker = symbol.upper().strip()
+    data = jp_store.get_ohlc_series(BASE_DIR, ticker)
+    if not data:
+        return jsonify({"error": f"ไม่พบข้อมูล {symbol} — กรุณากด JP Index Max ก่อน"}), 404
+    return jsonify({"dates": data["dates"], "closes": data["closes"], "volumes": data["volumes"]})
+
+
+# ============================================================
+# Hedge Holdings (13F / superinvestors จาก Dataroma)
+# ดู sources/dataroma.py — cache: data/hedge_holdings.json
+# ============================================================
+@app.route("/api/hedge/managers")
+def hedge_managers():
+    """เสิร์ฟ cache การถือครองทุกกอง (managers + holdings) ให้ client คำนวณ overlap เอง"""
+    from sources import dataroma
+    data = dataroma.load_cache(BASE_DIR)
+    if not data:
+        return jsonify({"error": "ยังไม่มีข้อมูล กดปุ่ม 'อัพเดท Hedge Holdings' เพื่อดึงครั้งแรก"}), 404
+    return jsonify(data)
+
+
+@app.route("/api/hedge-status")
+def hedge_status():
+    """สถานะสั้นๆ ของ cache — วันที่ดึงล่าสุด + จำนวนกอง (ไว้โชว์บนหน้า)"""
+    from sources import dataroma
+    data = dataroma.load_cache(BASE_DIR)
+    if not data:
+        return jsonify({"cached": False})
+    return jsonify({"cached": True, "generated_at": data.get("generated_at"),
+                    "manager_count": data.get("manager_count")})
+
+
+@app.route("/api/hedge-refresh", methods=["POST"])
+def hedge_refresh():
+    """ขูดการถือครองทุกกองจาก Dataroma ใหม่ (~84 กอง, ใช้เวลาหลายนาที) — background thread
+    ใช้ progress state ร่วม (_state/_update/_lock — ดู /api/progress)"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=0, message="กำลังเริ่มดึง Hedge Holdings จาก Dataroma...")
+    threading.Thread(target=_run_hedge_refresh, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _run_hedge_refresh():
+    try:
+        from sources import dataroma
+
+        def cb(current, total, msg):
+            _update(current=current, total=total, message=msg)
+
+        payload = dataroma.refresh_all(BASE_DIR, callback=cb)
+        msg = f"เสร็จแล้ว! ดึง Hedge Holdings {payload['manager_count']} กอง"
+        _update(running=False, done=True, message=msg)
+        run_log.record_run(BASE_DIR, "hedge_refresh", True, msg)
+    except Exception as e:  # noqa: BLE001
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        run_log.record_run(BASE_DIR, "hedge_refresh", False, str(e))
+
+
+def _hedge_norm(sym):
+    """Dataroma ใช้จุด (BRK.B) — คลัง US ใช้ขีด (BRK-B) ให้ตรง yfinance/us_prices.db"""
+    return (sym or "").upper().replace(".", "-").strip()
+
+
+def _hedge_us_covered():
+    """set ของ ticker US (normalize แล้ว) ที่ "มีในคลัง" = สมาชิกดัชนีหลัก (us_prices.db) ∪
+    หุ้นที่เคยดึง on-demand แล้ว (table mirror_ondemand, market=US) — ใช้เช็คว่าตัวไหนยังขาด"""
+    covered = set()
+    try:
+        from sources import us_index_membership
+        covered |= {_hedge_norm(t) for t in us_index_membership.all_tickers(BASE_DIR)}
+    except Exception:
+        pass
+    try:
+        import sqlite3
+        con = sqlite3.connect(os.path.join(BASE_DIR, "financials.db"))
+        try:
+            covered |= {_hedge_norm(r[0]) for r in
+                        con.execute("SELECT symbol FROM mirror_ondemand WHERE market='US'")}
+        finally:
+            con.close()
+    except Exception:
+        pass
+    return covered
+
+
+@app.route("/api/hedge-coverage")
+def hedge_coverage():
+    """คืนรายชื่อหุ้น (จาก cache hedge) ที่ "มีในคลัง" แล้ว — ให้ client ติด badge + นับตัวที่ขาด
+    ก่อนกดดึง (covered = subset ของ hedge universe เพื่อ payload เล็ก)"""
+    from sources import dataroma
+    data = dataroma.load_cache(BASE_DIR)
+    if not data:
+        return jsonify({"covered": []})
+    hedge_syms = set()
+    for m in data.get("managers", {}).values():
+        for h in m.get("holdings", []):
+            if h.get("sym"):
+                hedge_syms.add(_hedge_norm(h["sym"]))
+    covered = _hedge_us_covered()
+    return jsonify({"covered": sorted(hedge_syms & covered),
+                    "total_universe": len(hedge_syms)})
+
+
+@app.route("/api/hedge-fetch-missing", methods=["POST"])
+def hedge_fetch_missing():
+    """ดึงหุ้น US ที่ส่งมา (list) ตัวที่ยังไม่มีในคลัง → เข้า mirror_ondemand (Tearsheet/Peer/
+    Screener+ ใช้ได้) — background thread, progress ผ่าน _state ร่วม
+    body: {"symbols": ["HHH","AER",...]} (รูปแบบ Dataroma มีจุดได้ จะ normalize เอง)"""
+    syms = []
+    if request.is_json:
+        syms = request.json.get("symbols") or []
+    syms = [_hedge_norm(s) for s in syms if s]
+    if not syms:
+        return jsonify({"error": "ไม่มีรายชื่อหุ้นที่จะดึง"}), 400
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=0, message="กำลังเตรียมดึงหุ้น consensus เข้าคลัง...")
+    threading.Thread(target=_run_hedge_fetch_missing, args=(syms,), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _run_hedge_fetch_missing(syms):
+    try:
+        from sources import mirror_ondemand
+        covered = _hedge_us_covered()
+        todo = [s for s in dict.fromkeys(syms) if s not in covered]  # ไม่ซ้ำ + ตัดที่มีแล้ว
+        total = len(todo)
+        if not total:
+            _update(running=False, done=True, current=0, total=0,
+                    message="หุ้นในรายการมีในคลังครบแล้ว ไม่มีอะไรต้องดึง")
+            return
+        ok = fail = 0
+        failed = []
+        for i, sym in enumerate(todo, 1):
+            _update(current=i, total=total, message=f"ดึง {sym} เข้าคลัง ({i}/{total}) · สำเร็จ {ok}")
+            try:
+                row = mirror_ondemand.fetch_header(BASE_DIR, "US", sym, force=False)
+                if row:
+                    ok += 1
+                else:
+                    fail += 1; failed.append(sym)
+            except Exception:  # noqa: BLE001 — ตัวเดียวพังไม่ล้มทั้ง batch
+                fail += 1; failed.append(sym)
+        msg = f"เสร็จแล้ว! ดึงเข้าคลังสำเร็จ {ok}/{total} ตัว"
+        if fail:
+            msg += f" · ไม่สำเร็จ {fail} (เช่น {', '.join(failed[:8])}{'...' if len(failed) > 8 else ''})"
+        _update(running=False, done=True, message=msg)
+        run_log.record_run(BASE_DIR, "hedge_fetch_missing", True, msg)
+    except Exception as e:  # noqa: BLE001
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        run_log.record_run(BASE_DIR, "hedge_fetch_missing", False, str(e))
+
+
 @app.route("/api/dr-history/<symbol>")
 def get_dr_history(symbol):
     """ดึง price history สำหรับ DR stock — เสิร์ฟจาก cache ก่อน ไม่ต้อง fetch yfinance ซ้ำ"""
@@ -2312,7 +2571,7 @@ def peer_compare():
     if level not in ("sector", "industry"):
         level = "sector"
     mkt = (request.args.get("market") or "TH").upper()
-    if mkt not in ("TH", "US", "HK", "DR"):
+    if mkt not in ("TH", "US", "HK", "JP", "DR"):
         mkt = "TH"
 
     dr_symbol = None
@@ -2456,11 +2715,16 @@ def peer_compare():
 
 
 def _mirror_sym(mkt, sym):
-    """แปลง symbol ให้ตรงกับ key ที่ factor_snapshot_mirror ใช้จริง — hk_index_metrics.json
-    เก็บ symbol แบบ '0700.HK' (ให้ยิง yfinance ตรงๆ ได้) แต่ namespace mirror ('FINN:HK:0700'
-    ทั้ง finnomena_q/yahoo) ใช้รหัสดิบไม่มี suffix เสมอ — ต้องตัด '.HK' ก่อน lookup ทุกครั้ง
-    ไม่งั้น snap_rows.get(sym) จะไม่เจออะไรเลยสำหรับหุ้น HK ทั้งหมด (US ไม่มีปัญหานี้)"""
-    return sym.replace(".HK", "") if mkt == "HK" else sym
+    """แปลง symbol ให้ตรงกับ key ที่ factor_snapshot_mirror ใช้จริง — hk_index_metrics.json/
+    jp_index_metrics.json เก็บ symbol แบบ '0700.HK'/'7203.T' (ให้ยิง yfinance ตรงๆ ได้) แต่
+    namespace mirror ('FINN:HK:0700'/'FINN:JP:7203' ทั้ง finnomena_q/yahoo) ใช้รหัสดิบไม่มี
+    suffix เสมอ — ต้องตัด suffix ก่อน lookup ทุกครั้ง ไม่งั้น snap_rows.get(sym) จะไม่เจออะไรเลย
+    (US ไม่มีปัญหานี้ ไม่มี suffix ต่อท้ายอยู่แล้ว)"""
+    if mkt == "HK":
+        return sym.replace(".HK", "")
+    if mkt == "JP":
+        return sym.replace(".T", "")
+    return sym
 
 
 def _tearsheet_universe_map(mkt):
@@ -2486,6 +2750,10 @@ def _tearsheet_universe_map(mkt):
         from sources import hk_index_metrics
         for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", []):
             out[s["symbol"]] = s
+    elif mkt == "JP":
+        from sources import jp_index_metrics
+        for s in jp_index_metrics.load_local(BASE_DIR).get("stocks", []):
+            out[s["symbol"]] = s
     return out
 
 
@@ -2510,7 +2778,7 @@ def tearsheet(market, symbol):
     from sources import dividend_stats
     mkt = market.upper()
     sym = symbol.upper().strip()
-    if mkt not in ("TH", "US", "HK", "DR"):
+    if mkt not in ("TH", "US", "HK", "JP", "DR"):
         return jsonify({"error": f"ไม่รู้จักตลาด {mkt}"}), 400
 
     dr_symbol = None
@@ -2709,8 +2977,9 @@ def tearsheet(market, symbol):
             div_rows, f.get("eps_latest"), f.get("eps_latest_date")),
     }
 
-    # ตลาด lite (JP/VN/SG/EU/TW/CN) ยังไม่ตั้ง discount rate เฉพาะ — ใช้ 9.0 กลางๆ ปรับเองได้ใน UI
-    discount_rate_default = {"TH": 9.0, "US": 8.5, "HK": 9.5}.get(mkt, 9.0)
+    # ตลาด lite (VN/SG/EU/TW/CN — DR underlying ไม่มี cohort) ยังไม่ตั้ง discount rate เฉพาะ —
+    # ใช้ 9.0 กลางๆ ปรับเองได้ใน UI · JP=7.0 ตลาดพัฒนาแล้ว ดอกเบี้ย/cost of equity ต่ำกว่า US/HK
+    discount_rate_default = {"TH": 9.0, "US": 8.5, "HK": 9.5, "JP": 7.0}.get(mkt, 9.0)
     dcf = {
         "fcf": fcf, "mkt_cap": mkt_cap, "net_cash": f.get("net_cash"), "price": s.get("price"),
         "rev_cagr": f.get("rev_cagr"), "profit_cagr": f.get("profit_cagr"),
@@ -2997,6 +3266,91 @@ def _run_hk_index_sync(min_age_days=None):
         _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
 
 
+@app.route("/api/jp-index-membership")
+def get_jp_index_membership():
+    """รายชื่อ ticker ที่อยู่ใน Nikkei 225 (ไฟล์ local อัพเดทได้ผ่านปุ่ม "ดึงเฉพาะที่ขาด/
+    เก่า" — ดู /api/jp-index-sync) ใช้กรองรายการ browse หุ้น JP — คืน {NIKKEI225:[...]}"""
+    path = os.path.join(BASE_DIR, "data", "jp_index_membership.json")
+    if not os.path.exists(path):
+        return jsonify({})
+    try:
+        with open(path, encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify({})
+
+
+@app.route("/api/jp-index-check-updates")
+def jp_index_check_updates():
+    """เทียบรายชื่อ Nikkei 225 สดจาก ja.wikipedia กับไฟล์ local — รายงานตัวใหม่/ตัวที่ถูกถอด
+    ไม่แก้ไฟล์ local ให้ (คู่กับ hk_index_check_updates)"""
+    cached = _jp_index_diff_cache.get("result")
+    if cached and (time.time() - _jp_index_diff_cache.get("ts", 0) < _JP_INDEX_DIFF_CACHE_TTL):
+        return jsonify(cached)
+    try:
+        from sources import jp_index_membership
+        result, _live = jp_index_membership.diff_membership(BASE_DIR)
+        _jp_index_diff_cache["result"] = result
+        _jp_index_diff_cache["ts"] = time.time()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/jp-index-sync", methods=["POST"])
+def start_jp_index_sync():
+    """ปุ่ม "ดึงเฉพาะที่ขาด/เก่า (local)" ของดัชนี JP — เช็ค ja.wikipedia แล้วอัพเดทไฟล์ local
+    ให้ตรง จากนั้นดึงงบการเงิน (ผ่าน Yahoo Finance) ให้สมาชิก Nikkei 225 ทุกตัวที่ยังไม่มีข้อมูล
+    (ใช้ `sync_mirror_yahoo_index` — skip-if-exists, ไม่มี min_age_days re-fetch แบบ
+    `_run_hk_index_sync`/`sync_all` เพราะ scope เล็กแค่ 225 ตัว ไม่ต้องการ incremental refresh
+    ซับซ้อน) แล้ว rebuild factor_snapshot_mirror ให้ Tearsheet/Peer Compare/F-Score-Z-Score
+    เห็นข้อมูล — **ไม่ใช้ build_mirror_snapshot() ปกติ** (ผูกกับ finnomena_q ที่ไม่มีข้อมูล JP
+    เลย) ใช้ build_mirror_snapshot_yahoo_only() แทน"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None, current=0, total=0,
+                      message="กำลังเช็คดัชนี Nikkei 225 จาก Wikipedia...")
+    threading.Thread(target=_run_jp_index_sync, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _run_jp_index_sync():
+    try:
+        from sources import jp_index_membership
+        diff, _live = jp_index_membership.sync_membership(BASE_DIR)
+        _jp_index_diff_cache.clear()
+        added_n = sum(len(v["new"]) for v in diff.values())
+        removed_n = sum(len(v["removed"]) for v in diff.values())
+
+        # รหัสดิบไม่มี suffix (namespace mirror ใช้เสมอ) ดู _mirror_sym/sync_mirror_yahoo_index
+        tickers = [t[:-2] for t in jp_index_membership.all_tickers(BASE_DIR) if t.endswith(".T")]
+        # ราคาปัจจุบัน (ต่อ ticker รหัสดิบ) จาก jp_index_metrics.json — ใช้คำนวณ mkt_cap ให้
+        # Z-Score variant 'Z' เพราะไม่มี finnomena_q ให้ _factors_for หา mkt_cap เองแบบ US/HK
+        from sources import jp_index_metrics
+        price_by_ticker = {s["symbol"][:-2]: s["price"] for s in
+                            jp_index_metrics.load_local(BASE_DIR).get("stocks", [])
+                            if s.get("price") and s["symbol"].endswith(".T")}
+
+        def cb(current, total, msg):
+            _update(current=current, total=total,
+                    message=f"ดัชนีอัพเดทแล้ว (+{added_n}/-{removed_n}) · {msg}")
+
+        result = financials_store.sync_mirror_yahoo_index(BASE_DIR, {"JP": tickers}, callback=cb)
+        _update(message="กำลัง rebuild factor snapshot JP...")
+        n_mirror = factor_snapshot.build_mirror_snapshot_yahoo_only(
+            BASE_DIR, "JP", tickers, price_by_ticker=price_by_ticker)
+        _fin_analytics_cache.clear()
+
+        _update(running=False, done=True,
+                message=f"เสร็จแล้ว! ดัชนี Nikkei 225 อัพเดท +{added_n}/-{removed_n} · "
+                        f"งบการเงิน {result['ok']} ตัว (ข้าม {result['skipped']} ที่มีอยู่แล้ว"
+                        + (f", ล้มเหลว {result['fail']}" if result["fail"] else "") + f") · "
+                        f"factor snapshot: {n_mirror} ตัว")
+    except Exception as e:
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+
+
 @app.route("/api/hk-index-heatmap")
 def hk_index_heatmap():
     """Heatmap ของ HSI / HSCEI / HSTECH — ?index=HSI|HSCEI|HSTECH
@@ -3102,6 +3456,98 @@ def hk_index_heatmap():
 
     result = {"rows": rows, "ts": now_ts, "requested": len(tickers), "missing": len(tickers) - len(rows)}
     _hk_heatmap_cache[index_key] = result
+    return jsonify(result)
+
+
+@app.route("/api/jp-index-heatmap")
+def jp_index_heatmap():
+    """Heatmap ของ Nikkei 225 — ดัชนีเดียว (ไม่มี ?index= ต่างจาก US/HK ที่มีหลายดัชนีให้เลือก)
+    คืน {rows:[{symbol, name, mkt_cap, chg_1d, chg_1w, sector}], ts, requested, missing}
+    ก็อปโครงจาก hk_index_heatmap ทั้งหมด — chg_1d/chg_1w คำนวณจาก jp_prices.db ในเครื่อง
+    (Quick Update อัพเดทให้ทุกวัน) mkt_cap ยิง fast_info สด cache แยกไฟล์ 1 วันเหมือน HK/US"""
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor
+    from core import jp_store
+    from sources import jp_index_membership, jp_index_metrics
+
+    force = request.args.get("force") == "1"
+
+    cached = _jp_heatmap_cache.get("NIKKEI225")
+    if not force and cached and (time.time() - cached["ts"] < _JP_HEATMAP_CACHE_TTL):
+        return jsonify(cached)
+
+    local = jp_index_membership.load_local(BASE_DIR)
+    tickers = local.get("NIKKEI225") or []
+    if not tickers:
+        return jsonify({"error": "ยังไม่มีรายชื่อ NIKKEI225 ในเครื่อง — กด \"📈 JP Index Max\" ก่อน"}), 404
+
+    # % เปลี่ยนแปลง 1 วัน/1 สัปดาห์ — คำนวณจาก jp_prices.db ตรงๆ (มีราคาอยู่แล้วจาก Quick
+    # Update ทุกวัน ไม่ต้องยิง Yahoo สดเหมือน US heatmap) ดู hk_index_heatmap สำหรับเหตุผลเดียวกัน
+    chg1d_map, chg1w_map = {}, {}
+    recent = dict(jp_store.iter_recent_series(BASE_DIR, warmup_rows=6))
+    for t in tickers:
+        series = recent.get(t)
+        if not series or not series.get("closes"):
+            continue
+        closes = [c for c in series["closes"] if c is not None]
+        if len(closes) >= 2:
+            chg1d_map[t] = round((closes[-1] / closes[-2] - 1) * 100, 2)
+        if len(closes) >= 6:
+            chg1w_map[t] = round((closes[-1] / closes[-6] - 1) * 100, 2)
+        elif len(closes) >= 2:
+            chg1w_map[t] = round((closes[-1] / closes[0] - 1) * 100, 2)
+
+    # Market cap — fast_info ต้องยิงทีละ ticker (ไม่มีใน jp_prices.db) ใช้ disk cache
+    # อายุ 1 วันก่อน (เปลี่ยนช้า) ยิง Yahoo เฉพาะตัวที่ cache หมดอายุ/ไม่มี ขนาน 12 threads
+    def _mc_one(t):
+        try:
+            v = getattr(yf.Ticker(t).fast_info, "market_cap", None)
+            return t, (float(v) if v else None)
+        except Exception:
+            return t, None
+
+    mktcap_cache = _load_jp_mktcap_cache()
+    now_ts = time.time()
+    stale = [t for t in tickers if force
+             or t not in mktcap_cache
+             or now_ts - mktcap_cache[t].get("ts", 0) >= _MKTCAP_CACHE_TTL]
+
+    if stale:
+        try:
+            with ThreadPoolExecutor(max_workers=12) as ex:
+                for t, mc in ex.map(_mc_one, stale):
+                    if mc is not None:
+                        mktcap_cache[t] = {"mc": mc, "ts": now_ts}
+        except Exception as e:
+            print(f"[JP Heatmap] market cap batch ล้มเหลว: {e}")
+        _save_jp_mktcap_cache(mktcap_cache)
+
+    mkt_map = {t: mktcap_cache[t]["mc"] for t in tickers if t in mktcap_cache}
+
+    # ชื่อบริษัท: jp_index_membership ไม่เก็บชื่อ (แค่ ticker+sector) — ใช้ name ที่
+    # jp_index_metrics คำนวณไว้แล้วจาก dr_universe/Yahoo ตอน sync งบ
+    metrics_local = jp_index_metrics.load_local(BASE_DIR)
+    name_map = {s["symbol"]: s.get("name") for s in metrics_local.get("stocks", [])}
+    sector_map = dict(local.get("NIKKEI225_sector") or {})
+
+    rows = []
+    for t in tickers:
+        mc = mkt_map.get(t)
+        chg_1d = chg1d_map.get(t)
+        chg_1w = chg1w_map.get(t)
+        if mc is None and chg_1d is None:
+            continue   # โดนบล็อค/ไม่มีข้อมูลจริงทั้งคู่ — ข้ามแทนที่จะโชว์กล่องว่าง
+        rows.append({
+            "symbol": t,
+            "name": name_map.get(t) or t,
+            "mkt_cap": mc,
+            "chg_1d": chg_1d,
+            "chg_1w": chg_1w,
+            "sector": sector_map.get(t) or "อื่นๆ",
+        })
+
+    result = {"rows": rows, "ts": now_ts, "requested": len(tickers), "missing": len(tickers) - len(rows)}
+    _jp_heatmap_cache["NIKKEI225"] = result
     return jsonify(result)
 
 
@@ -3856,6 +4302,17 @@ def data_health():
         "insider", "Insider / ผู้ถือหุ้นใหญ่", "Flow/เจ้าของ",
         _insider_at, 48, 168))
 
+    # Hedge Holdings (13F superinvestors จาก Dataroma) — ยื่นรายไตรมาส ดีเลย์ ~45 วัน
+    # เกณฑ์เตือนจึงหลวมกว่า flow อื่น (แนะนำกดรีเฟรชเดือนละครั้งพอ — ดู sources/dataroma.py)
+    from sources import dataroma as _dataroma_dh
+    _hedge_cache = _dataroma_dh.load_cache(BASE_DIR)
+    items.append(_dh_item(
+        "hedge_holdings", "Hedge Holdings 13F (Dataroma)", "Flow/เจ้าของ",
+        _dh_parse(_hedge_cache.get("generated_at")) if _hedge_cache else None,
+        45 * 24, 100 * 24,
+        missing_note="ยังไม่เคยดึง Hedge Holdings ในเครื่องนี้ — กดปุ่ม '⟳ อัพเดท Hedge Holdings' "
+                      "ในหน้า 🐋 Hedge Holdings", optional=True))
+
     # หุ้นเข้าใหม่/ถูกถอด
     items.append(_dh_item(
         "set_universe", "รายชื่อหุ้น SET (listedCompanies xls)", "หุ้นเข้าใหม่/ถูกถอด",
@@ -3869,9 +4326,13 @@ def data_health():
         "hk_index_membership", "สมาชิกดัชนี HK (HSI/HSCEI/HSTECH)", "หุ้นเข้าใหม่/ถูกถอด",
         _dh_mtime(os.path.join(BASE_DIR, "data", "hk_index_membership.json")), 45 * 24, 90 * 24))
 
-    # ราคา/metrics หุ้นดัชนี US/HK — auto ผ่าน Quick Update/Index Max, เกณฑ์เดียวกับ
+    items.append(_dh_item(
+        "jp_index_membership", "สมาชิกดัชนี JP (Nikkei 225)", "หุ้นเข้าใหม่/ถูกถอด",
+        _dh_mtime(os.path.join(BASE_DIR, "data", "jp_index_membership.json")), 45 * 24, 90 * 24))
+
+    # ราคา/metrics หุ้นดัชนี US/HK/JP — auto ผ่าน Quick Update/Index Max, เกณฑ์เดียวกับ
     # ราคาหุ้นไทย (30/72 ชม.) เพราะ upsert_bars() stamp 'updated_at' รอบเดียวกัน
-    from core import us_store as _us_store, hk_store as _hk_store
+    from core import us_store as _us_store, hk_store as _hk_store, jp_store as _jp_store
     items.append(_dh_item(
         "us_prices", "ราคาหุ้นดัชนี US (us_prices.db)", "ราคา/เทคนิค",
         _dh_parse(_us_store.get_meta(BASE_DIR, "updated_at")), 30, 72,
@@ -3883,6 +4344,11 @@ def data_health():
         missing_note="ยังไม่เคยอัพเดทหุ้น HK ในเครื่องนี้", optional=True))
 
     items.append(_dh_item(
+        "jp_prices", "ราคาหุ้นดัชนี JP (jp_prices.db)", "ราคา/เทคนิค",
+        _dh_parse(_jp_store.get_meta(BASE_DIR, "updated_at")), 30, 72,
+        missing_note="ยังไม่เคยอัพเดทหุ้น JP ในเครื่องนี้", optional=True))
+
+    items.append(_dh_item(
         "us_index_metrics", "Metrics หุ้นดัชนี US (us_index_metrics.json)", "ราคา/เทคนิค",
         _dh_mtime(os.path.join(BASE_DIR, "data", "us_index_metrics.json")), 30, 72,
         missing_note="ยังไม่เคยอัพเดทหุ้น US ในเครื่องนี้", optional=True))
@@ -3891,6 +4357,11 @@ def data_health():
         "hk_index_metrics", "Metrics หุ้นดัชนี HK (hk_index_metrics.json)", "ราคา/เทคนิค",
         _dh_mtime(os.path.join(BASE_DIR, "data", "hk_index_metrics.json")), 30, 72,
         missing_note="ยังไม่เคยอัพเดทหุ้น HK ในเครื่องนี้", optional=True))
+
+    items.append(_dh_item(
+        "jp_index_metrics", "Metrics หุ้นดัชนี JP (jp_index_metrics.json)", "ราคา/เทคนิค",
+        _dh_mtime(os.path.join(BASE_DIR, "data", "jp_index_metrics.json")), 30, 72,
+        missing_note="ยังไม่เคยอัพเดทหุ้น JP ในเครื่องนี้", optional=True))
 
     # งบการเงิน (local-only)
     _fin_summary = financials_store.get_meta_summary(BASE_DIR)
@@ -4239,7 +4710,10 @@ _UPDATE_STATUS_LABEL = {
     "mirror_finnomena": "📥 Mirror US/HK ทั้งตลาด (mirror_finnomena.py)",
     "us_index_full_refresh": "📈 ดึงราคา US Index ย้อนหลังสูงสุด",
     "hk_index_full_refresh": "📈 ดึงราคา HK Index ย้อนหลังสูงสุด",
+    "jp_index_full_refresh": "📈 ดึงราคา JP Index ย้อนหลังสูงสุด",
     "offsite_backup":  "🛟 สำรองไฟล์สร้างใหม่ไม่ได้นอกเครื่อง (backup_financials_offsite.py)",
+    "hedge_refresh":   "🐋 อัพเดท Hedge Holdings (Dataroma)",
+    "hedge_fetch_missing": "⬇️ ดึงหุ้น Hedge Holdings ที่ยังไม่มีเข้าคลัง",
 }
 
 @app.route("/api/update-status")
@@ -5012,6 +5486,16 @@ def _run_quick():
             _hk_heatmap_cache.clear()
             print(f"[QuickUpdate] HK Index: gap-updated {n_hk} ticker, metrics rebuilt")
         _sub_step("HK Index", 96, "อัพเดทราคา HK Index...", _hk_index)
+
+        # อัพเดทราคา JP Index (Nikkei 225 gap-update) + คำนวณ RS/EMA/Stage/52W ใหม่
+        def _jp_index():
+            def _jp_cb(current, total, msg):
+                _update(message=f"JP Index: {msg}")
+            n_jp = _run_jp_index_gap_update(progress_cb=_jp_cb)
+            from sources import jp_index_metrics
+            jp_index_metrics.build(BASE_DIR)
+            print(f"[QuickUpdate] JP Index: gap-updated {n_jp} ticker, metrics rebuilt")
+        _sub_step("JP Index", 97, "อัพเดทราคา JP Index...", _jp_index)
 
         # อัพเดท short sales + NVDR ประจำวัน
         _sub_step("Short Sales", 97, "อัพเดท Short Sales...", short_sales_daily_update)
