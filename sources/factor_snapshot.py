@@ -531,6 +531,55 @@ def build_mirror_snapshot(base_dir, exchanges=("US", "HK"), min_quarters=12, min
     return out
 
 
+def build_mirror_snapshot_yahoo_only(base_dir, market, tickers, price_by_ticker=None):
+    """เหมือน build_mirror_snapshot แต่สำหรับตลาดที่ **ไม่มีข้อมูลใน Finnomena เลย** (เช่น JP)
+    — build_mirror_snapshot() อ่านจาก source='finnomena_q' เป็นตัวกรองหลัก (เช็คจำนวนไตรมาส/PE
+    เพื่อคัด OTC/junk ออกจาก raw universe หลักหมื่นตัว) ใช้กับตลาดที่ไม่มี Finnomena ไม่ได้เลย
+    (loop จะไม่เจอแถวอะไรเลย) — ฟังก์ชันนี้ไม่ต้องกรอง OTC/junk เพราะ caller ส่ง universe ที่
+    curate ไว้แล้ว (เช่น สมาชิกดัชนีหลัก ~225 ตัวของ Nikkei 225 ไม่ใช่ raw universe ทั้งตลาด)
+
+    tickers: รหัสดิบไม่มี suffix (ตรงกับ namespace 'FINN:{market}:{ticker}') ข้ามตัวที่ยังไม่มี
+    งบ Yahoo annual sync ไว้ (ดู sync_mirror_yahoo_index) คืนจำนวนตัวที่เขียนสำเร็จ
+
+    price_by_ticker: {ticker: price} เสริม — Z-Score variant 'Z' (ต้นฉบับ) ต้องมี market cap
+    แต่ _factors_for() หา mkt_cap จาก finnomena_q เท่านั้น (ไม่มีสำหรับตลาดนี้เลย → z_score
+    จะเป็น None ทุกตัว) ถ้าส่ง price map มา จะคำนวณ mkt_cap = price × shares_out เอง
+    (shares_out มาจากงบ Yahoo อยู่แล้วใน f) แล้ว compute_zscore ใหม่ทับเฉพาะตัวที่ยังไม่ถูก
+    exclude เพราะเป็นสถาบันการเงิน (z_excluded_reason) — mkt_cap นี้ค้างตามราคาตอน sync
+    ไม่ใช่ราคาสดรายวินาที (เหมือน mkt_cap ของ US/HK มิเรอร์ที่อิงราคางวดล่าสุดของ Finnomena)"""
+    init_mirror_table(base_dir)
+    price_by_ticker = price_by_ticker or {}
+    recs = []
+    for ticker in tickers:
+        ticker = ticker.upper().strip()
+        key = f"FINN:{market}:{ticker}"
+        y = fs.get(base_dir, key, "yahoo", is_dr=False)
+        if not y:
+            continue
+        f = _factors_for(base_dir, key, is_dr=False, z_variant="Z")
+        if f is None:
+            continue
+        if f.get("z_score") is None and not f.get("z_excluded_reason"):
+            price = price_by_ticker.get(ticker)
+            if price and f.get("shares_out"):
+                f.update(fs.compute_zscore(y, price * f["shares_out"], variant="Z"))
+        f["div_cagr_5y"] = _div_cagr_5y(base_dir, ticker, market)
+        recs.append((ticker, market, f))
+
+    con = _connect(base_dir)
+    try:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        con.execute(f"DELETE FROM {MIRROR_TABLE} WHERE market=?", (market,))
+        con.executemany(
+            f"INSERT INTO {MIRROR_TABLE}(symbol, market, factors, computed_at) VALUES (?,?,?,?)",
+            [(n, m, json.dumps(f, ensure_ascii=False), now) for n, m, f in recs])
+        con.commit()
+    finally:
+        con.close()
+    fs._set_meta(base_dir, "factor_mirror_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    return len(recs)
+
+
 def get_mirror_snapshot(base_dir, market):
     """อ่าน mirror snapshot ของตลาดเดียว (US หรือ HK) — คืน list ของ dict"""
     if not fs.db_exists(base_dir):

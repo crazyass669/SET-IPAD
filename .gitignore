@@ -64,6 +64,12 @@ hk_prices.db
 hk_prices.db-wal
 hk_prices.db-shm
 
+# SQLite ราคาสมาชิกดัชนี JP (Nikkei 225) — local only, regenerate ได้ด้วย
+# backfill_jp_index_prices.py
+jp_prices.db
+jp_prices.db-wal
+jp_prices.db-shm
+
 # SQLite SEC filings store (insider trades / major shareholder changes)
 sec_filings.db
 sec_filings.db-wal

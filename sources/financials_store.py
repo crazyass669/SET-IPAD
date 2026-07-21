@@ -356,6 +356,8 @@ def fetch_yahoo_full(symbol, is_dr=False, market=None):
         yf_ticker, stock_type, stock_name = sym, "dr", sym
     elif is_dr and market == "HK":
         yf_ticker, stock_type, stock_name = sym.zfill(4) + ".HK", "dr", sym
+    elif is_dr and market == "JP":
+        yf_ticker, stock_type, stock_name = sym + ".T", "dr", sym
     else:
         yf_ticker, stock_type, stock_name = sym + ".BK", "set", sym
 
@@ -411,6 +413,8 @@ def fetch_yahoo_quarterly(symbol, is_dr=False, market=None):
         yf_ticker, stock_type, stock_name = sym, "dr", sym
     elif is_dr and market == "HK":
         yf_ticker, stock_type, stock_name = sym.zfill(4) + ".HK", "dr", sym
+    elif is_dr and market == "JP":
+        yf_ticker, stock_type, stock_name = sym + ".T", "dr", sym
     else:
         yf_ticker, stock_type, stock_name = sym + ".BK", "set", sym
 
