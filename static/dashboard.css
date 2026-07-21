@@ -24,30 +24,41 @@
   nav {
     background: var(--bg2);
     border-bottom: 1px solid var(--border);
-    padding: 0 20px;
+    padding: 4px 20px;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 4px;
-    height: 44px;
+    row-gap: 3px;
+    min-height: 34px;
     position: sticky; top: 0; z-index: 100;
-    overflow-x: auto;
-    overflow-y: hidden;
+    overflow-x: visible;
+    overflow-y: visible;
   }
   .nav-brand, .nav-btn { white-space: nowrap; flex-shrink: 0; }
   .nav-brand { font-weight: 700; font-size: 14px; color: var(--text); margin-right: 16px; letter-spacing: .5px; }
   .nav-brand span { color: var(--blue); }
   .nav-btn {
     background: none; border: none; color: var(--text2); cursor: pointer;
-    padding: 6px 12px; border-radius: 6px; font-size: 12px; font-family: var(--font);
+    padding: 4px 10px; border-radius: 6px; font-size: 12px; font-family: var(--font);
     transition: all .15s;
   }
   .nav-btn:hover { background: var(--bg3); color: var(--text); }
   .nav-btn.active { background: var(--accent); color: #fff; }
+  .nav-toggle-btn {
+    background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
+    cursor: pointer; padding: 4px 10px; border-radius: 6px; font-size: 11px;
+    font-family: var(--font); white-space: nowrap; flex-shrink: 0; margin-right: 8px;
+  }
+  .nav-toggle-btn:hover { color: var(--text); }
+  /* ย่อเมนู: โชว์เฉพาะปุ่มที่ active (หน้าปัจจุบัน) เหลือแถวเดียว ปุ่มอื่นซ่อนไว้
+     กดปุ่มเดิมซ้ำเพื่อขยายกลับ — ไม่กระทบการสลับหน้า (showPage ทำงานปกติ) */
+  nav.nav-collapsed .nav-btn:not(.active) { display: none; }
   .nav-right { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   #updated-at { font-size: 11px; color: var(--text2); white-space: nowrap; }
   .refresh-btn {
     background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
-    padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 11px;
+    padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 11px;
     font-family: var(--font); white-space: nowrap; flex-shrink: 0;
   }
   .refresh-btn:hover { color: var(--text); }
@@ -659,7 +670,7 @@
 
   /* ALERT PANEL (slide-in from right) */
   #alert-panel {
-    display: none; position: fixed; top: 44px; right: 0; bottom: 0;
+    display: none; position: fixed; top: var(--nav-h, 44px); right: 0; bottom: 0;
     width: 380px; background: var(--bg2); border-left: 1px solid var(--border);
     z-index: 500; overflow-y: auto; flex-direction: column;
   }

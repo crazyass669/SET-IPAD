@@ -5029,7 +5029,7 @@ function _drToScreenerStock(s) {
     symbol: s.sym, sector: s.ind, industry: s.ind,
     ret_1d: s.chg,
     pe: null, pbv: null, div_yield: null,
-    above_ema50: null, above_ema200: null, dq: null,
+    dq: null,
     market: 'DR',
     _isDR: true,
   };
@@ -5070,6 +5070,15 @@ async function runScreener() {
       const d = await r.json();
       if (d.stocks) { _drData = d.stocks; _drLoaded = true; _mergeFinAnalyticsInto(_drData, s => s.sym, 'dr'); }
     } catch (e) { /* เงียบ — ถ้าดึงไม่ได้ก็กรองแค่หุ้นไทยไปก่อน */ }
+  }
+  // หุ้น DR มี price_history/vol_history จาก /api/dr แล้ว (server ผูก above_ema50/200
+  // ให้ด้วย) — เรียก _enrichTechSignals ตัวเดียวกับหุ้นไทยเพื่อคำนวณ EMA/SMA cross,
+  // RSI rebound, bullish volume ให้ DR ด้วย ไม่งั้นติ๊ก "รวมหุ้นต่างประเทศ" +
+  // signal เทคนิคใดๆ จะกรอง DR ออกหมดเสมอ (ทำทุกครั้งเพราะราคาถูกอัพเดทได้เรื่อยๆ
+  // ต้นทุนคำนวณต่ำ ~280 หุ้น ไม่คุ้มจะเก็บ state แยก)
+  if (includeDR && _drData) {
+    _drData.forEach(s => { if (s.ret_1d == null) s.ret_1d = s.chg; });
+    _enrichTechSignals(_drData);
   }
   saveScreenerSettings();
   const rsMin     = parseFloat(document.getElementById('scr-rs-min').value);

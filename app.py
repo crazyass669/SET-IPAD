@@ -162,7 +162,7 @@ _INDICES_CACHE_TTL = 4 * 3600
 from flask import Flask, jsonify, send_file, Response, request
 
 # สูตรคำนวณกลาง — ห้าม copy สูตรมาวางในไฟล์นี้ ให้ import จาก core.metrics เท่านั้น
-from core.metrics import calc_rs_raw
+from core.metrics import calc_rs_raw, calc_ema
 
 # HTTP clients / static universe — แยกไว้ที่ sources/ (Phase 2 refactor)
 from sources.tradingview import INDEX_INFO, _yf_to_tv, _fetch_tv_bars
@@ -505,7 +505,7 @@ def _dr_light(result, refreshing=False):
     /api/dr — frontend ใช้แค่ close100 (sparkline) + ohlc30 (แท่งเทียนย่อ) ส่วนกราฟ
     full history ดึงแยกรายตัวจาก /api/dr-history ซึ่งอ่านจาก _dr_cache ฝั่ง server
     (cache ในหน่วยความจำ/ไฟล์ยังเก็บเต็มเหมือนเดิม — quick-update ก็ใช้ dates ต่อได้)"""
-    out = {"stocks": [{k: v for k, v in s.items() if k not in ("dates", "closes")}
+    out = {"stocks": [{k: v for k, v in s.items() if k not in ("dates", "closes", "_full_vols")}
                       for s in result.get("stocks", [])],
            "ts": result.get("ts")}
     if refreshing:
@@ -682,6 +682,24 @@ def _dr_do_rebuild():
             dates_all  = [str(d)[:10] for d in close.index.tolist()]
             closes_all = [round(float(x), 6) for x in close.tolist()]
 
+            # above_ema50/200 + price/vol_history ~500/260 แท่ง (เหมือนหุ้นไทยใน
+            # set_data_fetcher.process_stock) — ให้ Screener ฝั่ง client เรียก
+            # _enrichTechSignals() แบบเดียวกับหุ้นไทยได้ (EMA/SMA cross, RSI rebound,
+            # bullish volume) แทนที่จะ hardcode null ทิ้งแบบเดิม (EMA200 ต้องการ
+            # warmup ~300 แท่งหลัง seed จึงจะ converge ถูกต้อง เลยเก็บยาวกว่า close100)
+            ema50  = calc_ema(close, 50)
+            ema200 = calc_ema(close, 200)
+            above_ema50  = bool(price > ema50)  if ema50  is not None else None
+            above_ema200 = bool(price > ema200) if ema200 is not None else None
+            _hist_bars = min(len(close), 500)
+            price_history = [
+                [d, round(float(p), 4 if p < 1 else 2)]
+                for d, p in zip(dates_all[-_hist_bars:], close.tail(_hist_bars).tolist())
+            ]
+            vol_history = [int(v) for v in vol_s.tail(260).tolist()] if len(vol_s) else []
+            vol_today   = int(vol_s.iloc[-1]) if len(vol_s) else None
+            vol_avg20   = int(vol_s.tail(21).iloc[:-1].mean()) if len(vol_s) >= 21 else None
+
             n = min(30, len(close))
             ohlc30 = []
             for i in range(-n, 0):
@@ -763,6 +781,12 @@ def _dr_do_rebuild():
                 "ohlc30":   ohlc30,
                 "dates":    dates_all,
                 "closes":   closes_all,
+                "above_ema50":   above_ema50,
+                "above_ema200":  above_ema200,
+                "price_history": price_history,
+                "vol_history":   vol_history,
+                "vol_today":     vol_today,
+                "vol_avg20":     vol_avg20,
             })
         except Exception as e:
             print(f"[DR] {stock['sym']}: {e}")
@@ -896,18 +920,22 @@ def dr_quick_update():
                             entry.pop("live_chg", None)
                         new_closes_raw = [round(float(c), 4) for c in close.tolist()]
                         new_dates_raw  = [str(d)[:10] for d in close.index.tolist()]
+                        new_vols_raw   = [int(v) for v in vol_s.tolist()] if len(vol_s) == len(close) else [0] * len(close)
                         # อัปเดต close100
                         old100 = entry.get("close100", [])
                         entry["close100"] = (old100 + new_closes_raw)[-100:]
-                        # อัปเดต full history
+                        # อัปเดต full history (+ volume คู่กัน สำหรับ _bullish_vol ฝั่ง client)
                         old_dates  = entry.get("dates", [])
                         old_closes = entry.get("closes", [])
-                        for dt, cl in zip(new_dates_raw, new_closes_raw):
+                        old_vols   = entry.get("_full_vols", [0] * len(old_dates))
+                        for dt, cl, vv in zip(new_dates_raw, new_closes_raw, new_vols_raw):
                             if not old_dates or dt > old_dates[-1]:
                                 old_dates.append(dt)
                                 old_closes.append(cl)
+                                old_vols.append(vv)
                         entry["dates"]  = old_dates
                         entry["closes"] = old_closes
+                        entry["_full_vols"] = old_vols
                         # recalculate return metrics from updated full history
                         def _ret_q(arr, n):
                             if len(arr) < n + 1:
@@ -919,6 +947,23 @@ def dr_quick_update():
                         entry["ret_3m"] = _ret_q(old_closes, 63)
                         entry["ret_6m"] = _ret_q(old_closes, 126)
                         entry["ret_1y"] = _ret_q(old_closes, 250)
+                        # อัปเดต above_ema50/200 + price_history/vol_history (ให้ Screener
+                        # เรียก _enrichTechSignals() กับ DR ได้แบบเดียวกับหุ้นไทย — ดู
+                        # comment เต็มใน _dr_do_rebuild)
+                        _close_series = pd.Series(old_closes)
+                        _ema50_q  = calc_ema(_close_series, 50)
+                        _ema200_q = calc_ema(_close_series, 200)
+                        entry["above_ema50"]  = bool(price > _ema50_q)  if _ema50_q  is not None else None
+                        entry["above_ema200"] = bool(price > _ema200_q) if _ema200_q is not None else None
+                        _hist_bars_q = min(len(old_closes), 500)
+                        entry["price_history"] = [
+                            [d, round(float(p), 4 if p < 1 else 2)]
+                            for d, p in zip(old_dates[-_hist_bars_q:], old_closes[-_hist_bars_q:])
+                        ]
+                        entry["vol_history"] = old_vols[-260:]
+                        entry["vol_today"]   = old_vols[-1] if old_vols else None
+                        entry["vol_avg20"]   = (round(sum(old_vols[-21:-1]) / 20)
+                                                 if len(old_vols) >= 21 else None)
                         # rebuild ohlc30 with volume from latest 5d data
                         try:
                             n = min(30, len(close))

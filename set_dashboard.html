@@ -33,6 +33,7 @@
 <!-- NAV -->
 <nav>
   <div class="nav-brand">SET <span>Dashboard</span></div>
+  <button id="nav-toggle-btn" class="nav-toggle-btn" title="ซ่อนเมนู" onclick="toggleNavCollapse()">▲ ซ่อนเมนู</button>
   <button class="nav-btn active" onclick="showPage('overview',this)">Overview</button>
   <button class="nav-btn" onclick="showPage('rotation',this)">Rotation</button>
   <button class="nav-btn" onclick="showPage('indices',this)">ดัชนีกลุ่ม</button>
@@ -103,45 +104,6 @@
       </div>
     </div>
     <div class="btn-wrap">
-      <button class="refresh-btn" id="us-index-refresh-btn" onclick="startUsIndexFullRefresh()">📈 US Index Max</button>
-      <div class="btn-note">
-        <b>📈 US Index Max — S&amp;P 500 + Dow + Nasdaq 100</b><br>
-        ดึงราคา OHLC ย้อนหลัง<b>สูงสุด</b>ทั้ง ~518 ตัว<br>
-        📦 เก็บลง us_prices.db (แยกจาก set_prices.db)<br>
-        ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
-        <span id="us-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
-      </div>
-    </div>
-    <div class="btn-wrap">
-      <button class="refresh-btn" id="hk-index-refresh-btn" onclick="startHkIndexFullRefresh()">📈 HK Index Max</button>
-      <div class="btn-note">
-        <b>📈 HK Index Max — HSI + HSTECH + HSCEI</b><br>
-        ดึงราคา OHLC ย้อนหลัง<b>สูงสุด</b>ทั้ง ~105 ตัว<br>
-        📦 เก็บลง hk_prices.db (แยกจาก set_prices.db/us_prices.db)<br>
-        ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
-        <span id="hk-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
-      </div>
-    </div>
-    <div class="btn-wrap">
-      <button class="refresh-btn" id="jp-index-refresh-btn" onclick="startJpIndexFullRefresh()">📈 JP Index Max</button>
-      <div class="btn-note">
-        <b>📈 JP Index Max — Nikkei 225</b><br>
-        ดึงราคา OHLC ย้อนหลัง<b>สูงสุด</b>ทั้ง ~225 ตัว<br>
-        📦 เก็บลง jp_prices.db (แยกจาก set_prices.db/us_prices.db/hk_prices.db)<br>
-        ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
-        <span id="jp-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
-      </div>
-    </div>
-    <div class="btn-wrap">
-      <button class="refresh-btn" id="mirror-yahoo-sync-btn" onclick="startMirrorYahooIndexSync()">🌐 Sync Mirror US/HK เต็ม</button>
-      <div class="btn-note">
-        <b>🌐 Sync งบ Yahoo Mirror US/HK — ทั้ง universe</b><br>
-        ดึงงบ Yahoo annual ให้หุ้น mirror US/HK ทั้งหมด (~5,108 ตัว ไม่ใช่แค่ดัชนีหลัก)<br>
-        📦 ปลดล็อก F-Score/Z-Score/FCF/มูลค่าตลาดใน Screener+ ให้ครบทุกตัว<br>
-        ⏱ กดมือเป็นครั้งคราว ใช้เวลานาน (เป็นชั่วโมง) — Full Refresh sync ให้เองทีละ 300 ตัวอยู่แล้ว
-      </div>
-    </div>
-    <div class="btn-wrap">
       <button class="refresh-btn" id="restart-btn" onclick="restartServer()"
         style="background:#6e40c9;color:#fff">↺ Restart</button>
       <div class="btn-note" style="width:180px">
@@ -152,6 +114,33 @@
     </div>
   </div>
 </nav>
+<script>
+  (function () {
+    var navEl = document.querySelector('nav');
+    var toggleBtn = document.getElementById('nav-toggle-btn');
+
+    function syncNavHeight() {
+      document.documentElement.style.setProperty('--nav-h', navEl.offsetHeight + 'px');
+    }
+    window.syncNavHeight = syncNavHeight;
+
+    window.toggleNavCollapse = function (forceState) {
+      var collapsed = typeof forceState === 'boolean'
+        ? forceState
+        : !navEl.classList.contains('nav-collapsed');
+      navEl.classList.toggle('nav-collapsed', collapsed);
+      toggleBtn.textContent = collapsed ? '▼ แสดงเมนู' : '▲ ซ่อนเมนู';
+      localStorage.setItem('nav-collapsed', collapsed ? '1' : '0');
+      syncNavHeight();
+    };
+
+    if (localStorage.getItem('nav-collapsed') === '1') toggleNavCollapse(true);
+
+    syncNavHeight();
+    window.addEventListener('resize', syncNavHeight);
+    new ResizeObserver(syncNavHeight).observe(navEl);
+  })();
+</script>
 
 <!-- Data Quality banner — แสดงเมื่อข้อมูล stale หรือมีหุ้นถูกกันออกจากการคำนวณ -->
 <div id="dq-banner" style="display:none"></div>
@@ -1713,9 +1702,10 @@
             <strong>รวมหุ้นต่างประเทศ (DR Underlying) เข้าผลลัพธ์ด้วย</strong><br>
             เพิ่มหุ้นต้นทางทุกตัวที่มี DR เทรดบน SET (AAPL, TSLA, NVDA ฯลฯ) เข้าไปในผลการกรอง<br><br>
             <span style="color:var(--text2)">
-            ⚠ P/E, P/BV, Div Yield, RS Score, EMA ไม่มีข้อมูล (ไม่ได้ดึงจาก SET.or.th) — ถ้าตั้ง filter พวกนี้ หุ้น DR จะถูกกรองออกอัตโนมัติ<br><br>
+            ⚠ P/E, P/BV, Div Yield, RS Score ไม่มีข้อมูล (ไม่ได้ดึงจาก SET.or.th) — ถ้าตั้ง filter พวกนี้ หุ้น DR จะถูกกรองออกอัตโนมัติ<br><br>
             ⚠ ช่อง "ตลาด" ต้องเป็น "ทั้งหมด" — ถ้าเลือก SET หรือ mai หุ้น DR จะถูกกรองออกทั้งหมด (DR ไม่ใช่ทั้งสองตลาดนั้น)<br><br>
             ✅ Growth Score, PEG, FCF Yield, รายได้/กำไรโตต่อเนื่อง ใช้ได้ปกติ (คำนวณจากงบการเงินเหมือนกัน)<br><br>
+            ✅ EMA/SMA Cross, RSI Rebound, Bullish Volume, Break 52W High ใช้ได้แล้ว (คำนวณจากราคาย้อนหลัง yfinance)<br><br>
             ราคา/มูลค่าตลาดเป็นสกุลเงินของหุ้นต้นทาง ไม่ใช่บาท — อย่าเทียบตรงๆ กับหุ้นไทยในตารางเดียวกัน
             </span><br><br>
             โหลดครั้งแรกอาจใช้เวลา 1-2 นาที (ดึงราคาสดทุกตัว) — ครั้งถัดไปเร็วขึ้นเพราะ cache ไว้แล้ว
@@ -3640,6 +3630,53 @@
     <div id="dh-last-runs-wrap" style="display:flex;gap:24px;flex-wrap:wrap;font-size:12px"></div>
   </div>
 
+  <!-- ปุ่มดึงราคาดัชนี US/HK/JP + Sync Mirror — ย้ายมาจาก top nav เพราะกดมือเป็นครั้งคราวเท่านั้น
+       ไม่ผูกกับ Quick Update ประจำวัน ไม่จำเป็นต้องอยู่ติดจอตลอด -->
+  <div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">📈 อัพเดทราคาดัชนี US/HK/JP + Sync Mirror — กดมือเป็นครั้งคราว</div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap">
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="us-index-refresh-btn" onclick="startUsIndexFullRefresh()">📈 US Index Max</button>
+        <div class="btn-note">
+          <b>📈 US Index Max — S&amp;P 500 + Dow + Nasdaq 100</b><br>
+          ดึงราคา OHLC ย้อนหลัง<b>สูงสุด</b>ทั้ง ~518 ตัว<br>
+          📦 เก็บลง us_prices.db (แยกจาก set_prices.db)<br>
+          ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
+          <span id="us-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
+        </div>
+      </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="hk-index-refresh-btn" onclick="startHkIndexFullRefresh()">📈 HK Index Max</button>
+        <div class="btn-note">
+          <b>📈 HK Index Max — HSI + HSTECH + HSCEI</b><br>
+          ดึงราคา OHLC ย้อนหลัง<b>สูงสุด</b>ทั้ง ~105 ตัว<br>
+          📦 เก็บลง hk_prices.db (แยกจาก set_prices.db/us_prices.db)<br>
+          ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
+          <span id="hk-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
+        </div>
+      </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="jp-index-refresh-btn" onclick="startJpIndexFullRefresh()">📈 JP Index Max</button>
+        <div class="btn-note">
+          <b>📈 JP Index Max — Nikkei 225</b><br>
+          ดึงราคา OHLC ย้อนหลัง<b>สูงสุด</b>ทั้ง ~225 ตัว<br>
+          📦 เก็บลง jp_prices.db (แยกจาก set_prices.db/us_prices.db/hk_prices.db)<br>
+          ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
+          <span id="jp-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
+        </div>
+      </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="mirror-yahoo-sync-btn" onclick="startMirrorYahooIndexSync()">🌐 Sync Mirror US/HK เต็ม</button>
+        <div class="btn-note">
+          <b>🌐 Sync งบ Yahoo Mirror US/HK — ทั้ง universe</b><br>
+          ดึงงบ Yahoo annual ให้หุ้น mirror US/HK ทั้งหมด (~5,108 ตัว ไม่ใช่แค่ดัชนีหลัก)<br>
+          📦 ปลดล็อก F-Score/Z-Score/FCF/มูลค่าตลาดใน Screener+ ให้ครบทุกตัว<br>
+          ⏱ กดมือเป็นครั้งคราว ใช้เวลานาน (เป็นชั่วโมง) — Full Refresh sync ให้เองทีละ 300 ตัวอยู่แล้ว
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- คู่มือลำดับการกดอัพเดท — สรุปจาก สรุป_ปุ่มอัพเดทข้อมูล.txt + คู่มือ-อัพเดทข้อมูล.txt
        เปิดค้างไว้ (open) เพราะเป็นข้อมูลที่ต้องดูบ่อยตอนไม่แน่ใจว่าต้องกดอะไร -->
   <details class="card" id="dh-order-guide" style="padding:14px 16px;margin-bottom:12px" open>
@@ -3683,11 +3720,11 @@
         <div style="padding-left:14px">
           <b>⟳ Full Refresh</b> <span style="color:var(--text2)">(20 นาที - 1.5 ชม. · ดึงราคาย้อนหลังทั้งหมด +
           fundamentals ใหม่ทั้งกระดาน + DR/DRx เต็ม + Capital Flow)</span><br>
-          <b>📈 US Index Max</b> · <b>📈 HK Index Max</b>
+          <b>📈 US/HK/JP Index Max</b> <span style="color:var(--text2)">(ปุ่มด้านบนในหน้านี้ — ย้ายมาจาก top nav)</span>
           <span style="color:var(--text2)">— backfill ประวัติยาวของหุ้นในดัชนี
           ปกติ<b>ไม่ต้องกดประจำ</b> เพราะ Quick Update เติมช่องว่างรายวันให้อยู่แล้ว
           กดเมื่อ: ตั้งระบบครั้งแรก, ดัชนีเปลี่ยนสมาชิก, หรืออยากได้ประวัติยาวขึ้น</span><br>
-          <b>🌐 Sync Mirror US/HK เต็ม</b>
+          <b>🌐 Sync Mirror US/HK เต็ม</b> <span style="color:var(--text2)">(ปุ่มด้านบนในหน้านี้)</span>
           <span style="color:var(--text2)">— ดึงราคา/metrics หุ้น mirror นอกดัชนีหลัก (~5,000 ตัว) ใช้เวลานาน
           กดตอนอยากให้ Screener+ ครอบคลุมครบ</span>
         </div>
