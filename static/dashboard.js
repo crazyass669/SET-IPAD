@@ -5754,7 +5754,52 @@ const FS_COL_CLR = {
 };
 const FS_MKT_BADGE = { TH: '#58a6ff', US: '#3fb950', HK: '#e3b341', DR: '#3fb950' };
 
-// คลิก symbol ในตาราง -> เปิดหน้างบการเงินของหุ้นตัวนั้น (ใช้ได้ทุก universe รวม mirror US/HK)
+// คลิก symbol ในตาราง Screener+ -> เปิด "chart-modal" ป็อปอัพเดียวกับที่ใช้ทั่วทั้งแอป
+// (กราฟราคา + เมตริก + ปุ่มงบการเงิน/Tearsheet/เทียบเพื่อนอยู่ในนั้นแล้ว) แทนที่จะเด้ง
+// ไปหน้างบการเงินตรงๆ เหมือนเดิม — เลือก modal ให้ตรงตามชนิดแถว (TH/DR/US/HK mirror)
+// lazy-load ชุดข้อมูลที่โมดัลนั้นต้องใช้ก่อน ถ้ายังไม่เคยโหลด (ผู้ใช้อาจเข้า Screener+
+// เป็นหน้าแรกโดยไม่เคยเปิดหน้า DR/US/HK มาก่อนเลย)
+//
+// universe=us/hk (mirror table) เซ็ต is_dr=true ให้ทุกแถวเสมอ (backend เขียนไว้แบบนั้นตั้งแต่ต้น
+// ไม่เกี่ยวกับ DR จริง) ต้องเช็ค dropdown universe ก่อน ไม่ใช่ isDr param ตรงๆ ไม่งั้นหุ้น mirror
+// US/HK จะหลุดไปเปิด openDRChartModal ผิด (หา symbol ใน _drData ~279 ตัวไม่เจอ -> เงียบไม่มีอะไรเกิดขึ้น)
+async function fsOpenDetail(sym, isDr) {
+  const uni = document.getElementById('fs-universe')?.value;
+  if (uni === 'us' || uni === 'hk') {
+    const isUS = uni === 'us';
+    if (isUS ? !_usData : !_hkData) {
+      try {
+        const d = await (await fetch(isUS ? '/api/us-index-metrics' : '/api/hk-index-metrics')).json();
+        if (isUS) _usData = d; else _hkData = d;
+      } catch (e) { /* เช็ค found ด้านล่างจะเป็น false แล้วตกไป fallback เอง */ }
+    }
+    // hk_index_metrics.json เก็บ symbol แบบมี suffix '.HK' (เช่น "0700.HK") แต่แถวใน
+    // mirror snapshot เป็นรหัสดิบไม่มี suffix (เช่น "0700") — ต่อให้ตรงก่อน lookup
+    const lookupSym = isUS ? sym : (sym.endsWith('.HK') ? sym : `${sym}.HK`);
+    const found = ((isUS ? _usData : _hkData)?.stocks || []).some(s => s.symbol === lookupSym);
+    if (found) { (isUS ? openUsChartModal : openHkChartModal)(lookupSym); return; }
+    // หุ้น mirror ส่วนใหญ่ (~4,500 จาก ~5,108 ตัว) อยู่นอกดัชนีหลัก (S&P500/Dow/NDX หรือ
+    // HSI/HSCEI/HSTECH) ไม่มีราคารายวันเก็บไว้ในเครื่องเลย เปิดกราฟไม่ได้จริงๆ (ต่างจาก DR
+    // ที่ดึงราคาสดจาก yfinance เองได้เสมอ) — พาไปหน้างบการเงินแทนเด้ง alert บอกให้กด
+    // 'Index Max' ซึ่งช่วยไม่ได้เพราะตัวนอกดัชนีจะไม่มีวันถูกดึงราคาเก็บไว้อยู่ดี
+    fsOpenFin(sym, true);
+    return;
+  }
+  if (isDr) {
+    if (!_drData) {
+      try {
+        const d = await (await fetch('/api/dr')).json();
+        if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
+      } catch (e) { fsOpenFin(sym, true); return; }
+    }
+    openDRChartModal(sym);
+    return;
+  }
+  openChartModal(sym);   // หุ้นไทย (market='TH')
+}
+
+// สำรอง — เปิดหน้างบการเงินตรงๆ (ใช้ตอน chart modal ของ DR เปิดไม่ได้จริงๆ เช่น
+// /api/dr ล่ม) ปุ่ม "งบการเงิน" ปกติอยู่ในตัว chart-modal เองแล้ว ไม่ต้องผ่านฟังก์ชันนี้
 function fsOpenFin(sym, isDr) {
   showPage('financials');
   const btn = document.getElementById(isDr ? 'fin-tab-dr-btn' : 'fin-tab-set-btn');
@@ -5858,6 +5903,7 @@ function resetFscreener(skipRun) {
     document.getElementById('fs-count').textContent = '';
     document.getElementById('fs-results').innerHTML = '<div class="empty">เลือก preset ด้านบน หรือกรอกเงื่อนไขเอง แล้วกด ค้นหา</div>';
     document.getElementById('fs-export').style.display = 'none';
+    const moreBtn = document.getElementById('fs-more'); if (moreBtn) moreBtn.style.display = 'none';
   }
 }
 
@@ -5950,6 +5996,8 @@ async function _runFscreenerMirror(uni, conds) {
     document.getElementById('fs-count').textContent =
       `พบ ${total.toLocaleString()} หุ้น` + (total > rows.length ? ` (แสดง ${rows.length} อันดับแรก — เพิ่มเงื่อนไขเพื่อแคบผล)` : '');
     document.getElementById('fs-export').style.display = rows.length ? '' : 'none';
+    const moreBtn = document.getElementById('fs-more');
+    if (moreBtn) moreBtn.style.display = 'none';   // mirror US/HK แบ่งหน้าฝั่ง server (limit param) ไม่ใช่ที่นี่
     renderFsTable(rows);
     const note = document.createElement('div');
     note.style.cssText = 'font-size:11px;color:var(--text2);margin:4px 0 8px';
@@ -6006,13 +6054,30 @@ function runFscreener() {
     return sc.dir * (x - y);
   });
 
-  document.getElementById('fs-count').textContent = `พบ ${rows.length} หุ้น` + (rows.length > 300 ? ' (แสดง 300 ตัวแรก)' : '');
-  document.getElementById('fs-export').style.display = rows.length ? '' : 'none';
   _fsResultCache = rows;
-  renderFsTable(rows.slice(0, 300));
+  _fsShowLimit = 300;
+  _fsRenderPage();
 }
 
 let _fsResultCache = [];
+let _fsShowLimit = 300;
+
+// เพจผลลัพธ์ฝั่ง client (universe หลัก ทั้งหมด/ไทย/DR) — ใช้ทั้งตอนค้นหาใหม่และกด "แสดงเพิ่ม"
+// (mirror US/HK แบ่งหน้าฝั่ง server อยู่แล้วผ่าน limit=500 ไม่ผ่านฟังก์ชันนี้)
+function _fsRenderPage() {
+  const rows = _fsResultCache;
+  document.getElementById('fs-count').textContent = `พบ ${rows.length} หุ้น`
+    + (rows.length > _fsShowLimit ? ` (แสดง ${_fsShowLimit.toLocaleString()} ตัวแรก)` : '');
+  document.getElementById('fs-export').style.display = rows.length ? '' : 'none';
+  const moreBtn = document.getElementById('fs-more');
+  if (moreBtn) moreBtn.style.display = rows.length > _fsShowLimit ? '' : 'none';
+  renderFsTable(rows.slice(0, _fsShowLimit));
+}
+
+function fsShowMore() {
+  _fsShowLimit += 300;
+  _fsRenderPage();
+}
 
 function fsSort(key) {
   if (_fsSort.key === key) _fsSort.dir *= -1;
@@ -6044,6 +6109,32 @@ function _fsDisplayName(r) {
 
 const _SEP_CSS = 'border-left:1px solid var(--border);padding-left:10px';
 
+// ค่า + สีต่อคอลัมน์ (ไม่รวม symbol — ใช้ทั้งตารางหลักและ popup รายละเอียด กันโค้ดสีตรง
+// z_zone/market เพี้ยนกันระหว่างสองที่)
+function _fsColHtml(r, c) {
+  const v = _fsFmt(r[c.k], c.k);
+  if (c.k === 'market') {
+    const cc = FS_MKT_BADGE[r.market] || 'var(--text2)';
+    return `<span style="background:${cc}22;color:${cc};padding:1px 7px;border-radius:4px;font-size:10.5px;font-weight:600">${r.market || '—'}</span>`;
+  }
+  if (c.k === 'z_zone') {
+    const zoneColor = { safe: 'var(--green,#2ea043)', grey: '#d29922', distress: 'var(--red,#da3633)' }[r.z_zone] || '';
+    const zoneLabel = { safe: 'ปลอดภัย', grey: 'เทา', distress: 'เสี่ยง' }[r.z_zone];
+    return zoneLabel
+      ? `<span title="${_zScoreTooltip(r.z_variant, r.z_zone, zoneLabel)}" style="color:${zoneColor};font-weight:600;cursor:help">${zoneLabel}</span>`
+      : (r.z_excluded_reason
+          ? `<span title="${r.z_excluded_reason}" style="color:var(--text2);cursor:help">–</span>`
+          : '<span style="color:var(--text2)">–</span>');
+  }
+  const raw = r[c.k];
+  const clr = FS_COL_CLR[c.k];
+  if (clr && raw != null && typeof raw === 'number') {
+    const col = clr(raw);
+    if (col) return `<span style="color:${col};font-weight:600">${v}</span>`;
+  }
+  return v;
+}
+
 function renderFsTable(rows) {
   if (!rows.length) {
     document.getElementById('fs-results').innerHTML = '<div class="empty">ไม่พบหุ้นที่ตรงเงื่อนไข ลองผ่อนเกณฑ์</div>';
@@ -6057,30 +6148,14 @@ function renderFsTable(rows) {
   const body = rows.map(r => {
     const name = _fsDisplayName(r).replace(/</g, '&lt;');
     const tds = FS_COLS.map(c => {
-      let v = _fsFmt(r[c.k], c.k);
-      let style = `text-align:${c.txt ? 'left' : 'right'};white-space:nowrap;${c.sep ? _SEP_CSS : ''}`;
+      const style = `text-align:${c.txt ? 'left' : 'right'};white-space:nowrap;${c.sep ? _SEP_CSS : ''}`;
+      let v;
       if (c.k === 'symbol') {
         const sub = name ? `<div style="font-size:10px;color:var(--text2);font-weight:400;max-width:150px;overflow:hidden;text-overflow:ellipsis">${name}</div>` : '';
-        v = `<a href="#" onclick="fsOpenFin('${r.symbol}', ${r.is_dr ? 'true' : 'false'}); return false"
-               style="color:var(--blue);font-weight:700;text-decoration:none" title="เปิดงบการเงิน ${r.symbol}">${r.symbol}</a>${sub}`;
-      } else if (c.k === 'market') {
-        const cc = FS_MKT_BADGE[r.market] || 'var(--text2)';
-        v = `<span style="background:${cc}22;color:${cc};padding:1px 7px;border-radius:4px;font-size:10.5px;font-weight:600">${r.market || '—'}</span>`;
-      } else if (c.k === 'z_zone') {
-        const zoneColor = { safe: 'var(--green,#2ea043)', grey: '#d29922', distress: 'var(--red,#da3633)' }[r.z_zone] || '';
-        const zoneLabel = { safe: 'ปลอดภัย', grey: 'เทา', distress: 'เสี่ยง' }[r.z_zone];
-        v = zoneLabel
-          ? `<span title="${_zScoreTooltip(r.z_variant, r.z_zone, zoneLabel)}" style="color:${zoneColor};font-weight:600;cursor:help">${zoneLabel}</span>`
-          : (r.z_excluded_reason
-              ? `<span title="${r.z_excluded_reason}" style="color:var(--text2);cursor:help">–</span>`
-              : '<span style="color:var(--text2)">–</span>');
+        v = `<a href="#" onclick="fsOpenDetail('${r.symbol}', ${r.is_dr ? 'true' : 'false'}); return false"
+               style="color:var(--blue);font-weight:700;text-decoration:none" title="ดูรายละเอียด ${r.symbol}">${r.symbol}</a>${sub}`;
       } else {
-        const raw = r[c.k];
-        const clr = FS_COL_CLR[c.k];
-        if (clr && raw != null && typeof raw === 'number') {
-          const col = clr(raw);
-          if (col) style += `color:${col};font-weight:600;`;
-        }
+        v = _fsColHtml(r, c);
       }
       return `<td style="${style}">${v}</td>`;
     }).join('');

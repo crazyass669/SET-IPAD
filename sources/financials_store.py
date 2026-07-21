@@ -256,7 +256,9 @@ def get_synced_symbols(base_dir, source, is_dr=False):
         con.close()
     if is_dr:
         return {r[0][3:] for r in rows if r[0].startswith("DR:")}
-    return {r[0] for r in rows if not r[0].startswith("DR:")}
+    # ตัด 'FINN:{ex}:{name}' ออกด้วย — namespace นี้เก็บงบ mirror US/HK ไว้ใต้ is_dr=False
+    # เช่นกัน (ดู sync_mirror_yahoo_index) เพื่อให้ _factors_for lookup เจอ ไม่ใช่หุ้นไทยจริง
+    return {r[0] for r in rows if not r[0].startswith("DR:") and not r[0].startswith("FINN:")}
 
 
 def get_synced_map(base_dir, is_dr=False):
