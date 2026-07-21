@@ -208,7 +208,31 @@
   .static-mode .nav-btn[onclick*="'financials'"],
   .static-mode .nav-btn[onclick*="'band'"],
   .static-mode .nav-btn[onclick*="'data-health'"],
+  .static-mode .nav-btn[onclick*="'hedge'"],
   .static-mode #pe-reminder-modal { display: none !important; }
+
+  /* HEDGE HOLDINGS (13F) */
+  .hedge-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .hedge-table thead th {
+    position: sticky; top: 0; background: var(--bg3); color: var(--text2);
+    text-align: left; font-weight: 600; padding: 8px 12px; white-space: nowrap;
+    border-bottom: 1px solid var(--border); z-index: 1;
+  }
+  .hedge-table tbody td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .hedge-table tbody tr:hover { background: var(--bg3); }
+  .hedge-chip {
+    display: inline-flex; align-items: center; gap: 3px; margin: 2px 3px 2px 0;
+    padding: 1px 6px; border-radius: 4px; background: var(--bg3);
+    border: 1px solid var(--border); font-size: 10.5px; cursor: pointer; color: var(--fg);
+  }
+  .hedge-chip b { color: var(--blue); font-size: 9.5px; }
+  .hedge-chip:hover { border-color: var(--blue); }
+  .hedge-fund-chip {
+    display: inline-block; margin: 2px 3px 2px 0; padding: 1px 6px; border-radius: 4px;
+    background: var(--bg3); border: 1px solid var(--border); font-size: 10px;
+    cursor: pointer; color: var(--text2); white-space: nowrap;
+  }
+  .hedge-fund-chip:hover { color: var(--fg); }
 
   /* DATA HEALTH — badge สีแดงบนปุ่ม nav เมื่อมีรายการค้าง/red */
   .dh-nav-badge {
