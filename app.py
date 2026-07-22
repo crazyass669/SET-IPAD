@@ -5549,6 +5549,15 @@ def _run_quick():
         # อัพเดท Capital Flow
         _sub_step("Capital Flow", 99, "อัพเดท Capital Flow...", _fetch_flow_data)
 
+        # อัพเดท S50 Futures Flow — TFEX ให้แค่ "วันล่าสุดวันเดียว" ไม่มี API ประวัติ
+        # ต้องสะสมเองทุกวัน ถ้าไม่ดึงตอน Quick Update (พึ่งแค่คนเปิดหน้าเว็บ) วันที่
+        # ไม่มีใครเปิดหน้าตอน TFEX ยังโชว์วันนั้นอยู่ จะหายไปถาวร (ดู _fetch_flow_s50_data)
+        _sub_step("S50 Futures Flow", 99, "อัพเดท S50 Futures Flow...", _fetch_flow_s50_data)
+
+        # อัพเดท Thai Bond Flow — ThaiBMA คืนประวัติเต็มทุกครั้ง (ไม่เสี่ยงข้อมูลหาย
+        # แบบ S50) แต่เดิมพึ่งแค่คนเปิดหน้าเว็บ เลยมักค้างจนกว่าจะมีคนเข้าไปดู
+        _sub_step("Bond Flow", 99, "อัพเดท Bond Flow...", _fetch_flow_bond_data)
+
         if failed_steps:
             summary = "Quick Update เสร็จแล้ว (⚠️ ล้มเหลว: " + ", ".join(failed_steps) + ")"
         else:
@@ -6046,8 +6055,24 @@ def _fetch_flow_tfex_today():
     return {"date": date, "fund": inst_net, "foreign": for_net, "retail": loc_net}
 
 
+_S50_GITHUB_RAW_URL = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main/s50_flow_data.json"
+
+
+def _fetch_flow_s50_github_fallback():
+    """ดึง s50_flow_data.json ที่ GitHub Actions commit ไว้ (cron รันวันละ 3 รอบ:
+    06:00/13:10/18:30 ICT) มาใช้เติมวันที่ขาดบนเครื่อง — TFEX ให้แค่ "วันล่าสุดวันเดียว"
+    ถ้าเครื่อง local ไม่ได้เปิดแอป/กด Quick Update พอดีตอน TFEX ยังโชว์วันนั้นอยู่ วันนั้น
+    จะหายถาวร แต่ GitHub Actions มีโอกาสจับติดมากกว่าเพราะรันถี่กว่า 3 เท่า"""
+    import urllib.request as _ur, ssl as _ssl
+    ctx = _ssl._create_unverified_context()
+    req = _ur.Request(_S50_GITHUB_RAW_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with _ur.urlopen(req, context=ctx, timeout=15) as r:
+        data = json.loads(r.read().decode("utf-8", "ignore"))
+    return data.get("rows") or []
+
+
 def _fetch_flow_s50_data():
-    """รวมข้อมูล S50 Futures flow จากไฟล์สะสม + TFEX (วันล่าสุด) — เหมือน SET flow"""
+    """รวมข้อมูล S50 Futures flow จากไฟล์สะสม + GitHub fallback + TFEX (วันล่าสุด) — เหมือน SET flow"""
     rows_by_date = {}
     try:
         with open(_S50_FLOW_FILE, encoding="utf-8") as f:
@@ -6056,6 +6081,14 @@ def _fetch_flow_s50_data():
                     rows_by_date[r0["date"]] = r0
     except Exception:
         pass
+
+    # เติมเฉพาะวันที่ขาดบนเครื่อง (ไม่ทับของเดิม — ไฟล์ local อาจถูกแก้ไขมือไว้แล้ว)
+    try:
+        for r0 in _fetch_flow_s50_github_fallback():
+            if r0.get("date") and r0["date"] not in rows_by_date:
+                rows_by_date[r0["date"]] = r0
+    except Exception as e:
+        print(f"[S50 Flow] GitHub fallback ไม่ได้ ({e})")
 
     sources = []
     try:
