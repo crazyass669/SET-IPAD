@@ -2320,6 +2320,7 @@ def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map, yahoo_only=Fa
         fcf = financials_store.compute_fcf_metrics(payload, mktcap_map.get(sym))
         streaks = financials_store.compute_growth_streaks(payload)
         ratios = financials_store.compute_ratio_trends(payload)
+        q_finn = None
         if yahoo_only:
             q_used = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
             qg = financials_store.compute_quarterly_growth(q_used)
@@ -2339,6 +2340,12 @@ def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map, yahoo_only=Fa
                 qg_y = financials_store.compute_quarterly_growth(q_yah)
                 if qg_y["quarters_available"] > qg["quarters_available"]:
                     qg, q_used = qg_y, q_yah
+        # เป็นบวกติดกัน (รายได้/กำไร/EBITDA/OCF) + OCF>กำไรสุทธิงวดล่าสุด — เวอร์ชันรันบนเครื่อง
+        # ใช้ Finnomena รายไตรมาสล้วน (เหมือน factor_snapshot.compute_positive_streaks)
+        # ส่วน yahoo_only (bake เว็บมือถือ/ไอแพด ไม่มี Finnomena) สลับไปนับจากงบ Yahoo
+        # "รายปี" แทน (payload เดิมที่ดึงมาแล้วด้านบน) — field ชื่อเดียวกันแต่หน่วยกลายเป็นปี
+        # ไม่ใช่ไตรมาส ฝั่ง frontend (_patchPosStreakForStatic) แก้ label/tooltip ให้ตรงแล้ว
+        pq = financials_store.compute_positive_streaks(payload if yahoo_only else q_finn)
         pe = pe_map.get(sym)
         # PEG = PE ÷ %โตของ 'กำไร' TTM — นิยามเดียวกับ Screener+ (เดิมใช้ CAGR รายได้
         # หลายปีซึ่งไม่ตรงนิยามสากลและทำให้ค่า PEG สองเมนูไม่ตรงกัน) มีค่าเฉพาะ
@@ -2364,7 +2371,7 @@ def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map, yahoo_only=Fa
             zscore = {"z_score": None, "z_variant": None, "z_zone": None}
         else:
             zscore = financials_store.compute_zscore(payload, mc, variant=("Z" if is_dr else "Z2"))
-        result[sym] = {**gs, **fcf, **streaks, **ratios, **qg, **tg, "peg": peg, "ps": ps,
+        result[sym] = {**gs, **fcf, **streaks, **ratios, **qg, **tg, **pq, "peg": peg, "ps": ps,
                        "f_score": fscore["f_score"], "f_score_max": fscore["f_score_max"],
                        "f_score_detail": fscore["f_score_detail"],
                        "z_score": zscore["z_score"], "z_variant": zscore["z_variant"],

@@ -26,7 +26,65 @@ const IS_STATIC = location.hostname.endsWith('github.io')
   || new URLSearchParams(location.search).has('static');
 
 if (IS_STATIC) {
-  document.addEventListener('DOMContentLoaded', () => document.body.classList.add('static-mode'));
+  document.addEventListener('DOMContentLoaded', () => {
+    document.body.classList.add('static-mode');
+    _patchPosStreakForStatic();
+  });
+
+  // เว็บมือถือ/ไอแพดไม่มี Finnomena รายไตรมาส (financials.db เต็มเป็น local-only) —
+  // ช่อง "เป็นบวกติดกัน" ทั้ง 4 + checkbox OCF>กำไรสุทธิ จึงคำนวณจากงบ Yahoo "รายปี"
+  // แทน (เหมือนกับที่ backend สลับไปใช้ payload รายปีตอน yahoo_only=True ใน
+  // _compute_fin_analytics_for) — ต้องแก้ label/placeholder/tooltip ให้ตรงหน่วยจริง
+  // ไม่งั้นผู้ใช้จะเข้าใจผิดว่ายังนับเป็นไตรมาสอยู่
+  function _patchPosStreakForStatic() {
+    const FIELDS = {
+      'scr-rev-posstreak-min': {
+        label: 'รายได้เป็นบวกติดกัน ≥ (ปี) *', placeholder: 'เช่น 3',
+        tip: `<strong>รายได้เป็นบวกต่อเนื่อง</strong><br>
+          จำนวนปีติดกัน (จากปีล่าสุดย้อนหลัง) ที่รายได้ &gt; 0 — ต่างจาก "รายได้โตติดกัน" ที่ต้องมากกว่าปีก่อนทุกครั้ง ตัวนี้แค่เช็คว่าเป็นบวก ไม่สนว่าโตหรือหด<br><br>
+          เช่น ใส่ 3 = มีรายได้จริงต่อเนื่อง 3 ปีเต็ม<br><br>
+          📡 จาก Yahoo Finance งบรายปี ย้อนหลัง ~4-5 ปี (ไม่มี Finnomena บนเว็บมือถือ/ไอแพด — เวอร์ชันรันบนเครื่องนับเป็นไตรมาสแทน)`,
+      },
+      'scr-profit-posstreak-min': {
+        label: 'กำไรเป็นบวกติดกัน ≥ (ปี) *', placeholder: 'เช่น 2',
+        tip: `<strong>กำไรสุทธิเป็นบวกต่อเนื่อง</strong><br>
+          จำนวนปีติดกันที่กำไรสุทธิ &gt; 0 (ไม่ขาดทุนเลย) — กรองหุ้นที่เพิ่งพลิกมาขาดทุน หรือขาดทุนแฝงบางปี<br><br>
+          เช่น ใส่ 2 = ไม่ขาดทุนเลยใน 2 ปีหลัง<br><br>
+          📡 จาก Yahoo Finance งบรายปี ย้อนหลัง ~4-5 ปี (ไม่มี Finnomena บนเว็บมือถือ/ไอแพด — เวอร์ชันรันบนเครื่องนับเป็นไตรมาสแทน)`,
+      },
+      'scr-ebitda-posstreak-min': {
+        label: 'EBITDA เป็นบวกติดกัน ≥ (ปี) *', placeholder: 'เช่น 2',
+        tip: `<strong>EBITDA เป็นบวกต่อเนื่อง (ประมาณ)</strong><br>
+          จำนวนปีติดกันที่ EBITDA &gt; 0<br><br>
+          เช่น ใส่ 2 = EBITDA เป็นบวกทุกปีใน 2 ปีหลัง<br><br>
+          ⚠ ประมาณจาก "กำไรสุทธิ + ค่าเสื่อม/ตัดจำหน่าย" รายปี (Yahoo ไม่มี EBITDA ตรงๆ) เครื่องหมายบวก/ลบแม่นยำสูง แต่ตัวเลขจะต่ำกว่า EBITDA จริงเล็กน้อย<br><br>
+          📡 จาก Yahoo Finance งบรายปี ย้อนหลัง ~4-5 ปี (ไม่มี Finnomena บนเว็บมือถือ/ไอแพด — เวอร์ชันรันบนเครื่องนับเป็นไตรมาสแทน)`,
+      },
+      'scr-ocf-posstreak-min': {
+        label: 'OCF เป็นบวกติดกัน ≥ (ปี) *', placeholder: 'เช่น 3',
+        tip: `<strong>กระแสเงินสดดำเนินงาน (OCF) เป็นบวกต่อเนื่อง</strong><br>
+          จำนวนปีติดกันที่ OCF &gt; 0 — เงินสดเข้าจริงจากการดำเนินธุรกิจ ไม่ใช่แค่กำไรทางบัญชี<br><br>
+          เช่น ใส่ 3 = เงินสดเข้าจริงต่อเนื่อง 3 ปีเต็ม<br><br>
+          📡 จาก Yahoo Finance งบรายปี ย้อนหลัง ~4-5 ปี (ไม่มี Finnomena บนเว็บมือถือ/ไอแพด — เวอร์ชันรันบนเครื่องนับเป็นไตรมาสแทน)`,
+      },
+    };
+    Object.entries(FIELDS).forEach(([id, cfg]) => {
+      const input = document.getElementById(id);
+      if (!input) return;
+      input.placeholder = cfg.placeholder;
+      const group = input.closest('.scr-group');
+      const label = group?.querySelector('.scr-label');
+      if (label) label.childNodes[0].textContent = cfg.label + ' ';
+      const box = group?.querySelector('.scr-tip-box');
+      if (box) box.innerHTML = cfg.tip;
+    });
+    const ocfGtNiBox = document.getElementById('scr-ocf-gt-ni')?.closest('label')?.querySelector('.scr-tip-box');
+    if (ocfGtNiBox) {
+      ocfGtNiBox.innerHTML = `<strong>คุณภาพกำไร ณ ปีล่าสุด</strong><br>
+        ปีล่าสุดที่มีข้อมูลครบ: กระแสเงินสดดำเนินงาน (OCF) มากกว่ากำไรสุทธิไหม — ถ้าใช่ = กำไรมีเงินสดหนุนจริง ไม่ใช่แค่ตัวเลขทางบัญชี<br><br>
+        <span style="color:var(--text2)">📡 จาก Yahoo Finance งบรายปี (ไม่มี Finnomena บนเว็บมือถือ/ไอแพด — เวอร์ชันรันบนเครื่องเช็คงวดไตรมาสแทน)</span>`;
+    }
+  }
 
   // PWA: ลงทะเบียน service worker เฉพาะเวอร์ชันเว็บ (ติดตั้งเป็นแอป + cache + ออฟไลน์)
   // ไม่ลงทะเบียนบน local Flask — กัน cache บังโค้ดใหม่ระหว่างพัฒนา (file: ก็ลงไม่ได้อยู่แล้ว)
@@ -4489,6 +4547,11 @@ function _mergeFinAnalyticsInto(stocks, keyFn, universe = 'set') {
     s.profit_yoy_q        = a.profit_yoy_q;
     s.rev_qoq_streak      = a.rev_qoq_streak;
     s.profit_qoq_streak   = a.profit_qoq_streak;
+    s.rev_pos_streak_q    = a.rev_pos_streak_q;
+    s.profit_pos_streak_q = a.profit_pos_streak_q;
+    s.ebitda_pos_streak_q = a.ebitda_pos_streak_q;
+    s.ocf_pos_streak_q    = a.ocf_pos_streak_q;
+    s.ocf_gt_ni_latest    = a.ocf_gt_ni_latest;
     s.margin_qoq_streak   = a.margin_qoq_streak;
     s.rev_accel_streak    = a.rev_accel_streak;
     s.profit_accel_streak = a.profit_accel_streak;
@@ -4519,6 +4582,7 @@ const _FIN_DEP_INPUT_IDS = [
   'scr-growth-min', 'scr-peg-max', 'scr-rev-streak-min', 'scr-profit-streak-min',
   'scr-rev-qoq-min', 'scr-profit-qoq-min', 'scr-rev-yoyq-min', 'scr-profit-yoyq-min',
   'scr-rev-qstreak-min', 'scr-profit-qstreak-min', 'scr-margin-qstreak-min',
+  'scr-rev-posstreak-min', 'scr-profit-posstreak-min', 'scr-ebitda-posstreak-min', 'scr-ocf-posstreak-min', 'scr-ocf-gt-ni',
   'scr-rev-accel-min', 'scr-profit-accel-min', 'scr-margin-yoyq-min', 'scr-ttm-margin-min',
   'scr-gross-margin-min', 'scr-roe-min', 'scr-net-margin-min',
   'scr-gross-margin-trend-min', 'scr-roe-trend-min', 'scr-net-margin-trend-min',
@@ -5187,6 +5251,11 @@ async function runScreener() {
   const revQStreakMin    = parseFloat(document.getElementById('scr-rev-qstreak-min').value);
   const profitQStreakMin = parseFloat(document.getElementById('scr-profit-qstreak-min').value);
   const marginQStreakMin = parseFloat(document.getElementById('scr-margin-qstreak-min').value);
+  const revPosStreakMin    = parseFloat(document.getElementById('scr-rev-posstreak-min').value);
+  const profitPosStreakMin = parseFloat(document.getElementById('scr-profit-posstreak-min').value);
+  const ebitdaPosStreakMin = parseFloat(document.getElementById('scr-ebitda-posstreak-min').value);
+  const ocfPosStreakMin    = parseFloat(document.getElementById('scr-ocf-posstreak-min').value);
+  const ocfGtNi            = document.getElementById('scr-ocf-gt-ni')?.checked || false;
   const revAccelMin      = parseFloat(document.getElementById('scr-rev-accel-min').value);
   const profitAccelMin   = parseFloat(document.getElementById('scr-profit-accel-min').value);
   const marginYoyqMin    = parseFloat(document.getElementById('scr-margin-yoyq-min').value);
@@ -5291,6 +5360,12 @@ async function runScreener() {
     if (!isNaN(revQStreakMin)    && (s.rev_qoq_streak      ?? -1) < revQStreakMin)    return false;
     if (!isNaN(profitQStreakMin) && (s.profit_qoq_streak   ?? -1) < profitQStreakMin) return false;
     if (!isNaN(marginQStreakMin) && (s.margin_qoq_streak   ?? -1) < marginQStreakMin) return false;
+    // เป็นบวกติดกัน (Finnomena รายไตรมาส) — null = ยังไม่มีงบไตรมาส
+    if (!isNaN(revPosStreakMin)    && (s.rev_pos_streak_q    ?? -1) < revPosStreakMin)    return false;
+    if (!isNaN(profitPosStreakMin) && (s.profit_pos_streak_q ?? -1) < profitPosStreakMin) return false;
+    if (!isNaN(ebitdaPosStreakMin) && (s.ebitda_pos_streak_q ?? -1) < ebitdaPosStreakMin) return false;
+    if (!isNaN(ocfPosStreakMin)    && (s.ocf_pos_streak_q    ?? -1) < ocfPosStreakMin)    return false;
+    if (ocfGtNi && !s.ocf_gt_ni_latest) return false;
     if (!isNaN(revAccelMin)      && (s.rev_accel_streak    ?? -1) < revAccelMin)      return false;
     if (!isNaN(profitAccelMin)   && (s.profit_accel_streak ?? -1) < profitAccelMin)   return false;
     // margin ขยายตัว (จุด%) — YoY เทียบไตรมาสเดียวกันปีก่อน / TTM เทียบ 4 ไตรมาสชุดก่อน
@@ -8615,6 +8690,7 @@ const _SCR_FIELDS = ['scr-rs-min','scr-1m','scr-3m','scr-1d','scr-ytd','scr-cap'
                      'scr-growth-min','scr-peg-max','scr-rev-streak-min','scr-profit-streak-min',
                      'scr-rev-qoq-min','scr-profit-qoq-min','scr-rev-yoyq-min','scr-profit-yoyq-min',
                      'scr-rev-qstreak-min','scr-profit-qstreak-min','scr-margin-qstreak-min',
+                     'scr-rev-posstreak-min','scr-profit-posstreak-min','scr-ebitda-posstreak-min','scr-ocf-posstreak-min',
                      'scr-rev-accel-min','scr-profit-accel-min','scr-margin-yoyq-min','scr-ttm-margin-min',
                      'scr-gross-margin-min','scr-roe-min','scr-net-margin-min',
                      'scr-gross-margin-trend-min','scr-roe-trend-min','scr-net-margin-trend-min',
@@ -8625,7 +8701,7 @@ const _SCR_CHECKS = ['scr-ema20','scr-ema50','scr-ema200','scr-golden-cross',
                      'scr-new52h','scr-sma-cross50','scr-sma-cross200',
                      'scr-ema-cross50','scr-ema-cross200','scr-ema200-reclaim',
                      'scr-rsi-rebound','scr-bullish-vol',
-                     'scr-backtest','scr-include-dr','scr-insider-buy'];
+                     'scr-backtest','scr-include-dr','scr-insider-buy','scr-ocf-gt-ni'];
 
 function _populateScrIndustry() {
   if (!DATA) return;
@@ -15421,6 +15497,73 @@ function startDRFinancialsSyncIncremental() {
 const _DH_STATUS_LABEL = { ok: '🟢 สด', warn: '🟡 เริ่มค้าง', red: '🔴 ต้องดู', na: '⚪ ยังไม่ใช้งาน' };
 const _DH_STATUS_COLOR = { ok: 'var(--green)', warn: 'var(--yellow)', red: 'var(--red)', na: 'var(--text2)' };
 
+// อธิบายว่าแต่ละแถวใน Data Health มาจากการกดปุ่มไหน/หน้าไหน — key ต้องตรงกับ
+// item["key"] ที่ backend ส่งมา (ดู app.py data_health()) เพิ่ม key ใหม่ที่นี่ทุกครั้ง
+// ที่เพิ่ม item ใหม่ฝั่ง backend ไม่งั้นแถวนั้นจะโชว่แค่ "—"
+// fn = ชื่อฟังก์ชัน JS ที่มีอยู่แล้วในหน้าอื่น เรียกจากที่นี่ได้ตรงๆ เพราะเป็น SPA
+// (ทุกหน้าอยู่ใน DOM เดียวกัน แค่ซ่อน/โชว์ด้วย showPage) — gotoPage ใช้พาไปหน้าต้นทาง
+// เผื่ออยากเห็นบริบท/สถานะเต็มๆ ก่อนกด ไม่ใช่ทุก key จะมี fn ได้ (บางตัวต้องโหลดไฟล์เอง/
+// รันคำสั่งใน terminal — ใส่แค่คำอธิบายไว้)
+const DH_SOURCE_MAP = {
+  prices:               { text: '⚡ Quick Update (ปุ่มหัวจอ) หรือ ⟳ Full Refresh', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  indices:              { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  dr_cache:             { text: 'หน้า DR/DRx — อัพเดทอัตโนมัติตอนเปิดหน้า หรือปุ่ม "⚡ อัปเดตราคา" ในหน้านั้น', gotoPage: 'dr', gotoLabel: 'ไปหน้า DR/DRx' },
+  market_flow:          { text: 'อัตโนมัติจาก GitHub Actions (3 รอบ/วัน) — เครื่องนี้ต้อง git pull เพื่อรับไฟล์ใหม่ ไม่มีปุ่มกดในแอป' },
+  s50_flow:             { text: 'อัตโนมัติจาก GitHub Actions (3 รอบ/วัน) — เครื่องนี้ต้อง git pull เพื่อรับไฟล์ใหม่ ไม่มีปุ่มกดในแอป' },
+  bond_flow:            { text: 'อัตโนมัติจาก GitHub Actions (3 รอบ/วัน) — เครื่องนี้ต้อง git pull เพื่อรับไฟล์ใหม่ ไม่มีปุ่มกดในแอป' },
+  short_sales:          { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  nvdr:                 { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  insider:              { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  hedge_holdings:       { text: 'หน้า 🐋 Hedge Holdings — ปุ่ม "⟳ อัพเดท Hedge Holdings"', fn: 'startHedgeRefresh', fnLabel: '⟳ อัพเดท Hedge Holdings', gotoPage: 'hedge' },
+  set_universe:         { text: 'ต้องโหลด listedCompanies_en_US.xls จาก SET.or.th เองแล้ววางทับไฟล์เดิม — ไม่มีปุ่มในแอป' },
+  us_index_membership:  { text: 'หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม US → "ดึงเฉพาะที่ขาด/เก่า"', fn: 'startUSIndexSync', fnLabel: '🔄 Sync ดัชนี US', gotoPage: 'financials' },
+  hk_index_membership:  { text: 'หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม HK → "ดึงเฉพาะที่ขาด/เก่า"', fn: 'startHKIndexSync', fnLabel: '🔄 Sync ดัชนี HK', gotoPage: 'financials' },
+  jp_index_membership:  { text: 'หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม JP → "ดึงเฉพาะที่ขาด/เก่า"', fn: 'startJPIndexSync', fnLabel: '🔄 Sync ดัชนี JP', gotoPage: 'financials' },
+  us_prices:            { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 US Index Max" ด้านบนในหน้านี้ (ประวัติยาว)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  hk_prices:            { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 HK Index Max" ด้านบนในหน้านี้ (ประวัติยาว)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  jp_prices:            { text: 'ปุ่ม "📈 JP Index Max" ด้านบนในหน้านี้ — ไม่ได้อยู่ใน Quick Update', fn: 'startJpIndexFullRefresh', fnLabel: '📈 JP Index Max' },
+  us_index_metrics:     { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 US Index Max" ด้านบนในหน้านี้', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  hk_index_metrics:     { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 HK Index Max" ด้านบนในหน้านี้', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  jp_index_metrics:     { text: 'ปุ่ม "📈 JP Index Max" ด้านบนในหน้านี้ — ไม่ได้อยู่ใน Quick Update', fn: 'startJpIndexFullRefresh', fnLabel: '📈 JP Index Max' },
+  financials:           { text: 'หน้า งบการเงิน — ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" (หรือ python update_financials.py)', fn: 'startFinancialsSync', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด', gotoPage: 'financials' },
+  mirror:               { text: 'ปุ่ม "🌐 Sync Mirror US/HK เต็ม" ด้านบนในหน้านี้ (หรือ python mirror_finnomena.py force)', fn: 'startMirrorYahooIndexSync', fnLabel: '🌐 Sync Mirror US/HK เต็ม' },
+  market_stats:         { text: 'หน้า Valuation — ปุ่ม "⟳ อัพเดทข้อมูล P/E & P/BV" (ต้องโหลด Table_PE.xls/Table_PBV.xls มาวางทับก่อน)', fn: 'refreshMarketStats', fnLabel: '⟳ อัพเดท P/E & P/BV', gotoPage: 'valuation' },
+  offsite_backup:       { text: 'รันเอง: python backup_financials_offsite.py <โฟลเดอร์ปลายทาง> — ไม่มีปุ่มในแอป (เขียนไฟล์นอกเครื่อง)' },
+  static_bake:          { text: 'รัน python run_static_update.py (เครื่องนี้) หรือ GitHub Actions (เว็บ/มือถือ) แล้ว git pull — ไม่มีปุ่มในแอป' },
+  static_bake_run:      { text: 'รัน python run_static_update.py — ไม่มีปุ่มในแอป (ปกติรันบน GitHub Actions)' },
+  set_history:          { text: '⚡ Quick Update หรือ ⟳ Full Refresh', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  fin_analytics_yahoo:  { text: 'รัน python run_static_update.py — ไม่มีปุ่มในแอป' },
+  stock_valuation_stats:{ text: 'รัน python run_static_update.py — ไม่มีปุ่มในแอป' },
+  mirror_names:         { text: 'รัน python build_mirror_names.py — ไม่มีปุ่มในแอป (ทำหลัง mirror ได้หุ้นใหม่)' },
+  dr_universe:          { text: 'อัตโนมัติทุกครั้งที่เปิดหน้า DR/DRx', gotoPage: 'dr', gotoLabel: 'ไปหน้า DR/DRx' },
+  dr_descriptions:      { text: 'หน้า DR/DRx — ปุ่ม "📖 ดึงคำอธิบายบริษัท DR"', fn: 'startDRDescriptionSync', fnLabel: '📖 ดึงคำอธิบาย DR', gotoPage: 'dr' },
+  q_set_data:           { text: 'ชุดเดียวกับ "ราคา/RS/เทคนิค (หุ้นไทย)" — ⚡ Quick Update / ⟳ Full Refresh', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  q_bake_set_data:      { text: 'รัน python run_static_update.py — ไม่มีปุ่มในแอป' },
+  q_breadth:            { text: 'รัน python run_static_update.py — ไม่มีปุ่มในแอป' },
+};
+
+// พาไปหน้าต้นทาง — หา nav-btn ที่ onclick อ้างถึง pageId นั้นแล้วสั่ง showPage ให้
+// เหมือนกดปุ่มเมนูจริง (ไฮไลท์ nav ถูกต้อง) ใช้แพทเทิร์นเดียวกับ goToFinUpdate()
+function _dhGoto(pageId) {
+  const btn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes(`'${pageId}'`));
+  showPage(pageId, btn);
+}
+
+function _dhRunAction(fnName) {
+  const fn = window[fnName];
+  if (typeof fn === 'function') fn();
+}
+
+function _dhSourceCell(key) {
+  const src = DH_SOURCE_MAP[key];
+  if (!src) return '—';
+  const btns = [];
+  if (src.fn) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhRunAction('${src.fn}')">${src.fnLabel || 'อัพเดท'}</button>`);
+  if (src.gotoPage) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhGoto('${src.gotoPage}')">${src.gotoLabel || 'ไปหน้านั้น'}</button>`);
+  const btnRow = btns.length ? `<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">${btns.join('')}</div>` : '';
+  return `<span>${src.text}</span>${btnRow}`;
+}
+
 function _dhAgeText(item) {
   if (item.age_hours == null) {
     return item.last_at ? item.last_at : '—';
@@ -15455,13 +15598,14 @@ async function loadDataHealth() {
     wrap.innerHTML = Object.entries(byCategory).map(([cat, items]) => `
       <div class="card" style="padding:14px 16px;margin-bottom:10px">
         <div style="font-size:13px;font-weight:600;margin-bottom:8px">${cat}</div>
-        <div style="overflow-x:auto"><table class="tbl" style="min-width:480px">
-          <thead><tr><th>แหล่งข้อมูล</th><th>สถานะ</th><th>อัพเดทล่าสุด</th><th>หมายเหตุ</th></tr></thead>
+        <div style="overflow-x:auto"><table class="tbl" style="min-width:640px">
+          <thead><tr><th>แหล่งข้อมูล</th><th>สถานะ</th><th>อัพเดทล่าสุด</th><th>มาจากปุ่ม/หน้าไหน</th><th>หมายเหตุ</th></tr></thead>
           <tbody>${items.map(it => `
             <tr>
               <td>${it.label}</td>
               <td style="color:${_DH_STATUS_COLOR[it.status]};font-weight:600;white-space:nowrap">${_DH_STATUS_LABEL[it.status]}</td>
               <td style="font-size:11px;color:var(--text2);white-space:nowrap">${_dhAgeText(it)}</td>
+              <td style="font-size:11px;color:var(--text2);min-width:180px">${_dhSourceCell(it.key)}</td>
               <td style="font-size:11px;color:var(--text2)">${it.note || '—'}</td>
             </tr>`).join('')}</tbody>
         </table></div>

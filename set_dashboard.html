@@ -1262,6 +1262,50 @@
         <input class="scr-input" id="scr-profit-qstreak-min" type="number" placeholder="เช่น 3" min="0" step="1">
       </div>
       <div class="scr-group">
+        <div class="scr-label">รายได้เป็นบวกติดกัน ≥ (ไตรมาส) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>รายได้เป็นบวกต่อเนื่อง</strong><br>
+            จำนวนไตรมาสติดกัน (จากงวดล่าสุดย้อนหลัง) ที่รายได้ &gt; 0 — ต่างจาก "รายได้โตติดกัน" ที่ต้องมากกว่างวดก่อนทุกครั้ง ตัวนี้แค่เช็คว่าเป็นบวก ไม่สนว่าโตหรือหด<br><br>
+            เช่น ใส่ 8 = มีรายได้จริงต่อเนื่อง 2 ปีเต็ม<br><br>
+            ⚠ จาก Finnomena รายไตรมาส · ต้องกดอัพเดทงบการเงินก่อน · เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-rev-posstreak-min" type="number" placeholder="เช่น 8" min="0" step="1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">กำไรเป็นบวกติดกัน ≥ (ไตรมาส) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>กำไรสุทธิเป็นบวกต่อเนื่อง</strong><br>
+            จำนวนไตรมาสติดกันที่กำไรสุทธิ &gt; 0 (ไม่ขาดทุนเลย) — กรองหุ้นที่เพิ่งพลิกมาขาดทุน หรือขาดทุนแฝงบางไตรมาส<br><br>
+            เช่น ใส่ 4 = ไม่ขาดทุนเลยใน 4 ไตรมาสหลัง<br><br>
+            ⚠ จาก Finnomena รายไตรมาส · ต้องกดอัพเดทงบการเงินก่อน · เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-profit-posstreak-min" type="number" placeholder="เช่น 4" min="0" step="1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">EBITDA เป็นบวกติดกัน ≥ (ไตรมาส) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>EBITDA เป็นบวกต่อเนื่อง (ประมาณ)</strong><br>
+            จำนวนไตรมาสติดกันที่ EBITDA &gt; 0<br><br>
+            เช่น ใส่ 4 = EBITDA เป็นบวกทุกไตรมาสใน 1 ปีหลัง<br><br>
+            ⚠ Finnomena ไม่มี EBITDA ตรงๆ รายไตรมาส — ประมาณจาก "กำไรสุทธิ + ค่าเสื่อม/ตัดจำหน่าย" เครื่องหมายบวก/ลบแม่นยำสูง แต่ตัวเลขจะต่ำกว่า EBITDA จริงเล็กน้อย · ต้องกดอัพเดทงบการเงินก่อน · เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-ebitda-posstreak-min" type="number" placeholder="เช่น 4" min="0" step="1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">OCF เป็นบวกติดกัน ≥ (ไตรมาส) *
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>กระแสเงินสดดำเนินงาน (OCF) เป็นบวกต่อเนื่อง</strong><br>
+            จำนวนไตรมาสติดกันที่ OCF &gt; 0 — เงินสดเข้าจริงจากการดำเนินธุรกิจ ไม่ใช่แค่กำไรทางบัญชี<br><br>
+            เช่น ใส่ 8 = เงินสดเข้าจริงต่อเนื่อง 2 ปีเต็ม<br><br>
+            ⚠ จาก Finnomena รายไตรมาส · ต้องกดอัพเดทงบการเงินก่อน · เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-ocf-posstreak-min" type="number" placeholder="เช่น 8" min="0" step="1">
+      </div>
+      <div class="scr-group">
         <div class="scr-label">Margin เพิ่มติดกัน ≥ (ไตรมาส) *
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
             <strong>Net Margin (กำไรสุทธิ ÷ รายได้) เพิ่มขึ้นติดต่อกันกี่ไตรมาส</strong><br>
@@ -1719,6 +1763,14 @@
             <span style="color:#3fb950">ผู้บริหารรู้กิจการดีที่สุด — ซื้อหุ้นตัวเองมักเป็นสัญญาณเชื่อมั่น</span><br>
             ใช้คู่ "รายได้โต YoY ไตรมาส" + RVOL = combo งบโต + คนในเก็บของ<br><br>
             <span style="color:var(--text2)">⚠ หุ้น DR ไม่มีข้อมูล ก.ล.ต. ไทย จะถูกกรองออกเสมอเมื่อเปิดตัวนี้ · ข้อมูลชุดเดียวกับเมนู Insider &amp; ผู้ถือหุ้นใหญ่</span>
+          </div></span>
+        </label>
+
+        <label class="scr-check"><input type="checkbox" id="scr-ocf-gt-ni"> 💰 OCF &gt; กำไรสุทธิ (งวดล่าสุด)
+          <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:290px">
+            <strong>คุณภาพกำไร ณ งวดล่าสุด</strong><br>
+            ไตรมาสล่าสุดที่มีข้อมูลครบ: กระแสเงินสดดำเนินงาน (OCF) มากกว่ากำไรสุทธิไหม — ถ้าใช่ = กำไรมีเงินสดหนุนจริง ไม่ใช่แค่ตัวเลขทางบัญชี (เช่น ลูกหนี้ค้างเยอะ/รับรู้รายได้ล่วงหน้า)<br><br>
+            <span style="color:var(--text2)">จาก Finnomena รายไตรมาส · ต้องกดอัพเดทงบการเงินก่อน · เฉพาะเวอร์ชันรันบนเครื่อง</span>
           </div></span>
         </label>
 
