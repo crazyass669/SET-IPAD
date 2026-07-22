@@ -14614,14 +14614,12 @@ function _renderFinancialsFull(d, source) {
     const deepAnnual = isFinnY;
     const _slice = isQ ? (_finFullShowAll ? -999 : -8) : (deepAnnual ? (_finFullShowAll ? -999 : -10) : -6);
     const cols = [...allDates].sort().slice(_slice);
-    const _allPct = new Set(cols.map((_, i) => i));   // ปิด QoQ% สำหรับตาราง ratio/valuation (% ของ % อ่านยาก)
     const colLabels = cols.map(c => isQ ? c.slice(0, 7) : c.slice(0, 4));
     // valuation ใช้ชุดวันที่ของตัวเอง (ยาวกว่า) เพื่อให้โชว์งวดราคาล่าสุดครบ ไม่มีคอลัมน์ว่าง
     const valDates = new Set();
     Object.values(val).forEach(row => Object.keys(row).forEach(k => valDates.add(k)));
     const valCols = [...valDates].sort().slice(_slice);
     const valColLabels = valCols.map(c => isQ ? c.slice(0, 7) : c.slice(0, 4));
-    const _allPctVal = new Set(valCols.map((_, i) => i));
     const isRatio = () => false;
 
     // ป้าย SET/DR อิงแท็บที่ผู้ใช้เลือก (_finTab) ไม่ใช่ d.type — เพราะ payload จาก
@@ -14722,8 +14720,8 @@ function _renderFinancialsFull(d, source) {
       ${_finFullTable('📊 งบกำไรขาดทุน (Income Statement)', cols, colLabels, FIN_YAHOO_GROUPS.income,   null, (key,c) => (inc[key]||{})[c],  isRatio, _finFullShowAll, null, isFinn, pctOffset)}
       ${_finFullTable('📋 งบดุล (Balance Sheet)',           cols, colLabels, FIN_YAHOO_GROUPS.balance,  null, (key,c) => (bal[key]||{})[c],  isRatio, _finFullShowAll, null, isFinn, pctOffset)}
       ${_finFullTable('💵 กระแสเงินสด (Cash Flow)',          cols, colLabels, FIN_YAHOO_GROUPS.cashflow, null, (key,c) => (cf[key]||{})[c],   isRatio, _finFullShowAll, null, isFinn, pctOffset)}
-      ${isFinn ? _finFullTable('📐 อัตราส่วนการเงิน (Ratios)', cols, colLabels, FIN_FINN_RATIO_GROUP, null, (key,c) => (rat[key]||{})[c], () => false, true, _allPct, false, pctOffset) : ''}
-      ${isFinn ? _finFullTable('💰 มูลค่า / Valuation', valCols, valColLabels, FIN_FINN_VAL_GROUP, null, (key,c) => (val[key]||{})[c], () => false, true, _allPctVal, false, pctOffset) : ''}
+      ${isFinn ? _finFullTable('📐 อัตราส่วนการเงิน (Ratios)', cols, colLabels, FIN_FINN_RATIO_GROUP, null, (key,c) => (rat[key]||{})[c], () => false, true, null, false, pctOffset) : ''}
+      ${isFinn ? _finFullTable('💰 มูลค่า / Valuation', valCols, valColLabels, FIN_FINN_VAL_GROUP, null, (key,c) => (val[key]||{})[c], () => false, true, null, false, pctOffset) : ''}
       <div style="font-size:10px;color:var(--text2);margin-top:16px">${disclaimer}</div>
     </div>`;
     _loadFinDescription(d.sym, _finTab === 'dr' ? tvMarket : 'TH');
