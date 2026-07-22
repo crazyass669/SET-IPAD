@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260722c">
+<link rel="stylesheet" href="static/dashboard.css?v=20260722d">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -72,7 +72,7 @@
   <button class="nav-btn" onclick="showPage('jp-heatmap',this)" title="Heatmap Nikkei 225 (หุ้น JP) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้">🗺️ Heatmap JP</button>
   <button class="nav-btn" onclick="showPage('jp-rotation',this)" title="JP Rotation — RRG ของหุ้น JP แต่ละตัว เทียบกับค่าเฉลี่ย sector ที่เลือก">🔄 JP Rotation</button>
   <button class="nav-btn" onclick="showPage('stock-news',this)" title="ข่าวรายหุ้น — รวมประกาศ SET.or.th + Yahoo Finance + Google News ในหน้าเดียว แค่พิมพ์ชื่อย่อหุ้น (ดึงสดต่อหุ้น local-only, ไม่มีบน GitHub Pages)">📰 ข่าวหุ้น</button>
-  <button class="nav-btn mobile-hide" onclick="showPage('filings',this)" title="งบ &amp; รายงานทางการ — รวมลิงก์เอกสารต้นทาง (56-1 One Report / 10-K / Annual Report HKEX) + เว็บสรุปงบ + prompt วิเคราะห์ 13 ข้อ แค่พิมพ์ชื่อย่อหุ้น">📑 รายงานทางการ</button>
+  <button class="nav-btn" onclick="showPage('filings',this)" title="งบ &amp; รายงานทางการ — รวมลิงก์เอกสารต้นทาง (56-1 One Report / 10-K / Annual Report HKEX) + เว็บสรุปงบ + prompt วิเคราะห์ 13 ข้อ แค่พิมพ์ชื่อย่อหุ้น">📑 รายงานทางการ</button>
   <button class="nav-btn" onclick="showPage('hedge',this)" title="Hedge Holdings — การถือครองของ superinvestors/hedge funds (13F จาก Dataroma รายไตรมาส) หาหุ้นที่หลายกองถือซ้ำกัน (consensus/overlap) เพื่ออ้างอิงการเลือกหุ้น · local-only">🐋 Hedge Holdings</button>
   <button class="nav-btn" onclick="showPage('data-health',this)" title="Data Health — ความสดของทุกไฟล์/DB ที่ dashboard ใช้ในจอเดียว + ปิงแหล่งข้อมูลภายนอก (local-only)">🩺 Data Health<span id="dh-nav-badge" class="dh-nav-badge" style="display:none"></span></button>
   <div class="nav-right">
