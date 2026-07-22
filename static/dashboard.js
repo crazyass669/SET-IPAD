@@ -3795,7 +3795,11 @@ function hedgeShowStock(sym) {
         <span style="color:var(--text2);font-size:12px"> ${_hedgeEsc(name)}</span>
         <div style="font-size:12px;color:var(--text2);margin-top:2px">ถืออยู่ <b>${holders.length}</b> กอง · ซื้อ/เพิ่มไตรมาสนี้ <b style="color:#2ea043">${nBuy}</b> กอง
           ${sellers.length ? ` · ขายทิ้งหมดไตรมาสนี้ <b style="color:#d1242f">${sellers.length}</b> กอง` : ''}</div></div>
-      <div style="display:flex;gap:12px;font-size:12px">
+      <div style="display:flex;gap:8px;font-size:12px;flex-wrap:wrap;align-items:center">
+        <button class="btn-secondary" style="font-size:12px;padding:5px 10px" onclick="hedgeOpenDetail('${_hedgeEsc(sym)}')">🔍 รายละเอียดหุ้น</button>
+        <button class="btn-secondary" style="font-size:12px;padding:5px 10px" onclick="hedgeOpenFinancials('${_hedgeEsc(sym)}')">🧾 งบการเงิน</button>
+        <button class="btn-secondary" style="font-size:12px;padding:5px 10px" onclick="hedgeOpenTearsheet('${_hedgeEsc(sym)}')">📋 Tearsheet</button>
+        <a class="btn-secondary" style="font-size:12px;padding:5px 10px;text-decoration:none;display:inline-block" href="${_usTvUrl(sym, 'D')}" target="_blank" rel="noopener">TradingView ↗</a>
         <a href="https://whalewisdom.com/stock/${encodeURIComponent(sym.toLowerCase())}" target="_blank" rel="noopener" style="color:var(--blue)">WhaleWisdom ↗</a>
         <a href="https://hedgefollow.com/stocks/${encodeURIComponent(sym)}" target="_blank" rel="noopener" style="color:var(--blue)">HedgeFollow ↗</a>
         <a href="https://www.dataroma.com/m/stock.php?sym=${encodeURIComponent(sym)}" target="_blank" rel="noopener" style="color:var(--blue)">Dataroma ↗</a>
@@ -3809,6 +3813,27 @@ function hedgeShowStock(sym) {
         <th style="text-align:right;cursor:pointer" onclick="hedgeStockDetailSortBy('activity')">Activity${_hedgeStockDetailSortArrow('activity')}</th>
         <th style="text-align:right;cursor:pointer" onclick="hedgeStockDetailSortBy('value')">มูลค่า${_hedgeStockDetailSortArrow('value')}</th>
       </tr></thead><tbody>${rows}</tbody></table></div>`);
+}
+
+// ปุ่ม quick-action บนหน้ารายละเอียดหุ้น (hedgeShowStock) — หุ้นจาก Dataroma เป็น
+// ticker ตลาด US เกือบทั้งหมด (13F filers เป็นกองสหรัฐฯ) เลยพา user ไปทาง US โดยตรง
+// เหมือนปุ่มงบการเงิน/Tearsheet/popup ที่มีอยู่แล้วในเมนู Screener+/US stocks
+// เปิดเป็นแท็บใหม่เสมอ (ผู้ใช้ไม่อยากหลุดจากหน้า Hedge Holdings ที่กำลังดูอยู่) ผ่าน
+// URL hash deep-link เดียวกับที่ #fin/ ใช้อยู่แล้ว — ดู _tsApplyHash / _stockApplyHash ด้านล่าง
+function hedgeOpenFinancials(sym) {
+  window.open(location.pathname + location.search + '#fin/dr/' + encodeURIComponent(sym), '_blank');
+}
+
+function hedgeOpenTearsheet(sym) {
+  window.open(location.pathname + location.search + '#ts/us/' + encodeURIComponent(sym), '_blank');
+}
+
+// "popup รายละเอียดหุ้น" เดียวกับที่ Screener+/US stocks ใช้ (chart-modal มีกราฟ+
+// งบการเงิน+Tearsheet+TradingView ในตัวอยู่แล้ว) — เปิดได้เฉพาะหุ้นที่มีราคาเก็บไว้
+// ใน us_prices.db (ในดัชนีหลัก S&P500/Dow/NDX) หุ้นนอกดัชนีให้ใช้ปุ่มงบการเงิน/
+// Tearsheet ด้านข้างแทน (ดึงจาก Yahoo ตรงๆ ได้เสมอ ไม่ต้องมีราคาเก็บไว้ล่วงหน้า)
+function hedgeOpenDetail(sym) {
+  window.open(location.pathname + location.search + '#stock/us/' + encodeURIComponent(sym), '_blank');
 }
 
 function _hedgeRenderDetail(html) {
@@ -11404,8 +11429,12 @@ function _usTvSymbol(sym) {
   return sym.replace(/-/g, '.');
 }
 
+function _usTvUrl(sym, interval) {
+  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(_usTvSymbol(sym))}${interval ? '&interval=' + interval : ''}`;
+}
+
 function _usTvLink(sym) {
-  return `<a href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(_usTvSymbol(sym))}" target="_blank" title="เปิด TradingView" style="text-decoration:none;font-size:10px;margin-left:3px;opacity:.6">↗</a>`;
+  return `<a href="${_usTvUrl(sym)}" target="_blank" title="เปิด TradingView" style="text-decoration:none;font-size:10px;margin-left:3px;opacity:.6">↗</a>`;
 }
 
 function renderUsTable() {
@@ -13266,6 +13295,47 @@ function _finApplyHash() {
 }
 window.addEventListener('hashchange', _finApplyHash);
 window.addEventListener('DOMContentLoaded', () => { if (location.hash.startsWith('#fin/')) _finApplyHash(); });
+
+// URL hash deep-link: #ts/us/AAPL — เปิดหน้า Tearsheet พร้อมโหลดหุ้นทันที (ใช้โดยปุ่ม
+// "เปิดแท็บใหม่" เช่น hedgeOpenTearsheet ใน Hedge Holdings) เหมือน #fin/ ด้านบน
+function _tsApplyHash() {
+  const m = location.hash.match(/^#ts\/(th|us|hk|jp)\/([^/]+)$/);
+  if (!m) return;
+  const [, mktRaw, symRaw] = m;
+  const mkt = mktRaw.toUpperCase();
+  const sym = decodeURIComponent(symRaw).toUpperCase();
+  showPage('tearsheet', document.querySelector('.nav-btn[onclick*="tearsheet"]'));
+  setTsMarket(mkt, document.getElementById('ts-tab-' + mktRaw));
+  loadTearsheet(sym, mkt);
+}
+window.addEventListener('hashchange', _tsApplyHash);
+window.addEventListener('DOMContentLoaded', () => { if (location.hash.startsWith('#ts/')) _tsApplyHash(); });
+
+// URL hash deep-link: #stock/us/AAPL — เปิดหน้าหุ้น US แล้วเด้ง popup รายละเอียด (chart-modal)
+// ให้เองทันที (ใช้โดยปุ่ม "เปิดแท็บใหม่" เช่น hedgeOpenDetail ใน Hedge Holdings — หุ้นจาก
+// Dataroma เป็น US เท่านั้น จึงรองรับแค่ us/hk ไม่มี th)
+async function _stockApplyHash() {
+  const m = location.hash.match(/^#stock\/(us|hk)\/([^/]+)$/);
+  if (!m) return;
+  const [, mktRaw, symRaw] = m;
+  const sym = decodeURIComponent(symRaw).toUpperCase();
+  // เช็ค/โหลด _usData|_hkData ให้เสร็จก่อนเรียก showPage เสมอ — ถ้าโหลดทีหลัง
+  // showPage จะไปเรียก loadUsStocksPage/loadHkStocksPage ที่ยิง fetch เส้นเดียวกัน
+  // ซ้ำอีกรอบ (เพราะตอนนั้น _usData/_hkData ยังว่างอยู่)
+  const pageId = mktRaw === 'us' ? 'us-stocks' : 'hk-stocks';
+  if (mktRaw === 'us') {
+    if (!_usData) { try { _usData = await (await fetch('/api/us-index-metrics')).json(); } catch (e) { /* เช็ค found ใน openUsChartModal จะแจ้งเตือนเอง */ } }
+    showPage(pageId, document.querySelector(`.nav-btn[onclick*="${pageId}"]`));
+    openUsChartModal(sym);
+  } else {
+    const hkSym = sym.endsWith('.HK') ? sym : `${sym}.HK`;
+    if (!_hkData) { try { _hkData = await (await fetch('/api/hk-index-metrics')).json(); } catch (e) { /* เช็ค found ใน openHkChartModal จะแจ้งเตือนเอง */ } }
+    showPage(pageId, document.querySelector(`.nav-btn[onclick*="${pageId}"]`));
+    openHkChartModal(hkSym);
+  }
+}
+window.addEventListener('hashchange', _stockApplyHash);
+window.addEventListener('DOMContentLoaded', () => { if (location.hash.startsWith('#stock/')) _stockApplyHash(); });
 
 function initFinPage() {
   _finRecentRender();
