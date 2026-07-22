@@ -843,6 +843,10 @@
   .nav-brand, .nav-btn { flex-shrink: 0; white-space: nowrap; }
   .nav-right { flex-shrink: 0; }
 
+  /* เมนูที่ใช้งานบนมือถือไม่ได้จริง (ข่าวหุ้น = ดึงสด local-only ไม่มีบน GitHub Pages,
+     Heatmap US = จอเล็กเกินไปสำหรับ treemap) — ซ่อนแค่บนจอแคบ desktop ยังใช้ได้ปกติ */
+  .nav-btn.mobile-hide { display: none; }
+
   /* Touch target: ปุ่ม nav ยืดเต็มความสูงแถบ (44px ตามเกณฑ์ Apple/Google)
      แทนที่จะเป็นกล่องข้อความเล็กๆ ลอยอยู่กลางแถบ — พื้นที่แตะโดนได้
      กว้างขึ้นทั้งแท่ง โดยไม่เปลี่ยนขนาดตัวหนังสือ/หน้าตาเดิมเลย */

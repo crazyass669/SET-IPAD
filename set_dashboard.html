@@ -63,7 +63,7 @@
   <button class="nav-btn" onclick="showPage('confluence',this)" title="สัญญาณเงินทุนรวม — insider + short + NVDR ที่ตรงกันหลายชั้น">🎯 สัญญาณรวม</button>
   <button class="nav-btn" onclick="showPage('financials',this)">งบการเงิน</button>
   <button class="nav-btn" onclick="showPage('us-stocks',this)" title="หุ้น US — RS / Stage / 52W High / Momentum / EMA ของสมาชิก S&amp;P 500 · Dow Jones · Nasdaq 100 (ราคา OHLC ใน us_prices.db, คำนวณสูตรเดียวกับหุ้นไทย)">🇺🇸 หุ้น US</button>
-  <button class="nav-btn" onclick="showPage('us-heatmap',this)" title="Heatmap S&amp;P 500 / Dow Jones / Nasdaq 100 (หุ้น US) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้ · คนละหน้ากับ &quot;Heatmap&quot; ของหุ้นไทยด้านซ้าย">🗺️ Heatmap US</button>
+  <button class="nav-btn mobile-hide" onclick="showPage('us-heatmap',this)" title="Heatmap S&amp;P 500 / Dow Jones / Nasdaq 100 (หุ้น US) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้ · คนละหน้ากับ &quot;Heatmap&quot; ของหุ้นไทยด้านซ้าย">🗺️ Heatmap US</button>
   <button class="nav-btn" onclick="showPage('us-rotation',this)" title="US Rotation — RRG ของหุ้น US แต่ละตัว เทียบกับค่าเฉลี่ยดัชนี/sector ที่เลือก">🔄 US Rotation</button>
   <button class="nav-btn" onclick="showPage('hk-stocks',this)" title="หุ้น HK — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Hang Seng Index · Hang Seng TECH · Hang Seng China Enterprises (ราคา OHLC ใน hk_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US)">🇭🇰 หุ้น HK</button>
   <button class="nav-btn" onclick="showPage('hk-heatmap',this)" title="Heatmap HSI / HSTECH / HSCEI (หุ้น HK) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้">🗺️ Heatmap HK</button>
@@ -71,7 +71,7 @@
   <button class="nav-btn" onclick="showPage('jp-stocks',this)" title="หุ้น JP — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Nikkei 225 (ราคา OHLC ใน jp_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US/HK) — มี Tearsheet/เทียบเพื่อน/งบการเงินครบแล้ว">🇯🇵 หุ้น JP</button>
   <button class="nav-btn" onclick="showPage('jp-heatmap',this)" title="Heatmap Nikkei 225 (หุ้น JP) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้">🗺️ Heatmap JP</button>
   <button class="nav-btn" onclick="showPage('jp-rotation',this)" title="JP Rotation — RRG ของหุ้น JP แต่ละตัว เทียบกับค่าเฉลี่ย sector ที่เลือก">🔄 JP Rotation</button>
-  <button class="nav-btn" onclick="showPage('stock-news',this)" title="ข่าวรายหุ้น — รวมประกาศ SET.or.th + Yahoo Finance + Google News ในหน้าเดียว แค่พิมพ์ชื่อย่อหุ้น">📰 ข่าวหุ้น</button>
+  <button class="nav-btn mobile-hide" onclick="showPage('stock-news',this)" title="ข่าวรายหุ้น — รวมประกาศ SET.or.th + Yahoo Finance + Google News ในหน้าเดียว แค่พิมพ์ชื่อย่อหุ้น (ดึงสดต่อหุ้น local-only, ไม่มีบน GitHub Pages)">📰 ข่าวหุ้น</button>
   <button class="nav-btn" onclick="showPage('filings',this)" title="งบ &amp; รายงานทางการ — รวมลิงก์เอกสารต้นทาง (56-1 One Report / 10-K / Annual Report HKEX) + เว็บสรุปงบ + prompt วิเคราะห์ 13 ข้อ แค่พิมพ์ชื่อย่อหุ้น">📑 รายงานทางการ</button>
   <button class="nav-btn" onclick="showPage('hedge',this)" title="Hedge Holdings — การถือครองของ superinvestors/hedge funds (13F จาก Dataroma รายไตรมาส) หาหุ้นที่หลายกองถือซ้ำกัน (consensus/overlap) เพื่ออ้างอิงการเลือกหุ้น · local-only">🐋 Hedge Holdings</button>
   <button class="nav-btn" onclick="showPage('data-health',this)" title="Data Health — ความสดของทุกไฟล์/DB ที่ dashboard ใช้ในจอเดียว + ปิงแหล่งข้อมูลภายนอก (local-only)">🩺 Data Health<span id="dh-nav-badge" class="dh-nav-badge" style="display:none"></span></button>
@@ -3418,7 +3418,7 @@
 <!-- PAGE: STOCK NEWS — ข่าวรายหุ้นรวม 3 แหล่ง (SET.or.th + Yahoo + Google News) -->
 <div id="page-stock-news" class="page">
   <div class="page-title">📰 ข่าวหุ้น</div>
-  <div class="page-sub">รวมข่าวจากทุกแหล่งในหน้าเดียว — ประกาศทางการ SET.or.th · Yahoo Finance · Google News (สื่อไทย/สากล) แค่พิมพ์ชื่อย่อหุ้น</div>
+  <div class="page-sub">รวมข่าวจากทุกแหล่งในหน้าเดียว — ประกาศทางการ SET.or.th · Yahoo Finance · Google News (สื่อไทย/สากล) แค่พิมพ์ชื่อย่อหุ้น (ดึงสดต่อหุ้นทุกครั้ง ต้องรันผ่าน Flask ในเครื่อง — local-only)</div>
 
   <div class="card" style="padding:14px 16px;margin-bottom:12px">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -3929,6 +3929,8 @@
       </div>
     </div>
     <div class="cm-metrics" id="cm-metrics"></div>
+    <!-- HEDGE HOLDINGS (13F/Dataroma) summary — โผล่เฉพาะหุ้นที่มีกอง superinvestor ถืออยู่ -->
+    <div id="cm-hedge-info" style="display:none"></div>
     <!-- FLOW CONFLUENCE summary (insider + short + NVDR รวม 1 บรรทัด) -->
     <div id="cm-flow-summary" style="display:none;margin-bottom:10px"></div>
     <!-- DR COMPANY DESCRIPTION (Yahoo Finance แปลไทย) -->

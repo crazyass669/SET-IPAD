@@ -3174,6 +3174,61 @@ function _hedgeActMeta(act) {
   return { cls: '', txt: act || '', buy: false, sell: false };
 }
 
+// ------------------------------------------------------------- CHART MODAL: hedge holdings badge
+// แสดงสรุป 13F ของหุ้นที่กำลังเปิดใน chart-modal (ทุกตลาด) — โหลด _hedgeData แบบ lazy ครั้งเดียว
+// แล้ว cache อันดับ/สถิติของทุกหุ้นไว้ใน _hedgeGlobalStatsCache ไม่ต้องคำนวณซ้ำทุกครั้งที่เปิดโมดัล
+let _hedgeGlobalStatsCache = null;   // sym(raw จาก dataroma) -> {sym,name,nFunds,nBuy,nSell,rank}
+function _hedgeEnsureLoaded(cb) {
+  if (_hedgeData) { cb(); return; }
+  fetch('/api/hedge/managers')
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(d => { _hedgeData = d; _hedgeLoaded = true; cb(); })
+    .catch(() => {});
+}
+function _hedgeGlobalStats() {
+  if (_hedgeGlobalStatsCache) return _hedgeGlobalStatsCache;
+  const map = {};
+  Object.values(_hedgeData.managers || {}).forEach(m => {
+    (m.holdings || []).forEach(h => {
+      if (!h.sym) return;
+      const e = map[h.sym] || (map[h.sym] = { sym: h.sym, name: h.name || '', nFunds: 0, nBuy: 0, nSell: 0 });
+      e.nFunds++;
+      const am = _hedgeActMeta(h.activity);
+      if (am.buy) e.nBuy++;
+      if (am.sell) e.nSell++;
+    });
+  });
+  Object.values(map).sort((a, b) => b.nFunds - a.nFunds).forEach((e, i) => { e.rank = i + 1; });
+  _hedgeGlobalStatsCache = map;
+  return map;
+}
+let _cmHedgeReqSymbol = null;   // กันแสดงผลผิดตัวถ้าผู้ใช้สลับหุ้นเร็วก่อน fetch เสร็จ
+function _cmRenderHedgeInfo(symbol) {
+  const box = document.getElementById('cm-hedge-info');
+  if (!box) return;
+  box.style.display = 'none';
+  box.innerHTML = '';
+  if (!symbol) return;
+  _cmHedgeReqSymbol = symbol;
+  _hedgeEnsureLoaded(() => {
+    if (!_hedgeData || _cmHedgeReqSymbol !== symbol) return;
+    const map = _hedgeGlobalStats();
+    const norm = _hedgeNorm(symbol);
+    let e = map[symbol];
+    if (!e) e = Object.values(map).find(x => _hedgeNorm(x.sym) === norm);
+    if (!e) return;
+    box.style.display = '';
+    box.innerHTML = `<div class="card" style="padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;cursor:pointer"
+        title="คลิกดูรายชื่อกองที่ถือหุ้นนี้" onclick="closeChartModal();showPage('hedge');setTimeout(()=>hedgeShowStock('${_hedgeEsc(e.sym)}'),80)">
+      <span style="font-size:12px;color:var(--text2)">🐋 Hedge Holdings (13F)</span>
+      <span style="font-size:12px">ลำดับ <b>${e.rank}</b></span>
+      <span style="font-size:12px"># กองถือ <b>${e.nFunds}</b></span>
+      ${e.nBuy ? `<span style="font-size:12px;color:#2ea043">ซื้อ/เพิ่ม ▲ ${e.nBuy}</span>` : ''}
+      ${e.nSell ? `<span style="font-size:12px;color:#d1242f">ลด/ขาย ▼ ${e.nSell}</span>` : ''}
+    </div>`;
+  });
+}
+
 function loadHedgePage() {
   updateHedgeStatus();
   if (_hedgeLoaded) { renderHedgeActiveTab(); return; }
@@ -8902,6 +8957,7 @@ function openDRChartModal(sym) {
 
   _cmStock = { ...s, symbol: s.sym, price_history: null, _isDR: true };
   _cmSyncPeerTearsheetButtons();
+  _cmRenderHedgeInfo(s.yf || s.sym);   // ใช้ ticker US จริง (s.yf) เทียบกับ Dataroma ไม่ใช่รหัส DR ไทย
   _cmTf = '1y';
   _cmHistoryData = null;
   _cmVolumeData  = null;
@@ -9002,6 +9058,7 @@ function openUsChartModal(symbol) {
 
   _cmStock = { ...s, price_history: s.price_history, _isDR: false, _isUSIdx: true };
   _cmSyncPeerTearsheetButtons();
+  _cmRenderHedgeInfo(s.symbol);
   _cmTf = '1y';
   // เว้น _cmHistoryData ไว้ null (ต่างจาก price_history ที่วาด preview ทันที) —
   // ให้แท็บ 5Y/Max ยังทำงาน (setCmTf เช็ค !_cmHistoryData ก่อนไปดึงประวัติเต็มจาก
@@ -9083,6 +9140,7 @@ function openHkChartModal(symbol) {
 
   _cmStock = { ...s, price_history: s.price_history, _isDR: false, _isUSIdx: false, _isHKIdx: true };
   _cmSyncPeerTearsheetButtons();
+  _cmRenderHedgeInfo(s.symbol);
   _cmTf = '1y';
   _cmHistoryData = null;
   _cmVolumeData  = s.vol_history || null;
@@ -9159,6 +9217,7 @@ function openJpChartModal(symbol) {
 
   _cmStock = { ...s, price_history: s.price_history, _isDR: false, _isUSIdx: false, _isHKIdx: false, _isJPIdx: true };
   _cmSyncPeerTearsheetButtons();
+  _cmRenderHedgeInfo(s.symbol);
   _cmTf = '1y';
   _cmHistoryData = null;
   _cmVolumeData  = s.vol_history || null;
@@ -9518,6 +9577,7 @@ function openChartModal(symbol) {
 
   _cmStock = s;
   _cmSyncPeerTearsheetButtons();
+  _cmRenderHedgeInfo(s.symbol);
   _cmTf = '1y';
   _cmHistoryData = null;
   _cmVolumeData  = null;
@@ -12671,6 +12731,9 @@ async function searchStockNews() {
   const market = isDr ? (typeof _finGuessDrMarket === 'function' ? _finGuessDrMarket(sym) : 'US') : '';
   try {
     const r = await fetch(`/api/stock-news/${encodeURIComponent(sym)}${isDr ? `?is_dr=1&market=${market}` : ''}`);
+    if (!r.ok || !(r.headers.get('content-type') || '').includes('application/json')) {
+      throw new Error('เมนูนี้ต้องรัน Flask server ในเครื่อง — ใช้บนเวอร์ชัน static/GitHub Pages ไม่ได้ (ดึงข่าวสดต่อหุ้น bake ล่วงหน้าไม่ได้)');
+    }
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     _newsRows = d.rows || [];
