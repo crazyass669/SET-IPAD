@@ -220,6 +220,19 @@
   .static-mode .nav-btn[onclick*="'band'"],
   .static-mode .nav-btn[onclick*="'data-health'"],
   .static-mode .nav-btn[onclick*="'hedge'"],
+  /* หุ้น/Heatmap/Rotation US·HK·JP เรียก /api/{us,hk,jp}-index-metrics ตรงๆ ซึ่งไม่ได้
+     bake ไว้ใน STATIC_MAP (ดู dashboard.js) — เปิดบน GitHub Pages แล้วขึ้น error เสมอ
+     ไม่ใช่แค่จอแคบ เลยซ่อนแบบไม่มีเงื่อนไขความกว้างจอ (คนละกลุ่มกับ .mobile-hide) */
+  .static-mode .nav-btn[onclick*="'us-stocks'"],
+  .static-mode .nav-btn[onclick*="'us-heatmap'"],
+  .static-mode .nav-btn[onclick*="'us-rotation'"],
+  .static-mode .nav-btn[onclick*="'hk-stocks'"],
+  .static-mode .nav-btn[onclick*="'hk-heatmap'"],
+  .static-mode .nav-btn[onclick*="'hk-rotation'"],
+  .static-mode .nav-btn[onclick*="'jp-stocks'"],
+  .static-mode .nav-btn[onclick*="'jp-heatmap'"],
+  .static-mode .nav-btn[onclick*="'jp-rotation'"],
+  .static-mode .nav-btn[onclick*="'stock-news'"],
   .static-mode #pe-reminder-modal { display: none !important; }
 
   /* HEDGE HOLDINGS (13F) */
@@ -843,8 +856,10 @@
   .nav-brand, .nav-btn { flex-shrink: 0; white-space: nowrap; }
   .nav-right { flex-shrink: 0; }
 
-  /* เมนูที่ใช้งานบนมือถือไม่ได้จริง (ข่าวหุ้น = ดึงสด local-only ไม่มีบน GitHub Pages,
-     Heatmap US = จอเล็กเกินไปสำหรับ treemap) — ซ่อนแค่บนจอแคบ desktop ยังใช้ได้ปกติ */
+  /* เมนูที่ดูลำบากบนจอแคบแต่ยังใช้งานได้จริง (ข้อมูล/ฟีเจอร์ครบ แค่ layout ไม่เหมาะ) —
+     ต่างจาก .static-mode ด้านบนที่ซ่อนเพราะฟีเจอร์ใช้งานไม่ได้เลยบน GitHub Pages
+     ตอนนี้เหลือแค่ "รายงานทางการ" อยู่ในกลุ่มนี้ (รอ confirm ว่าจะซ่อนถาวรไหม) —
+     desktop ยังใช้ได้ปกติเสมอ */
   .nav-btn.mobile-hide { display: none; }
 
   /* Touch target: ปุ่ม nav ยืดเต็มความสูงแถบ (44px ตามเกณฑ์ Apple/Google)
