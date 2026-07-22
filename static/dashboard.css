@@ -234,6 +234,11 @@
   .static-mode .nav-btn[onclick*="'jp-rotation'"],
   .static-mode .nav-btn[onclick*="'stock-news'"],
   .static-mode .nav-btn[onclick*="'filings'"],
+  /* เทียบเพื่อน/Tearsheet/ปฏิทิน เรียก /api/peer-compare, /api/tearsheet/*, /api/calendar-events*
+     ตรงๆ ทุกตลาด (รวม TH) ไม่ได้ bake ไว้ใน STATIC_MAP เลย — พังบน GitHub Pages เสมอ */
+  .static-mode .nav-btn[onclick*="'peer'"],
+  .static-mode .nav-btn[onclick*="'tearsheet'"],
+  .static-mode .nav-btn[onclick*="'calendar'"],
   .static-mode #pe-reminder-modal { display: none !important; }
 
   /* HEDGE HOLDINGS (13F) */
