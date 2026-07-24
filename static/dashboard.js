@@ -825,36 +825,28 @@ function renderOverview() {
   const fgiColor = s => s >= 75 ? '#3fb950' : s >= 55 ? '#6fca6f' : s >= 45 ? '#d29922' : s >= 25 ? '#e07830' : '#f85149';
   const fgiLabel = s => s >= 75 ? 'Extreme Greed' : s >= 55 ? 'Greed' : s >= 45 ? 'Neutral' : s >= 25 ? 'Fear' : 'Extreme Fear';
 
-  const fgiPt = (s, cx, cy, r) => {
-    const a = Math.PI - (s / 100) * Math.PI;
-    return [cx + r * Math.cos(a), cy - r * Math.sin(a)];
-  };
-  const fgiArc = (s1, s2, color, cx, cy, r) => {
-    const [x1, y1] = fgiPt(s1, cx, cy, r);
-    const [x2, y2] = fgiPt(s2, cx, cy, r);
-    return `<path d="M${x1.toFixed(1)} ${y1.toFixed(1)} A${r} ${r} 0 0 0 ${x2.toFixed(1)} ${y2.toFixed(1)}" stroke="${color}" stroke-width="12" fill="none" stroke-linecap="butt"/>`;
-  };
-  const gcx = 80, gcy = 76, gr = 62;
-  const [nx, ny] = fgiPt(fgi.score, gcx, gcy, gr * 0.82);
-  const gaugeHTML = `<svg width="160" height="90" viewBox="0 0 160 90" style="display:block;margin:0 auto">
-    <path d="M${gcx-gr} ${gcy} A${gr} ${gr} 0 0 0 ${gcx+gr} ${gcy}" stroke="var(--bg3)" stroke-width="13" fill="none"/>
-    ${fgiArc(0,20,'#f85149',gcx,gcy,gr)}
-    ${fgiArc(20,40,'#e07830',gcx,gcy,gr)}
-    ${fgiArc(40,60,'#d29922',gcx,gcy,gr)}
-    ${fgiArc(60,80,'#6fca6f',gcx,gcy,gr)}
-    ${fgiArc(80,100,'#3fb950',gcx,gcy,gr)}
-    <line x1="${gcx}" y1="${gcy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
-    <circle cx="${gcx}" cy="${gcy}" r="5" fill="#fff"/>
-    <text x="13" y="${gcy+13}" fill="#f85149" font-size="8" font-family="Segoe UI,system-ui,sans-serif" text-anchor="middle" font-weight="600">Fear</text>
-    <text x="147" y="${gcy+13}" fill="#3fb950" font-size="8" font-family="Segoe UI,system-ui,sans-serif" text-anchor="middle" font-weight="600">Greed</text>
-  </svg>`;
+  const gSize = 220, gRing = 20, gAngle = (fgi.score / 100) * 180 - 90;
+  const gaugeHTML = `
+    <div style="position:relative;width:${gSize}px;height:${gSize/2+34}px;margin:0 auto">
+      <div style="position:absolute;top:0;left:0;width:${gSize}px;height:${gSize/2}px;overflow:hidden">
+        <div style="position:absolute;top:0;left:0;width:${gSize}px;height:${gSize}px;border-radius:50%;
+          background:conic-gradient(from -90deg,#f85149 0deg,#e07830 45deg,#d29922 90deg,#6fca6f 135deg,#3fb950 180deg,transparent 180deg 360deg)"></div>
+        <div style="position:absolute;top:${gRing}px;left:${gRing}px;width:${gSize-gRing*2}px;height:${gSize-gRing*2}px;border-radius:50%;background:var(--bg2)"></div>
+      </div>
+      <div style="position:absolute;bottom:34px;left:${gSize/2}px;width:5px;height:${gSize/2*0.86}px;margin-left:-2.5px;background:#fff;
+        transform-origin:50% 100%;transform:rotate(${gAngle.toFixed(1)}deg);clip-path:polygon(50% 0%,100% 100%,0% 100%);border-radius:2px"></div>
+      <div style="position:absolute;top:${gSize/2}px;left:${gSize/2}px;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;
+        background:#0d1117;border:2.5px solid #fff;box-sizing:border-box"></div>
+      <div style="position:absolute;top:${gSize/2+10}px;left:0;font-size:12px;font-weight:700;color:#f85149">Fear</div>
+      <div style="position:absolute;top:${gSize/2+10}px;right:0;font-size:12px;font-weight:700;color:#3fb950">Greed</div>
+    </div>`;
 
   const compBarFGI = (label, value) => {
     const w = Math.round(value);
     const c = value >= 60 ? '#3fb950' : value >= 40 ? '#d29922' : '#f85149';
     return `<div style="margin-bottom:8px">
-      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">
-        <span style="color:var(--text2)">${label}</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:3px">
+        <span style="color:var(--text2);display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:2px;background:${c};display:inline-block;flex:none"></span>${label}</span>
         <span style="color:${c};font-weight:600">${value.toFixed(0)}</span>
       </div>
       <div style="background:var(--bg3);border-radius:3px;height:4px;overflow:hidden">
@@ -866,11 +858,11 @@ function renderOverview() {
   document.getElementById('fgi-container').innerHTML = `
     <div class="card">
       <div style="display:flex;align-items:flex-start;gap:28px;flex-wrap:wrap">
-        <div style="text-align:center;min-width:160px">
-          <div class="card-title">SET Fear &amp; Greed Index</div>
+        <div style="text-align:center;min-width:220px">
+          <div class="card-title" style="display:flex;align-items:center;justify-content:center;gap:7px"><span style="width:8px;height:8px;border-radius:2px;background:${fgiColor(fgi.score)};display:inline-block;flex:none"></span>SET Fear &amp; Greed Index</div>
           ${gaugeHTML}
-          <div style="font-size:28px;font-weight:700;color:${fgiColor(fgi.score)};line-height:1;margin-top:-2px">${fgi.score}</div>
-          <div style="font-size:13px;font-weight:700;color:${fgiColor(fgi.score)};margin-top:4px">${fgiLabel(fgi.score)}</div>
+          <div style="font-size:32px;font-weight:700;color:${fgiColor(fgi.score)};line-height:1;margin-top:-6px">${fgi.score}</div>
+          <div style="font-size:14px;font-weight:700;color:${fgiColor(fgi.score)};margin-top:4px">${fgiLabel(fgi.score)}</div>
           <div style="font-size:10px;color:var(--text2);margin-top:5px">คำนวณจากข้อมูลตลาดจริง</div>
         </div>
         <div style="flex:1;min-width:220px;padding-top:26px">
