@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260722e">
+<link rel="stylesheet" href="static/dashboard.css?v=20260725a">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -34,6 +34,8 @@
 <nav>
   <div class="nav-brand">SET <span>Dashboard</span></div>
   <button id="nav-toggle-btn" class="nav-toggle-btn" title="ซ่อนเมนู" onclick="toggleNavCollapse()">▲ ซ่อนเมนู</button>
+  <!-- ป้ายเริ่มต้นตรงกับค่า default ของ navOpenMode() ('new') — _navOpenModeSync จะแก้ให้เองถ้าผู้ใช้เคยสลับเป็น 'same' -->
+  <button id="nav-openmode-btn" class="nav-toggle-btn mode-new" onclick="toggleNavOpenMode()">🗗 แท็บใหม่</button>
   <button class="nav-btn active" onclick="showPage('overview',this)">Overview</button>
   <button class="nav-btn" onclick="showPage('rotation',this)">Rotation</button>
   <button class="nav-btn" onclick="showPage('indices',this)">ดัชนีกลุ่ม</button>
@@ -4327,6 +4329,6 @@
 </div>
 
 <script src="static/fin_translations.js?v=20260713a"></script>
-<script src="static/dashboard.js?v=20260722f"></script>
+<script src="static/dashboard.js?v=20260725a"></script>
 </body>
 </html>

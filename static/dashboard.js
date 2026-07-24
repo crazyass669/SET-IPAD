@@ -3134,6 +3134,87 @@ function renderWatchlist() {
 }
 
 // ============================================================
+// NAV OPEN MODE — "กดเมนู/กดดูหุ้น แล้วเปิดในหน้าเดิม หรือเปิดแท็บใหม่"
+// ------------------------------------------------------------
+// ปุ่มสลับอยู่ข้างปุ่มซ่อนเมนู (#nav-openmode-btn) จำค่าไว้ใน localStorage
+//   'new' (ค่าเริ่มต้น) = กดเมนู/ปุ่มดูหุ้น แล้วเปิดแท็บใหม่ผ่าน deep-link hash
+//   'same'              = พฤติกรรมเดิมทุกอย่าง — กดเมนูแล้วสลับหน้าในแท็บเดียว
+// ไม่ว่าโหมดไหน Ctrl/Cmd+click หรือคลิกล้อกลาง = เปิดแท็บใหม่เสมอ (มาตรฐานเบราว์เซอร์)
+//
+// วิธี intercept เมนู: ดัก click แบบ capture ที่ <nav> แล้ว stopPropagation ก่อน event
+// ถึงตัวปุ่ม → inline onclick="showPage(...)" จะไม่ทำงาน จึงไม่ต้องแก้ showPage เลย
+// (สำคัญ: showPage ถูกเรียกจากโค้ดภายในอีกสิบกว่าที่ ถ้าไปดักในนั้นจะเด้งแท็บใหม่มั่ว)
+// ============================================================
+const NAV_OPEN_MODE_KEY = 'nav-open-mode';
+
+function navOpenMode() {
+  return localStorage.getItem(NAV_OPEN_MODE_KEY) === 'same' ? 'same' : 'new';
+}
+
+function _navOpenModeSync() {
+  const b = document.getElementById('nav-openmode-btn');
+  if (!b) return;
+  const isNew = navOpenMode() === 'new';
+  b.textContent = isNew ? '🗗 แท็บใหม่' : '🔗 หน้าเดิม';
+  b.classList.toggle('mode-new', isNew);
+  b.title = isNew
+    ? 'ตอนนี้: กดเมนู/ปุ่มดูหุ้น = เปิดแท็บใหม่ (หน้าเดิมยังคาไว้ ไม่ต้องกดย้อนกลับ)\nกดเพื่อสลับเป็น "เปิดในหน้าเดิม"'
+    : 'ตอนนี้: กดเมนู/ปุ่มดูหุ้น = เปลี่ยนหน้าในแท็บเดิม\nกดเพื่อสลับเป็น "เปิดแท็บใหม่"\n(เคล็ดลับ: Ctrl+คลิก เปิดแท็บใหม่ได้เสมอ)';
+  if (typeof syncNavHeight === 'function') syncNavHeight();
+}
+
+function toggleNavOpenMode() {
+  localStorage.setItem(NAV_OPEN_MODE_KEY, navOpenMode() === 'new' ? 'same' : 'new');
+  _navOpenModeSync();
+}
+
+// เปิด deep-link ภายใน dashboard (เช่น '#fin/dr/NVDA', '#ts/us/AAPL', '#page/screener')
+// ตามโหมดที่ผู้ใช้เลือกไว้ — forceNew=true เพื่อบังคับแท็บใหม่ (เช่นกด Ctrl ค้าง)
+function openInternalHash(hash, forceNew) {
+  if (forceNew || navOpenMode() === 'new') {
+    window.open(location.pathname + location.search + hash, '_blank', 'noopener');
+    return;
+  }
+  // กดหุ้นตัวเดิมซ้ำ: hash ไม่เปลี่ยน → hashchange ไม่ยิง ต้องกระตุ้นเอง
+  if (location.hash === hash) window.dispatchEvent(new HashChangeEvent('hashchange'));
+  else location.hash = hash;
+}
+
+// URL hash deep-link ของ "หน้า" ธรรมดา: #page/screener — ใช้ตอนเปิดเมนูเป็นแท็บใหม่
+// (deep-link รายหุ้นมี #fin/ #ts/ #stock/ อยู่แล้ว ดูท้ายไฟล์)
+function _pageApplyHash() {
+  const m = location.hash.match(/^#page\/([\w-]+)$/);
+  if (!m) return;
+  const id = m[1];
+  if (!document.getElementById('page-' + id)) return;
+  showPage(id, document.querySelector(`.nav-btn[onclick*="'${id}'"]`));
+}
+
+(function _navOpenModeInit() {
+  const boot = () => {
+    _navOpenModeSync();
+    const nav = document.querySelector('nav');
+    if (nav) {
+      nav.addEventListener('click', e => {
+        const btn = e.target.closest('.nav-btn');
+        if (!btn || !nav.contains(btn)) return;
+        const forceNew = e.ctrlKey || e.metaKey || e.button === 1;
+        if (!forceNew && navOpenMode() !== 'new') return;   // โหมดหน้าเดิม = ปล่อยผ่านตามปกติ
+        const m = (btn.getAttribute('onclick') || '').match(/showPage\(\s*['"]([\w-]+)['"]/);
+        if (!m) return;
+        e.preventDefault();
+        e.stopPropagation();      // กัน inline onclick ของปุ่มไม่ให้ทำงาน (capture phase)
+        window.open(location.pathname + location.search + '#page/' + m[1], '_blank', 'noopener');
+      }, true);
+    }
+    if (location.hash.startsWith('#page/')) _pageApplyHash();
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+  window.addEventListener('hashchange', _pageApplyHash);
+})();
+
+// ============================================================
 // NAV
 // ============================================================
 function showPage(id, btn) {
@@ -3871,11 +3952,11 @@ function hedgeShowStock(sym) {
 // เปิดเป็นแท็บใหม่เสมอ (ผู้ใช้ไม่อยากหลุดจากหน้า Hedge Holdings ที่กำลังดูอยู่) ผ่าน
 // URL hash deep-link เดียวกับที่ #fin/ ใช้อยู่แล้ว — ดู _tsApplyHash / _stockApplyHash ด้านล่าง
 function hedgeOpenFinancials(sym) {
-  window.open(location.pathname + location.search + '#fin/dr/' + encodeURIComponent(sym), '_blank');
+  openInternalHash('#fin/dr/US:' + encodeURIComponent(sym));
 }
 
 function hedgeOpenTearsheet(sym) {
-  window.open(location.pathname + location.search + '#ts/us/' + encodeURIComponent(sym), '_blank');
+  openInternalHash('#ts/us/' + encodeURIComponent(sym));
 }
 
 // "popup รายละเอียดหุ้น" เดียวกับที่ Screener+/US stocks ใช้ (chart-modal มีกราฟ+
@@ -3883,7 +3964,7 @@ function hedgeOpenTearsheet(sym) {
 // ใน us_prices.db (ในดัชนีหลัก S&P500/Dow/NDX) หุ้นนอกดัชนีให้ใช้ปุ่มงบการเงิน/
 // Tearsheet ด้านข้างแทน (ดึงจาก Yahoo ตรงๆ ได้เสมอ ไม่ต้องมีราคาเก็บไว้ล่วงหน้า)
 function hedgeOpenDetail(sym) {
-  window.open(location.pathname + location.search + '#stock/us/' + encodeURIComponent(sym), '_blank');
+  openInternalHash('#stock/us/' + encodeURIComponent(sym));
 }
 
 function _hedgeRenderDetail(html) {
@@ -4149,18 +4230,11 @@ function closeStockPopup() {
   document.removeEventListener('click', _spopOutside);
 }
 
+// ผ่าน deep-link #fin/ ให้ _finApplyHash จัดการ tab+ช่องค้นหา+searchFinancials ให้เอง
+// (ทางเดียวกันนี้ทำให้ปุ่มเคารพโหมด "🔗 หน้าเดิม / 🗗 แท็บใหม่" บนแถบเมนูโดยอัตโนมัติ)
 function _spopGoFin(sym) {
-  const drStocks = _drData || [];
-  const isDR = drStocks.some(s => s.sym === sym);
-  showPage('financials');
-  if (isDR) {
-    setFinTab('dr',  document.getElementById('fin-tab-dr-btn'));
-    document.getElementById('fin-sym-dr').value = sym;
-  } else {
-    setFinTab('set', document.getElementById('fin-tab-set-btn'));
-    document.getElementById('fin-sym-set').value = sym;
-  }
-  setTimeout(searchFinancials, 150);
+  const isDR = (_drData || []).some(s => s.sym === sym);
+  openInternalHash('#fin/' + (isDR ? 'dr' : 'set') + '/' + encodeURIComponent(sym));
 }
 
 function _drawSpopChart(d) {
@@ -6772,7 +6846,6 @@ function closePeerAndOpenChart(sym) {
 
 function openPeerFromModal() {
   if (!_cmStock) return;
-  closeChartModal();
   // หุ้น DR (_isDR) fetch แรกต้องส่ง market='DR' ตรงๆ ให้ backend resolve เป็น underlying
   // US/HK เอง (DR sym อาจไม่ตรงกับ yf ticker จริง เช่น DR "APPL" -> underlying "APP" — เดา
   // ผิดตัวได้ถ้าส่ง market=US ตรงๆ) ส่วนแท็บ UI/datalist ยังตั้งเป็น US/HK ตามปกติ (field
@@ -6781,6 +6854,12 @@ function openPeerFromModal() {
   // ใช้ _peerMarket ปกติได้
   const isDr = !!_cmStock._isDR;
   const tabMkt = isDr ? (_cmStock.region === 'HK' ? 'HK' : 'US') : (_cmStock._isUSIdx ? 'US' : _cmStock._isHKIdx ? 'HK' : _cmStock._isJPIdx ? 'JP' : 'TH');
+  // โหมด "🗗 แท็บใหม่" — ส่ง deep-link #peer/ ไปแท็บใหม่ คากราฟที่ดูอยู่ไว้ในแท็บนี้ (DR ไปทางเดิม)
+  if (!isDr && navOpenMode() === 'new') {
+    openInternalHash(`#peer/${tabMkt.toLowerCase()}/${encodeURIComponent(_cmStock.symbol)}`, true);
+    return;
+  }
+  closeChartModal();
   const btn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'peer'"));
   showPage('peer', btn);
   setPeerMarket(tabMkt, document.getElementById('peer-tab-' + tabMkt.toLowerCase()));
@@ -7751,6 +7830,7 @@ function _tsGoFilings(sym) {
 
 function _tsGoPeer(sym) {
   const mkt = _tsData?.market || 'TH';
+  if (navOpenMode() === 'new') { openInternalHash(`#peer/${mkt.toLowerCase()}/${encodeURIComponent(sym)}`, true); return; }
   const btn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'peer'"));
   showPage('peer', btn);
   setPeerMarket(mkt, document.getElementById('peer-tab-' + mkt.toLowerCase()));
@@ -7759,16 +7839,9 @@ function _tsGoPeer(sym) {
 
 function _tsGoFin(sym) {
   const mkt = _tsData?.market || 'TH';
-  showPage('financials');
-  if (mkt === 'TH') {
-    setFinTab('set', document.getElementById('fin-tab-set-btn'));
-    document.getElementById('fin-sym-set').value = sym;
-  } else {
-    setFinTab('dr', document.getElementById('fin-tab-dr-btn'));
-    _finMirSelectMarket(mkt);
-    document.getElementById('fin-sym-dr').value = _tsRawSym(sym);
-  }
-  setTimeout(searchFinancials, 150);
+  openInternalHash(mkt === 'TH'
+    ? '#fin/set/' + encodeURIComponent(sym)
+    : `#fin/dr/${mkt}:${encodeURIComponent(_tsRawSym(sym))}`);
 }
 
 function _tsGoDividends(sym) {
@@ -7972,11 +8045,17 @@ function closeTsOpenChart(sym) {
 
 function openTearsheetFromModal() {
   if (!_cmStock) return;
-  closeChartModal();
   // หุ้น DR (_isDR) fetch แรกส่ง market='DR' ให้ backend resolve underlying เอง (ดู
   // openPeerFromModal ด้านบนสำหรับเหตุผลเดียวกัน) แท็บ UI ยังตั้งเป็น US/HK ตามปกติ
   const isDr = !!_cmStock._isDR;
   const mkt = isDr ? (_cmStock.region === 'HK' ? 'HK' : 'US') : (_cmStock._isUSIdx ? 'US' : _cmStock._isHKIdx ? 'HK' : _cmStock._isJPIdx ? 'JP' : 'TH');
+  // โหมด "🗗 แท็บใหม่" — ส่ง deep-link #ts/ ไปแท็บใหม่ แล้วคากราฟที่กำลังดูอยู่ไว้ในแท็บนี้
+  // (ยกเว้นหุ้น DR: hash route ไม่มี market 'DR' ที่ backend ต้องใช้ resolve underlying)
+  if (!isDr && navOpenMode() === 'new') {
+    openInternalHash(`#ts/${mkt.toLowerCase()}/${encodeURIComponent(_cmStock.symbol)}`, true);
+    return;
+  }
+  closeChartModal();
   const btn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'tearsheet'"));
   showPage('tearsheet', btn);
   setTsMarket(mkt, document.getElementById('ts-tab-' + mkt.toLowerCase()));
@@ -12385,7 +12464,7 @@ function _hmGoFin() {
   if (!_hmPopupSym) return;
   const sym = _hmPopupSym;
   document.getElementById('hm-popup').style.display = 'none';
-  location.hash = '#fin/dr/' + sym;   // ทริกเกอร์ _finApplyHash — ไม่ต้องเดา setTimeout ว่าหน้าโหลดเสร็จหรือยัง
+  openInternalHash('#fin/dr/US:' + sym);   // ทริกเกอร์ _finApplyHash — ไม่ต้องเดา setTimeout ว่าหน้าโหลดเสร็จหรือยัง (หรือเปิดแท็บใหม่ตามโหมดที่เลือก)
 }
 
 // ============================================================
@@ -12557,7 +12636,7 @@ function _hkHmGoFin() {
   const sym = _hkHmPopupSym.replace(/\.HK$/i, '');
   document.getElementById('hm-popup').style.display = 'none';
   _finMirSelectMarket('HK');
-  location.hash = '#fin/dr/' + sym;
+  openInternalHash('#fin/dr/HK:' + sym);
 }
 
 // ============================================================
@@ -12718,7 +12797,7 @@ function _jpHmGoFin() {
   const sym = _jpHmPopupSym.replace(/\.T$/i, '');
   document.getElementById('hm-popup').style.display = 'none';
   _finMirSelectMarket('JP');
-  location.hash = '#fin/dr/' + sym;
+  openInternalHash('#fin/dr/JP:' + sym);
 }
 
 // ============================================================
@@ -13350,12 +13429,15 @@ function resetFinCompare() {
 
 // URL hash deep-link: #fin/set/PTT หรือ #fin/dr/NVDA — เปิดหน้างบการเงินพร้อมค้นหาหุ้นทันที
 // รองรับ refresh/back-forward/แชร์ลิงก์ (เดิมไม่มี hash routing เลย รีเฟรชแล้วหลุดกลับหน้าแรกทุกครั้ง)
+// รูปแบบ #fin/dr/HK:0700 (มี prefix ตลาด) ใช้ตอนเปิดเป็นแท็บใหม่จาก Heatmap HK/JP —
+// แท็บใหม่ไม่ได้สืบทอด _finMirMarket จากแท็บเดิม ถ้าไม่พกตลาดมาด้วยจะเดา yf ticker ผิด
 function _finApplyHash() {
-  const m = location.hash.match(/^#fin\/(set|dr)\/([^/]+)$/);
+  const m = location.hash.match(/^#fin\/(set|dr)\/(?:(US|HK|JP):)?([^/]+)$/);
   if (!m) return;
-  const [, tab, symRaw] = m;
+  const [, tab, mkt, symRaw] = m;
   const sym = decodeURIComponent(symRaw).toUpperCase();
   showPage('financials', document.querySelector('.nav-btn[onclick*="financials"]'));
+  if (mkt) _finMirSelectMarket(mkt);
   setFinTab(tab, document.getElementById(tab === 'set' ? 'fin-tab-set-btn' : 'fin-tab-dr-btn'));
   const inp = document.getElementById(tab === 'set' ? 'fin-sym-set' : 'fin-sym-dr');
   if (inp) inp.value = sym;
@@ -13378,6 +13460,22 @@ function _tsApplyHash() {
 }
 window.addEventListener('hashchange', _tsApplyHash);
 window.addEventListener('DOMContentLoaded', () => { if (location.hash.startsWith('#ts/')) _tsApplyHash(); });
+
+// URL hash deep-link: #peer/us/AAPL — เปิดหน้า "เทียบเพื่อน" พร้อมโหลดกลุ่มของหุ้นนั้นทันที
+// (ใช้โดยปุ่มเทียบเพื่อนต่าง ๆ เมื่อผู้ใช้เลือกโหมด "🗗 แท็บใหม่") เหมือน #ts/ ด้านบน
+// หมายเหตุ: หุ้น DR ต้องส่ง market='DR' ให้ backend resolve underlying จึงไม่ผ่าน route นี้
+function _peerApplyHash() {
+  const m = location.hash.match(/^#peer\/(th|us|hk|jp)\/([^/]+)$/);
+  if (!m) return;
+  const [, mktRaw, symRaw] = m;
+  const mkt = mktRaw.toUpperCase();
+  const sym = decodeURIComponent(symRaw).toUpperCase();
+  showPage('peer', document.querySelector('.nav-btn[onclick*="peer"]'));
+  setPeerMarket(mkt, document.getElementById('peer-tab-' + mktRaw));
+  loadPeerCompare(sym, mkt);
+}
+window.addEventListener('hashchange', _peerApplyHash);
+window.addEventListener('DOMContentLoaded', () => { if (location.hash.startsWith('#peer/')) _peerApplyHash(); });
 
 // URL hash deep-link: #stock/us/AAPL — เปิดหน้าหุ้น US แล้วเด้ง popup รายละเอียด (chart-modal)
 // ให้เองทันที (ใช้โดยปุ่ม "เปิดแท็บใหม่" เช่น hedgeOpenDetail ใน Hedge Holdings — หุ้นจาก

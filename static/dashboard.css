@@ -51,6 +51,12 @@
     font-family: var(--font); white-space: nowrap; flex-shrink: 0; margin-right: 8px;
   }
   .nav-toggle-btn:hover { color: var(--text); }
+  /* ปุ่มสลับ "เปิดหน้าเดิม / เปิดแท็บใหม่" เวลากดเมนูหรือปุ่มดูหุ้น (ดู navOpenMode ใน dashboard.js)
+     โหมดแท็บใหม่ย้อมสีฟ้าให้เห็นชัดว่าตอนนี้กดอะไรก็เด้งแท็บใหม่หมด */
+  #nav-openmode-btn.mode-new {
+    border-color: var(--blue); color: var(--blue);
+    background: color-mix(in srgb, var(--blue) 14%, transparent);
+  }
   /* ย่อเมนู: โชว์เฉพาะปุ่มที่ active (หน้าปัจจุบัน) เหลือแถวเดียว ปุ่มอื่นซ่อนไว้
      กดปุ่มเดิมซ้ำเพื่อขยายกลับ — ไม่กระทบการสลับหน้า (showPage ทำงานปกติ) */
   nav.nav-collapsed .nav-btn:not(.active) { display: none; }
