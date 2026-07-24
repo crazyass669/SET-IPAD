@@ -36,6 +36,10 @@ SITUATION: Laptop = ใช้ทุกวัน, PC = ใช้ 2-3 วันต
      git commit -m "feat: เพิ่มหน้า screener"
      git push
 
+  ⚡ Lazy version (บรรทัดเดียว - ไม่ต้องคิดอะไร):
+
+     git add .; git commit -m "update"; git push
+
   ✓ ถ้า push สำเร็จจะเห็นข้อมูลขึ้นมา:
      Enumerating objects: 15, done.
      Counting objects: 100% (15/15), done.
@@ -157,6 +161,34 @@ SITUATION: Laptop = ใช้ทุกวัน, PC = ใช้ 2-3 วันต
   3. Push ทุกวันก่อนปิดเครื่อง = ข้อมูลปลอดภัย GitHub
 
   4. Pull ทุกครั้งเปิดเครื่อง = โค้ดเป็นล่าสุด
+
+
+🤖 Claude Code ช่วยเขียน Commit Message
+================================================================================
+
+  ถ้าแก้โค้ดหลายอย่างและงง commit message ต้องเขียนยังไง:
+
+  1. เปิด Claude Code ที่ terminal/IDE ของโปรเจกต์
+
+  2. รัน:
+     git diff --stat
+     git status
+
+  3. Copy output มาให้ Claude โดยพิมพ์:
+     "help commit message"
+
+  4. Claude จะวิเคราะห์ code ที่เปลี่ยนแล้วเขียน commit message ให้
+
+  ตัวอย่าง:
+     git diff --stat
+     [Output: sources/screener.py | 45 +++, app.py | 12 +++]
+
+     → "help commit message"
+
+     Claude ตอบ: feat: เพิ่ม screener filter + fix port 5001 (sources/screener.py, app.py)
+
+     → Copy ไปพิมพ์:
+     git commit -m "feat: เพิ่ม screener filter + fix port 5001"
 
 
 🎉 สำเร็จ
