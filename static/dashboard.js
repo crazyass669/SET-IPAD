@@ -3187,7 +3187,12 @@ function _pageApplyHash() {
   if (!m) return;
   const id = m[1];
   if (!document.getElementById('page-' + id)) return;
-  showPage(id, document.querySelector(`.nav-btn[onclick*="'${id}'"]`));
+  const btn = document.querySelector(`.nav-btn[onclick*="'${id}'"]`);
+  // เว็บ static (GitHub Pages) ซ่อนปุ่ม nav ของหน้า local-only ไว้ด้วย CSS (.static-mode)
+  // แต่ hash นี้เรียก showPage() ตรงๆ ข้าม CSS guard ได้ — ถ้า hash ค้าง/แชร์ลิงก์มาเปิดหน้า
+  // ที่ควรถูกซ่อนแล้วเจอ error แทน กันด้วยการเช็คว่าปุ่มนี้ถูกซ่อนอยู่หรือไม่ก่อนเปิด
+  if (btn && getComputedStyle(btn).display === 'none') return;
+  showPage(id, btn);
 }
 
 (function _navOpenModeInit() {
@@ -13444,6 +13449,11 @@ function resetFinCompare() {
 // รูปแบบ #fin/dr/HK:0700 (มี prefix ตลาด) ใช้ตอนเปิดเป็นแท็บใหม่จาก Heatmap HK/JP —
 // แท็บใหม่ไม่ได้สืบทอด _finMirMarket จากแท็บเดิม ถ้าไม่พกตลาดมาด้วยจะเดา yf ticker ผิด
 function _finApplyHash() {
+  // เว็บ static (มือถือ/ไอแพด GitHub Pages) ไม่มีหน้านี้เลย (ปุ่ม nav ถูกซ่อนไว้ด้วย
+  // CSS .static-mode) แต่ hash deep-link นี้เรียก showPage() ตรงๆ ข้าม CSS guard ได้
+  // — ถ้าไม่กันไว้ตรงนี้ hash เก่า/แชร์ลิงก์มา/แท็บที่เบราว์เซอร์ restore จะเปิดหน้าที่
+  // ควรถูกซ่อนแล้วเจอ error แทน
+  if (IS_STATIC) return;
   const m = location.hash.match(/^#fin\/(set|dr)\/(?:(US|HK|JP):)?([^/]+)$/);
   if (!m) return;
   const [, tab, mkt, symRaw] = m;
@@ -13461,6 +13471,8 @@ window.addEventListener('DOMContentLoaded', () => { if (location.hash.startsWith
 // URL hash deep-link: #ts/us/AAPL — เปิดหน้า Tearsheet พร้อมโหลดหุ้นทันที (ใช้โดยปุ่ม
 // "เปิดแท็บใหม่" เช่น hedgeOpenTearsheet ใน Hedge Holdings) เหมือน #fin/ ด้านบน
 function _tsApplyHash() {
+  // ดูคอมเมนต์เดียวกันใน _finApplyHash — หน้า Tearsheet ก็ถูกซ่อนด้วย .static-mode เช่นกัน
+  if (IS_STATIC) return;
   const m = location.hash.match(/^#ts\/(th|us|hk|jp)\/([^/]+)$/);
   if (!m) return;
   const [, mktRaw, symRaw] = m;
@@ -13477,6 +13489,8 @@ window.addEventListener('DOMContentLoaded', () => { if (location.hash.startsWith
 // (ใช้โดยปุ่มเทียบเพื่อนต่าง ๆ เมื่อผู้ใช้เลือกโหมด "🗗 แท็บใหม่") เหมือน #ts/ ด้านบน
 // หมายเหตุ: หุ้น DR ต้องส่ง market='DR' ให้ backend resolve underlying จึงไม่ผ่าน route นี้
 function _peerApplyHash() {
+  // ดูคอมเมนต์เดียวกันใน _finApplyHash — หน้าเทียบเพื่อนก็ถูกซ่อนด้วย .static-mode เช่นกัน
+  if (IS_STATIC) return;
   const m = location.hash.match(/^#peer\/(th|us|hk|jp)\/([^/]+)$/);
   if (!m) return;
   const [, mktRaw, symRaw] = m;
@@ -13493,6 +13507,9 @@ window.addEventListener('DOMContentLoaded', () => { if (location.hash.startsWith
 // ให้เองทันที (ใช้โดยปุ่ม "เปิดแท็บใหม่" เช่น hedgeOpenDetail ใน Hedge Holdings — หุ้นจาก
 // Dataroma เป็น US เท่านั้น จึงรองรับแค่ us/hk ไม่มี th)
 async function _stockApplyHash() {
+  // ดูคอมเมนต์เดียวกันใน _finApplyHash — หน้าหุ้น US/HK ก็ถูกซ่อนด้วย .static-mode เช่นกัน
+  // (/api/us-index-metrics, /api/hk-index-metrics ไม่ได้ bake ไว้เลย)
+  if (IS_STATIC) return;
   const m = location.hash.match(/^#stock\/(us|hk)\/([^/]+)$/);
   if (!m) return;
   const [, mktRaw, symRaw] = m;
