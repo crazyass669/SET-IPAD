@@ -4956,6 +4956,18 @@ function retryFinMissing(symbols) {
   });
 }
 
+// ตรวจว่าวันที่ข้อมูล (YYYY-MM-DD) ค้างเกิน maxDays วันหรือยัง — ใช้ร่วมกันโดย
+// NVDR Ranking/Short Sales status line (คนละจุดจาก checkFlowFreshness ด้านล่าง
+// ซึ่งซ่อนทั้งเมนู Capital Flow ตาม market_flow.json อย่างเดียว — NVDR/Short มี
+// แหล่งข้อมูลของตัวเอง ค้างได้อิสระจาก market_flow เลยต้องเช็คแยก)
+function _staleTradeDateHtml(dateStr, maxDays = 4) {
+  if (!dateStr) return ' <span style="color:var(--red);font-weight:600">⚠ ไม่มีข้อมูล</span>';
+  const ageDays = (Date.now() - new Date(dateStr).getTime()) / 86400000;
+  return ageDays > maxDays
+    ? ' <span style="color:var(--red);font-weight:600">⚠ ข้อมูลค้าง</span>'
+    : '';
+}
+
 // ============================================================
 // CAPITAL FLOW FRESHNESS CHECK — เฉพาะเวอร์ชันเว็บ (GitHub Pages)
 // market_flow.json มาจาก siamchart.com ที่สงสัยว่าโดนบล็อคจาก IP ของ
@@ -18969,8 +18981,8 @@ async function loadShortPage() {
     return;
   }
   const upd  = data.last_api_update ? `อัพเดท API ${data.last_api_update}` : 'ยังไม่มี daily update';
-  document.getElementById('short-status').textContent =
-    `ข้อมูล ${data.period_from} ถึง ${data.period_to} · ${upd}`;
+  document.getElementById('short-status').innerHTML =
+    `ข้อมูล ${data.period_from} ถึง ${data.period_to} · ${upd}${_staleTradeDateHtml(data.last_api_update)}`;
   // Squeeze Radar ต้องใช้ _insAccum (insider) + _nvdrData ด้วย — เดิมต้องเข้าหน้า
   // Insider/NVDR ก่อนถึงจะมีข้อมูล (แถว NVDR% ในการ์ด squeeze หายเงียบๆ)
   // โหลดให้อัตโนมัติตรงนี้เลย ไม่ต้องพึ่งลำดับที่ผู้ใช้กดหน้าไหนก่อน
@@ -20250,7 +20262,7 @@ async function renderNvdrRanking() {
   const st = document.getElementById('nvdr-rank-status');
   if (st) {
     const modeLbl = n === 1 ? 'Δ ล่าสุด' : `Δ สะสม ${n} snapshots`;
-    st.textContent = `อัพเดท: ${d.updated_at || '—'} · ${modeLbl} · ${withD.length} หุ้นมีการเปลี่ยนแปลง`;
+    st.innerHTML = `อัพเดท: ${d.updated_at || '—'}${_staleTradeDateHtml(d.updated_at)} · ${modeLbl} · ${withD.length} หุ้นมีการเปลี่ยนแปลง`;
   }
 }
 

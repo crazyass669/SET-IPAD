@@ -5699,7 +5699,10 @@ def short_sales_daily_update():
 
         trade_date = resp.get("tradingBeginDate", "")[:10]
         if not trade_date:
-            return
+            raise ValueError(
+                f"SET API ไม่คืน tradingBeginDate (อาจถูกบล็อค/รูปแบบ response เปลี่ยน) — "
+                f"response keys: {list(resp.keys())}"
+            )
 
         with open(_SHORT_DATA_FILE, encoding="utf-8") as f:
             data = json.load(f)
@@ -5849,7 +5852,10 @@ def short_sales_daily_update():
         print(f"[short-sales] updated {updated} stocks ({trade_date})")
 
     except Exception as e:
-        print(f"[short-sales] daily update error: {e}")
+        import traceback as _tb
+        print(f"[short-sales] daily update error: {type(e).__name__}: {e}")
+        print(_tb.format_exc())
+        raise
 
 
 # ── Capital Flow ─────────────────────────────────────────────────────────────
@@ -6295,7 +6301,10 @@ def nvdr_daily_update():
     try:
         trade_date, items = _fetch_nvdr_outstanding()
         if not trade_date or not items:
-            return
+            raise ValueError(
+                f"SET API ไม่คืนข้อมูล NVDR (อาจถูกบล็อค/รูปแบบ response เปลี่ยน) — "
+                f"trade_date={trade_date!r}, items={len(items) if items else 0}"
+            )
 
         # โหลดหรือสร้างไฟล์ใหม่
         if os.path.exists(_NVDR_DATA_FILE):
@@ -6337,7 +6346,10 @@ def nvdr_daily_update():
         print(f"[nvdr] updated {updated} stocks ({trade_date})")
 
     except Exception as e:
-        print(f"[nvdr] update error: {e}")
+        import traceback as _tb
+        print(f"[nvdr] update error: {type(e).__name__}: {e}")
+        print(_tb.format_exc())
+        raise
 
 
 @app.route("/api/prices")
