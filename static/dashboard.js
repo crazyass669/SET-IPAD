@@ -4992,12 +4992,21 @@ function retryFinMissing(symbols) {
 // NVDR Ranking/Short Sales status line (คนละจุดจาก checkFlowFreshness ด้านล่าง
 // ซึ่งซ่อนทั้งเมนู Capital Flow ตาม market_flow.json อย่างเดียว — NVDR/Short มี
 // แหล่งข้อมูลของตัวเอง ค้างได้อิสระจาก market_flow เลยต้องเช็คแยก)
-function _staleTradeDateHtml(dateStr, maxDays = 4) {
-  if (!dateStr) return ' <span style="color:var(--red);font-weight:600">⚠ ไม่มีข้อมูล</span>';
+// คืน DOM node (ไม่ใช่ HTML string) ให้ caller ใช้ appendChild ต่อท้าย textContent เดิมได้
+// โดยไม่ต้องเปิดช่อง innerHTML ให้ค่าจาก API (period_from/to, last_api_update ฯลฯ)
+// ที่ไม่ได้ escape เล็ดลอดเข้าไปเป็น HTML ได้ แม้จะมาจาก local JSON ที่เชื่อถือได้ก็ตาม
+function _staleTradeDateBadge(dateStr, maxDays = 4) {
+  const span = document.createElement('span');
+  span.style.color = 'var(--red)';
+  span.style.fontWeight = '600';
+  if (!dateStr) {
+    span.textContent = ' ⚠ ไม่มีข้อมูล';
+    return span;
+  }
   const ageDays = (Date.now() - new Date(dateStr).getTime()) / 86400000;
-  return ageDays > maxDays
-    ? ' <span style="color:var(--red);font-weight:600">⚠ ข้อมูลค้าง</span>'
-    : '';
+  if (ageDays <= maxDays) return null;
+  span.textContent = ' ⚠ ข้อมูลค้าง';
+  return span;
 }
 
 // ============================================================
@@ -13764,9 +13773,10 @@ function _calSetRange(days, btn) {
 }
 
 // สลับดู "อนาคต" (default เดิม) กับ "ย้อนหลัง" — ย้อนหลังใช้ช่วงวันเดียวกับปุ่ม 7/30/ทั้งหมด แต่
-// นับถอยจากวันนี้ไปข้างหลังแทน ต้องขยับปฏิทินรายเดือน (grid) ไปเดือนก่อนด้วยถ้ากำลังดูมุมมองนั้น
-// ไม่งั้นจะยังค้างที่เดือนปัจจุบันซึ่งอาจไม่มี event ย้อนหลังให้ดู (ดู backend _CALENDAR_LOOKBACK_DAYS
-// ที่ต้อง sync ให้ครอบคลุมพอกับช่วงย้อนหลังที่เลือกได้)
+// นับถอยจากวันนี้ไปข้างหลังแทน ใช้ได้เฉพาะมุมมอง "รายการ" (_calRenderList) เท่านั้น — มุมมอง
+// "ปฏิทินเดือน" (grid) มีปุ่ม ◀/▶/วันนี้ เลื่อนดูเดือนย้อนหลังเองอยู่แล้ว เลยซ่อนแถวปุ่มนี้ไป
+// ตอนอยู่ grid view (ดู _calSetView) ไม่ต้องพึ่ง _calDirection เลย ต้องมีข้อมูลย้อนหลังพอให้เห็น
+// จริง ดู backend _CALENDAR_LOOKBACK_DAYS ที่ sync ให้ครอบคลุมช่วงย้อนหลังที่เลือกได้
 function _calSetDirection(dir, btn) {
   _calDirection = dir;
   document.querySelectorAll('#cal-dir-future,#cal-dir-past').forEach(b => b.classList.remove('active'));
@@ -18984,8 +18994,10 @@ async function loadShortPage() {
     return;
   }
   const upd  = data.last_api_update ? `อัพเดท API ${data.last_api_update}` : 'ยังไม่มี daily update';
-  document.getElementById('short-status').innerHTML =
-    `ข้อมูล ${data.period_from} ถึง ${data.period_to} · ${upd}${_staleTradeDateHtml(data.last_api_update)}`;
+  const shortStatusEl = document.getElementById('short-status');
+  shortStatusEl.textContent = `ข้อมูล ${data.period_from} ถึง ${data.period_to} · ${upd}`;
+  const shortStaleBadge = _staleTradeDateBadge(data.last_api_update);
+  if (shortStaleBadge) shortStatusEl.appendChild(shortStaleBadge);
   // Squeeze Radar ต้องใช้ _insAccum (insider) + _nvdrData ด้วย — เดิมต้องเข้าหน้า
   // Insider/NVDR ก่อนถึงจะมีข้อมูล (แถว NVDR% ในการ์ด squeeze หายเงียบๆ)
   // โหลดให้อัตโนมัติตรงนี้เลย ไม่ต้องพึ่งลำดับที่ผู้ใช้กดหน้าไหนก่อน
@@ -20265,7 +20277,10 @@ async function renderNvdrRanking() {
   const st = document.getElementById('nvdr-rank-status');
   if (st) {
     const modeLbl = n === 1 ? 'Δ ล่าสุด' : `Δ สะสม ${n} snapshots`;
-    st.innerHTML = `อัพเดท: ${d.updated_at || '—'}${_staleTradeDateHtml(d.updated_at)} · ${modeLbl} · ${withD.length} หุ้นมีการเปลี่ยนแปลง`;
+    st.textContent = `อัพเดท: ${d.updated_at || '—'}`;
+    const nvdrStaleBadge = _staleTradeDateBadge(d.updated_at);
+    if (nvdrStaleBadge) st.appendChild(nvdrStaleBadge);
+    st.appendChild(document.createTextNode(` · ${modeLbl} · ${withD.length} หุ้นมีการเปลี่ยนแปลง`));
   }
 }
 
