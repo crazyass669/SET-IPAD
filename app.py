@@ -4459,6 +4459,7 @@ _UPDATE_STATUS_LABEL = {
     "full_refresh":   "⟳ Full Refresh",
     "financials_sync": "🔄 อัพเดทงบการเงิน (update_financials.py)",
     "mirror_finnomena": "📥 Mirror US/HK ทั้งตลาด (mirror_finnomena.py)",
+    "build_mirror_names": "🏷️ ดึงชื่อหุ้น mirror ใหม่ (build_mirror_names.py)",
     "us_index_full_refresh": "📈 ดึงราคา US Index ย้อนหลังสูงสุด",
     "hk_index_full_refresh": "📈 ดึงราคา HK Index ย้อนหลังสูงสุด",
     "jp_index_full_refresh": "📈 ดึงราคา JP Index ย้อนหลังสูงสุด",
@@ -4632,6 +4633,184 @@ def mirror_yahoo_index_sync():
         _state.update(running=True, done=False, error=None,
                       current=0, total=0, message="กำลังเริ่ม sync งบ Yahoo หุ้น US/HK ทั้ง mirror universe...")
     threading.Thread(target=_run_mirror_yahoo_index_sync, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+# ============================================================
+# หลังงบไตรมาสออก (ก.พ./พ.ค./ส.ค./พ.ย.) — เดิมต้องเปิด command line รัน
+# update_financials.py / mirror_finnomena.py / build_snapshot.py / build_mirror_names.py
+# เอง (คู่มือ-อัพเดทข้อมูล.txt) ย้ายมาเป็นปุ่มในหน้า Data Health แทน ใช้ job system
+# เดียวกับ mirror-sync-new/mirror-yahoo-index-sync ด้านบน (progress bar + run_log)
+# ============================================================
+
+def _run_financials_update_all():
+    """เทียบเท่า `python update_financials.py` (scope=all) — เช็ค DR ใหม่ → sync งบหุ้นไทย
+    (Yahoo+SET+Finnomena) → sync งบ DR (Yahoo+Finnomena) → refresh งบ mirror US/HK ที่ค้น
+    บ่อยใน 90 วัน → build factor snapshot ใหม่ ปุ่มที่ใช้บ่อยสุด (ทุกครั้งหลังงบไตรมาสออก)"""
+    t0 = time.time()
+    searched = []
+    try:
+        _update(current=1, total=100, message="เช็ค DR ใหม่จาก SET.or.th...")
+        try:
+            sync_dr_universe(BASE_DIR)
+        except Exception as e:
+            print(f"[FinancialsUpdateAll] DR-sync error (ข้าม ใช้ universe เดิม): {e}")
+
+        syms_th = _financials_universe()
+        _update(current=5, total=100, message=f"sync งบหุ้นไทย {len(syms_th)} ตัว...")
+
+        def _th_cb(done, total, msg):
+            pct = 5 + (done / max(total, 1) * 45)
+            _update(current=round(pct), total=100, message=f"งบหุ้นไทย: {done}/{total}")
+        r_th = financials_store.sync_all(BASE_DIR, syms_th,
+                                          sources=("yahoo", "set", "yahoo_q", "finnomena_q"),
+                                          callback=_th_cb, is_dr=False)
+
+        syms_dr = _dr_financials_universe()
+        _update(current=50, total=100, message=f"sync งบ DR {len(syms_dr)} ตัว...")
+
+        def _dr_cb(done, total, msg):
+            pct = 50 + (done / max(total, 1) * 30)
+            _update(current=round(pct), total=100, message=f"งบ DR: {done}/{total}")
+        r_dr = financials_store.sync_all(BASE_DIR, syms_dr,
+                                          sources=("yahoo", "yahoo_q", "finnomena_q"),
+                                          callback=_dr_cb, is_dr=True)
+
+        refreshed_mirror = 0
+        port = set(syms_dr)
+        searched = [s for s in financials_store.get_recent_searches(BASE_DIR, days=90) if s not in port]
+        if searched:
+            for i, s in enumerate(searched):
+                _update(current=80 + round(i / len(searched) * 12), total=100,
+                        message=f"refresh งบ mirror US/HK ที่ค้นบ่อย {i}/{len(searched)}...")
+                try:
+                    if financials_store.refresh_mirror_stock(BASE_DIR, s):
+                        refreshed_mirror += 1
+                except Exception:
+                    pass
+                time.sleep(0.3)   # throttle กัน Finnomena บล็อก
+
+        _update(current=93, total=100, message="กำลังคำนวณ factor snapshot ใหม่...")
+        factor_snapshot.build_snapshot(BASE_DIR)
+        if refreshed_mirror:
+            _update(current=98, total=100, message="กำลัง rebuild mirror snapshot...")
+            factor_snapshot.build_mirror_snapshot(BASE_DIR)
+        _fin_analytics_cache.clear()
+
+        elapsed_min = (time.time() - t0) / 60
+        summary = (f"เสร็จแล้ว! หุ้นไทย {r_th['ok']}/{r_th['total']} (พลาด {r_th['fail']}) · "
+                   f"DR {r_dr['ok']}/{r_dr['total']} (พลาด {r_dr['fail']})"
+                   + (f" · mirror ค้นบ่อย {refreshed_mirror}/{len(searched)}" if searched else "")
+                   + f" · ใช้เวลา {elapsed_min:.0f} นาที")
+        _update(running=False, done=True, message=summary)
+        run_log.record_run(BASE_DIR, "financials_sync", True, summary)
+    except Exception as e:
+        run_log.record_run(BASE_DIR, "financials_sync", False, str(e))
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+
+
+@app.route("/api/financials-update-all", methods=["POST"])
+def financials_update_all():
+    """ปุ่ม '🔄 อัพเดทงบการเงินทั้งหมด' (หน้า Data Health) — แทน `python update_financials.py`
+    ใช้เวลาไม่กี่นาที ใช้บ่อยสุด (ทุกครั้งหลังงบไตรมาสออก)"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=100, message="กำลังเริ่มอัพเดทงบการเงิน...")
+    threading.Thread(target=_run_financials_update_all, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _run_mirror_finnomena_force_full():
+    """เทียบเท่า `python mirror_finnomena.py force` แล้วต่อด้วย `python build_snapshot.py`
+    — ยิงซ้ำงบ Finnomena ทั้งตลาด TH+HK+US (ทุกตัวที่มีงบอยู่แล้ว) เพื่อดึงงวดใหม่มา merge
+    ใช้เวลานานมาก (เป็นชั่วโมง) ควรรันไตรมาสละครั้งหลัง earnings season"""
+    t0 = time.time()
+    try:
+        def cb(current, total, msg):
+            pct = (current / max(total, 1) * 85)
+            _update(current=round(pct), total=100, message=msg)
+        result = financials_store.mirror_finnomena(BASE_DIR, exchanges=("TH", "HK", "US"),
+                                                     callback=cb, force=True)
+        _mirror_diff_cache.clear()
+
+        _update(current=88, total=100, message="กำลังคำนวณ factor snapshot หลัก (ไทย+DR)...")
+        factor_snapshot.build_snapshot(BASE_DIR)
+        _update(current=94, total=100, message="กำลัง rebuild mirror snapshot US/HK...")
+        factor_snapshot.build_mirror_snapshot(BASE_DIR)
+        _fin_analytics_cache.clear()
+
+        elapsed_min = (time.time() - t0) / 60
+        summary = (f"เสร็จแล้ว! มีงบ {result['ok']} · ไม่มีงบ {result['empty']}"
+                   + (f" · พลาด {result['fail']}" if result["fail"] else "")
+                   + f" · ใช้เวลา {elapsed_min:.0f} นาที")
+        _update(running=False, done=True, message=summary)
+        run_log.record_run(BASE_DIR, "mirror_finnomena", True, summary)
+    except Exception as e:
+        run_log.record_run(BASE_DIR, "mirror_finnomena", False, str(e))
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+
+
+@app.route("/api/mirror-finnomena-force-full", methods=["POST"])
+def mirror_finnomena_force_full():
+    """ปุ่ม '📥 Mirror ทั้งตลาด (force) + rebuild snapshot' (หน้า Data Health) — แทน
+    `python mirror_finnomena.py force` + `python build_snapshot.py` ใช้เวลานานมาก (เป็น
+    ชั่วโมง) ปิดแท็บ/ปิดคอมได้ระหว่างรัน (สคริปต์ resume เองรอบหน้า) ควรรันไตรมาสละครั้ง"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=100, message="กำลังเริ่ม mirror งบ Finnomena ทั้งตลาด (force)...")
+    threading.Thread(target=_run_mirror_finnomena_force_full, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _run_build_mirror_names():
+    """เทียบเท่า `python build_mirror_names.py` — ดึงชื่อบริษัทของหุ้น US/HK ที่มีงบใน mirror
+    เก็บ mirror_names.json เร็ว (ไม่กี่วินาที) รันหลัง mirror เจอหุ้นใหม่"""
+    t0 = time.time()
+    try:
+        _update(current=10, total=100, message="ดึงรายชื่อ US จาก Finnomena...")
+        out = {}
+        con = financials_store._connect(BASE_DIR)
+        try:
+            for i, ex in enumerate(("US", "HK")):
+                _update(current=10 + i * 40, total=100, message=f"ดึงรายชื่อ {ex} จาก Finnomena...")
+                rows = (financials_store._finn_get(f"/stock/list?exchange={ex}", timeout=120) or {}).get("data") or []
+                name_map = {(r.get("name") or "").upper(): (r.get("en_name") or "").strip()
+                            for r in rows if r.get("name")}
+                have = {r[0] for r in con.execute(
+                    "SELECT symbol FROM financials WHERE source='finnomena_q' "
+                    "AND symbol LIKE ? AND payload NOT LIKE '%\"empty\": true%'", (f"FINN:{ex}:%",))}
+                have = {s.split(":", 2)[2] for s in have}
+                out[ex] = {t: name_map[t] for t in have if name_map.get(t)}
+        finally:
+            con.close()
+
+        _update(current=95, total=100, message="กำลังบันทึก mirror_names.json...")
+        out_path = os.path.join(BASE_DIR, "mirror_names.json")
+        _atomic_write_json(out_path, out)
+
+        elapsed_s = time.time() - t0
+        summary = f"เสร็จแล้ว! US {len(out['US'])} + HK {len(out['HK'])} ชื่อ ({elapsed_s:.0f} วิ)"
+        _update(running=False, done=True, message=summary)
+        run_log.record_run(BASE_DIR, "build_mirror_names", True, summary)
+    except Exception as e:
+        run_log.record_run(BASE_DIR, "build_mirror_names", False, str(e))
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+
+
+@app.route("/api/build-mirror-names", methods=["POST"])
+def build_mirror_names_route():
+    """ปุ่ม '🏷️ ดึงชื่อหุ้น mirror ใหม่' (หน้า Data Health) — แทน `python build_mirror_names.py`
+    เร็ว (ไม่กี่วินาที) รันเฉพาะตอนมี mirror หุ้นใหม่ (ไม่รันก็ไม่พัง แค่ตัวใหม่โชว์ ticker เปล่า)"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=100, message="กำลังดึงชื่อหุ้น mirror ใหม่...")
+    threading.Thread(target=_run_build_mirror_names, daemon=True).start()
     return jsonify({"ok": True})
 
 

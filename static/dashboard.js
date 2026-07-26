@@ -422,6 +422,22 @@ function startMirrorYahooIndexSync() {
   _startJob("/api/mirror-yahoo-index-sync", "mirror-yahoo-sync-btn", "🌐 Sync Mirror US/HK เต็ม", null, checkDataHealthBadge);
 }
 
+// หลังงบไตรมาสออก (ก.พ./พ.ค./ส.ค./พ.ย.) — เดิมต้องเปิด command line รันสคริปต์
+// (คู่มือ-อัพเดทข้อมูล.txt) ย้ายมาเป็นปุ่มในหน้า Data Health แทน ใช้ job system เดียวกับ
+// Quick Update/Full Refresh (progress bar + SSE + กันกดซ้ำระหว่างมีงานอื่นรันอยู่)
+function startFinancialsUpdateAll() {
+  _startJob("/api/financials-update-all", "fin-update-all-btn", "🔄 อัพเดทงบการเงินทั้งหมด", null, checkDataHealthBadge);
+}
+
+function startMirrorFinnomenaForceFull() {
+  if (!confirm('ยิงซ้ำงบ Finnomena ทั้งตลาด TH+HK+US (ทุกตัวที่มีงบอยู่แล้ว) เพื่อดึงงวดใหม่?\n\nใช้เวลานานมาก (เป็นชั่วโมง) — ปิดแท็บ/ปิดคอมได้ระหว่างรัน กดใหม่ภายหลังจะรันต่อจากเดิมเอง\n\nแนะนำกดตอนไม่ได้ใช้เครื่องต่อ (เช่นก่อนนอน)')) return;
+  _startJob("/api/mirror-finnomena-force-full", "mirror-force-btn", "📥 Mirror ทั้งตลาด (force)", null, checkDataHealthBadge);
+}
+
+function startBuildMirrorNames() {
+  _startJob("/api/build-mirror-names", "build-mirror-names-btn", "🏷️ ดึงชื่อหุ้น mirror ใหม่", null, checkDataHealthBadge);
+}
+
 async function restartServer() {
   if (!confirm('ยืนยันการ Restart Server?\n\nหน้าเว็บจะ reload อัตโนมัติหลัง server พร้อม')) return;
   const btn = document.getElementById('restart-btn');
@@ -5941,39 +5957,28 @@ const _BT_NOTE_HTML = `
 
 const _CLI_FIN_NOTE_HTML = `
 <div style="font-size:12px;line-height:1.75">
-  <div style="font-weight:700;font-size:13px;margin-bottom:6px">🧑‍💻 อัพเดทงบไตรมาส ผ่าน command line — ทำไมต้องรัน แล้วรันยังไง</div>
-  <div style="color:var(--text2);margin-bottom:10px">ทุกไตรมาส (ก.พ. / พ.ค. / ส.ค. / พ.ย.) บริษัทประกาศงบใหม่ — ข้อมูลนี้ไม่อัพเดทเองอัตโนมัติ ต้องสั่งดึงเอง ปุ่มในแอปด้านบนทำได้แค่บางส่วน ส่วน command line ครอบคลุมกว่าและเร็วกว่าเพราะรันครั้งเดียวจบ</div>
+  <div style="font-weight:700;font-size:13px;margin-bottom:6px">🧑‍💻 อัพเดทงบไตรมาส — ปุ่ม 3 ปุ่มทำอะไรอยู่ข้างในบ้าง</div>
+  <div style="color:var(--text2);margin-bottom:10px">ทุกไตรมาส (ก.พ. / พ.ค. / ส.ค. / พ.ย.) บริษัทประกาศงบใหม่ — ข้อมูลนี้ไม่อัพเดทเองอัตโนมัติ ต้องกดเอง เดิมต้องเปิด command line รันสคริปต์ ตอนนี้ย้ายมาเป็นปุ่มในหน้านี้แล้วทั้งหมด (การ์ด "📊 อัพเดทงบไตรมาส" ด้านบน) — ปุ่มแต่ละอันเรียกโค้ดชุดเดียวกับสคริปต์เดิมตรงๆ ไม่ได้ตัดอะไรออก</div>
 
-  <div style="font-weight:600;margin-bottom:4px">วิธีเปิด command line (ครั้งแรก)</div>
-  <ol style="margin:0 0 10px 18px;padding:0;color:var(--text2)">
-    <li>เปิดโฟลเดอร์โปรเจกต์ (SET_Dashboard) ใน File Explorer</li>
-    <li>คลิกที่แถบ address bar ด้านบน (ที่โชว์ path ของโฟลเดอร์) พิมพ์ <code>cmd</code> แล้วกด Enter — จะเปิดหน้าต่างดำๆ ที่อยู่ในโฟลเดอร์นี้พอดี</li>
-    <li>พิมพ์คำสั่งทีละบรรทัดตามด้านล่าง กด Enter แล้วรอจนขึ้น ✅ หรือ "เสร็จ"</li>
-  </ol>
+  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#1f6feb22;color:#58a6ff;font-weight:600;margin-bottom:6px">① 🔄 อัพเดทงบการเงินทั้งหมด — ทำทุกครั้งหลังงบออก ใช้บ่อยสุด</div>
+  <div style="color:var(--text2);margin-bottom:8px">เช็ค DR ใหม่ → ดึงงบหุ้นไทยทุกตัว (Yahoo+SET+Finnomena รวมกับของเดิม ไม่ทับของเก่า) → ดึงงบ DR → รีเฟรชหุ้น US/HK ที่มีคนค้นบ่อยใน 90 วัน → คำนวณ factor snapshot ใหม่ให้หน้า Screener (เดิมคือ <code>python update_financials.py</code>)<br>
+  ใช้เวลาไม่กี่นาที มี progress bar ให้ดู เสร็จแล้วข้อมูลรีเฟรชในหน้าเว็บให้เองอัตโนมัติ</div>
 
-  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#1f6feb22;color:#58a6ff;font-weight:600;margin-bottom:6px">① ทำทุกครั้งหลังงบออก — ใช้บ่อยสุด</div>
-  <div style="background:#161b22;border-radius:6px;padding:6px 10px;margin:4px 0"><code>python update_financials.py</code></div>
-  <div style="color:var(--text2);margin-bottom:8px">คำสั่งเดียวทำให้อัตโนมัติ: เช็ค DR ใหม่ → ดึงงบหุ้นไทยทุกตัว (Yahoo+SET+Finnomena รวมกับของเดิม ไม่ทับของเก่า) → ดึงงบ DR → รีเฟรชหุ้น US/HK ที่มีคนค้นบ่อยใน 90 วัน → คำนวณ factor snapshot ใหม่ให้หน้า Screener<br>
-  ใช้เวลาไม่กี่นาที เสร็จแล้ว<b>แค่กด refresh หน้าเว็บ</b> ไม่ต้อง restart อะไร</div>
+  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#3fb95022;color:#3fb950;font-weight:600;margin-bottom:6px">② 📥 Mirror ทั้งตลาด (force) — ไตรมาสละครั้ง ใช้เวลานาน</div>
+  <div style="color:var(--text2);margin-bottom:8px">โหลดงบ Finnomena "ทั้งตลาด" ไทย+ฮ่องกง+อเมริกา (ไม่ใช่แค่หุ้นที่มีคนค้น) เก็บลงฐานข้อมูล แล้ว rebuild factor snapshot ต่อให้เองในปุ่มเดียว (เดิมคือ <code>python mirror_finnomena.py force</code> ต่อด้วย <code>python build_snapshot.py</code>) — ใช้เวลานานมาก (เป็นชั่วโมง) ปิดแท็บ/ปิดคอมได้ระหว่างรัน กดใหม่ทีหลังจะข้ามตัวที่ทำแล้วและทำต่อจากเดิมให้เอง ก่อนเริ่มสำรอง financials.db ไว้ให้อัตโนมัติด้วย</div>
 
-  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#3fb95022;color:#3fb950;font-weight:600;margin-bottom:6px">② ไตรมาสละครั้ง — ใช้เวลานาน แนะนำรันกลางคืน</div>
-  <div style="background:#161b22;border-radius:6px;padding:6px 10px;margin:4px 0"><code>python mirror_finnomena.py force</code></div>
-  <div style="background:#161b22;border-radius:6px;padding:6px 10px;margin:4px 0"><code>python build_snapshot.py</code></div>
-  <div style="color:var(--text2);margin-bottom:8px">คำสั่งแรกโหลดงบ "ทั้งตลาด" ไทย+ฮ่องกง+อเมริกา (ไม่ใช่แค่หุ้นที่มีคนค้น) เก็บลงฐานข้อมูล — ใช้เวลานานมาก หยุดกลางทางได้เสมอ (ปิดคอมได้เลย) รันใหม่จะข้ามตัวที่ทำแล้วและทำต่อจากเดิมให้เอง ก่อนเริ่มมันสำรอง financials.db ไว้ให้อัตโนมัติด้วย<br>
-  คำสั่งที่สอง<b>ต้องรันต่อเสมอ</b> — เป็นตัวคำนวณสรุปใหม่ให้หน้า Screener เห็นข้อมูลล่าสุด ถ้าลืม หน้า Screener จะยังโชว์ตัวเลขเก่า</div>
-
-  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#e3b34122;color:#e3b341;font-weight:600;margin-bottom:6px">③ ทำเฉพาะตอนมี mirror หุ้นใหม่</div>
-  <div style="background:#161b22;border-radius:6px;padding:6px 10px;margin:4px 0"><code>python build_mirror_names.py</code></div>
-  <div style="color:var(--text2);margin-bottom:8px">ดึง "ชื่อบริษัท" ของหุ้น US/HK ที่เพิ่งมีงบเข้ามาใหม่ — ไม่รันก็ไม่พัง แค่หุ้นตัวใหม่จะโชว์แค่ ticker เปล่าๆ ไม่มีชื่อเต็มตอนค้นหา ใช้เวลาไม่กี่วินาที</div>
+  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#e3b34122;color:#e3b341;font-weight:600;margin-bottom:6px">③ 🏷️ ดึงชื่อหุ้น mirror ใหม่ — ทำเฉพาะตอนมี mirror หุ้นใหม่</div>
+  <div style="color:var(--text2);margin-bottom:8px">ดึง "ชื่อบริษัท" ของหุ้น US/HK ที่เพิ่งมีงบเข้ามาใหม่จากปุ่ม ② — ไม่กดก็ไม่พัง แค่หุ้นตัวใหม่จะโชว์แค่ ticker เปล่าๆ ไม่มีชื่อเต็มตอนค้นหา (เดิมคือ <code>python build_mirror_names.py</code>) ใช้เวลาไม่กี่วินาที</div>
 
   <table style="border-collapse:collapse;font-size:11.5px;margin-top:8px;width:100%">
-    <tr style="color:var(--text2)"><td style="padding:2px 12px 2px 0">คำสั่ง</td><td style="padding:2px 12px 2px 0">ความถี่</td><td>เวลาที่ใช้</td></tr>
-    <tr><td style="padding:2px 12px 2px 0"><code>python update_financials.py</code></td><td style="padding:2px 12px 2px 0">ทุกครั้งหลังงบไตรมาสออก</td><td>ไม่กี่นาที</td></tr>
-    <tr><td style="padding:2px 12px 2px 0"><code>mirror_finnomena.py force</code> → <code>build_snapshot.py</code></td><td style="padding:2px 12px 2px 0">ไตรมาสละครั้ง</td><td>นานมาก (รันกลางคืน)</td></tr>
-    <tr><td style="padding:2px 12px 2px 0"><code>python build_mirror_names.py</code></td><td style="padding:2px 12px 2px 0">หลัง mirror เจอหุ้นใหม่</td><td>ไม่กี่วินาที</td></tr>
+    <tr style="color:var(--text2)"><td style="padding:2px 12px 2px 0">ปุ่ม</td><td style="padding:2px 12px 2px 0">ความถี่</td><td>เวลาที่ใช้</td></tr>
+    <tr><td style="padding:2px 12px 2px 0">🔄 อัพเดทงบการเงินทั้งหมด</td><td style="padding:2px 12px 2px 0">ทุกครั้งหลังงบไตรมาสออก</td><td>ไม่กี่นาที</td></tr>
+    <tr><td style="padding:2px 12px 2px 0">📥 Mirror ทั้งตลาด (force)</td><td style="padding:2px 12px 2px 0">ไตรมาสละครั้ง</td><td>นานมาก (เป็นชั่วโมง)</td></tr>
+    <tr><td style="padding:2px 12px 2px 0">🏷️ ดึงชื่อหุ้น mirror ใหม่</td><td style="padding:2px 12px 2px 0">หลัง Mirror force เจอหุ้นใหม่</td><td>ไม่กี่วินาที</td></tr>
   </table>
 
-  <div style="color:var(--text2);margin-top:8px;font-size:11px">⚠ ถ้าขึ้น error หรือค้างนานผิดปกติ ให้ก็อปข้อความ error มาถามได้ — ข้อมูลชุดนี้อยู่เฉพาะบนเครื่อง (financials.db) ห้ามขึ้น GitHub</div>
+  <div style="color:var(--text2);margin-top:8px;font-size:11px">💡 Windows Task Scheduler ยังตั้งรัน <code>task_update_financials_quarterly.bat</code> / <code>task_mirror_quarterly.bat</code> อัตโนมัติแยกอยู่ (ไม่ผูกกับปุ่มพวกนี้) — ถ้าตั้งไว้แล้วไม่ต้องกดปุ่มเองก็ได้ กดซ้ำได้ไม่พัง แค่เสียเวลาฟรี<br>
+  ⚠ ถ้าขึ้น error หรือค้างนานผิดปกติ ให้ก็อปข้อความ error มาถามได้ — ข้อมูลชุดนี้อยู่เฉพาะบนเครื่อง (financials.db) ห้ามขึ้น GitHub</div>
 </div>`;
 
 const _BT_NOTE_HTML_BY_ID = { 'dh-cli-note': _CLI_FIN_NOTE_HTML };

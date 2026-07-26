@@ -3736,6 +3736,44 @@
     </div>
   </div>
 
+  <!-- ปุ่มอัพเดทงบไตรมาส (ก.พ./พ.ค./ส.ค./พ.ย.) — เดิมต้องเปิด command line รัน
+       update_financials.py/mirror_finnomena.py/build_snapshot.py/build_mirror_names.py เอง
+       ย้ายมาเป็นปุ่มในแอป ใช้ job system เดียวกับด้านบน (progress bar + กันกดซ้ำ) -->
+  <div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">📊 อัพเดทงบไตรมาส (ก.พ. / พ.ค. / ส.ค. / พ.ย.) — เดิมต้องรัน command line ตอนนี้กดปุ่มได้เลย</div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap">
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="fin-update-all-btn" onclick="startFinancialsUpdateAll()">🔄 อัพเดทงบการเงินทั้งหมด</button>
+        <div class="btn-note">
+          <b>🔄 อัพเดทงบการเงินทั้งหมด — ใช้บ่อยสุด</b><br>
+          เช็ค DR ใหม่ → งบหุ้นไทยทุกตัว (Yahoo+SET+Finnomena) → งบ DR → หุ้น US/HK ที่ค้นบ่อยใน 90 วัน →
+          คำนวณ factor snapshot ใหม่ให้ Screener<br>
+          📦 แทน <code>python update_financials.py</code><br>
+          ⏱ ไม่กี่นาที — <b>กดทุกครั้งหลังงบไตรมาสออก</b>
+        </div>
+      </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="mirror-force-btn" onclick="startMirrorFinnomenaForceFull()">📥 Mirror ทั้งตลาด (force)</button>
+        <div class="btn-note">
+          <b>📥 Mirror งบ Finnomena ทั้งตลาด (force) + rebuild snapshot</b><br>
+          ยิงซ้ำงบ Finnomena ทุกตัวที่มีอยู่แล้วทั้ง TH+HK+US เพื่อดึงงวดใหม่มา merge (ไม่ใช่แค่ตัวที่ค้นบ่อย) แล้ว
+          rebuild factor snapshot ต่อให้เอง<br>
+          📦 แทน <code>python mirror_finnomena.py force</code> + <code>python build_snapshot.py</code><br>
+          ⏱ <b>นานมาก (เป็นชั่วโมง)</b> — ไตรมาสละครั้งพอ ปิดแท็บ/ปิดคอมได้ระหว่างรัน กดใหม่จะรันต่อจากเดิมเอง
+        </div>
+      </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="build-mirror-names-btn" onclick="startBuildMirrorNames()">🏷️ ดึงชื่อหุ้น mirror ใหม่</button>
+        <div class="btn-note">
+          <b>🏷️ ดึงชื่อบริษัทหุ้น mirror US/HK ใหม่</b><br>
+          ดึงชื่อบริษัทของหุ้น US/HK ที่เพิ่งมีงบเข้ามาใหม่ — ไม่กดก็ไม่พัง แค่ตัวใหม่โชว์แค่ ticker เปล่าตอนค้นหา<br>
+          📦 แทน <code>python build_mirror_names.py</code><br>
+          ⏱ ไม่กี่วินาที — กดหลัง "Mirror ทั้งตลาด (force)" เจอหุ้นใหม่
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- คู่มือลำดับการกดอัพเดท — สรุปจาก สรุป_ปุ่มอัพเดทข้อมูล.txt + คู่มือ-อัพเดทข้อมูล.txt
        เปิดค้างไว้ (open) เพราะเป็นข้อมูลที่ต้องดูบ่อยตอนไม่แน่ใจว่าต้องกดอะไร -->
   <details class="card" id="dh-order-guide" style="padding:14px 16px;margin-bottom:12px" open>
@@ -3790,31 +3828,21 @@
       </div>
 
       <div style="margin-bottom:14px">
-        <div style="font-weight:600;color:var(--green);margin-bottom:4px">📊 หลังงบไตรมาสออก (ก.พ. / พ.ค. / ส.ค. / พ.ย.) — กดในแอปได้</div>
+        <div style="font-weight:600;color:var(--green);margin-bottom:4px">📊 หลังงบไตรมาสออก (ก.พ. / พ.ค. / ส.ค. / พ.ย.) — กดในแอปได้ทั้งหมด ไม่ต้องเปิด command line แล้ว</div>
         <div style="padding-left:14px">
-          <b>🔄 อัพเดทงบการเงินทั้งหมด</b> <span style="color:var(--text2)">หน้า "งบการเงิน" — งบหุ้นไทย 3 แหล่ง
-          (Yahoo รายปี/รายไตรมาส + SET.or.th)</span><br>
-          <b>🔍 ตรวจสอบความครบถ้วน</b> <span style="color:var(--text2)">หน้าเดียวกัน — ดูว่าตัวไหนงบขาด ก่อน/หลัง sync</span><br>
+          <b>🔄 อัพเดทงบการเงินทั้งหมด</b> <span style="color:var(--text2)">ปุ่มด้านบนในหน้านี้ (การ์ด "📊 อัพเดทงบไตรมาส")
+          — ใช้บ่อยสุด ไม่กี่นาที</span><br>
+          <b>📥 Mirror ทั้งตลาด (force)</b> <span style="color:var(--text2)">ปุ่มเดียวกัน — ไตรมาสละครั้ง ใช้เวลานาน (เป็นชั่วโมง)</span><br>
+          <b>🏷️ ดึงชื่อหุ้น mirror ใหม่</b> <span style="color:var(--text2)">ปุ่มเดียวกัน — กดหลัง Mirror force เจอหุ้นใหม่</span><br>
+          <b>🔍 ตรวจสอบความครบถ้วน</b> <span style="color:var(--text2)">หน้า "งบการเงิน" — ดูว่าตัวไหนงบขาด ก่อน/หลัง sync</span><br>
           <b>🔄 ดึงเฉพาะที่ขาด/เก่า</b> <span style="color:var(--text2)">หน้า "DR / DRx" — งบหุ้นแม่ของ DR
           (เร็วกว่า 📥 ดึงทั้งหมด เพราะข้ามตัวที่เพิ่งดึงไป)</span><br>
           <b>🔄 ดึงเฉพาะที่ขาด/เก่า</b> <span style="color:var(--text2)">หน้า "งบการเงิน" → แท็บต่างประเทศ (DR) →
           ปุ่ม <b>US</b> — งบหุ้น S&amp;P500/Dow/Nasdaq 100</span><br>
           <b>🔄 ดึงเฉพาะที่ขาด/เก่า</b> <span style="color:var(--text2)">หน้าเดียวกัน → ปุ่ม <b>HK</b>
           — งบหุ้น HSI/HSCEI/HSTECH</span>
-        </div>
-      </div>
-
-      <div style="margin-bottom:14px">
-        <div style="font-weight:600;color:var(--green);margin-bottom:4px">💻 หลังงบไตรมาส — รันใน command line (ครอบคลุมกว่าปุ่มในแอป)</div>
-        <div style="padding-left:14px;color:var(--text2)">
-          <code>python update_financials.py</code> — ครบสุดในคำสั่งเดียว:
-          เช็ค DR ใหม่ → งบหุ้นไทย → DR → US/HK ที่ค้นบ่อย → snapshot
-          <b>(แทนปุ่มในแอปทั้ง 4 ปุ่มข้างบนได้)</b><br>
-          <code>python mirror_finnomena.py force</code> แล้วต่อด้วย <code>python build_snapshot.py</code>
-          — ไตรมาสละครั้ง (ใช้เวลานาน แนะนำรันกลางคืน)<br>
-          <code>python build_mirror_names.py</code> — หลัง mirror ได้หุ้นใหม่ ไม่งั้นตัวใหม่โชว์แค่ ticker เปล่า
           <div style="margin-top:8px">
-            <button class="filter-btn" onclick="toggleBtNote('dh-cli-note')" style="font-size:11px">🧑‍💻 ขยายความ — สอนสำหรับคนใช้งานไม่เป็น กดอ่าน</button>
+            <button class="filter-btn" onclick="toggleBtNote('dh-cli-note')" style="font-size:11px">🧑‍💻 ปุ่มพวกนี้ทำอะไรอยู่ข้างในบ้าง — กดอ่าน (สำหรับคนอยากรู้/แก้ปัญหา)</button>
             <div id="dh-cli-note" style="display:none;margin-top:8px;padding:12px;background:#0d1117;border:1px solid var(--border);border-radius:8px"></div>
           </div>
         </div>
