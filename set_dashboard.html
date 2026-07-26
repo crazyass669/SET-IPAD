@@ -2952,9 +2952,13 @@
         <button class="filter-btn active" id="cal-view-list" onclick="_calSetView('list',this)" title="แสดงเป็นรายการเรียงตามวันที่ พร้อมตัวกรองช่วงเวลา">📋 รายการ</button>
         <button class="filter-btn" id="cal-view-grid" onclick="_calSetView('grid',this)" title="แสดงเป็นปฏิทินรายเดือน เลื่อนดูเดือนก่อน/ถัดไปได้">🗓️ ปฏิทินเดือน</button>
       </div>
+      <div class="filter-row" style="gap:0;margin:0" id="cal-direction-row">
+        <button class="filter-btn active" id="cal-dir-future" onclick="_calSetDirection('future',this)" style="border-radius:6px 0 0 6px" title="ดูเหตุการณ์ที่ยังไม่เกิดขึ้น">🔮 อนาคต</button>
+        <button class="filter-btn" id="cal-dir-past" onclick="_calSetDirection('past',this)" style="border-radius:0 6px 6px 0" title="ดูเหตุการณ์ที่ผ่านมาแล้ว (มีลิงก์ไปดูงบจริงที่ SET.or.th สำหรับหุ้นไทยที่ประกาศงบแล้ว)">⏪ ย้อนหลัง</button>
+      </div>
       <div class="filter-row" style="gap:0;margin:0" id="cal-range-row">
-        <button class="filter-btn active" id="cal-range-7" onclick="_calSetRange(7,this)" style="border-radius:6px 0 0 6px">7 วันข้างหน้า</button>
-        <button class="filter-btn" id="cal-range-30" onclick="_calSetRange(30,this)">30 วันข้างหน้า</button>
+        <button class="filter-btn active" id="cal-range-7" onclick="_calSetRange(7,this)" style="border-radius:6px 0 0 6px">7 วัน</button>
+        <button class="filter-btn" id="cal-range-30" onclick="_calSetRange(30,this)">30 วัน</button>
         <button class="filter-btn" id="cal-range-all" onclick="_calSetRange(365,this)" style="border-radius:0 6px 6px 0">ทั้งหมดที่มีข้อมูล</button>
       </div>
       <div class="filter-row" style="gap:6px;margin:0;display:none;align-items:center" id="cal-month-nav">
@@ -2963,7 +2967,8 @@
         <button class="filter-btn" onclick="_calMonthNav(1)">▶</button>
         <button class="filter-btn" onclick="_calMonthNav(0,true)">วันนี้</button>
       </div>
-      <button class="filter-btn" id="cal-refresh-btn" style="font-size:12px;margin-left:auto" onclick="loadCalendarPage(true)">🔄 ดึงข้อมูลใหม่ทั้งหมด</button>
+      <button class="filter-btn" onclick="_calOpenMarketWideNews()" style="font-size:12px;margin-left:auto" title="เปิดหน้าข่าวผลประกอบการของ SET.or.th แบบทั้งตลาด (ไม่กรองหุ้น) ย้อนหลัง 90 วันล่าสุด">🔎 ข่าวงบทั้งตลาด (90 วัน)</button>
+      <button class="filter-btn" id="cal-refresh-btn" style="font-size:12px" onclick="loadCalendarPage(true)">🔄 ดึงข้อมูลใหม่ทั้งหมด</button>
     </div>
   </div>
   <div id="cal-result"><div class="empty" style="padding:24px">กำลังโหลด...</div></div>
@@ -3368,7 +3373,7 @@
 
 <div id="page-us-heatmap" class="page">
   <div class="page-title">Heatmap ดัชนี US</div>
-  <div class="page-sub">ขนาดกล่อง = มูลค่าตลาด (Market Cap) · สี = % เปลี่ยนแปลง — ข้อมูลจาก Yahoo Finance สด</div>
+  <div class="page-sub">ทุกหุ้นในดัชนี จัดกลุ่มตาม Sector — เลือกสีตาม metric ได้ 11 แบบ (return หลายช่วง/RS/Volume/52W High/ATH) อ่านจาก us_index_metrics.json (อัพเดทตอน Quick Update หรือ 📈 US Index Max)</div>
 
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
     <div class="filter-row" style="gap:0;margin:0">
@@ -3376,28 +3381,28 @@
       <button class="filter-btn" id="hm-idx-dow" onclick="setHeatmapIndex('DOW',this)" style="min-width:100px">Dow Jones</button>
       <button class="filter-btn" id="hm-idx-ndx" onclick="setHeatmapIndex('NDX',this)" style="border-radius:0 6px 6px 0;min-width:100px">Nasdaq 100</button>
     </div>
-    <div class="filter-row" style="gap:0;margin:0">
-      <button class="filter-btn active" id="hm-period-1d" onclick="setHeatmapPeriod('chg_1d',this)" style="border-radius:6px 0 0 6px;min-width:56px" title="% เปลี่ยนแปลงวันนี้">1D</button>
-      <button class="filter-btn" id="hm-period-1w" onclick="setHeatmapPeriod('chg_1w',this)" style="border-radius:0 6px 6px 0;min-width:56px" title="% เปลี่ยนแปลง 5 วันทำการล่าสุด">1W</button>
-    </div>
-    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer;user-select:none">
-      <input type="checkbox" id="hm-sector-toggle" checked onchange="_renderHeatmap(_hmData[_hmIndex])"> จัดกลุ่มตาม Sector
-    </label>
     <input id="hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderHeatmap(_hmData[_hmIndex])">
-    <button class="filter-btn" id="hm-refresh-btn" onclick="loadHeatmapPage(true)" title="บังคับดึงราคา/มูลค่าตลาดสดจาก Yahoo Finance ใหม่ทั้งชุด (ข้าม cache 15 นาทีของ server) — ปกติไม่ต้องกด เพราะ cache หมดอายุแล้วโหลดหน้าใหม่จะได้สดอัตโนมัติ">⚡ อัพเดทราคา</button>
+    <button class="filter-btn" id="hm-refresh-btn" onclick="loadHeatmapPage(true)" title="ข้าม cache 15 นาทีของ server แล้วคำนวณใหม่จากราคาล่าสุดในเครื่อง — ปกติไม่ต้องกด เพราะ cache หมดอายุแล้วโหลดหน้าใหม่จะได้ข้อมูลล่าสุดอัตโนมัติ">⚡ อัพเดทราคา</button>
+    <button class="filter-btn" onclick="_hmOpenTradingView()" title="เปิด Heatmap ของดัชนีที่เลือกอยู่บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
     <span id="hm-note" style="font-size:11px;color:var(--text2)"></span>
   </div>
 
-  <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:11px;color:var(--text2)">
-    <span>-3%</span>
-    <div style="width:180px;height:10px;border-radius:4px;background:linear-gradient(to right, rgb(248,81,73), rgb(33,38,45), rgb(63,185,80))"></div>
-    <span>+3%</span>
-    <span style="margin-left:4px">(สีเข้มขึ้นตามขนาด % คลิปที่ ±3%)</span>
+  <div class="filter-row" id="hm-period-btns" style="margin-bottom:8px">
+    <button class="filter-btn active" onclick="setHeatmapPeriod('ret_1d',this)" title="สีแสดง % เปลี่ยนแปลงราคาวันนี้">1D%</button>
+    <button class="filter-btn" onclick="setHeatmapPeriod('ret_1w',this)" title="สีแสดง % เปลี่ยนแปลง 1 สัปดาห์">1W%</button>
+    <button class="filter-btn" onclick="setHeatmapPeriod('ret_1m',this)" title="สีแสดง % เปลี่ยนแปลง 1 เดือน">1M%</button>
+    <button class="filter-btn" onclick="setHeatmapPeriod('ret_3m',this)" title="สีแสดง % เปลี่ยนแปลง 3 เดือน">3M%</button>
+    <button class="filter-btn" onclick="setHeatmapPeriod('ret_6m',this)" title="สีแสดง % เปลี่ยนแปลง 6 เดือน">6M%</button>
+    <button class="filter-btn" onclick="setHeatmapPeriod('ret_ytd',this)" title="สีแสดง % เปลี่ยนแปลงตั้งแต่ต้นปี">YTD%</button>
+    <button class="filter-btn" onclick="setHeatmapPeriod('ret_1y',this)" title="สีแสดง % เปลี่ยนแปลง 1 ปี">1Y%</button>
+    <button class="filter-btn" onclick="setHeatmapPeriod('rs_score',this)" title="สีแสดง RS Score (0–99) — เขียว = แข็งแกร่ง / แดง = อ่อนแอ">RS Score</button>
+    <button class="filter-btn" onclick="setHeatmapPeriod('vol_ratio',this)" title="สีแสดง Volume วันนี้ ÷ เฉลี่ย 20 วัน — น้ำเงินเข้ม = ปริมาณซื้อขายสูงผิดปกติ">Vol Ratio</button>
+    <button class="filter-btn" onclick="setHeatmapPeriod('from_52wh',this)" title="สีแสดง % ห่างจาก 52W High — เขียว = ใกล้ High / แดง = ห่าง High มาก">% from 52W High</button>
+    <button class="filter-btn" onclick="setHeatmapPeriod('ath_dist',this)" title="สีแสดง % ห่างจาก All-Time High — เขียว = ใกล้ ATH / แดง = ห่าง ATH มาก">ATH Distance</button>
   </div>
+  <div id="hm-hint" style="font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
 
-  <div id="hm-box" style="position:relative;width:100%;height:640px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
-    <div id="hm-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">กำลังโหลด heatmap (ครั้งแรกอาจใช้เวลา ~30-60 วิ)...</div>
-  </div>
+  <div id="hm-box"></div>
 </div>
 
 <!-- PAGE: HK INDEX HEATMAP — ก็อปโครงจาก page-us-heatmap ทั้งหมด ต่างแค่ prefix hm->hk-hm,
@@ -3405,7 +3410,7 @@
      hk_prices.db ที่มีอยู่แล้ว ไม่ได้ยิง Yahoo สดเหมือน US — force รีเฟรชแค่ market cap) -->
 <div id="page-hk-heatmap" class="page">
   <div class="page-title">Heatmap ดัชนี HK</div>
-  <div class="page-sub">ขนาดกล่อง = มูลค่าตลาด (Market Cap) · สี = % เปลี่ยนแปลง — % เปลี่ยนแปลงจากราคาใน hk_prices.db (อัพเดททุกวันตอน Quick Update), Market Cap ดึงสดจาก Yahoo Finance</div>
+  <div class="page-sub">ทุกหุ้นในดัชนี จัดกลุ่มตาม Sector — เลือกสีตาม metric ได้ 11 แบบ (return หลายช่วง/RS/Volume/52W High/ATH) อ่านจาก hk_index_metrics.json (อัพเดทตอน Quick Update หรือ 📈 HK Index Max)</div>
 
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
     <div class="filter-row" style="gap:0;margin:0">
@@ -3413,28 +3418,28 @@
       <button class="filter-btn" id="hk-hm-idx-hstech" onclick="setHkHeatmapIndex('HSTECH',this)" style="min-width:100px">HSTECH</button>
       <button class="filter-btn" id="hk-hm-idx-hscei" onclick="setHkHeatmapIndex('HSCEI',this)" style="border-radius:0 6px 6px 0;min-width:100px">HSCEI</button>
     </div>
-    <div class="filter-row" style="gap:0;margin:0">
-      <button class="filter-btn active" id="hk-hm-period-1d" onclick="setHkHeatmapPeriod('chg_1d',this)" style="border-radius:6px 0 0 6px;min-width:56px" title="% เปลี่ยนแปลงวันนี้">1D</button>
-      <button class="filter-btn" id="hk-hm-period-1w" onclick="setHkHeatmapPeriod('chg_1w',this)" style="border-radius:0 6px 6px 0;min-width:56px" title="% เปลี่ยนแปลง 5 วันทำการล่าสุด">1W</button>
-    </div>
-    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer;user-select:none">
-      <input type="checkbox" id="hk-hm-sector-toggle" checked onchange="_renderHkHeatmap(_hkHmData[_hkHmIndex])"> จัดกลุ่มตาม Sector
-    </label>
     <input id="hk-hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderHkHeatmap(_hkHmData[_hkHmIndex])">
-    <button class="filter-btn" id="hk-hm-refresh-btn" onclick="loadHkHeatmapPage(true)" title="บังคับดึง market cap สดจาก Yahoo Finance ใหม่ทั้งชุด (ข้าม cache 1 วันของ server) — ปกติไม่ต้องกด">⚡ อัพเดท Market Cap</button>
+    <button class="filter-btn" id="hk-hm-refresh-btn" onclick="loadHkHeatmapPage(true)" title="ข้าม cache 15 นาทีของ server แล้วคำนวณใหม่จากราคาล่าสุดในเครื่อง — ปกติไม่ต้องกด">⚡ รีเฟรช</button>
+    <button class="filter-btn" onclick="_hkHmOpenTradingView()" title="เปิด Heatmap ของดัชนีที่เลือกอยู่บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
     <span id="hk-hm-note" style="font-size:11px;color:var(--text2)"></span>
   </div>
 
-  <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:11px;color:var(--text2)">
-    <span>-3%</span>
-    <div style="width:180px;height:10px;border-radius:4px;background:linear-gradient(to right, rgb(248,81,73), rgb(33,38,45), rgb(63,185,80))"></div>
-    <span>+3%</span>
-    <span style="margin-left:4px">(สีเข้มขึ้นตามขนาด % คลิปที่ ±3%)</span>
+  <div class="filter-row" id="hk-hm-period-btns" style="margin-bottom:8px">
+    <button class="filter-btn active" onclick="setHkHeatmapPeriod('ret_1d',this)" title="สีแสดง % เปลี่ยนแปลงราคาวันนี้">1D%</button>
+    <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_1w',this)" title="สีแสดง % เปลี่ยนแปลง 1 สัปดาห์">1W%</button>
+    <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_1m',this)" title="สีแสดง % เปลี่ยนแปลง 1 เดือน">1M%</button>
+    <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_3m',this)" title="สีแสดง % เปลี่ยนแปลง 3 เดือน">3M%</button>
+    <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_6m',this)" title="สีแสดง % เปลี่ยนแปลง 6 เดือน">6M%</button>
+    <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_ytd',this)" title="สีแสดง % เปลี่ยนแปลงตั้งแต่ต้นปี">YTD%</button>
+    <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_1y',this)" title="สีแสดง % เปลี่ยนแปลง 1 ปี">1Y%</button>
+    <button class="filter-btn" onclick="setHkHeatmapPeriod('rs_score',this)" title="สีแสดง RS Score (0–99) — เขียว = แข็งแกร่ง / แดง = อ่อนแอ">RS Score</button>
+    <button class="filter-btn" onclick="setHkHeatmapPeriod('vol_ratio',this)" title="สีแสดง Volume วันนี้ ÷ เฉลี่ย 20 วัน — น้ำเงินเข้ม = ปริมาณซื้อขายสูงผิดปกติ">Vol Ratio</button>
+    <button class="filter-btn" onclick="setHkHeatmapPeriod('from_52wh',this)" title="สีแสดง % ห่างจาก 52W High — เขียว = ใกล้ High / แดง = ห่าง High มาก">% from 52W High</button>
+    <button class="filter-btn" onclick="setHkHeatmapPeriod('ath_dist',this)" title="สีแสดง % ห่างจาก All-Time High — เขียว = ใกล้ ATH / แดง = ห่าง ATH มาก">ATH Distance</button>
   </div>
+  <div id="hk-hm-hint" style="font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
 
-  <div id="hk-hm-box" style="position:relative;width:100%;height:640px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
-    <div id="hk-hm-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">กำลังโหลด heatmap (ครั้งแรกอาจใช้เวลา ~30-60 วิ)...</div>
-  </div>
+  <div id="hk-hm-box"></div>
 </div>
 
 <!-- PAGE: JP INDEX HEATMAP — ก็อปโครงจาก page-hk-heatmap ทั้งหมด ต่างแค่ดัชนีเดียว (Nikkei 225
@@ -3442,31 +3447,31 @@
      (_jpHmPopupSym) เพราะ popup DOM #hm-popup ใช้ร่วมกันแค่ตัว element ไม่ใช่ state -->
 <div id="page-jp-heatmap" class="page">
   <div class="page-title">Heatmap Nikkei 225</div>
-  <div class="page-sub">ขนาดกล่อง = มูลค่าตลาด (Market Cap) · สี = % เปลี่ยนแปลง — % เปลี่ยนแปลงจากราคาใน jp_prices.db (อัพเดททุกวันตอน Quick Update), Market Cap ดึงสดจาก Yahoo Finance</div>
+  <div class="page-sub">ทุกหุ้นในดัชนี จัดกลุ่มตาม Sector — เลือกสีตาม metric ได้ 11 แบบ (return หลายช่วง/RS/Volume/52W High/ATH) อ่านจาก jp_index_metrics.json (อัพเดทตอน Quick Update หรือ 📈 JP Index Max)</div>
 
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-    <div class="filter-row" style="gap:0;margin:0">
-      <button class="filter-btn active" id="jp-hm-period-1d" onclick="setJpHeatmapPeriod('chg_1d',this)" style="border-radius:6px 0 0 6px;min-width:56px" title="% เปลี่ยนแปลงวันนี้">1D</button>
-      <button class="filter-btn" id="jp-hm-period-1w" onclick="setJpHeatmapPeriod('chg_1w',this)" style="border-radius:0 6px 6px 0;min-width:56px" title="% เปลี่ยนแปลง 5 วันทำการล่าสุด">1W</button>
-    </div>
-    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer;user-select:none">
-      <input type="checkbox" id="jp-hm-sector-toggle" checked onchange="_renderJpHeatmap(_jpHmData)"> จัดกลุ่มตาม Sector
-    </label>
     <input id="jp-hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderJpHeatmap(_jpHmData)">
-    <button class="filter-btn" id="jp-hm-refresh-btn" onclick="loadJpHeatmapPage(true)" title="บังคับดึง market cap สดจาก Yahoo Finance ใหม่ทั้งชุด (ข้าม cache 1 วันของ server) — ปกติไม่ต้องกด">⚡ อัพเดท Market Cap</button>
+    <button class="filter-btn" id="jp-hm-refresh-btn" onclick="loadJpHeatmapPage(true)" title="ข้าม cache 15 นาทีของ server แล้วคำนวณใหม่จากราคาล่าสุดในเครื่อง — ปกติไม่ต้องกด">⚡ รีเฟรช</button>
+    <button class="filter-btn" onclick="window.open('https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22NI225%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D','_blank','noopener')" title="เปิด Heatmap Nikkei 225 บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
     <span id="jp-hm-note" style="font-size:11px;color:var(--text2)"></span>
   </div>
 
-  <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:11px;color:var(--text2)">
-    <span>-3%</span>
-    <div style="width:180px;height:10px;border-radius:4px;background:linear-gradient(to right, rgb(248,81,73), rgb(33,38,45), rgb(63,185,80))"></div>
-    <span>+3%</span>
-    <span style="margin-left:4px">(สีเข้มขึ้นตามขนาด % คลิปที่ ±3%)</span>
+  <div class="filter-row" id="jp-hm-period-btns" style="margin-bottom:8px">
+    <button class="filter-btn active" onclick="setJpHeatmapPeriod('ret_1d',this)" title="สีแสดง % เปลี่ยนแปลงราคาวันนี้">1D%</button>
+    <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_1w',this)" title="สีแสดง % เปลี่ยนแปลง 1 สัปดาห์">1W%</button>
+    <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_1m',this)" title="สีแสดง % เปลี่ยนแปลง 1 เดือน">1M%</button>
+    <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_3m',this)" title="สีแสดง % เปลี่ยนแปลง 3 เดือน">3M%</button>
+    <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_6m',this)" title="สีแสดง % เปลี่ยนแปลง 6 เดือน">6M%</button>
+    <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_ytd',this)" title="สีแสดง % เปลี่ยนแปลงตั้งแต่ต้นปี">YTD%</button>
+    <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_1y',this)" title="สีแสดง % เปลี่ยนแปลง 1 ปี">1Y%</button>
+    <button class="filter-btn" onclick="setJpHeatmapPeriod('rs_score',this)" title="สีแสดง RS Score (0–99) — เขียว = แข็งแกร่ง / แดง = อ่อนแอ">RS Score</button>
+    <button class="filter-btn" onclick="setJpHeatmapPeriod('vol_ratio',this)" title="สีแสดง Volume วันนี้ ÷ เฉลี่ย 20 วัน — น้ำเงินเข้ม = ปริมาณซื้อขายสูงผิดปกติ">Vol Ratio</button>
+    <button class="filter-btn" onclick="setJpHeatmapPeriod('from_52wh',this)" title="สีแสดง % ห่างจาก 52W High — เขียว = ใกล้ High / แดง = ห่าง High มาก">% from 52W High</button>
+    <button class="filter-btn" onclick="setJpHeatmapPeriod('ath_dist',this)" title="สีแสดง % ห่างจาก All-Time High — เขียว = ใกล้ ATH / แดง = ห่าง ATH มาก">ATH Distance</button>
   </div>
+  <div id="jp-hm-hint" style="font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
 
-  <div id="jp-hm-box" style="position:relative;width:100%;height:640px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
-    <div id="jp-hm-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">กำลังโหลด heatmap (ครั้งแรกอาจใช้เวลา ~30-60 วิ)...</div>
-  </div>
+  <div id="jp-hm-box"></div>
 </div>
 
 <!-- PAGE: STOCK NEWS — ข่าวรายหุ้นรวม 3 แหล่ง (SET.or.th + Yahoo + Google News) -->
@@ -3919,7 +3924,7 @@
   <div style="display:flex;gap:14px;margin-top:8px">
     <div><div id="hm-popup-chg1d" style="font-size:16px;font-weight:700"></div><div style="font-size:10px;color:var(--text2)">1D</div></div>
     <div><div id="hm-popup-chg1w" style="font-size:16px;font-weight:700"></div><div style="font-size:10px;color:var(--text2)">1W</div></div>
-    <div><div id="hm-popup-mktcap" style="font-size:14px;font-weight:600"></div><div style="font-size:10px;color:var(--text2)">Market Cap</div></div>
+    <div><div id="hm-popup-rs" style="font-size:16px;font-weight:700"></div><div style="font-size:10px;color:var(--text2)">RS Score</div></div>
   </div>
   <button class="btn-primary" id="hm-popup-fin-btn" style="width:100%;margin-top:10px;font-size:12px;padding:6px 0" onclick="_hmGoFin()">📋 ดูงบการเงิน</button>
 </div>

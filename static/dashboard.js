@@ -491,24 +491,51 @@ function fmtVol(v) {
 // วาด sparkline ลงใน canvas element
 function drawSparkline(canvas, prices, retVal) {
   if (!canvas || !prices || prices.length < 2) return;
-  // canvas ยืด CSS width:100% ตามคอลัมน์จริง (auto-layout table ความกว้าง
-  // เปลี่ยนได้ เช่น ตอนซ่อนคอลัมน์ "ชื่อ" คอลัมน์นี้จะกว้างขึ้น) — วัดขนาด
-  // ที่ render จริงมาตั้งเป็น resolution ของ canvas แทนค่าคงที่ 60px เดิม
-  // กันเส้นกราฟเดิมดูเล็ก/ลอยอยู่แค่ซีกซ้ายของคอลัมน์ที่กว้างขึ้น
+  // canvas ยืด CSS width:100%/height:100% ตามกล่องจริง (คอลัมน์ตารางแคบ 24px, การ์ด
+  // Tearsheet สูง 60px) — วัดขนาดที่ render จริงมาตั้งเป็น resolution ของ canvas
+  // ทั้งกว้างและสูง แทนค่าคงที่ 24px เดิมที่ทำให้กราฟ Tearsheet (กล่องสูง 60px) ถูกยืด
+  // ภาพ 24px ขึ้น 60px จนพร่ามัว
   const W = canvas.width  = Math.max(20, Math.round(canvas.clientWidth || 60));
-  const H = canvas.height = 24;
+  const H = canvas.height = Math.max(16, Math.round(canvas.clientHeight || 24));
   const ctx = canvas.getContext('2d');
   const vals = prices.map(p => p[1]);
   const mn = Math.min(...vals), mx = Math.max(...vals);
   const range = mx - mn || 1;
-  const toY = v => H - 2 - (v - mn) / range * (H - 4);
+  const pad = H > 30 ? 4 : 2;   // กราฟใหญ่ (Tearsheet) เว้นขอบมากกว่ากันเส้นชนขอบ
+  const toY = v => H - pad - (v - mn) / range * (H - pad * 2);
   const toX = (i, n) => (i / (n-1)) * (W - 2) + 1;
   const color = (retVal || 0) >= 0 ? '#3fb950' : '#f85149';
   ctx.clearRect(0,0,W,H);
+
+  // กราฟใหญ่ (Tearsheet, H>30): เติมพื้นที่ใต้เส้นด้วย gradient จางๆ + เส้นฐานราคาต้นงวด
+  // เป็นเส้นประ ช่วยให้อ่านง่ายขึ้นว่ากำไร/ขาดทุนเทียบจุดเริ่มต้น (เดิมมีแค่เส้นเปล่าๆ)
+  if (H > 30) {
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, color + '55');
+    grad.addColorStop(1, color + '00');
+    ctx.beginPath();
+    vals.forEach((v,i) => i===0 ? ctx.moveTo(toX(i,vals.length), toY(v)) : ctx.lineTo(toX(i,vals.length), toY(v)));
+    ctx.lineTo(toX(vals.length-1, vals.length), H);
+    ctx.lineTo(toX(0, vals.length), H);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    const baseY = toY(vals[0]);
+    ctx.beginPath();
+    ctx.moveTo(0, baseY);
+    ctx.lineTo(W, baseY);
+    ctx.strokeStyle = 'rgba(139,148,158,.35)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   ctx.beginPath();
   vals.forEach((v,i) => i===0 ? ctx.moveTo(toX(i,vals.length), toY(v)) : ctx.lineTo(toX(i,vals.length), toY(v)));
   ctx.strokeStyle = color;
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = H > 30 ? 2 : 1.5;
   ctx.stroke();
 }
 
@@ -12238,24 +12265,32 @@ function _renderJpBreadth() {
 }
 
 // ============================================================
-// HEATMAP — S&P 500 / Dow Jones / Nasdaq 100 (treemap: ขนาด=market cap, สี=% วันนี้)
+// HEATMAP — S&P 500 / Dow Jones / Nasdaq 100
+// เปลี่ยนจาก treemap (ขนาดกล่อง=market cap) มาเป็น grid ขนาดเท่ากันจัดกลุ่มตาม sector แบบ
+// หน้า "Market Heatmap" หุ้นไทย (renderHeatmap ด้านบน) — เหตุผล: treemap ต้องพึ่ง market cap
+// ที่ต้องยิง Yahoo fast_info ทีละ ticker (ช้า ~30-60 วิตอน cache หมดอายุ) ตัด market cap ออก
+// ทั้งฝั่ง backend แล้ว (ดู /api/us-index-heatmap) เปลี่ยนไปอ่านจาก us_index_metrics.json
+// ตรงๆ (field เดียวกับหุ้นไทยทุกตัว — process_stock() เดียวกัน) เลยมี metric ให้เลือกสีได้
+// ครบ 11 แบบเหมือนหน้าไทย ใช้ HM_CFG ชุดเดียวกัน (ดู setHeatmapPeriod/_hmGridHtml)
 // ============================================================
 let _hmIndex = 'SP500';
-let _hmPeriod = 'chg_1d';   // 'chg_1d' หรือ 'chg_1w' — สลับดูได้ทันทีจากข้อมูลชุดเดียวกัน ไม่ยิง API ซ้ำ
+let _hmPeriod = 'ret_1d';   // key ใน HM_CFG — สลับดูได้ทันทีจากข้อมูลชุดเดียวกัน ไม่ยิง API ซ้ำ
 let _hmData = {};      // cache ในหน่วยความจำต่อ tab {SP500:{rows,ts,requested,missing}, DOW:{...}, NDX:{...}}
 let _hmPopupSym = null;
 
-// ปรับขนาดหน้าต่างแล้ววาด treemap ใหม่ให้พอดี (ใช้ข้อมูลใน memory เดิม ไม่ยิง API ซ้ำ)
-// debounce 200ms กันวาดรัวๆ ระหว่างลาก resize
-let _hmResizeTimer = null;
-window.addEventListener('resize', () => {
-  clearTimeout(_hmResizeTimer);
-  _hmResizeTimer = setTimeout(() => {
-    if (document.getElementById('page-us-heatmap')?.classList.contains('active') && _hmData[_hmIndex]) {
-      _renderHeatmap(_hmData[_hmIndex]);
-    }
-  }, 200);
-});
+// ลิงก์ไปหน้า Heatmap จริงของ TradingView.com ต่อดัชนี — เผื่อผู้ใช้อยากดู treemap ขนาดกล่อง
+// = market cap จริง (ของเราตัด market cap ออกแล้วเปลี่ยนเป็น grid ขนาดเท่ากันแทน เพราะเดิมต้อง
+// ยิง Yahoo fast_info ทีละ ticker ทำให้หน้าโหลดช้ามาก — ดู _hmGridHtml ด้านล่าง)
+const _HM_TV_URL = {
+  SP500: 'https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22SPX500%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D',
+  NDX:   'https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22NASDAQ100%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D',
+  DOW:   'https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22DJCA%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D',
+};
+
+function _hmOpenTradingView() {
+  const url = _HM_TV_URL[_hmIndex];
+  if (url) window.open(url, '_blank', 'noopener');
+}
 
 function setHeatmapIndex(idx, btn) {
   _hmIndex = idx;
@@ -12266,8 +12301,10 @@ function setHeatmapIndex(idx, btn) {
 
 function setHeatmapPeriod(period, btn) {
   _hmPeriod = period;
-  document.querySelectorAll('#hm-period-1d,#hm-period-1w').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#hm-period-btns .filter-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
+  const hintEl = document.getElementById('hm-hint');
+  if (hintEl) hintEl.textContent = (HM_CFG[period] || HM_CFG.ret_1d).hint;
   if (_hmData[_hmIndex]) _renderHeatmap(_hmData[_hmIndex]);
 }
 
@@ -12278,9 +12315,9 @@ function loadHeatmapPage(forceRefresh = false) {
   if (!forceRefresh && _hmData[_hmIndex]) { _renderHeatmap(_hmData[_hmIndex]); return; }
   const btn = document.getElementById('hm-refresh-btn');
   if (forceRefresh && btn) { btn.disabled = true; btn.textContent = '⚡ กำลังอัพเดท...'; }
-  box.innerHTML = `<div id="hm-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">กำลังโหลด heatmap (${forceRefresh ? 'บังคับดึงราคาสดจาก Yahoo' : 'ครั้งแรกอาจใช้เวลา ~30-60 วิ'})...</div>`;
+  box.innerHTML = `<div id="hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
   note.textContent = '';
-  fetch(`/api/us-index-heatmap?index=${_hmIndex}${forceRefresh ? '&force=1' : ''}`)
+  fetch(`/api/us-index-heatmap?index=${_hmIndex}`)
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -12288,14 +12325,11 @@ function loadHeatmapPage(forceRefresh = false) {
       _renderHeatmap(d);
       const age = Math.max(0, Math.round((Date.now() / 1000) - d.ts));
       const ageStr = age < 60 ? `${age} วิที่แล้ว` : `${Math.round(age / 60)} นาทีที่แล้ว`;
-      const missNote = d.missing ? ` · ขาด ${d.missing} ตัว (Yahoo ดึงไม่ได้)` : '';
-      // นับเฉพาะแถวที่มี mkt_cap วาดเป็นกล่องได้จริง (rows.length รวมแถวที่มีแค่ chg_1d
-      // แต่ไม่มี mkt_cap ด้วย ซึ่ง _renderHeatmap กรองทิ้งก่อนวาด — นับตรงนี้ให้ตรงกัน)
-      const drawn = (d.rows || []).filter(r => r.mkt_cap > 0).length;
-      note.textContent = `ข้อมูล ณ ${ageStr} · ${drawn}/${d.requested} ตัว${missNote}`;
+      const missNote = d.missing ? ` · ขาด ${d.missing} ตัว (ไม่มีราคาในเครื่อง)` : '';
+      note.textContent = `ข้อมูล ณ ${ageStr} · ${(d.rows || []).length}/${d.requested} ตัว${missNote}`;
     })
     .catch(e => {
-      box.innerHTML = `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--red);font-size:13px;padding:20px;text-align:center">⚠ โหลดไม่สำเร็จ: ${e.message}</div>`;
+      box.innerHTML = `<div style="color:var(--red);font-size:13px;padding:20px;text-align:center">⚠ โหลดไม่สำเร็จ: ${e.message}</div>`;
     })
     .finally(() => {
       if (btn) { btn.disabled = false; btn.textContent = '⚡ อัพเดทราคา'; }
@@ -12303,7 +12337,9 @@ function loadHeatmapPage(forceRefresh = false) {
 }
 
 // Squarified treemap (Bruls/Huizing/van Wijk) — จัดกล่องให้สัดส่วนกว้าง:สูงใกล้ 1:1 มากที่สุด
-// เท่าที่ทำได้ (ต่างจากแบ่งแถวธรรมดาที่กล่องเล็กสุดจะยาวเรียวจนอ่านตัวหนังสือไม่ได้)
+// เท่าที่ทำได้ (ต่างจากแบ่งแถวธรรมดาที่กล่องเล็กสุดจะยาวเรียวจนอ่านตัวหนังสือไม่ได้) — heatmap
+// US/HK/JP เลิกใช้แล้ว (เปลี่ยนเป็น grid ขนาดเท่ากัน) แต่ยังใช้กับ Hedge Holdings 13F heatmap
+// (renderHedgeHeatmap) ที่ขนาดกล่อง = จำนวนกองถือ เลยเก็บฟังก์ชันนี้ไว้
 function _squarify(data, x, y, w, h) {
   const total = data.reduce((a, d) => a + d.value, 0);
   if (total <= 0 || w <= 0 || h <= 0) return [];
@@ -12359,7 +12395,8 @@ function _squarify(data, x, y, w, h) {
 }
 
 // สเกลสีแบบ diverging เขียว/แดง — ใช้คู่สีเดียวกับทั้งแอป (var(--green)/var(--red)) ไล่ความเข้ม
-// จากเทากลาง (0%) ไปเข้มสุดที่ ±3% (คลิปไว้กันหุ้นข่าวช็อตทำให้กล่องอื่นดูจืดหมด)
+// จากเทากลาง (0%) ไปเข้มสุดที่ ±3% (คลิปไว้กันหุ้นข่าวช็อตทำให้กล่องอื่นดูจืดหมด) — ใช้ร่วมกัน
+// ทั้ง heatmap US/HK/JP และ Hedge Holdings 13F heatmap
 function _hmColor(chg) {
   if (chg == null) return '#30363d';
   const clamp = Math.max(-3, Math.min(3, chg));
@@ -12372,74 +12409,65 @@ function _hmColor(chg) {
   return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
 }
 
-// วาดกล่องหุ้นหนึ่งตัว (ใช้ทั้งโหมด flat และโหมดจัดกลุ่ม sector) — dim กล่องที่ไม่ตรงคำค้นแทนการ
-// ซ่อนทิ้ง เพื่อไม่ให้ layout เปลี่ยนฮวบฮาบเวลาพิมพ์ค้นหา
-function _hmCellHtml(r, x, y, w, h, search) {
-  if (w < 1 || h < 1) return '';
-  const chg = r[_hmPeriod];
-  const chgStr = chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—';
-  const showName = w > 70 && h > 40;
-  const fontSize = Math.max(9, Math.min(16, Math.min(w, h) / 5));
+// วาดกล่องหุ้นหนึ่งตัวในกริด (ขนาดเท่ากันทุกกล่อง — คลาส .hm-cell ตัวเดียวกับ Market Heatmap
+// หุ้นไทย) — dim กล่องที่ไม่ตรงคำค้นแทนการซ่อนทิ้ง เพื่อไม่ให้ layout เปลี่ยนฮวบฮาบเวลาพิมพ์ค้นหา
+// ใช้ร่วมกันทั้ง US/HK/JP — popupFn คือชื่อฟังก์ชัน popup ของตลาดนั้นๆ (ต่าง state กัน)
+// cfgKey คือ key ใน HM_CFG (ret_1d/ret_1w/.../rs_score/vol_ratio/from_52wh/ath_dist) — ตัวเดียว
+// กับที่หน้า Market Heatmap หุ้นไทยใช้ (ดู renderHeatmap ด้านบน) ข้อมูล US/HK/JP มาจาก
+// process_stock() เดียวกัน field ชื่อตรงกันทุกตัว เลยใช้ config ชุดเดียวกันได้เลยไม่ต้องแยก
+function _hmGridCellHtml(r, cfgKey, search, popupFn) {
+  const cfg = HM_CFG[cfgKey] || HM_CFG.ret_1d;
+  const v = cfg.getV(r);
+  const lbl = v != null ? cfg.fmt(v) : '—';
   const dim = search && !r.symbol.toLowerCase().includes(search) && !(r.name || '').toLowerCase().includes(search);
-  const ring = search && !dim ? 'outline:2px solid #fff;outline-offset:-2px;' : '';
-  return `<div onclick="_hmShowPopup(event,'${r.symbol}')" title="${(r.name || '').replace(/"/g, '&quot;')} (${r.symbol}): ${chgStr}"
-    style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;background:${_hmColor(chg)};
-    border:1px solid var(--bg2);box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;
-    align-items:center;justify-content:center;overflow:hidden;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.5);
-    font-size:${fontSize}px;line-height:1.3;padding:2px;transition:filter .1s,opacity .15s;${ring}
-    ${dim ? 'opacity:.15;' : ''}"
-    onmouseenter="this.style.filter='brightness(1.2)'" onmouseleave="this.style.filter=''">
-    <div style="font-weight:700;white-space:nowrap">${r.symbol}</div>
-    ${showName ? `<div style="font-size:${Math.max(8, fontSize - 3)}px;opacity:.85">${chgStr}</div>` : ''}
+  return `<div class="hm-cell" onclick="${popupFn}(event,'${r.symbol}')"
+    title="${(r.name || '').replace(/"/g, '&quot;')} (${r.symbol}): ${lbl}"
+    style="background:${cfg.clr(v)};color:${cfg.txt(v)};${dim ? 'opacity:.15;' : ''}">
+    <span style="font-size:11px;font-weight:700">${r.symbol.replace(/\.(HK|T)$/, '')}</span>
+    <span style="font-size:10px;opacity:.92">${lbl}</span>
   </div>`;
+}
+
+// จัดกลุ่มแถวตาม sector แล้วเรียง sector ตามค่าเฉลี่ยของ metric ที่เลือก (สูง→ต่ำ) เหมือน
+// renderHeatmap ของหุ้นไทยทุกประการ — คืน HTML พร้อมใส่ลงกล่องได้เลย
+function _hmGridHtml(rows, cfgKey, search, popupFn) {
+  const cfg = HM_CFG[cfgKey] || HM_CFG.ret_1d;
+  const groups = {};
+  rows.forEach(r => { (groups[r.sector || 'อื่นๆ'] ??= []).push(r); });
+  const sectorList = Object.entries(groups).sort((a, b) => {
+    const avg = arr => { const vs = arr.map(cfg.getV).filter(v => v != null); return vs.length ? vs.reduce((s, v) => s + v, 0) / vs.length : -999; };
+    return avg(b[1]) - avg(a[1]);
+  });
+  return sectorList.map(([sec, stocks]) => {
+    const sorted = [...stocks].sort((a, b) => (cfg.getV(b) ?? -999) - (cfg.getV(a) ?? -999));
+    const withVal = sorted.filter(s => cfg.getV(s) != null);
+    const avg = withVal.length ? withVal.reduce((s, x) => s + cfg.getV(x), 0) / withVal.length : null;
+    const cells = sorted.map(r => _hmGridCellHtml(r, cfgKey, search, popupFn)).join('');
+    const avgClass = avg != null ? (cfg.aPos(avg) ? 'green' : 'red') : 'text2';
+    const avgDisp = avg != null ? cfg.aFmt(avg) : '—';
+    return `
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px;display:flex;align-items:center;gap:8px">
+          ${sec}
+          <span class="${avgClass}">${avgDisp}</span>
+          <span class="text2" style="font-size:10px">${stocks.length} หุ้น</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:2px">${cells}</div>
+      </div>`;
+  }).join('');
 }
 
 function _renderHeatmap(data) {
   const box = document.getElementById('hm-box');
   if (!box) return;
   const rows = data.rows || data;   // เผื่อเรียกจากที่อื่นด้วย array ตรงๆ
-  const valid = rows.filter(r => r.mkt_cap > 0);
-  if (!valid.length) {
-    box.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">ไม่มีข้อมูล market cap ที่ใช้วาด heatmap ได้</div>';
+  if (!rows.length) {
+    box.innerHTML = '<div class="text2" style="font-size:13px;padding:20px;text-align:center">ไม่มีข้อมูลราคาที่ใช้วาด heatmap ได้</div>';
     return;
   }
-  const W = box.clientWidth || 1000, H = box.clientHeight || 640;
   const searchEl = document.getElementById('hm-search');
   const search = (searchEl?.value || '').trim().toLowerCase();
-  const bySector = document.getElementById('hm-sector-toggle')?.checked;
-
-  if (!bySector) {
-    const items = valid.map(r => ({ value: r.mkt_cap, row: r })).sort((a, b) => b.value - a.value);
-    box.innerHTML = _squarify(items, 0, 0, W, H)
-      .map(b => _hmCellHtml(b.row, b.box.x, b.box.y, b.box.w, b.box.h, search)).join('');
-    return;
-  }
-
-  // จัดกลุ่มตาม sector — squarify ชั้นนอกด้วยผลรวม market cap ต่อ sector ก่อน แล้ว squarify
-  // ชั้นในด้วยหุ้นแต่ละตัวภายในพื้นที่ของ sector นั้น (เว้นหัวป้ายชื่อ sector ด้านบน)
-  const groups = {};
-  valid.forEach(r => { (groups[r.sector || 'อื่นๆ'] ??= []).push(r); });
-  const sectorItems = Object.entries(groups)
-    .map(([sec, stocks]) => ({ value: stocks.reduce((a, r) => a + r.mkt_cap, 0), sec, stocks }))
-    .sort((a, b) => b.value - a.value);
-  const sectorBoxes = _squarify(sectorItems, 0, 0, W, H);
-
-  let html = '';
-  sectorBoxes.forEach(sb => {
-    const { x, y, w, h } = sb.box;
-    if (w < 2 || h < 2) return;
-    const HEADER = h > 30 ? 16 : 0;
-    html += `<div style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;
-      border:2px solid var(--bg2);box-sizing:border-box;overflow:hidden">
-      ${HEADER ? `<div style="height:${HEADER}px;line-height:${HEADER}px;font-size:10px;font-weight:600;
-        color:var(--text2);padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-        background:var(--bg2)">${sb.sec}</div>` : ''}
-    </div>`;
-    const innerItems = sb.stocks.map(r => ({ value: r.mkt_cap, row: r })).sort((a, b) => b.value - a.value);
-    const innerBoxes = _squarify(innerItems, x, y + HEADER, w, h - HEADER);
-    html += innerBoxes.map(b => _hmCellHtml(b.row, b.box.x, b.box.y, b.box.w, b.box.h, search)).join('');
-  });
-  box.innerHTML = html;
+  box.innerHTML = _hmGridHtml(rows, _hmPeriod, search, '_hmShowPopup');
 }
 
 function _hmShowPopup(ev, sym) {
@@ -12456,9 +12484,11 @@ function _hmShowPopup(ev, sym) {
     el.textContent = v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '—';
     el.style.color = v == null ? 'var(--text2)' : v >= 0 ? 'var(--green)' : 'var(--red)';
   };
-  setChg('hm-popup-chg1d', r.chg_1d);
-  setChg('hm-popup-chg1w', r.chg_1w);
-  document.getElementById('hm-popup-mktcap').textContent = _drFmtCap(r.mkt_cap);
+  setChg('hm-popup-chg1d', r.ret_1d);
+  setChg('hm-popup-chg1w', r.ret_1w);
+  const rsEl = document.getElementById('hm-popup-rs');
+  rsEl.textContent = r.rs_score != null ? Math.round(r.rs_score) : '—';
+  rsEl.style.color = r.rs_score == null ? 'var(--text2)' : r.rs_score >= 50 ? 'var(--green)' : 'var(--red)';
   const finBtn = document.getElementById('hm-popup-fin-btn');
   if (finBtn) finBtn.onclick = _hmGoFin;
   const vw = window.innerWidth, vh = window.innerHeight;
@@ -12485,25 +12515,28 @@ function _hmGoFin() {
 }
 
 // ============================================================
-// HK HEATMAP — HSI / HSTECH / HSCEI (treemap: ขนาด=market cap, สี=% วันนี้)
-// ก็อปโครงจาก US HEATMAP ด้านบนทั้งหมด — reuse _squarify/_hmColor ตัวเดิม (generic ไม่มี id
-// ผูกอยู่) ต่างแค่ prefix hm->hk-hm, endpoint /api/hk-index-heatmap, และ popup ใช้ตัวแปร/
-// handler แยก (_hkHmPopupSym) เพราะ popup DOM #hm-popup ใช้ร่วมกันแค่ตัว element ไม่ใช่ state
+// HK HEATMAP — HSI / HSTECH / HSCEI
+// ก็อปโครงจาก US HEATMAP ด้านบนทั้งหมด — reuse _hmColor/_hmGridCellHtml/_hmGridHtml ตัวเดิม
+// (generic ไม่มี id ผูกอยู่) ต่างแค่ prefix hm->hk-hm, endpoint /api/hk-index-heatmap, และ
+// popup ใช้ตัวแปร/handler แยก (_hkHmPopupSym) เพราะ popup DOM #hm-popup ใช้ร่วมกันแค่ตัว
+// element ไม่ใช่ state
 // ============================================================
 let _hkHmIndex = 'HSI';
-let _hkHmPeriod = 'chg_1d';
+let _hkHmPeriod = 'ret_1d';   // key ใน HM_CFG (ดูคอมเมนต์หัวไฟล์ US heatmap ด้านบน)
 let _hkHmData = {};      // {HSI:{rows,ts,requested,missing}, HSTECH:{...}, HSCEI:{...}}
 let _hkHmPopupSym = null;
 
-let _hkHmResizeTimer = null;
-window.addEventListener('resize', () => {
-  clearTimeout(_hkHmResizeTimer);
-  _hkHmResizeTimer = setTimeout(() => {
-    if (document.getElementById('page-hk-heatmap')?.classList.contains('active') && _hkHmData[_hkHmIndex]) {
-      _renderHkHeatmap(_hkHmData[_hkHmIndex]);
-    }
-  }, 200);
-});
+// ลิงก์ TradingView Heatmap ต่อดัชนี — เหมือน _HM_TV_URL ของ US (ดูคอมเมนต์ตรงนั้น)
+const _HK_HM_TV_URL = {
+  HSI:    'https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22HSI%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D',
+  HSTECH: 'https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22HSTECH%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D',
+  HSCEI:  'https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22HSCEI%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D',
+};
+
+function _hkHmOpenTradingView() {
+  const url = _HK_HM_TV_URL[_hkHmIndex];
+  if (url) window.open(url, '_blank', 'noopener');
+}
 
 function setHkHeatmapIndex(idx, btn) {
   _hkHmIndex = idx;
@@ -12514,8 +12547,10 @@ function setHkHeatmapIndex(idx, btn) {
 
 function setHkHeatmapPeriod(period, btn) {
   _hkHmPeriod = period;
-  document.querySelectorAll('#hk-hm-period-1d,#hk-hm-period-1w').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#hk-hm-period-btns .filter-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
+  const hintEl = document.getElementById('hk-hm-hint');
+  if (hintEl) hintEl.textContent = (HM_CFG[period] || HM_CFG.ret_1d).hint;
   if (_hkHmData[_hkHmIndex]) _renderHkHeatmap(_hkHmData[_hkHmIndex]);
 }
 
@@ -12526,9 +12561,9 @@ function loadHkHeatmapPage(forceRefresh = false) {
   if (!forceRefresh && _hkHmData[_hkHmIndex]) { _renderHkHeatmap(_hkHmData[_hkHmIndex]); return; }
   const btn = document.getElementById('hk-hm-refresh-btn');
   if (forceRefresh && btn) { btn.disabled = true; btn.textContent = '⚡ กำลังอัพเดท...'; }
-  box.innerHTML = `<div id="hk-hm-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">กำลังโหลด heatmap (${forceRefresh ? 'บังคับดึง market cap สดจาก Yahoo' : 'ครั้งแรกอาจใช้เวลา ~30-60 วิ'})...</div>`;
+  box.innerHTML = `<div id="hk-hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
   note.textContent = '';
-  fetch(`/api/hk-index-heatmap?index=${_hkHmIndex}${forceRefresh ? '&force=1' : ''}`)
+  fetch(`/api/hk-index-heatmap?index=${_hkHmIndex}`)
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -12537,82 +12572,27 @@ function loadHkHeatmapPage(forceRefresh = false) {
       const age = Math.max(0, Math.round((Date.now() / 1000) - d.ts));
       const ageStr = age < 60 ? `${age} วิที่แล้ว` : `${Math.round(age / 60)} นาทีที่แล้ว`;
       const missNote = d.missing ? ` · ขาด ${d.missing} ตัว` : '';
-      // นับเฉพาะแถวที่มี mkt_cap วาดเป็นกล่องได้จริง (เหมือน US heatmap — ดูคอมเมนต์ที่ loadHeatmapPage)
-      const drawn = (d.rows || []).filter(r => r.mkt_cap > 0).length;
-      note.textContent = `ข้อมูล ณ ${ageStr} · ${drawn}/${d.requested} ตัว${missNote}`;
+      note.textContent = `ข้อมูล ณ ${ageStr} · ${(d.rows || []).length}/${d.requested} ตัว${missNote}`;
     })
     .catch(e => {
-      box.innerHTML = `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--red);font-size:13px;padding:20px;text-align:center">⚠ โหลดไม่สำเร็จ: ${e.message}</div>`;
+      box.innerHTML = `<div style="color:var(--red);font-size:13px;padding:20px;text-align:center">⚠ โหลดไม่สำเร็จ: ${e.message}</div>`;
     })
     .finally(() => {
-      if (btn) { btn.disabled = false; btn.textContent = '⚡ อัพเดท Market Cap'; }
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ รีเฟรช'; }
     });
-}
-
-function _hkHmCellHtml(r, x, y, w, h, search) {
-  if (w < 1 || h < 1) return '';
-  const chg = r[_hkHmPeriod];
-  const chgStr = chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—';
-  const showName = w > 70 && h > 40;
-  const fontSize = Math.max(9, Math.min(16, Math.min(w, h) / 5));
-  const dim = search && !r.symbol.toLowerCase().includes(search) && !(r.name || '').toLowerCase().includes(search);
-  const ring = search && !dim ? 'outline:2px solid #fff;outline-offset:-2px;' : '';
-  return `<div onclick="_hkHmShowPopup(event,'${r.symbol}')" title="${(r.name || '').replace(/"/g, '&quot;')} (${r.symbol}): ${chgStr}"
-    style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;background:${_hmColor(chg)};
-    border:1px solid var(--bg2);box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;
-    align-items:center;justify-content:center;overflow:hidden;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.5);
-    font-size:${fontSize}px;line-height:1.3;padding:2px;transition:filter .1s,opacity .15s;${ring}
-    ${dim ? 'opacity:.15;' : ''}"
-    onmouseenter="this.style.filter='brightness(1.2)'" onmouseleave="this.style.filter=''">
-    <div style="font-weight:700;white-space:nowrap">${r.symbol}</div>
-    ${showName ? `<div style="font-size:${Math.max(8, fontSize - 3)}px;opacity:.85">${chgStr}</div>` : ''}
-  </div>`;
 }
 
 function _renderHkHeatmap(data) {
   const box = document.getElementById('hk-hm-box');
   if (!box) return;
   const rows = data.rows || data;
-  const valid = rows.filter(r => r.mkt_cap > 0);
-  if (!valid.length) {
-    box.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">ไม่มีข้อมูล market cap ที่ใช้วาด heatmap ได้</div>';
+  if (!rows.length) {
+    box.innerHTML = '<div class="text2" style="font-size:13px;padding:20px;text-align:center">ไม่มีข้อมูลราคาที่ใช้วาด heatmap ได้</div>';
     return;
   }
-  const W = box.clientWidth || 1000, H = box.clientHeight || 640;
   const searchEl = document.getElementById('hk-hm-search');
   const search = (searchEl?.value || '').trim().toLowerCase();
-  const bySector = document.getElementById('hk-hm-sector-toggle')?.checked;
-
-  if (!bySector) {
-    const items = valid.map(r => ({ value: r.mkt_cap, row: r })).sort((a, b) => b.value - a.value);
-    box.innerHTML = _squarify(items, 0, 0, W, H)
-      .map(b => _hkHmCellHtml(b.row, b.box.x, b.box.y, b.box.w, b.box.h, search)).join('');
-    return;
-  }
-
-  const groups = {};
-  valid.forEach(r => { (groups[r.sector || 'อื่นๆ'] ??= []).push(r); });
-  const sectorItems = Object.entries(groups)
-    .map(([sec, stocks]) => ({ value: stocks.reduce((a, r) => a + r.mkt_cap, 0), sec, stocks }))
-    .sort((a, b) => b.value - a.value);
-  const sectorBoxes = _squarify(sectorItems, 0, 0, W, H);
-
-  let html = '';
-  sectorBoxes.forEach(sb => {
-    const { x, y, w, h } = sb.box;
-    if (w < 2 || h < 2) return;
-    const HEADER = h > 30 ? 16 : 0;
-    html += `<div style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;
-      border:2px solid var(--bg2);box-sizing:border-box;overflow:hidden">
-      ${HEADER ? `<div style="height:${HEADER}px;line-height:${HEADER}px;font-size:10px;font-weight:600;
-        color:var(--text2);padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-        background:var(--bg2)">${sb.sec}</div>` : ''}
-    </div>`;
-    const innerItems = sb.stocks.map(r => ({ value: r.mkt_cap, row: r })).sort((a, b) => b.value - a.value);
-    const innerBoxes = _squarify(innerItems, x, y + HEADER, w, h - HEADER);
-    html += innerBoxes.map(b => _hkHmCellHtml(b.row, b.box.x, b.box.y, b.box.w, b.box.h, search)).join('');
-  });
-  box.innerHTML = html;
+  box.innerHTML = _hmGridHtml(rows, _hkHmPeriod, search, '_hkHmShowPopup');
 }
 
 function _hkHmShowPopup(ev, sym) {
@@ -12629,9 +12609,11 @@ function _hkHmShowPopup(ev, sym) {
     el.textContent = v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '—';
     el.style.color = v == null ? 'var(--text2)' : v >= 0 ? 'var(--green)' : 'var(--red)';
   };
-  setChg('hm-popup-chg1d', r.chg_1d);
-  setChg('hm-popup-chg1w', r.chg_1w);
-  document.getElementById('hm-popup-mktcap').textContent = _drFmtCap(r.mkt_cap);
+  setChg('hm-popup-chg1d', r.ret_1d);
+  setChg('hm-popup-chg1w', r.ret_1w);
+  const rsEl = document.getElementById('hm-popup-rs');
+  rsEl.textContent = r.rs_score != null ? Math.round(r.rs_score) : '—';
+  rsEl.style.color = r.rs_score == null ? 'var(--text2)' : r.rs_score >= 50 ? 'var(--green)' : 'var(--red)';
   const finBtn = document.getElementById('hm-popup-fin-btn');
   if (finBtn) finBtn.onclick = _hkHmGoFin;
   const vw = window.innerWidth, vh = window.innerHeight;
@@ -12657,28 +12639,20 @@ function _hkHmGoFin() {
 }
 
 // ============================================================
-// JP HEATMAP — Nikkei 225 (treemap: ขนาด=market cap, สี=% วันนี้)
+// JP HEATMAP — Nikkei 225
 // ก็อปโครงจาก HK HEATMAP ด้านบนทั้งหมด — ดัชนีเดียว (ไม่มีปุ่มสลับดัชนีแบบ US/HK)
-// reuse _squarify/_hmColor ตัวเดิม endpoint /api/jp-index-heatmap
+// reuse _hmColor/_hmGridCellHtml/_hmGridHtml ตัวเดิม endpoint /api/jp-index-heatmap
 // ============================================================
-let _jpHmPeriod = 'chg_1d';
+let _jpHmPeriod = 'ret_1d';   // key ใน HM_CFG (ดูคอมเมนต์หัวไฟล์ US heatmap ด้านบน)
 let _jpHmData = null;      // {rows,ts,requested,missing}
 let _jpHmPopupSym = null;
 
-let _jpHmResizeTimer = null;
-window.addEventListener('resize', () => {
-  clearTimeout(_jpHmResizeTimer);
-  _jpHmResizeTimer = setTimeout(() => {
-    if (document.getElementById('page-jp-heatmap')?.classList.contains('active') && _jpHmData) {
-      _renderJpHeatmap(_jpHmData);
-    }
-  }, 200);
-});
-
 function setJpHeatmapPeriod(period, btn) {
   _jpHmPeriod = period;
-  document.querySelectorAll('#jp-hm-period-1d,#jp-hm-period-1w').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#jp-hm-period-btns .filter-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
+  const hintEl = document.getElementById('jp-hm-hint');
+  if (hintEl) hintEl.textContent = (HM_CFG[period] || HM_CFG.ret_1d).hint;
   if (_jpHmData) _renderJpHeatmap(_jpHmData);
 }
 
@@ -12689,9 +12663,9 @@ function loadJpHeatmapPage(forceRefresh = false) {
   if (!forceRefresh && _jpHmData) { _renderJpHeatmap(_jpHmData); return; }
   const btn = document.getElementById('jp-hm-refresh-btn');
   if (forceRefresh && btn) { btn.disabled = true; btn.textContent = '⚡ กำลังอัพเดท...'; }
-  box.innerHTML = `<div id="jp-hm-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">กำลังโหลด heatmap (${forceRefresh ? 'บังคับดึง market cap สดจาก Yahoo' : 'ครั้งแรกอาจใช้เวลา ~30-60 วิ'})...</div>`;
+  box.innerHTML = `<div id="jp-hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
   note.textContent = '';
-  fetch(`/api/jp-index-heatmap${forceRefresh ? '?force=1' : ''}`)
+  fetch('/api/jp-index-heatmap')
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -12700,81 +12674,27 @@ function loadJpHeatmapPage(forceRefresh = false) {
       const age = Math.max(0, Math.round((Date.now() / 1000) - d.ts));
       const ageStr = age < 60 ? `${age} วิที่แล้ว` : `${Math.round(age / 60)} นาทีที่แล้ว`;
       const missNote = d.missing ? ` · ขาด ${d.missing} ตัว` : '';
-      const drawn = (d.rows || []).filter(r => r.mkt_cap > 0).length;
-      note.textContent = `ข้อมูล ณ ${ageStr} · ${drawn}/${d.requested} ตัว${missNote}`;
+      note.textContent = `ข้อมูล ณ ${ageStr} · ${(d.rows || []).length}/${d.requested} ตัว${missNote}`;
     })
     .catch(e => {
-      box.innerHTML = `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--red);font-size:13px;padding:20px;text-align:center">⚠ โหลดไม่สำเร็จ: ${e.message}</div>`;
+      box.innerHTML = `<div style="color:var(--red);font-size:13px;padding:20px;text-align:center">⚠ โหลดไม่สำเร็จ: ${e.message}</div>`;
     })
     .finally(() => {
-      if (btn) { btn.disabled = false; btn.textContent = '⚡ อัพเดท Market Cap'; }
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ รีเฟรช'; }
     });
-}
-
-function _jpHmCellHtml(r, x, y, w, h, search) {
-  if (w < 1 || h < 1) return '';
-  const chg = r[_jpHmPeriod];
-  const chgStr = chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—';
-  const showName = w > 70 && h > 40;
-  const fontSize = Math.max(9, Math.min(16, Math.min(w, h) / 5));
-  const dim = search && !r.symbol.toLowerCase().includes(search) && !(r.name || '').toLowerCase().includes(search);
-  const ring = search && !dim ? 'outline:2px solid #fff;outline-offset:-2px;' : '';
-  return `<div onclick="_jpHmShowPopup(event,'${r.symbol}')" title="${(r.name || '').replace(/"/g, '&quot;')} (${r.symbol}): ${chgStr}"
-    style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;background:${_hmColor(chg)};
-    border:1px solid var(--bg2);box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;
-    align-items:center;justify-content:center;overflow:hidden;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.5);
-    font-size:${fontSize}px;line-height:1.3;padding:2px;transition:filter .1s,opacity .15s;${ring}
-    ${dim ? 'opacity:.15;' : ''}"
-    onmouseenter="this.style.filter='brightness(1.2)'" onmouseleave="this.style.filter=''">
-    <div style="font-weight:700;white-space:nowrap">${r.symbol}</div>
-    ${showName ? `<div style="font-size:${Math.max(8, fontSize - 3)}px;opacity:.85">${chgStr}</div>` : ''}
-  </div>`;
 }
 
 function _renderJpHeatmap(data) {
   const box = document.getElementById('jp-hm-box');
   if (!box) return;
   const rows = data.rows || data;
-  const valid = rows.filter(r => r.mkt_cap > 0);
-  if (!valid.length) {
-    box.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px">ไม่มีข้อมูล market cap ที่ใช้วาด heatmap ได้</div>';
+  if (!rows.length) {
+    box.innerHTML = '<div class="text2" style="font-size:13px;padding:20px;text-align:center">ไม่มีข้อมูลราคาที่ใช้วาด heatmap ได้</div>';
     return;
   }
-  const W = box.clientWidth || 1000, H = box.clientHeight || 640;
   const searchEl = document.getElementById('jp-hm-search');
   const search = (searchEl?.value || '').trim().toLowerCase();
-  const bySector = document.getElementById('jp-hm-sector-toggle')?.checked;
-
-  if (!bySector) {
-    const items = valid.map(r => ({ value: r.mkt_cap, row: r })).sort((a, b) => b.value - a.value);
-    box.innerHTML = _squarify(items, 0, 0, W, H)
-      .map(b => _jpHmCellHtml(b.row, b.box.x, b.box.y, b.box.w, b.box.h, search)).join('');
-    return;
-  }
-
-  const groups = {};
-  valid.forEach(r => { (groups[r.sector || 'อื่นๆ'] ??= []).push(r); });
-  const sectorItems = Object.entries(groups)
-    .map(([sec, stocks]) => ({ value: stocks.reduce((a, r) => a + r.mkt_cap, 0), sec, stocks }))
-    .sort((a, b) => b.value - a.value);
-  const sectorBoxes = _squarify(sectorItems, 0, 0, W, H);
-
-  let html = '';
-  sectorBoxes.forEach(sb => {
-    const { x, y, w, h } = sb.box;
-    if (w < 2 || h < 2) return;
-    const HEADER = h > 30 ? 16 : 0;
-    html += `<div style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;
-      border:2px solid var(--bg2);box-sizing:border-box;overflow:hidden">
-      ${HEADER ? `<div style="height:${HEADER}px;line-height:${HEADER}px;font-size:10px;font-weight:600;
-        color:var(--text2);padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-        background:var(--bg2)">${sb.sec}</div>` : ''}
-    </div>`;
-    const innerItems = sb.stocks.map(r => ({ value: r.mkt_cap, row: r })).sort((a, b) => b.value - a.value);
-    const innerBoxes = _squarify(innerItems, x, y + HEADER, w, h - HEADER);
-    html += innerBoxes.map(b => _jpHmCellHtml(b.row, b.box.x, b.box.y, b.box.w, b.box.h, search)).join('');
-  });
-  box.innerHTML = html;
+  box.innerHTML = _hmGridHtml(rows, _jpHmPeriod, search, '_jpHmShowPopup');
 }
 
 function _jpHmShowPopup(ev, sym) {
@@ -12791,9 +12711,11 @@ function _jpHmShowPopup(ev, sym) {
     el.textContent = v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '—';
     el.style.color = v == null ? 'var(--text2)' : v >= 0 ? 'var(--green)' : 'var(--red)';
   };
-  setChg('hm-popup-chg1d', r.chg_1d);
-  setChg('hm-popup-chg1w', r.chg_1w);
-  document.getElementById('hm-popup-mktcap').textContent = _drFmtCap(r.mkt_cap);
+  setChg('hm-popup-chg1d', r.ret_1d);
+  setChg('hm-popup-chg1w', r.ret_1w);
+  const rsEl = document.getElementById('hm-popup-rs');
+  rsEl.textContent = r.rs_score != null ? Math.round(r.rs_score) : '—';
+  rsEl.style.color = r.rs_score == null ? 'var(--text2)' : r.rs_score >= 50 ? 'var(--green)' : 'var(--red)';
   const finBtn = document.getElementById('hm-popup-fin-btn');
   if (finBtn) finBtn.onclick = _jpHmGoFin;
   const vw = window.innerWidth, vh = window.innerHeight;
@@ -13830,6 +13752,7 @@ function _renderDividendsView(d, sym, market, hint) {
 // งาน #4 Calendar — เฟส A: เฉพาะหุ้นใน Watchlist (ดู PLAN_stock_study_suite.txt งาน #4 —
 // "อย่า fetch ทั้ง universe ตั้งแต่แรก จะโดน rate limit")
 let _calRangeDays = 7;
+let _calDirection = 'future';    // 'future' | 'past' — งาน "ดูย้อนหลัง" (ดู _calRenderList)
 let _calView = 'list';           // 'list' | 'grid'
 let _calMonthCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
@@ -13840,10 +13763,22 @@ function _calSetRange(days, btn) {
   _calRenderFromCache();
 }
 
+// สลับดู "อนาคต" (default เดิม) กับ "ย้อนหลัง" — ย้อนหลังใช้ช่วงวันเดียวกับปุ่ม 7/30/ทั้งหมด แต่
+// นับถอยจากวันนี้ไปข้างหลังแทน ต้องขยับปฏิทินรายเดือน (grid) ไปเดือนก่อนด้วยถ้ากำลังดูมุมมองนั้น
+// ไม่งั้นจะยังค้างที่เดือนปัจจุบันซึ่งอาจไม่มี event ย้อนหลังให้ดู (ดู backend _CALENDAR_LOOKBACK_DAYS
+// ที่ต้อง sync ให้ครอบคลุมพอกับช่วงย้อนหลังที่เลือกได้)
+function _calSetDirection(dir, btn) {
+  _calDirection = dir;
+  document.querySelectorAll('#cal-dir-future,#cal-dir-past').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _calRenderFromCache();
+}
+
 function _calSetView(view, btn) {
   _calView = view;
   document.querySelectorAll('#cal-view-list,#cal-view-grid').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
+  document.getElementById('cal-direction-row').style.display = view === 'list' ? 'flex' : 'none';
   document.getElementById('cal-range-row').style.display = view === 'list' ? 'flex' : 'none';
   document.getElementById('cal-month-nav').style.display = view === 'grid' ? 'flex' : 'none';
   _calRenderFromCache();
@@ -13948,6 +13883,41 @@ const _CAL_TYPE_BADGE = { earnings: '📊 งบ', xd: '💵 XD', pay: '💰 จ
   xm: '🗳️ ประชุมผู้ถือหุ้น', xb: '📜 สิทธิจองซื้อ (XB)', xb_pay: '💳 ชำระค่าจองซื้อ' };
 const _CAL_CONF_LABEL = { confirmed: 'ยืนยันแล้ว', estimated: 'ประมาณการ', guessed: 'คาดการณ์' };
 const _CAL_CONF_COLOR = { confirmed: 'var(--green)', estimated: 'var(--blue)', guessed: 'var(--text2)' };
+// ลิงก์ไปดูงบจริงไม่ใช่ scrape/parse เอง เพราะ SET.or.th มี WAF (Incapsula) กับ API รายชื่อข่าว
+// ต้องใช้ token ที่ดึงอัตโนมัติไม่ได้ (ต้อง login flow ผ่านเบราว์เซอร์จริง) — ปล่อยให้ผู้ใช้กด
+// ลิงก์ไปดูเองในเบราว์เซอร์ตัวเองง่ายกว่ามาก ต้องมีข้อมูลย้อนหลังพอ (ดู _CALENDAR_LOOKBACK_DAYS
+// ฝั่ง app.py ที่ sync ให้ครอบคลุม) ถึงจะเห็น event ประกาศงบที่ผ่านมาแล้วในโหมด "⏪ ย้อนหลัง"
+//
+// ลิงก์ไปหน้าข่าว "ผลประกอบการ" ของหุ้นตัวนั้นบน SET.or.th (ให้ผู้ใช้กดเข้าไปดู F45 +
+  // คำอธิบายและวิเคราะห์ของฝ่ายจัดการ เอง) — โชว์เฉพาะหุ้นไทย (market TH) และเฉพาะ event
+  // ประเภท earnings ที่วันที่ผ่านมาแล้ว (ถือว่า "น่าจะประกาศแล้ว")
+function _calSourceLink(e) {
+  if (e.type !== 'earnings' || e.market !== 'TH') return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dt = new Date(e.date + 'T00:00:00');
+  if (dt >= today) return null;
+  // ต้องส่ง fromDate/toDate เอง ไม่งั้นหน้า SET จะ default เป็นช่วงสั้นๆ (~1 เดือนล่าสุดจากวันนี้)
+  // ซึ่งอาจไม่ครอบคลุมวันที่ประกาศจริง เพราะวันที่ในปฏิทินเราเป็นแค่ 'ประมาณการ' จาก yfinance
+  // (อาจเร็ว/ช้ากว่าวันจริงหลักสัปดาห์) — เผื่อ ±ให้กว้างพอ: 30 วันก่อนวันประมาณการ ถึงวันนี้
+  // (หรือ 45 วันหลังวันประมาณการถ้ายังไม่ถึงวันนี้)
+  const fmt = d => d.toISOString().slice(0, 10);
+  const fromDate = fmt(new Date(dt.getTime() - 30 * 86400000));
+  const toDateCandidate = new Date(dt.getTime() + 45 * 86400000);
+  const toDate = fmt(toDateCandidate < today ? toDateCandidate : today);
+  return `https://www.set.or.th/th/market/news-and-alert/news?source=company&symbol=${encodeURIComponent(e.symbol)}&securityType=S&type=3&fromDate=${fromDate}&toDate=${toDate}`;
+}
+
+// เปิดหน้าข่าว "ผลประกอบการ" ของ SET.or.th แบบไม่กรองหุ้น (ทั้งตลาด) ย้อนหลัง 90 วันล่าสุด — ทาง
+// เลือกที่เบากว่าการ sync yfinance ทั้ง ~800 หุ้นไทยเข้า Watchlist (ซึ่งมีช่องโหว่ backfill ไม่ได้
+// ถ้า sync ครั้งแรกมาช้ากว่าวันประกาศจริง ดู fetch_earnings_calendar) ปล่อยให้ผู้ใช้ไปดูฟีดข่าว
+// จริงของ SET เองตรงๆ ไม่ต้องพึ่งข้อมูลใน local DB เลย
+function _calOpenMarketWideNews() {
+  const fmt = d => d.toISOString().slice(0, 10);
+  const today = new Date();
+  const from = new Date(today.getTime() - 90 * 86400000);
+  const url = `https://www.set.or.th/th/market/news-and-alert/news?source=company&securityType=S&type=3&fromDate=${fmt(from)}&toDate=${fmt(today)}`;
+  window.open(url, '_blank', 'noopener');
+}
 
 // เรียง _calCache (flat อยู่แล้ว ไม่ว่า scope ไหน) ตามวันที่ ไม่กรองวันที่ (ตัวกรองช่วง/เดือน
 // ทำแยกที่ _calRenderList/_calRenderGrid) — ใช้ร่วมกันทั้ง 2 มุมมอง กันเขียน merge logic ซ้ำ
@@ -13976,15 +13946,20 @@ function _calListSortArrow(key) {
 function _calRenderList() {
   const box = document.getElementById('cal-result');
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const limit = new Date(today.getTime() + _calRangeDays * 86400000);
+  const isPast = _calDirection === 'past';
+  // ย้อนหลัง: [today - range, today] ทุกประเภท event (ไม่ใช่แค่ earnings) — ต้องมีข้อมูลจริงถึง
+  // ย้อนไปได้ ดู _CALENDAR_LOOKBACK_DAYS ฝั่ง app.py ที่ sync ให้ครอบคลุมช่วงนี้ อนาคต: เหมือนเดิม
+  const windowStart = isPast ? new Date(today.getTime() - _calRangeDays * 86400000) : today;
+  const windowEnd = isPast ? today : new Date(today.getTime() + _calRangeDays * 86400000);
 
   let flat = _calFlatEvents().filter(e => {
     const dt = new Date(e.date + 'T00:00:00');
-    return dt >= today && dt <= limit;
+    return dt >= windowStart && dt <= windowEnd;
   });
 
   if (flat.length === 0) {
-    box.innerHTML = `<div class="empty" style="padding:24px">ไม่มีเหตุการณ์ใน ${_calRangeDays} วันข้างหน้า ${_calScopeEmptyLabel()}</div>`;
+    const label = isPast ? `ย้อนหลัง ${_calRangeDays} วัน` : `${_calRangeDays} วันข้างหน้า`;
+    box.innerHTML = `<div class="empty" style="padding:24px">ไม่มีเหตุการณ์ใน${label} ${_calScopeEmptyLabel()}</div>`;
     return;
   }
   if (_calListSort) {
@@ -14005,12 +13980,18 @@ function _calRenderList() {
   const rows = flat.map(e => {
     const dt = new Date(e.date + 'T00:00:00');
     const dLeft = Math.round((dt - today) / 86400000);
+    const dLeftLabel = dLeft >= 0 ? `(อีก ${dLeft} วัน)` : `(${-dLeft} วันที่แล้ว)`;
+    const link = _calSourceLink(e);
+    const linkCell = link
+      ? `<button onclick="window.open('${link}','_blank','noopener')" title="เปิดหน้าข่าวผลประกอบการของ ${e.symbol} บน SET.or.th" style="font-size:11px;padding:3px 8px;border-radius:5px;border:1px solid var(--border);background:var(--bg2);color:var(--blue);cursor:pointer;white-space:nowrap">🔗 ดูงบจริง</button>`
+      : '';
     return `<tr>
-      <td style="padding:8px 10px;white-space:nowrap">${e.date} <span style="color:var(--text2);font-size:11px">(อีก ${dLeft} วัน)</span></td>
+      <td style="padding:8px 10px;white-space:nowrap">${e.date} <span style="color:var(--text2);font-size:11px">${dLeftLabel}</span></td>
       <td style="padding:8px 10px"><b>${e.symbol}</b> <span style="color:var(--text2);font-size:11px">${e.market}</span></td>
       <td style="padding:8px 10px">${_CAL_TYPE_BADGE[e.type] || e.type}</td>
       <td style="padding:8px 10px;color:var(--text2)">${e.detail || ''}</td>
       <td style="padding:8px 10px;text-align:right"><span style="color:${_CAL_CONF_COLOR[e.confidence] || 'var(--text2)'};font-size:11px">${_CAL_CONF_LABEL[e.confidence] || e.confidence}</span></td>
+      <td style="padding:8px 10px;text-align:right">${linkCell}</td>
     </tr>`;
   }).join('');
 
@@ -14020,14 +14001,16 @@ function _calRenderList() {
         <thead style="background:var(--bg2)">
           <tr><th style="text-align:left;padding:8px 10px;cursor:pointer" onclick="calListSortBy('date')">วันที่${_calListSortArrow('date')}</th><th style="text-align:left;padding:8px 10px;cursor:pointer" onclick="calListSortBy('symbol')">หุ้น${_calListSortArrow('symbol')}</th>
             <th style="text-align:left;padding:8px 10px;cursor:pointer" onclick="calListSortBy('type')">ประเภท${_calListSortArrow('type')}</th><th style="text-align:left;padding:8px 10px;cursor:pointer" onclick="calListSortBy('detail')">รายละเอียด${_calListSortArrow('detail')}</th>
-            <th style="text-align:right;padding:8px 10px;cursor:pointer" onclick="calListSortBy('confidence')">ความน่าเชื่อถือ${_calListSortArrow('confidence')}</th></tr>
+            <th style="text-align:right;padding:8px 10px;cursor:pointer" onclick="calListSortBy('confidence')">ความน่าเชื่อถือ${_calListSortArrow('confidence')}</th>
+            <th style="text-align:right;padding:8px 10px">ต้นทาง</th></tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
     <div style="font-size:11px;color:var(--text2);margin-top:10px">
       📊 งบ = ประมาณการจาก yfinance (อาจเลื่อน/คลาดเคลื่อน) · 💵 XD/💰 จ่ายปันผล/🗳️ ประชุมผู้ถือหุ้น/📜 สิทธิจองซื้อ = ประกาศทางการจาก SET.or.th (หุ้นไทยเท่านั้น) ·
-      หุ้น DR/US/HK เห็นเฉพาะวันประกาศงบประมาณการ
+      หุ้น DR/US/HK เห็นเฉพาะวันประกาศงบประมาณการ ·
+      🔗 ดูงบจริง = เปิดหน้าข่าวผลประกอบการของหุ้นนั้นบน SET.or.th (F45 + คำอธิบายและวิเคราะห์ของฝ่ายจัดการ) ให้ไปดูเอกสารต้นทางเอง
     </div>`;
 }
 
@@ -14061,7 +14044,7 @@ function _calRenderGrid() {
     </div>
     <div style="font-size:11px;color:var(--text2);margin-top:10px">
       📊 งบ = ประมาณการจาก yfinance (อาจเลื่อน/คลาดเคลื่อน) · 💵 XD/💰 จ่ายปันผล/🗳️ ประชุมผู้ถือหุ้น/📜 สิทธิจองซื้อ = ประกาศทางการจาก SET.or.th (หุ้นไทยเท่านั้น) ·
-      เดือนย้อนหลังจะไม่มีข้อมูล (ปฏิทินเก็บเฉพาะเหตุการณ์อนาคตตามดีไซน์)
+      กด ◀ ย้อนดูเดือนก่อนได้ (มีข้อมูลย้อนหลังได้ถึง ~1 ปีถ้าเคย sync ไว้) · ชิป 📊 งบ ที่วันในอดีตกดเปิดลิงก์ไปดูงบจริงที่ SET.or.th ได้เลย (หุ้นไทย)
     </div>`;
 }
 
@@ -14082,10 +14065,13 @@ function _calGridRows(year, month, byDate, today) {
       const iso = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
       const isToday = cellDate.getTime() === today.getTime();
       const dayEvents = byDate[iso] || [];
-      const chips = dayEvents.slice(0, 3).map(e =>
-        `<div title="${e.symbol} ${(e.detail || '').replace(/"/g, '')}" style="font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 3px;margin-top:2px;border-radius:3px;background:var(--bg2)">
-          ${_CAL_TYPE_ICON[e.type] || '•'} ${e.symbol}
-        </div>`).join('');
+      const chips = dayEvents.slice(0, 3).map(e => {
+        const link = _calSourceLink(e);
+        const title = `${e.symbol} ${(e.detail || '').replace(/"/g, '')}${link ? ' — คลิกดูงบจริงที่ SET.or.th' : ''}`;
+        const style = "font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 3px;margin-top:2px;border-radius:3px;background:var(--bg2)" + (link ? ";cursor:pointer;text-decoration:underline" : "");
+        const onclick = link ? ` onclick="window.open('${link}','_blank','noopener')"` : '';
+        return `<div title="${title}" style="${style}"${onclick}>${_CAL_TYPE_ICON[e.type] || '•'} ${e.symbol}</div>`;
+      }).join('');
       const more = dayEvents.length > 3 ? `<div style="font-size:9px;color:var(--text2)">+${dayEvents.length - 3} อื่นๆ</div>` : '';
       html += `<td style="vertical-align:top;padding:4px;height:76px;max-width:120px;border:1px solid var(--border);${isToday ? 'background:color-mix(in srgb, var(--blue) 12%, transparent)' : ''}">
         <div style="font-size:11px;font-weight:${isToday ? '700' : '400'};color:${isToday ? 'var(--blue)' : 'var(--text2)'}">${dayNum}</div>

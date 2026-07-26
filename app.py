@@ -54,92 +54,14 @@ _HK_INDEX_DIFF_CACHE_TTL = 6 * 3600
 _jp_index_diff_cache: dict = {}
 _JP_INDEX_DIFF_CACHE_TTL = 6 * 3600
 
-# Heatmap cache (mkt_cap + % เปลี่ยนแปลงรายวันของหุ้นในแต่ละดัชนี) — แยก slot ต่อดัชนี
-# TTL สั้นกว่า cache อื่นเพราะ % เปลี่ยนแปลงต้องสดพอสมควร แต่ไม่สดเกินจนต้องยิง Yahoo ทุกครั้งที่เปิดหน้า
-_heatmap_cache: dict = {}
-_HEATMAP_CACHE_TTL = 15 * 60
-
-# Heatmap HK cache — เหมือน _heatmap_cache ของ US แต่ % เปลี่ยนแปลงคำนวณจาก hk_prices.db
-# ที่มีอยู่แล้ว (ไม่ยิง Yahoo สด) เลยไม่จำเป็นต้องสั้นเท่า US — ใช้ TTL เดียวกันเผื่ออนาคต
-_hk_heatmap_cache: dict = {}
-_HK_HEATMAP_CACHE_TTL = 15 * 60
-
-# Heatmap JP cache — ดัชนีเดียว (NIKKEI225) ต่างจาก US/HK ที่มีหลายดัชนีให้เลือก แต่ pattern
-# เดียวกับ HK (chg_1d/chg_1w จาก jp_prices.db ในเครื่อง, mkt_cap ยิง Yahoo สด cache แยก)
-_jp_heatmap_cache: dict = {}
-_JP_HEATMAP_CACHE_TTL = 15 * 60
+# Heatmap US/HK/JP ไม่มี cache แยกของตัวเองอีกต่อไป — อ่านจาก <market>_index_metrics.json
+# ตรงๆ (ดู /api/us-index-heatmap ฯลฯ) ซึ่ง load_local() ของแต่ละไฟล์มี mtime cache ของมันเอง
+# อยู่แล้ว ไม่ต้องมี cache ซ้อน cache
 
 # ข่าวรายหุ้น (รวม SET.or.th + Yahoo + Google News) — cache ต่อ (symbol, is_dr) 15 นาที
 # ข่าวไม่ต้องสดวินาทีต่อวินาที แต่ก็ไม่ควรยิง 3 แหล่งซ้ำทุกครั้งที่พิมพ์ค้นหา
 _stock_news_cache: dict = {}
 _STOCK_NEWS_CACHE_TTL = 15 * 60
-
-# Market cap เปลี่ยนช้ามาก (ต่างจากราคา) — cache แยกลงไฟล์ต่างหาก อายุ 1 วัน ลดเวลาโหลด
-# ครั้งแรกจาก ~30-60 วิ (ยิง fast_info ทีละ ticker) เหลือแค่เวลา batch ราคา ~5 วิ
-_MKTCAP_CACHE_TTL = 24 * 3600
-
-
-def _mktcap_cache_path():
-    return os.path.join(BASE_DIR, "data", "us_heatmap_mktcap_cache.json")
-
-
-def _load_mktcap_cache():
-    try:
-        with open(_mktcap_cache_path(), encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _save_mktcap_cache(data):
-    p = _mktcap_cache_path()
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    tmp = p + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    os.replace(tmp, p)
-
-
-def _hk_mktcap_cache_path():
-    return os.path.join(BASE_DIR, "data", "hk_heatmap_mktcap_cache.json")
-
-
-def _load_hk_mktcap_cache():
-    try:
-        with open(_hk_mktcap_cache_path(), encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _save_hk_mktcap_cache(data):
-    p = _hk_mktcap_cache_path()
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    tmp = p + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    os.replace(tmp, p)
-
-
-def _jp_mktcap_cache_path():
-    return os.path.join(BASE_DIR, "data", "jp_heatmap_mktcap_cache.json")
-
-
-def _load_jp_mktcap_cache():
-    try:
-        with open(_jp_mktcap_cache_path(), encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _save_jp_mktcap_cache(data):
-    p = _jp_mktcap_cache_path()
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    tmp = p + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    os.replace(tmp, p)
 
 # Financials cache — งบการเงิน cache 24 ชั่วโมง (ข้อมูลไม่เปลี่ยนบ่อย)
 _fin_cache: dict = {}
@@ -2090,6 +2012,9 @@ def get_dividends_endpoint(market, symbol):
 
 
 _CALENDAR_STALE_DAYS = 7   # ปฏิทินเปลี่ยนเร็วกว่าปันผล (ประกาศใหม่ได้ตลอด) — sync ถี่กว่า
+_CALENDAR_LOOKBACK_DAYS = 365   # ย้อนหลังไว้ให้โหมด "⏪ ย้อนหลัง" ฝั่ง frontend (ปุ่ม 7/30/
+                                  # ทั้งหมด วันย้อนหลัง) มีข้อมูลให้ดูจริง รวมถึง earnings ที่ 'วัน
+                                  # คาดการณ์' เลยมาแล้วให้โผล่พร้อมลิงก์ไปดูงบจริงที่ SET
 
 
 @app.route("/api/calendar-events-all")
@@ -2097,10 +2022,10 @@ def get_all_calendar_events_endpoint():
     """ปฏิทินรวมทุกหุ้นที่เคย sync ไว้ใน local DB (ไม่ใช่แค่ watchlist) — ใช้กับตัวกรอง
     "ทั้งหมดที่มีข้อมูล"/"ตามตลาด" หน้า 📅 ปฏิทิน อ่านจาก cache เท่านั้น ไม่ fetch สด (เบา ไม่มี
     rate-limit risk) ?market=TH|US|HK|DR กรองเฉพาะตลาดนั้น ไม่ส่ง = ทุกตลาด"""
-    from datetime import date as _date
+    from datetime import date as _date, timedelta as _td
     market = request.args.get("market")
-    today_iso = _date.today().isoformat()
-    events = financials_store.get_all_calendar_events(BASE_DIR, from_date=today_iso, market=market)
+    from_date = (_date.today() - _td(days=_CALENDAR_LOOKBACK_DAYS)).isoformat()
+    events = financials_store.get_all_calendar_events(BASE_DIR, from_date=from_date, market=market)
     return jsonify({"events": events})
 
 
@@ -2113,9 +2038,9 @@ def get_calendar_events_endpoint(market, symbol):
     mkt = (market or "TH").upper()
     sym = symbol.upper().strip()
     force = request.args.get("refresh") == "1"
-    today_iso = _date.today().isoformat()
+    lookback_iso = (_date.today() - _td(days=_CALENDAR_LOOKBACK_DAYS)).isoformat()
 
-    rows, synced_at = financials_store.get_calendar_events(BASE_DIR, sym, mkt, from_date=today_iso)
+    rows, synced_at = financials_store.get_calendar_events(BASE_DIR, sym, mkt, from_date=lookback_iso)
     stale = True
     if synced_at:
         try:
@@ -2128,7 +2053,7 @@ def get_calendar_events_endpoint(market, symbol):
         try:
             fresh = financials_store.fetch_calendar_events(sym, market=mkt)
             financials_store.save_calendar_events(BASE_DIR, sym, mkt, fresh)
-            rows, synced_at = financials_store.get_calendar_events(BASE_DIR, sym, mkt, from_date=today_iso)
+            rows, synced_at = financials_store.get_calendar_events(BASE_DIR, sym, mkt, from_date=lookback_iso)
             stale = False
         except Exception as e:
             fetch_error = str(e)
@@ -3406,307 +3331,67 @@ def _run_jp_index_sync():
 @app.route("/api/hk-index-heatmap")
 def hk_index_heatmap():
     """Heatmap ของ HSI / HSCEI / HSTECH — ?index=HSI|HSCEI|HSTECH
-    คืน {rows:[{symbol, name, mkt_cap, chg_1d, chg_1w}], ts, requested, missing}
-    ต่างจาก us_index_heatmap ตรงที่ chg_1d/chg_1w คำนวณจากราคาใน hk_prices.db ที่มีอยู่แล้ว
-    (Quick Update อัพเดทให้ทุกวัน) ไม่ต้องยิง Yahoo สดเหมือน US — เหลือแค่ market cap ที่ต้อง
-    ยิง fast_info สดอยู่ดี (ไม่มีเก็บใน DB ราคา) cache ไฟล์แยก 1 วันเหมือนของ US"""
-    import yfinance as yf
-    from concurrent.futures import ThreadPoolExecutor
-    from core import hk_store
+    คืน {rows:[...stocks จาก hk_index_metrics.json...], ts, requested, missing}
+    อ่านจาก hk_index_metrics.json ที่คำนวณไว้แล้วตอน Quick Update/HK Index Max โดยตรง
+    (single source of truth เดียวกับหน้า "หุ้น HK") ไม่คำนวณ chg_1d/chg_1w เองอีกต่อไป —
+    ได้ field ครบชุดเดียวกับหุ้นไทย (ret_1d..ret_1y, rs_score, vol_today/vol_avg20, high_52w,
+    ath_pct ฯลฯ) มาฟรี ไม่ต้องยิง Yahoo หรือแตะ hk_prices.db เพิ่มเลย"""
+    from sources import hk_index_metrics
 
     index_key = (request.args.get("index") or "HSI").upper()
-    if index_key not in ("HSI", "HSCEI", "HSTECH"):
+    flag = {"HSI": "in_hsi", "HSCEI": "in_hscei", "HSTECH": "in_hstech"}.get(index_key)
+    if not flag:
         return jsonify({"error": "index ต้องเป็น HSI, HSCEI หรือ HSTECH เท่านั้น"}), 400
-    force = request.args.get("force") == "1"
 
-    cached = _hk_heatmap_cache.get(index_key)
-    if not force and cached and (time.time() - cached["ts"] < _HK_HEATMAP_CACHE_TTL):
-        return jsonify(cached)
+    data = hk_index_metrics.load_local(BASE_DIR)
+    rows = [s for s in data.get("stocks", []) if s.get(flag)]
+    if not rows:
+        return jsonify({"error": f"ยังไม่มีข้อมูล {index_key} ในเครื่อง — กด \"📈 HK Index Max\" ก่อน"}), 404
 
-    local = hk_index_membership.load_local(BASE_DIR)
-    tickers = local.get(index_key) or []
-    if not tickers:
-        return jsonify({"error": f"ยังไม่มีรายชื่อ {index_key} ในเครื่อง — กด \"ดึงเฉพาะที่ขาด/เก่า\" ในหน้างบการเงินก่อน"}), 404
-
-    # % เปลี่ยนแปลง 1 วัน/1 สัปดาห์ — คำนวณจาก hk_prices.db ตรงๆ (มีราคาอยู่แล้วจาก Quick
-    # Update ทุกวัน ไม่ต้องยิง Yahoo สดเหมือน US heatmap)
-    # ใช้แค่ 6 แท่งล่าสุดต่อตัว (chg_1d/chg_1w) — iter_recent_series เปิด connection
-    # เดียวอ่านทุก ticker แทนเปิดทีละ connection ต่อตัวด้วย get_ohlc_series (~105 ครั้ง)
-    chg1d_map, chg1w_map = {}, {}
-    recent = dict(hk_store.iter_recent_series(BASE_DIR, warmup_rows=6))
-    for t in tickers:
-        series = recent.get(t)
-        if not series or not series.get("closes"):
-            continue
-        closes = [c for c in series["closes"] if c is not None]
-        if len(closes) >= 2:
-            chg1d_map[t] = round((closes[-1] / closes[-2] - 1) * 100, 2)
-        if len(closes) >= 6:
-            chg1w_map[t] = round((closes[-1] / closes[-6] - 1) * 100, 2)
-        elif len(closes) >= 2:
-            chg1w_map[t] = round((closes[-1] / closes[0] - 1) * 100, 2)
-
-    # Market cap — fast_info ต้องยิงทีละ ticker (ไม่มีใน hk_prices.db) ใช้ disk cache
-    # อายุ 1 วันก่อน (เปลี่ยนช้า) ยิง Yahoo เฉพาะตัวที่ cache หมดอายุ/ไม่มี ขนาน 12 threads
-    def _mc_one(t):
-        try:
-            v = getattr(yf.Ticker(t).fast_info, "market_cap", None)
-            return t, (float(v) if v else None)
-        except Exception:
-            return t, None
-
-    mktcap_cache = _load_hk_mktcap_cache()
-    now_ts = time.time()
-    stale = [t for t in tickers if force
-             or t not in mktcap_cache
-             or now_ts - mktcap_cache[t].get("ts", 0) >= _MKTCAP_CACHE_TTL]
-
-    if stale:
-        try:
-            with ThreadPoolExecutor(max_workers=12) as ex:
-                for t, mc in ex.map(_mc_one, stale):
-                    if mc is not None:
-                        mktcap_cache[t] = {"mc": mc, "ts": now_ts}
-        except Exception as e:
-            print(f"[HK Heatmap] market cap batch {index_key} ล้มเหลว: {e}")
-        _save_hk_mktcap_cache(mktcap_cache)
-
-    mkt_map = {t: mktcap_cache[t]["mc"] for t in tickers if t in mktcap_cache}
-
-    mirror_names_hk = _load_mirror_names_hk()
-    extra_names = local.get("extra_names") or {}
-    # HSTECH ไม่มี *_sector จาก Wikipedia (bullet list ไม่มีคอลัมน์ industry) — ใช้แหล่ง
-    # เดียวกับ hk_index_metrics.build(): รวม sector ของ HSI/HSCEI แล้วเติมจาก dr_universe
-    sector_map = dict(local.get(f"{index_key}_sector") or {})
-    if not sector_map:
-        for k in ("HSI_sector", "HSCEI_sector"):
-            sector_map.update(local.get(k) or {})
-        for e in load_dr_universe(BASE_DIR):
-            yf_t = (e.get("yf") or "").upper()
-            if yf_t.endswith(".HK") and yf_t not in sector_map and e.get("ind"):
-                sector_map[yf_t] = e["ind"]
-
-    rows = []
-    for t in tickers:
-        mc = mkt_map.get(t)
-        chg_1d = chg1d_map.get(t)
-        chg_1w = chg1w_map.get(t)
-        if mc is None and chg_1d is None:
-            continue   # โดนบล็อค/ไม่มีข้อมูลจริงทั้งคู่ — ข้ามแทนที่จะโชว์กล่องว่าง
-        # ชื่อบริษัท: mirror_names/extra_names เก็บด้วยรหัสไม่มี .HK (ตาม Finnomena — มีทั้ง
-        # แบบเติม 0 นำหน้าและไม่เติม) ส่วน t เป็น "0700.HK" — ลองทั้งสองแบบ
-        code = t[:-3] if t.endswith(".HK") else t
-        rows.append({
-            "symbol": t,
-            "name": mirror_names_hk.get(code) or mirror_names_hk.get(code.lstrip("0") or "0")
-                    or extra_names.get(code) or t,
-            "mkt_cap": mc,
-            "chg_1d": chg_1d,
-            "chg_1w": chg_1w,
-            "sector": sector_map.get(t) or "อื่นๆ",
-        })
-
-    result = {"rows": rows, "ts": now_ts, "requested": len(tickers), "missing": len(tickers) - len(rows)}
-    _hk_heatmap_cache[index_key] = result
-    return jsonify(result)
+    requested = len(hk_index_membership.load_local(BASE_DIR).get(index_key) or [])
+    return jsonify({"rows": rows, "ts": time.time(),
+                     "requested": max(requested, len(rows)), "missing": max(0, requested - len(rows))})
 
 
 @app.route("/api/jp-index-heatmap")
 def jp_index_heatmap():
     """Heatmap ของ Nikkei 225 — ดัชนีเดียว (ไม่มี ?index= ต่างจาก US/HK ที่มีหลายดัชนีให้เลือก)
-    คืน {rows:[{symbol, name, mkt_cap, chg_1d, chg_1w, sector}], ts, requested, missing}
-    ก็อปโครงจาก hk_index_heatmap ทั้งหมด — chg_1d/chg_1w คำนวณจาก jp_prices.db ในเครื่อง
-    (Quick Update อัพเดทให้ทุกวัน) mkt_cap ยิง fast_info สด cache แยกไฟล์ 1 วันเหมือน HK/US"""
-    import yfinance as yf
-    from concurrent.futures import ThreadPoolExecutor
-    from core import jp_store
+    คืน {rows:[...stocks จาก jp_index_metrics.json...], ts, requested, missing}
+    ก็อปโครงจาก hk_index_heatmap ทั้งหมด — อ่านจาก jp_index_metrics.json ตรงๆ เหมือนกัน"""
     from sources import jp_index_membership, jp_index_metrics
 
-    force = request.args.get("force") == "1"
+    data = jp_index_metrics.load_local(BASE_DIR)
+    rows = [s for s in data.get("stocks", []) if s.get("in_nikkei225")]
+    if not rows:
+        return jsonify({"error": "ยังไม่มีข้อมูล NIKKEI225 ในเครื่อง — กด \"📈 JP Index Max\" ก่อน"}), 404
 
-    cached = _jp_heatmap_cache.get("NIKKEI225")
-    if not force and cached and (time.time() - cached["ts"] < _JP_HEATMAP_CACHE_TTL):
-        return jsonify(cached)
-
-    local = jp_index_membership.load_local(BASE_DIR)
-    tickers = local.get("NIKKEI225") or []
-    if not tickers:
-        return jsonify({"error": "ยังไม่มีรายชื่อ NIKKEI225 ในเครื่อง — กด \"📈 JP Index Max\" ก่อน"}), 404
-
-    # % เปลี่ยนแปลง 1 วัน/1 สัปดาห์ — คำนวณจาก jp_prices.db ตรงๆ (มีราคาอยู่แล้วจาก Quick
-    # Update ทุกวัน ไม่ต้องยิง Yahoo สดเหมือน US heatmap) ดู hk_index_heatmap สำหรับเหตุผลเดียวกัน
-    chg1d_map, chg1w_map = {}, {}
-    recent = dict(jp_store.iter_recent_series(BASE_DIR, warmup_rows=6))
-    for t in tickers:
-        series = recent.get(t)
-        if not series or not series.get("closes"):
-            continue
-        closes = [c for c in series["closes"] if c is not None]
-        if len(closes) >= 2:
-            chg1d_map[t] = round((closes[-1] / closes[-2] - 1) * 100, 2)
-        if len(closes) >= 6:
-            chg1w_map[t] = round((closes[-1] / closes[-6] - 1) * 100, 2)
-        elif len(closes) >= 2:
-            chg1w_map[t] = round((closes[-1] / closes[0] - 1) * 100, 2)
-
-    # Market cap — fast_info ต้องยิงทีละ ticker (ไม่มีใน jp_prices.db) ใช้ disk cache
-    # อายุ 1 วันก่อน (เปลี่ยนช้า) ยิง Yahoo เฉพาะตัวที่ cache หมดอายุ/ไม่มี ขนาน 12 threads
-    def _mc_one(t):
-        try:
-            v = getattr(yf.Ticker(t).fast_info, "market_cap", None)
-            return t, (float(v) if v else None)
-        except Exception:
-            return t, None
-
-    mktcap_cache = _load_jp_mktcap_cache()
-    now_ts = time.time()
-    stale = [t for t in tickers if force
-             or t not in mktcap_cache
-             or now_ts - mktcap_cache[t].get("ts", 0) >= _MKTCAP_CACHE_TTL]
-
-    if stale:
-        try:
-            with ThreadPoolExecutor(max_workers=12) as ex:
-                for t, mc in ex.map(_mc_one, stale):
-                    if mc is not None:
-                        mktcap_cache[t] = {"mc": mc, "ts": now_ts}
-        except Exception as e:
-            print(f"[JP Heatmap] market cap batch ล้มเหลว: {e}")
-        _save_jp_mktcap_cache(mktcap_cache)
-
-    mkt_map = {t: mktcap_cache[t]["mc"] for t in tickers if t in mktcap_cache}
-
-    # ชื่อบริษัท: jp_index_membership ไม่เก็บชื่อ (แค่ ticker+sector) — ใช้ name ที่
-    # jp_index_metrics คำนวณไว้แล้วจาก dr_universe/Yahoo ตอน sync งบ
-    metrics_local = jp_index_metrics.load_local(BASE_DIR)
-    name_map = {s["symbol"]: s.get("name") for s in metrics_local.get("stocks", [])}
-    sector_map = dict(local.get("NIKKEI225_sector") or {})
-
-    rows = []
-    for t in tickers:
-        mc = mkt_map.get(t)
-        chg_1d = chg1d_map.get(t)
-        chg_1w = chg1w_map.get(t)
-        if mc is None and chg_1d is None:
-            continue   # โดนบล็อค/ไม่มีข้อมูลจริงทั้งคู่ — ข้ามแทนที่จะโชว์กล่องว่าง
-        rows.append({
-            "symbol": t,
-            "name": name_map.get(t) or t,
-            "mkt_cap": mc,
-            "chg_1d": chg_1d,
-            "chg_1w": chg_1w,
-            "sector": sector_map.get(t) or "อื่นๆ",
-        })
-
-    result = {"rows": rows, "ts": now_ts, "requested": len(tickers), "missing": len(tickers) - len(rows)}
-    _jp_heatmap_cache["NIKKEI225"] = result
-    return jsonify(result)
+    requested = len(jp_index_membership.load_local(BASE_DIR).get("NIKKEI225") or [])
+    return jsonify({"rows": rows, "ts": time.time(),
+                     "requested": max(requested, len(rows)), "missing": max(0, requested - len(rows))})
 
 
 @app.route("/api/us-index-heatmap")
 def us_index_heatmap():
     """Heatmap ของ S&P 500 / Dow Jones / Nasdaq 100 — ?index=SP500|DOW|NDX
-    คืน {rows:[{symbol, name, mkt_cap, chg_1d, chg_1w}], ts, requested, missing}
-    mkt_cap ใช้กำหนดขนาดกล่อง, chg_1d/chg_1w ใช้กำหนดสี (ฝั่ง client สลับดูได้ทั้งคู่โดยไม่ต้องยิงซ้ำ)
-    ดึงสดจาก Yahoo (ไม่มีข้อมูลนี้ใน financials.db ที่ sync ไว้ล่วงหน้า — เป็นราคา/มูลค่าตลาด
-    ปัจจุบัน ไม่ใช่งบการเงิน) ราคา cache ไว้ 15 นาทีต่อดัชนี ส่วน market cap cache แยกไฟล์ 1 วัน
-    (เปลี่ยนช้ากว่าราคามาก) กันยิง Yahoo ทุกครั้งที่เปิดหน้า"""
-    import yfinance as yf
-    import pandas as pd
-    from concurrent.futures import ThreadPoolExecutor
+    คืน {rows:[...stocks จาก us_index_metrics.json...], ts, requested, missing}
+    อ่านจาก us_index_metrics.json ที่คำนวณไว้แล้วตอน Quick Update/US Index Max โดยตรง —
+    ดู hk_index_heatmap สำหรับเหตุผลเดียวกัน (เดิมเคยยิง yf.download + fast_info ทีละ ticker
+    ช้า ~30-60 วิ ตอน cache หมดอายุ ตอนนี้ไม่ยิง Yahoo จากหน้านี้เลย)"""
+    from sources import us_index_metrics
 
     index_key = (request.args.get("index") or "SP500").upper()
-    if index_key not in ("SP500", "DOW", "NDX"):
+    flag = {"SP500": "in_sp500", "DOW": "in_dow", "NDX": "in_ndx"}.get(index_key)
+    if not flag:
         return jsonify({"error": "index ต้องเป็น SP500, DOW หรือ NDX เท่านั้น"}), 400
-    force = request.args.get("force") == "1"
 
-    cached = _heatmap_cache.get(index_key)
-    if not force and cached and (time.time() - cached["ts"] < _HEATMAP_CACHE_TTL):
-        return jsonify(cached)
+    data = us_index_metrics.load_local(BASE_DIR)
+    rows = [s for s in data.get("stocks", []) if s.get(flag)]
+    if not rows:
+        return jsonify({"error": f"ยังไม่มีข้อมูล {index_key} ในเครื่อง — กด \"📈 US Index Max\" ก่อน"}), 404
 
-    local = us_index_membership.load_local(BASE_DIR)
-    tickers = local.get(index_key) or []
-    if not tickers:
-        return jsonify({"error": f"ยังไม่มีรายชื่อ {index_key} ในเครื่อง — กด \"ดึงเฉพาะที่ขาด/เก่า\" ในหน้างบการเงินก่อน"}), 404
-
-    yf_tickers = tickers   # ticker ในไฟล์ local เป็นรูปแบบ yfinance อยู่แล้ว (BRK-B ไม่ใช่ BRK.B)
-
-    # % เปลี่ยนแปลง 1 วัน/1 สัปดาห์ — ดาวน์โหลดพร้อมกันทั้งชุด (เร็วกว่ายิงทีละตัวมาก เหมือน dr_quick_update)
-    # period="1mo" ให้ครบทั้งสองช่วงในการยิงครั้งเดียว (1w = เทียบย้อน 5 วันทำการ)
-    chg1d_map, chg1w_map = {}, {}
-    try:
-        raw = yf.download(yf_tickers, period="1mo", auto_adjust=True,
-                          progress=False, group_by="ticker", threads=True)
-        is_multi = len(yf_tickers) > 1
-        for t in yf_tickers:
-            try:
-                closes = (raw[t]["Close"] if is_multi else raw["Close"]).dropna()
-                if len(closes) >= 2:
-                    chg1d_map[t] = round((closes.iloc[-1] / closes.iloc[-2] - 1) * 100, 2)
-                if len(closes) >= 6:
-                    chg1w_map[t] = round((closes.iloc[-1] / closes.iloc[-6] - 1) * 100, 2)
-                elif len(closes) >= 2:
-                    chg1w_map[t] = round((closes.iloc[-1] / closes.iloc[0] - 1) * 100, 2)
-            except (KeyError, TypeError):
-                continue
-    except Exception as e:
-        print(f"[Heatmap] ดาวน์โหลดราคา {index_key} ล้มเหลว: {e}")
-
-    # Market cap — fast_info ต้องยิงทีละ ticker (ไม่รวมอยู่ใน batch download ด้านบน)
-    # ใช้ disk cache อายุ 1 วันก่อน (เปลี่ยนช้า) ยิง Yahoo เฉพาะตัวที่ cache หมดอายุ/ไม่มี
-    # ขนาน 12 threads เหมือน DR rebuild (ดู _mc_one) ลดจาก sequential ~1-2 นาทีเหลือ ~15-20 วิ
-    def _mc_one(t):
-        try:
-            v = getattr(yf.Ticker(t).fast_info, "market_cap", None)
-            return t, (float(v) if v else None)
-        except Exception:
-            return t, None
-
-    mktcap_cache = _load_mktcap_cache()
-    now_ts = time.time()
-    stale = [t for t in yf_tickers if force
-             or t not in mktcap_cache
-             or now_ts - mktcap_cache[t].get("ts", 0) >= _MKTCAP_CACHE_TTL]
-
-    if stale:
-        try:
-            with ThreadPoolExecutor(max_workers=12) as ex:
-                for t, mc in ex.map(_mc_one, stale):
-                    if mc is not None:
-                        mktcap_cache[t] = {"mc": mc, "ts": now_ts}
-        except Exception as e:
-            print(f"[Heatmap] market cap batch {index_key} ล้มเหลว: {e}")
-        _save_mktcap_cache(mktcap_cache)
-
-    mkt_map = {t: mktcap_cache[t]["mc"] for t in yf_tickers if t in mktcap_cache}
-
-    mirror_names_us = _load_mirror_names_us()
-    extra_names = local.get("extra_names") or {}
-    sector_map = local.get(f"{index_key}_sector") or {}
-
-    rows = []
-    for t in tickers:
-        mc = mkt_map.get(t)
-        chg_1d = chg1d_map.get(t)
-        chg_1w = chg1w_map.get(t)
-        if mc is None and chg_1d is None:
-            continue   # โดนบล็อค/ไม่มีข้อมูลจริงทั้งคู่ — ข้ามแทนที่จะโชว์กล่องว่าง
-        rows.append({
-            "symbol": t,
-            "name": mirror_names_us.get(t) or extra_names.get(t) or t,
-            "mkt_cap": mc,
-            "chg_1d": chg_1d,
-            "chg_1w": chg_1w,
-            "sector": sector_map.get(t) or "อื่นๆ",
-        })
-
-    result = {"rows": rows, "ts": now_ts, "requested": len(tickers), "missing": len(tickers) - len(rows)}
-    # chg1d_map ว่างเปล่า = yf.download ทั้งชุดล้มเหลว (โดนบล็อค/เน็ตปัญหา) — ถ้า cache
-    # ผลลัพธ์สีเทาทั้งกระดานนี้ไว้ 15 นาทีจะยิ่งแย่ (ผู้ใช้ต้องรอนานกว่าจะได้ลองใหม่)
-    # ปล่อยให้ request ถัดไปยิง Yahoo ใหม่แทน — cache เฉพาะตอนที่ได้ราคาจริงมาบ้าง
-    if chg1d_map:
-        _heatmap_cache[index_key] = result
-    return jsonify(result)
+    requested = len(us_index_membership.load_local(BASE_DIR).get(index_key) or [])
+    return jsonify({"rows": rows, "ts": time.time(),
+                     "requested": max(requested, len(rows)), "missing": max(0, requested - len(rows))})
 
 
 # ============================================================
@@ -5535,7 +5220,6 @@ def _run_quick():
             from sources import hk_index_metrics
             hk_index_metrics.build(BASE_DIR)
             _hk_breadth_cache.clear()
-            _hk_heatmap_cache.clear()
             print(f"[QuickUpdate] HK Index: gap-updated {n_hk} ticker, metrics rebuilt")
         _sub_step("HK Index", 96, "อัพเดทราคา HK Index...", _hk_index)
 
