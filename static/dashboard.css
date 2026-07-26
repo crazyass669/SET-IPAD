@@ -45,6 +45,16 @@
   }
   .nav-btn:hover { background: var(--bg3); color: var(--text); }
   .nav-btn.active { background: var(--accent); color: #fff; }
+  /* Windows ไม่มีฟอนต์ธงอีโมจิ (regional-indicator) ให้เรนเดอร์เป็นธงจริง — ใช้ SVG inline แทน
+     ที่เมนู US/HK/JP กันปัญหาขึ้นเป็นตัวอักษร 2 ตัวแทนธง */
+  .nav-flag {
+    display: inline-block; width: 14px; height: 10px; margin-right: 4px;
+    vertical-align: -1px; border-radius: 2px; background-size: cover; background-position: center;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.12);
+  }
+  .nav-flag-us { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'%3E%3Crect width='20' height='14' fill='%23fff'/%3E%3Cg fill='%23B22234'%3E%3Crect y='0' width='20' height='1.08'/%3E%3Crect y='2.15' width='20' height='1.08'/%3E%3Crect y='4.31' width='20' height='1.08'/%3E%3Crect y='6.46' width='20' height='1.08'/%3E%3Crect y='8.62' width='20' height='1.08'/%3E%3Crect y='10.77' width='20' height='1.08'/%3E%3Crect y='12.92' width='20' height='1.08'/%3E%3C/g%3E%3Crect width='8' height='7.54' fill='%233C3B6E'/%3E%3C/svg%3E"); }
+  .nav-flag-hk { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'%3E%3Crect width='20' height='14' fill='%23DE2910'/%3E%3Cg transform='translate(10,7)' fill='%23fff'%3E%3Cellipse cx='0' cy='-3.2' rx='1.6' ry='3.2'/%3E%3Cellipse cx='0' cy='-3.2' rx='1.6' ry='3.2' transform='rotate(72)'/%3E%3Cellipse cx='0' cy='-3.2' rx='1.6' ry='3.2' transform='rotate(144)'/%3E%3Cellipse cx='0' cy='-3.2' rx='1.6' ry='3.2' transform='rotate(216)'/%3E%3Cellipse cx='0' cy='-3.2' rx='1.6' ry='3.2' transform='rotate(288)'/%3E%3C/g%3E%3C/svg%3E"); }
+  .nav-flag-jp { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'%3E%3Crect width='20' height='14' fill='%23fff'/%3E%3Ccircle cx='10' cy='7' r='4.2' fill='%23BC002D'/%3E%3C/svg%3E"); }
   .nav-toggle-btn {
     background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
     cursor: pointer; padding: 4px 10px; border-radius: 6px; font-size: 11px;
@@ -164,6 +174,10 @@
   .tbl tr:hover td { background: var(--bg3); }
   .tbl tr:last-child td { border-bottom: none; }
 
+  /* กล่อง Top Gainers/Losers: โชว์ ~10 แถวแรก ที่เหลือเลื่อนดู โดยขนาดการ์ดเท่าเดิม */
+  .mini-tbl-scroll { max-height: 296px; overflow-y: auto; }
+  .mini-tbl-scroll .tbl thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+
   /* ตารางงบการเงิน (หน้างบ) — ตรึงคอลัมน์ "รายการ" ไว้เวลาเลื่อนดูตัวเลขไปทางขวา
      คอลัมน์แรกต้องมีพื้นหลังทึบ (var(--bg2) = สีการ์ด) กันตัวเลขที่เลื่อนทะลุขึ้นมา */
   #fin-result .tbl th:first-child,
@@ -217,6 +231,7 @@
   /* STATIC MODE (GitHub Pages) — ซ่อนปุ่ม/ฟีเจอร์ที่ต้องมี Flask server */
   .static-mode #quick-update-btn,
   .static-mode #refresh-btn,
+  .static-mode #restart-btn,
   .static-mode #val-refresh-btn,
   .static-mode #dr-quick-btn,
   .static-mode #cm-mode-fin,
@@ -923,6 +938,14 @@
   .card:has(table.tbl) {
     overflow-x: auto;
   }
+
+  /* ซ่อนปุ่ม "เทียบเพื่อน"/"ดูสรุปเต็ม" ใน popup กราฟหุ้นรายตัว บนมือถือ/
+     ไอแพด — สองหน้านี้ (Peer Compare, Tearsheet) เป็นตาราง/เลย์เอาต์กว้าง
+     ที่ยังใช้งานไม่ได้จริงบนจอสัมผัส เลยซ่อนทางเข้าจาก popup ไว้ก่อน
+     (หน้าเดิมยังเข้าได้ปกติผ่านเมนู nav บนจอกว้าง) */
+  #cm-peer-btn, #cm-tearsheet-btn {
+    display: none !important;
+  }
 }
 
 /* ซ่อนถาวรทุกขนาดจอ (ไม่มีเงื่อนไขจอแคบ) — คอลัมน์ที่ซ้ำซ้อน/สำคัญน้อยสุด
@@ -970,6 +993,11 @@ body.static-mode #tbl-momentum   th:nth-child(4),  body.static-mode #tbl-momentu
   }
   /* มุมซ้ายบนของตารางที่ header ก็ sticky (เช่นตารางผล Screener+) ต้องลอยเหนือทุกชั้น */
   .tbl thead th:first-child, .data-table thead th:first-child { z-index: 4; }
+
+  /* มือถือ/แท็บเล็ต: ปุ่มสลับ "เปิดหน้าเดิม/เปิดแท็บใหม่" ไม่ค่อยมีประโยชน์
+     (แตะเมนูบนจอสัมผัสมักเปิดแท็บใหม่อยู่แล้วตามพฤติกรรม browser เอง) แถม
+     กินที่แถบ nav ที่แคบอยู่แล้ว — ซ่อนเฉพาะจอสัมผัส ส่วนเดสก์ท็อปยังโชว์ปกติ */
+  #nav-openmode-btn { display: none; }
 }
 
 /* ── การ์ดคู่มือลำดับการกดอัพเดท (หน้า Data Health) ────────────────────

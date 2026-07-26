@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260725a">
+<link rel="stylesheet" href="static/dashboard.css?v=20260726b">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -64,13 +64,13 @@
   <button class="nav-btn" onclick="showPage('short',this)" title="Short Sales — ข้อมูลการขายชอร์ตรายหุ้น, Squeeze Radar">Short</button>
   <button class="nav-btn" onclick="showPage('confluence',this)" title="สัญญาณเงินทุนรวม — insider + short + NVDR ที่ตรงกันหลายชั้น">🎯 สัญญาณรวม</button>
   <button class="nav-btn" onclick="showPage('financials',this)">งบการเงิน</button>
-  <button class="nav-btn" onclick="showPage('us-stocks',this)" title="หุ้น US — RS / Stage / 52W High / Momentum / EMA ของสมาชิก S&amp;P 500 · Dow Jones · Nasdaq 100 (ราคา OHLC ใน us_prices.db, คำนวณสูตรเดียวกับหุ้นไทย)">🇺🇸 หุ้น US</button>
+  <button class="nav-btn" onclick="showPage('us-stocks',this)" title="หุ้น US — RS / Stage / 52W High / Momentum / EMA ของสมาชิก S&amp;P 500 · Dow Jones · Nasdaq 100 (ราคา OHLC ใน us_prices.db, คำนวณสูตรเดียวกับหุ้นไทย)"><span class="nav-flag nav-flag-us"></span>หุ้น US</button>
   <button class="nav-btn" onclick="showPage('us-heatmap',this)" title="Heatmap S&amp;P 500 / Dow Jones / Nasdaq 100 (หุ้น US) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้ · คนละหน้ากับ &quot;Heatmap&quot; ของหุ้นไทยด้านซ้าย">🗺️ Heatmap US</button>
   <button class="nav-btn" onclick="showPage('us-rotation',this)" title="US Rotation — RRG ของหุ้น US แต่ละตัว เทียบกับค่าเฉลี่ยดัชนี/sector ที่เลือก">🔄 US Rotation</button>
-  <button class="nav-btn" onclick="showPage('hk-stocks',this)" title="หุ้น HK — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Hang Seng Index · Hang Seng TECH · Hang Seng China Enterprises (ราคา OHLC ใน hk_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US)">🇭🇰 หุ้น HK</button>
+  <button class="nav-btn" onclick="showPage('hk-stocks',this)" title="หุ้น HK — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Hang Seng Index · Hang Seng TECH · Hang Seng China Enterprises (ราคา OHLC ใน hk_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US)"><span class="nav-flag nav-flag-hk"></span>หุ้น HK</button>
   <button class="nav-btn" onclick="showPage('hk-heatmap',this)" title="Heatmap HSI / HSTECH / HSCEI (หุ้น HK) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้">🗺️ Heatmap HK</button>
   <button class="nav-btn" onclick="showPage('hk-rotation',this)" title="HK Rotation — RRG ของหุ้น HK แต่ละตัว เทียบกับค่าเฉลี่ยดัชนี/sector ที่เลือก">🔄 HK Rotation</button>
-  <button class="nav-btn" onclick="showPage('jp-stocks',this)" title="หุ้น JP — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Nikkei 225 (ราคา OHLC ใน jp_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US/HK) — มี Tearsheet/เทียบเพื่อน/งบการเงินครบแล้ว">🇯🇵 หุ้น JP</button>
+  <button class="nav-btn" onclick="showPage('jp-stocks',this)" title="หุ้น JP — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Nikkei 225 (ราคา OHLC ใน jp_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US/HK) — มี Tearsheet/เทียบเพื่อน/งบการเงินครบแล้ว"><span class="nav-flag nav-flag-jp"></span>หุ้น JP</button>
   <button class="nav-btn" onclick="showPage('jp-heatmap',this)" title="Heatmap Nikkei 225 (หุ้น JP) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้">🗺️ Heatmap JP</button>
   <button class="nav-btn" onclick="showPage('jp-rotation',this)" title="JP Rotation — RRG ของหุ้น JP แต่ละตัว เทียบกับค่าเฉลี่ย sector ที่เลือก">🔄 JP Rotation</button>
   <button class="nav-btn" onclick="showPage('stock-news',this)" title="ข่าวรายหุ้น — รวมประกาศ SET.or.th + Yahoo Finance + Google News ในหน้าเดียว แค่พิมพ์ชื่อย่อหุ้น (ดึงสดต่อหุ้น local-only, ไม่มีบน GitHub Pages)">📰 ข่าวหุ้น</button>
@@ -181,12 +181,12 @@
     <!-- TOP GAINERS -->
     <div class="card">
       <div class="card-title">Top Gainers Today (1D)</div>
-      <table class="tbl" id="tbl-gainers"></table>
+      <div class="mini-tbl-scroll"><table class="tbl" id="tbl-gainers"></table></div>
     </div>
     <!-- TOP LOSERS -->
     <div class="card">
       <div class="card-title">Top Losers Today (1D)</div>
-      <table class="tbl" id="tbl-losers"></table>
+      <div class="mini-tbl-scroll"><table class="tbl" id="tbl-losers"></table></div>
     </div>
   </div>
 

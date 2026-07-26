@@ -919,8 +919,8 @@ function renderOverview() {
   // กัน penny stock ออก เหมือน RS leaders preview ด้านล่าง — tick เดียวของหุ้นราคา
   // ไม่กี่สตางค์ทำให้ ret_1d กระโดด ±20-50% ครองอันดับทั้งที่ไม่ใช่การเคลื่อนไหวจริง
   const sorted1d = stocks.filter(s => s.ret_1d != null && !_dqIsPenny(s)).sort((a,b) => b.ret_1d - a.ret_1d);
-  const gainers = sorted1d.slice(0,10);
-  const losers  = sorted1d.slice(-10).reverse();
+  const gainers = sorted1d.slice(0,20);
+  const losers  = sorted1d.slice(-20).reverse();
 
   const miniTbl = (rows, isGainer) => `
     <thead><tr><th>Symbol${colTipIcon('symbol')}</th><th>Sector${colTipIcon('sector')}</th><th class="r">1D%${colTipIcon('ret_1d')}</th><th class="r">RS${colTipIcon('rs_score')}</th></tr></thead>
