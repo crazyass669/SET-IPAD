@@ -76,6 +76,12 @@ _SET_DAILY_VAL_TTL = 3 * 3600
 # event-invalidate ตอน sync งบการเงินเสร็จ + TTL 24h กันค้างข้าม restart
 _fin_analytics_cache: dict = {}
 _FIN_ANALYTICS_CACHE_TTL = 24 * 3600
+# lock กันรันซ้อน — คำนวณสด ~15-23 วิ/ครั้ง (เปิด sqlite ทีละ symbol) ถ้าไม่มี lock
+# หลายแท็บที่เปิดพร้อมกันตอน cache หมดอายุ/ว่าง (ทุกแท็บยิง /api/financials-analytics
+# ตอนโหลดหน้าผ่าน loadFinAnalytics()) จะแย่งกันคำนวณซ้ำพร้อมกันหลายชุด แข่งกันเอง
+# บน GIL จนแท็บหลังๆ ดูเหมือนค้าง (เจอจริงตอนเปิด 4-5 แท็บพร้อมกัน) — ใช้ pattern
+# เดียวกับ _dr_rebuild_lock ของ /api/dr: แท็บแรกคำนวณ แท็บอื่นรอเฉยๆ แล้วได้ผลจาก cache
+_fin_analytics_lock = threading.Lock()
 
 # Indices cache — ดัชนีราคากลุ่ม SET/MAI cache 4 ชั่วโมง
 _indices_cache: dict = {}
@@ -2329,27 +2335,35 @@ def financials_analytics():
     if cached and (time.time() - slot.get("ts", 0) < _FIN_ANALYTICS_CACHE_TTL):
         return jsonify(cached)
 
-    pe_map, mktcap_map = {}, {}
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, encoding="utf-8") as f:
-                for s in json.load(f).get("stocks", []):
-                    pe_map[s["symbol"]] = s.get("pe")
-                    mktcap_map[s["symbol"]] = s.get("mkt_cap")
-        except Exception:
-            pass
+    # lock กันหลายแท็บ/request ที่มาชนตอน cache หมดอายุพร้อมกันคำนวณซ้ำซ้อนกัน (ดูคอมเมนต์
+    # ที่ _fin_analytics_lock) — request ที่มาทีหลังรอเฉยๆ แล้วเช็ค cache ซ้ำหลังได้ lock
+    # ถ้า request แรกคำนวณเสร็จไปแล้วระหว่างรอ ก็ได้ผลจาก cache ทันทีไม่ต้องคำนวณซ้ำ
+    with _fin_analytics_lock:
+        cached = slot.get("result")
+        if cached and (time.time() - slot.get("ts", 0) < _FIN_ANALYTICS_CACHE_TTL):
+            return jsonify(cached)
 
-    set_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=False)
-    dr_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=True)
-    fin_sector_syms = factor_snapshot._financial_sector_symbols(BASE_DIR)
-    result = {
-        "set": _compute_fin_analytics_for(set_symbols, False, pe_map, mktcap_map, yahoo_only=yahoo_only, fin_sector_syms=fin_sector_syms),
-        "dr": _compute_fin_analytics_for(dr_symbols, True, pe_map, mktcap_map, yahoo_only=yahoo_only),
-    }
+        pe_map, mktcap_map = {}, {}
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, encoding="utf-8") as f:
+                    for s in json.load(f).get("stocks", []):
+                        pe_map[s["symbol"]] = s.get("pe")
+                        mktcap_map[s["symbol"]] = s.get("mkt_cap")
+            except Exception:
+                pass
 
-    slot["result"] = result
-    slot["ts"] = time.time()
-    return jsonify(result)
+        set_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=False)
+        dr_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=True)
+        fin_sector_syms = factor_snapshot._financial_sector_symbols(BASE_DIR)
+        result = {
+            "set": _compute_fin_analytics_for(set_symbols, False, pe_map, mktcap_map, yahoo_only=yahoo_only, fin_sector_syms=fin_sector_syms),
+            "dr": _compute_fin_analytics_for(dr_symbols, True, pe_map, mktcap_map, yahoo_only=yahoo_only),
+        }
+
+        slot["result"] = result
+        slot["ts"] = time.time()
+        return jsonify(result)
 
 
 @app.route("/api/factor-screener")

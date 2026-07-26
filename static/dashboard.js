@@ -8119,8 +8119,22 @@ function openTearsheetFromModal() {
 // HEATMAP
 // ============================================================
 let hmPeriod = 'ret_1d';
+let hmSortDir = 1;   // 1 = มากไปน้อย (ค่าเริ่มต้น), -1 = น้อยไปมาก — คลิกปุ่ม metric เดิมซ้ำเพื่อสลับทิศ
+
+// comparator ใช้ร่วมกันทั้ง 4 heatmap (ไทย/US/HK/JP) — ค่า null (ไม่มีข้อมูล) อยู่ท้ายสุดเสมอ
+// ไม่ว่าจะเรียงทิศไหน (ไม่งั้นตอนสลับเป็นน้อยไปมาก ค่า null จะโดดขึ้นไปอยู่บนสุดแทน)
+function _hmCmp(getV, dir) {
+  return (a, b) => {
+    const va = getV(a), vb = getV(b);
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    return (vb - va) * dir;
+  };
+}
 
 function setHmPeriod(key, btn) {
+  hmSortDir = (key === hmPeriod) ? -hmSortDir : 1;
   hmPeriod = key;
   document.querySelectorAll('#page-heatmap .filter-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
@@ -8163,7 +8177,7 @@ function renderHeatmap() {
   if (!DATA) return;
   const cfg = HM_CFG[hmPeriod] || HM_CFG.ret_1d;
   const hintEl = document.getElementById('hm-hint');
-  if (hintEl) hintEl.textContent = cfg.hint;
+  if (hintEl) hintEl.textContent = cfg.hint + (hmSortDir === 1 ? ' · เรียงมาก→น้อย' : ' · เรียงน้อย→มาก') + ' (คลิกปุ่มเดิมซ้ำเพื่อสลับ)';
 
   const groups = {};
   DATA.stocks.forEach(s => {
@@ -8172,13 +8186,11 @@ function renderHeatmap() {
     groups[sec].push(s);
   });
 
-  const sectorList = Object.entries(groups).sort((a, b) => {
-    const avg = arr => { const vs = arr.map(x => cfg.getV(x)).filter(v => v != null); return vs.length ? vs.reduce((s,v)=>s+v,0)/vs.length : -999; };
-    return avg(b[1]) - avg(a[1]);
-  });
+  const sectorAvg = arr => { const vs = arr.map(x => cfg.getV(x)).filter(v => v != null); return vs.length ? vs.reduce((s,v)=>s+v,0)/vs.length : null; };
+  const sectorList = Object.entries(groups).sort((a, b) => _hmCmp(x => sectorAvg(x[1]), hmSortDir)(a, b));
 
   document.getElementById('heatmap-grid').innerHTML = sectorList.map(([sec, stocks]) => {
-    const sorted = [...stocks].sort((a, b) => (cfg.getV(b) ?? -999) - (cfg.getV(a) ?? -999));
+    const sorted = [...stocks].sort(_hmCmp(cfg.getV, hmSortDir));
     const withVal = sorted.filter(s => cfg.getV(s) != null);
     const avg = withVal.length ? withVal.reduce((s, x) => s + cfg.getV(x), 0) / withVal.length : null;
     const cells = sorted.map(s => {
@@ -12284,6 +12296,7 @@ function _renderJpBreadth() {
 // ============================================================
 let _hmIndex = 'SP500';
 let _hmPeriod = 'ret_1d';   // key ใน HM_CFG — สลับดูได้ทันทีจากข้อมูลชุดเดียวกัน ไม่ยิง API ซ้ำ
+let _hmSortDir = 1;    // 1 = มากไปน้อย, -1 = น้อยไปมาก — คลิกปุ่ม metric เดิมซ้ำเพื่อสลับ (ดู _hmCmp)
 let _hmData = {};      // cache ในหน่วยความจำต่อ tab {SP500:{rows,ts,requested,missing}, DOW:{...}, NDX:{...}}
 let _hmPopupSym = null;
 
@@ -12309,11 +12322,13 @@ function setHeatmapIndex(idx, btn) {
 }
 
 function setHeatmapPeriod(period, btn) {
+  _hmSortDir = (period === _hmPeriod) ? -_hmSortDir : 1;
   _hmPeriod = period;
   document.querySelectorAll('#hm-period-btns .filter-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   const hintEl = document.getElementById('hm-hint');
-  if (hintEl) hintEl.textContent = (HM_CFG[period] || HM_CFG.ret_1d).hint;
+  if (hintEl) hintEl.textContent = (HM_CFG[period] || HM_CFG.ret_1d).hint +
+    (_hmSortDir === 1 ? ' · เรียงมาก→น้อย' : ' · เรียงน้อย→มาก') + ' (คลิกปุ่มเดิมซ้ำเพื่อสลับ)';
   if (_hmData[_hmIndex]) _renderHeatmap(_hmData[_hmIndex]);
 }
 
@@ -12437,18 +12452,17 @@ function _hmGridCellHtml(r, cfgKey, search, popupFn) {
   </div>`;
 }
 
-// จัดกลุ่มแถวตาม sector แล้วเรียง sector ตามค่าเฉลี่ยของ metric ที่เลือก (สูง→ต่ำ) เหมือน
-// renderHeatmap ของหุ้นไทยทุกประการ — คืน HTML พร้อมใส่ลงกล่องได้เลย
-function _hmGridHtml(rows, cfgKey, search, popupFn) {
+// จัดกลุ่มแถวตาม sector แล้วเรียง sector ตามค่าเฉลี่ยของ metric ที่เลือก เหมือน renderHeatmap
+// ของหุ้นไทยทุกประการ — dir: 1 = มากไปน้อย, -1 = น้อยไปมาก (ดู hmSortDir/_hmCmp ด้านบน)
+// คืน HTML พร้อมใส่ลงกล่องได้เลย
+function _hmGridHtml(rows, cfgKey, search, popupFn, dir = 1) {
   const cfg = HM_CFG[cfgKey] || HM_CFG.ret_1d;
   const groups = {};
   rows.forEach(r => { (groups[r.sector || 'อื่นๆ'] ??= []).push(r); });
-  const sectorList = Object.entries(groups).sort((a, b) => {
-    const avg = arr => { const vs = arr.map(cfg.getV).filter(v => v != null); return vs.length ? vs.reduce((s, v) => s + v, 0) / vs.length : -999; };
-    return avg(b[1]) - avg(a[1]);
-  });
+  const sectorAvg = arr => { const vs = arr.map(cfg.getV).filter(v => v != null); return vs.length ? vs.reduce((s, v) => s + v, 0) / vs.length : null; };
+  const sectorList = Object.entries(groups).sort(_hmCmp(x => sectorAvg(x[1]), dir));
   return sectorList.map(([sec, stocks]) => {
-    const sorted = [...stocks].sort((a, b) => (cfg.getV(b) ?? -999) - (cfg.getV(a) ?? -999));
+    const sorted = [...stocks].sort(_hmCmp(cfg.getV, dir));
     const withVal = sorted.filter(s => cfg.getV(s) != null);
     const avg = withVal.length ? withVal.reduce((s, x) => s + cfg.getV(x), 0) / withVal.length : null;
     const cells = sorted.map(r => _hmGridCellHtml(r, cfgKey, search, popupFn)).join('');
@@ -12476,7 +12490,7 @@ function _renderHeatmap(data) {
   }
   const searchEl = document.getElementById('hm-search');
   const search = (searchEl?.value || '').trim().toLowerCase();
-  box.innerHTML = _hmGridHtml(rows, _hmPeriod, search, '_hmShowPopup');
+  box.innerHTML = _hmGridHtml(rows, _hmPeriod, search, '_hmShowPopup', _hmSortDir);
 }
 
 function _hmShowPopup(ev, sym) {
@@ -12532,6 +12546,7 @@ function _hmGoFin() {
 // ============================================================
 let _hkHmIndex = 'HSI';
 let _hkHmPeriod = 'ret_1d';   // key ใน HM_CFG (ดูคอมเมนต์หัวไฟล์ US heatmap ด้านบน)
+let _hkHmSortDir = 1;    // 1 = มากไปน้อย, -1 = น้อยไปมาก — คลิกปุ่ม metric เดิมซ้ำเพื่อสลับ
 let _hkHmData = {};      // {HSI:{rows,ts,requested,missing}, HSTECH:{...}, HSCEI:{...}}
 let _hkHmPopupSym = null;
 
@@ -12555,11 +12570,13 @@ function setHkHeatmapIndex(idx, btn) {
 }
 
 function setHkHeatmapPeriod(period, btn) {
+  _hkHmSortDir = (period === _hkHmPeriod) ? -_hkHmSortDir : 1;
   _hkHmPeriod = period;
   document.querySelectorAll('#hk-hm-period-btns .filter-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   const hintEl = document.getElementById('hk-hm-hint');
-  if (hintEl) hintEl.textContent = (HM_CFG[period] || HM_CFG.ret_1d).hint;
+  if (hintEl) hintEl.textContent = (HM_CFG[period] || HM_CFG.ret_1d).hint +
+    (_hkHmSortDir === 1 ? ' · เรียงมาก→น้อย' : ' · เรียงน้อย→มาก') + ' (คลิกปุ่มเดิมซ้ำเพื่อสลับ)';
   if (_hkHmData[_hkHmIndex]) _renderHkHeatmap(_hkHmData[_hkHmIndex]);
 }
 
@@ -12601,7 +12618,7 @@ function _renderHkHeatmap(data) {
   }
   const searchEl = document.getElementById('hk-hm-search');
   const search = (searchEl?.value || '').trim().toLowerCase();
-  box.innerHTML = _hmGridHtml(rows, _hkHmPeriod, search, '_hkHmShowPopup');
+  box.innerHTML = _hmGridHtml(rows, _hkHmPeriod, search, '_hkHmShowPopup', _hkHmSortDir);
 }
 
 function _hkHmShowPopup(ev, sym) {
@@ -12653,15 +12670,18 @@ function _hkHmGoFin() {
 // reuse _hmColor/_hmGridCellHtml/_hmGridHtml ตัวเดิม endpoint /api/jp-index-heatmap
 // ============================================================
 let _jpHmPeriod = 'ret_1d';   // key ใน HM_CFG (ดูคอมเมนต์หัวไฟล์ US heatmap ด้านบน)
+let _jpHmSortDir = 1;    // 1 = มากไปน้อย, -1 = น้อยไปมาก — คลิกปุ่ม metric เดิมซ้ำเพื่อสลับ
 let _jpHmData = null;      // {rows,ts,requested,missing}
 let _jpHmPopupSym = null;
 
 function setJpHeatmapPeriod(period, btn) {
+  _jpHmSortDir = (period === _jpHmPeriod) ? -_jpHmSortDir : 1;
   _jpHmPeriod = period;
   document.querySelectorAll('#jp-hm-period-btns .filter-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   const hintEl = document.getElementById('jp-hm-hint');
-  if (hintEl) hintEl.textContent = (HM_CFG[period] || HM_CFG.ret_1d).hint;
+  if (hintEl) hintEl.textContent = (HM_CFG[period] || HM_CFG.ret_1d).hint +
+    (_jpHmSortDir === 1 ? ' · เรียงมาก→น้อย' : ' · เรียงน้อย→มาก') + ' (คลิกปุ่มเดิมซ้ำเพื่อสลับ)';
   if (_jpHmData) _renderJpHeatmap(_jpHmData);
 }
 
@@ -12703,7 +12723,7 @@ function _renderJpHeatmap(data) {
   }
   const searchEl = document.getElementById('jp-hm-search');
   const search = (searchEl?.value || '').trim().toLowerCase();
-  box.innerHTML = _hmGridHtml(rows, _jpHmPeriod, search, '_jpHmShowPopup');
+  box.innerHTML = _hmGridHtml(rows, _jpHmPeriod, search, '_jpHmShowPopup', _jpHmSortDir);
 }
 
 function _jpHmShowPopup(ev, sym) {
