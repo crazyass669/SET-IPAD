@@ -15,6 +15,8 @@ import sys
 import time
 from datetime import datetime, timezone, timedelta
 
+import pandas as pd
+
 _ICT = timezone(timedelta(hours=7))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -52,7 +54,21 @@ def _progress_cb(current, total, msg):
 
 from services import refresh as refresh_svc
 
-if price_store.db_exists(BASE_DIR):
+
+def _lagging_tickers(base_dir):
+    """หุ้นที่ last date ยังตามหลังวันล่าสุดของกระดาน (สภาพคล่องต่ำ Yahoo sync ช้า)
+    ตัดหุ้นค้างนาน >14 วันออก (พักเทรด/เพิกถอน — ไม่ใช่ sync lag ให้ retry)"""
+    last_map = price_store.get_last_dates(base_dir)
+    if not last_map:
+        return []
+    max_last = pd.to_datetime(max(last_map.values()))
+    stale_cut = max_last - pd.Timedelta(days=14)
+    return sorted(t for t, d in last_map.items()
+                  if stale_cut <= pd.to_datetime(d) < max_last)
+
+
+was_quick_update = price_store.db_exists(BASE_DIR)
+if was_quick_update:
     log("=== พบ set_prices.db (cache) — Quick Update ===")
     try:
         refresh_svc.run_quick_update(_progress_cb, BASE_DIR)
@@ -60,11 +76,38 @@ if price_store.db_exists(BASE_DIR):
     except Exception as e:
         log(f"⚠️ Quick Update ล้ม ({e}) — fallback Full Refresh")
         refresh_svc.run_with_progress(_progress_cb, base_dir=BASE_DIR, period="10y")
+        was_quick_update = False
 else:
     log("=== ไม่มี set_prices.db — Full Refresh 10 ปี (~30-60 นาที) ===")
     refresh_svc.run_with_progress(_progress_cb, base_dir=BASE_DIR, period="10y")
     log("✅ Full Refresh เสร็จ")
 
+# ── 1b. Retry เก็บตกในรอบเดียวกัน — หุ้นสภาพคล่องต่ำที่ Yahoo ยังไม่ปล่อยราคา
+# ตอน quick update รอบแรก เดิมต้องรอ CI รอบถัดไป (อาจข้ามวัน) ทำให้เวอร์ชันเว็บ
+# (มือถือ/ไอแพด) ค้างข้อมูลไม่ครบนานผิดปกติ — ลองซ้ำในรอบเดียวกันได้เพราะ job มี
+# timeout budget 120 นาที ใช้จริงแค่ ~4-5 นาที เหลือเผื่อเยอะพอรอ Yahoo ปล่อยข้อมูล
+if was_quick_update:
+    MAX_RETRY = 2
+    RETRY_WAIT_SEC = 600
+    for attempt in range(1, MAX_RETRY + 1):
+        lagging = _lagging_tickers(BASE_DIR)
+        if not lagging:
+            break
+        preview = lagging[:10]
+        log(f"=== พบหุ้นตามหลัง {len(lagging)} ตัว — รอ {RETRY_WAIT_SEC // 60} นาทีแล้ว "
+            f"retry ({attempt}/{MAX_RETRY}): {preview}{' ...' if len(lagging) > 10 else ''} ===")
+        time.sleep(RETRY_WAIT_SEC)
+        try:
+            refresh_svc.run_quick_update(_progress_cb, BASE_DIR)
+            log(f"✅ Retry quick update ({attempt}/{MAX_RETRY}) เสร็จ")
+        except Exception as e:
+            log(f"⚠️ Retry quick update ล้ม ({e}) — หยุด retry")
+            break
+    else:
+        lagging = _lagging_tickers(BASE_DIR)
+        if lagging:
+            log(f"⚠️ ยังมีหุ้นตามหลัง {len(lagging)} ตัวหลัง retry ครบ {MAX_RETRY} รอบ — "
+                f"ปล่อยไว้ รอ cron รอบถัดไป: {lagging[:10]}{' ...' if len(lagging) > 10 else ''}")
 
 # ── 2. สร้าง market stats จาก Table_PE.xls/Table_PBV.xls (ถ้ามีในรีโป) ──
 if os.path.exists(os.path.join(BASE_DIR, "Table_PE.xls")):
