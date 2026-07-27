@@ -4712,7 +4712,7 @@ def _run_financials_update_all():
 @app.route("/api/financials-update-all", methods=["POST"])
 def financials_update_all():
     """ปุ่ม '🔄 อัพเดทงบการเงินทั้งหมด' (หน้า Data Health) — แทน `python update_financials.py`
-    ใช้เวลาไม่กี่นาที ใช้บ่อยสุด (ทุกครั้งหลังงบไตรมาสออก)"""
+    ใช้เวลาไม่กี่นาทีถึงเกือบครึ่งชั่วโมง (ขึ้นกับจำนวนหุ้น/DR) ใช้บ่อยสุด (ทุกครั้งหลังงบไตรมาสออก)"""
     with _lock:
         if _state["running"]:
             return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409

@@ -426,6 +426,7 @@ function startMirrorYahooIndexSync() {
 // (คู่มือ-อัพเดทข้อมูล.txt) ย้ายมาเป็นปุ่มในหน้า Data Health แทน ใช้ job system เดียวกับ
 // Quick Update/Full Refresh (progress bar + SSE + กันกดซ้ำระหว่างมีงานอื่นรันอยู่)
 function startFinancialsUpdateAll() {
+  if (!confirm('เช็ค DR ใหม่ → งบหุ้นไทยทุกตัว (Yahoo+SET+Finnomena) → งบ DR → หุ้น US/HK ที่ค้นบ่อย → คำนวณ factor snapshot ใหม่?\n\nอาจใช้เวลานานถึงเกือบครึ่งชั่วโมง (ขึ้นกับจำนวนหุ้น/DR ที่ต้องดึง) — ปิดแท็บ/ปิดคอมได้ระหว่างรัน')) return;
   _startJob("/api/financials-update-all", "fin-update-all-btn", "🔄 อัพเดทงบการเงินทั้งหมด", null, checkDataHealthBadge);
 }
 
@@ -15665,7 +15666,9 @@ const DH_SOURCE_MAP = {
   us_index_metrics:     { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 US Index Max" ด้านบนในหน้านี้', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   hk_index_metrics:     { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 HK Index Max" ด้านบนในหน้านี้', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   jp_index_metrics:     { text: 'ปุ่ม "📈 JP Index Max" ด้านบนในหน้านี้ — ไม่ได้อยู่ใน Quick Update', fn: 'startJpIndexFullRefresh', fnLabel: '📈 JP Index Max' },
-  financials:           { text: 'หน้า งบการเงิน — ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" (หรือ python update_financials.py)', fn: 'startFinancialsSync', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด', gotoPage: 'financials' },
+  financials:           { text: 'หน้า งบการเงิน — ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" (หรือ python update_financials.py) · หรือเฉพาะงบหุ้นแม่ DR — หน้า DR/DRx ปุ่ม "🔄 ดึงเฉพาะที่ขาด/เก่า"/"📥 ดึงทั้งหมด"',
+                          fn: 'startFinancialsSync', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด', gotoPage: 'financials',
+                          fn2: 'startDRFinancialsSyncIncremental', fnLabel2: '🔄 ดึงงบ DR ที่ขาด/เก่า', gotoPage2: 'dr', gotoLabel2: 'ไปหน้า DR/DRx' },
   mirror:               { text: 'ปุ่ม "🌐 Sync Mirror US/HK เต็ม" ด้านบนในหน้านี้ (หรือ python mirror_finnomena.py force)', fn: 'startMirrorYahooIndexSync', fnLabel: '🌐 Sync Mirror US/HK เต็ม' },
   market_stats:         { text: 'หน้า Valuation — ปุ่ม "⟳ อัพเดทข้อมูล P/E & P/BV" (ต้องโหลด Table_PE.xls/Table_PBV.xls มาวางทับก่อน)', fn: 'refreshMarketStats', fnLabel: '⟳ อัพเดท P/E & P/BV', gotoPage: 'valuation' },
   offsite_backup:       { text: 'รันเอง: python backup_financials_offsite.py <โฟลเดอร์ปลายทาง> — ไม่มีปุ่มในแอป (เขียนไฟล์นอกเครื่อง)' },
@@ -15700,6 +15703,10 @@ function _dhSourceCell(key) {
   const btns = [];
   if (src.fn) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhRunAction('${src.fn}')">${src.fnLabel || 'อัพเดท'}</button>`);
   if (src.gotoPage) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhGoto('${src.gotoPage}')">${src.gotoLabel || 'ไปหน้านั้น'}</button>`);
+  // fn2/gotoPage2: ใช้กับ key ที่มีมากกว่า 1 หน้า/ปุ่มเขียนลงไฟล์เดียวกัน (เช่น financials.db
+  // ที่ทั้งหน้า "งบการเงิน" และปุ่มงบ DR ในหน้า DR/DRx ต่างก็เขียนทับ)
+  if (src.fn2) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhRunAction('${src.fn2}')">${src.fnLabel2 || 'อัพเดท'}</button>`);
+  if (src.gotoPage2) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhGoto('${src.gotoPage2}')">${src.gotoLabel2 || 'ไปหน้านั้น'}</button>`);
   const btnRow = btns.length ? `<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">${btns.join('')}</div>` : '';
   return `<span>${src.text}</span>${btnRow}`;
 }
@@ -15945,6 +15952,8 @@ async function checkSetUniverseUpdates() {
   }
 }
 
+let _dhMirrorNewTotal = 0;
+
 async function checkMirrorUpdates() {
   const btn  = document.getElementById('dh-mirror-diff-btn');
   const note = document.getElementById('dh-mirror-diff-note');
@@ -15959,6 +15968,7 @@ async function checkMirrorUpdates() {
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     const totalNew = (d.new_counts.US || 0) + (d.new_counts.HK || 0);
+    _dhMirrorNewTotal = totalNew;
     note.textContent = `Finnomena มี US ${d.live_counts.US} / HK ${d.live_counts.HK} ตัว · ` +
       (totalNew ? `พบตัวใหม่ ${totalNew} ตัว` : 'ไม่มีตัวใหม่');
     box.style.display = 'block';
@@ -15982,6 +15992,8 @@ async function checkMirrorUpdates() {
 }
 
 function startMirrorSyncNew() {
+  const n = _dhMirrorNewTotal || 0;
+  if (!confirm(`ดึงงบ Finnomena ของหุ้น mirror US/HK ตัวใหม่ที่เจอ (${n} ตัว)?\n\nเวลาที่ใช้ขึ้นกับจำนวนตัวใหม่ (มากอาจกินเวลาหลายนาทีถึงเป็นชั่วโมง) — ปิดแท็บ/ปิดคอมได้ระหว่างรัน`)) return;
   _startJob('/api/mirror-sync-new', 'dh-mirror-sync-btn', '📥 ดึงเฉพาะตัวใหม่ (local)', null, () => {
     document.getElementById('dh-mirror-diff-note').textContent = '';
     document.getElementById('dh-mirror-diff-result').style.display = 'none';

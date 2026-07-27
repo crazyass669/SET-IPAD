@@ -108,7 +108,7 @@ _DR_STATIC = [
     {"sym":'GOOG', "name":'Alphabet Inc. Class C', "region":'US', "yf":"GOOG", "ind":'Search, AI & Advertising', "drs":["GOOG23", "GOOG80"]},
     {"sym":'GOOGL', "name":'Alphabet Inc. Class A', "region":'US', "yf":"GOOGL", "ind":'Search, AI & Advertising', "drs":["GOOGL01", "GOOGL03", "GOOGL19"]},
     {"sym":'GRAB', "name":'Grab Holdings Limited', "region":'US', "yf":"GRAB", "ind":'Super App Southeast Asia', "drs":["GRAB80"]},
-    {"sym":'GSUS', "name":'The Goldman Sachs Group, Inc.', "region":'US', "yf":"GS", "ind":'US Equity ETF', "drs":["GSUS06"]},
+    {"sym":'GSUS', "name":'The Goldman Sachs Group, Inc.', "region":'US', "yf":"GS", "ind":'Investment Banking', "drs":["GSUS06"]},
     {"sym":'HIMS', "name":'Hims & Hers Health, Inc.', "region":'US', "yf":"HIMS", "ind":'Telehealth & Wellness', "drs":["HIMS03"]},
     {"sym":'HOOD', "name":'Robinhood Markets, Inc.', "region":'US', "yf":"HOOD", "ind":'Commission-Free Trading', "drs":["HOOD03", "HOOD06", "HOOD80"]},
     {"sym":'IBM', "name":'IBM Corporation', "region":'US', "yf":"IBM", "ind":'Enterprise AI & Cloud', "drs":["IBM06"]},
@@ -179,7 +179,7 @@ _DR_STATIC = [
     {"sym":'TER', "name":'Teradyne, Inc.', "region":'US', "yf":"TER", "ind":'Automated Test Equipment', "drs":["TER23", "TER01"]},
     {"sym":'TME', "name":'Tencent Music Entertainment', "region":'US', "yf":"TME", "ind":'Music Streaming China', "drs":["TME23"]},
     {"sym":'TRIPCOM', "name":'Trip.com Group Limited', "region":'US', "yf":"TCOM", "ind":'Online Travel China', "drs":["TRIPCOM23", "TRIPCOM80"]},
-    {"sym":'TRVUS', "name":'Travelers Companies, Inc.', "region":'US', "yf":"TRV", "ind":'Buffered Return ETF', "drs":["TRVUS06"]},
+    {"sym":'TRVUS', "name":'Travelers Companies, Inc.', "region":'US', "yf":"TRV", "ind":'Property & Casualty Insurance', "drs":["TRVUS06"]},
     {"sym":'TSLA', "name":'Tesla, Inc.', "region":'US', "yf":"TSLA", "ind":'Electric Vehicles & Energy', "drs":["TSLA01", "TSLA03", "TSLA23", "TSLA80"]},
     {"sym":'UBER', "name":'Uber Technologies, Inc.', "region":'US', "yf":"UBER", "ind":'Ride-Hailing & Delivery', "drs":["UBER06"]},
     {"sym":'UNH', "name":'UnitedHealth Group Inc.', "region":'US', "yf":"UNH", "ind":'Health Insurance & Services', "drs":["UNH19"]},
@@ -521,7 +521,7 @@ def load_dr_universe(base_dir):
         add = [t for t in extra.get(e["sym"], []) if t not in e["drs"]]
         if add:
             e["drs"] = list(e["drs"]) + sorted(add)
-        e["etf"] = "ETF" in (e.get("name", "") + " " + e.get("ind", "")).upper()
+        e["etf"] = bool(_re.search(r"\bETF\b", e.get("name", "") + " " + e.get("ind", ""), _re.IGNORECASE))
         out.append(e)
     static_syms = {e["sym"] for e in out}
     for e in auto.get("new_entries", []):
