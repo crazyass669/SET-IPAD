@@ -3642,10 +3642,14 @@ def _compute_idx_rs(result: dict):
                              "rs": int(round((e["raw"] - mn) / rng * 99))}
                             for e in weekly]
 
-            # เพิ่ม entry วันนี้
-            if rs_val is not None and (not hist or hist[-1]["date"] != today_str):
-                # normalize rs_set (0–99 vs SET) เข้าไปด้วย
-                hist.append({"date": today_str, "rs": rs_val})
+            # เพิ่ม entry วันนี้ / เขียนทับถ้าเป็นวันเดียวกับที่มีอยู่แล้ว (closes ย้อนหลังที่
+            # ใช้คำนวณ rs_raw อาจถูก TradingView แก้ไขระหว่างวัน — เดิม append-only เลยค้าง
+            # ค่า rs ของวันนั้นไว้ถาวรตั้งแต่รอบแรกที่รัน)
+            if rs_val is not None:
+                if hist and hist[-1]["date"] == today_str:
+                    hist[-1]["rs"] = rs_val
+                else:
+                    hist.append({"date": today_str, "rs": rs_val})
             entry["rs_history"] = hist[-52:]
 
         print(f"[Indices] RS vs SET computed ({ns} stocks)")
@@ -3710,15 +3714,23 @@ def _fetch_indices_tv(existing: dict, full_refresh: bool = False) -> dict:
             if full_refresh and not destructive_ok:
                 print(f"[Indices] FR {sym}: ได้ {len(new_dates)} bars < 90% ของเดิม "
                       f"({len(entry['dates'])}) — append แทนการทับ")
-            old_dates = entry["dates"]
-            old_vals  = entry["closes"]
-            last_d    = old_dates[-1] if old_dates else ""
-            added = 0
+            # TradingView แก้ค่าปิดของวันที่ผ่านมาแล้วย้อนหลังได้ (พบว่าค้างได้หลายวัน
+            # ทำการ ไม่ใช่แค่วันล่าสุด) เดิม merge แบบ append เฉพาะ d > last_d เลยไม่มี
+            # ทางรับค่าที่แก้ไขนี้เข้ามาเลย — เปลี่ยนเป็นเขียนทับทุกวันที่ที่ TV ส่งมาใหม่
+            # ในรอบนี้ (ทับของเดิมถ้าซ้ำวัน) แล้วค่อย append วันที่ใหม่จริงๆ ต่อท้าย
+            date_map = dict(zip(entry["dates"], entry["closes"]))
+            added = revised = 0
             for d, v in zip(new_dates, new_vals):
-                if d > last_d:
-                    old_dates.append(d); old_vals.append(v)
-                    last_d = d; added += 1
-            print(f"[Indices] QU {sym} +{added}d -> {(old_dates or ['?'])[-1]}")
+                if d in date_map:
+                    if date_map[d] != v:
+                        revised += 1
+                else:
+                    added += 1
+                date_map[d] = v
+            merged = sorted(date_map.items())
+            old_dates = [d for d, _ in merged]
+            old_vals  = [v for _, v in merged]
+            print(f"[Indices] QU {sym} +{added}d revised={revised}d -> {(old_dates or ['?'])[-1]}")
         else:
             old_dates = new_dates
             old_vals  = new_vals
@@ -5641,9 +5653,12 @@ def short_sales_daily_update():
             # อัพเดท short_pos ปัจจุบัน
             stocks[sym]["short_pos"]     = snap["short_pos"]
             stocks[sym]["short_pos_pct"] = snap["short_pos_pct"]
-            # append snapshot (ไม่ซ้ำวัน)
+            # append snapshot วันใหม่ / เขียนทับถ้าเป็นวันเดียวกับที่มีอยู่แล้ว (SET อาจ
+            # แก้ตัวเลขระหว่างวันถ้ารันซ้ำหลายรอบ — เดิม append-only เลยค้างค่าแรกไว้ถาวร)
             daily = stocks[sym].setdefault("daily", [])
-            if not daily or daily[-1].get("date") != trade_date:
+            if daily and daily[-1].get("date") == trade_date:
+                daily[-1] = snap
+            else:
                 daily.append(snap)
                 # เก็บแค่ 365 วัน
                 if len(daily) > 365:
@@ -6242,8 +6257,12 @@ def nvdr_daily_update():
             stocks[sym]["nvdr_shares"]   = shr
             stocks[sym]["paid_up_shares"] = paid
 
+            # เขียนทับถ้าเป็นวันเดียวกับที่มีอยู่แล้ว (SET อาจแก้ตัวเลขระหว่างวันถ้ารันซ้ำ
+            # หลายรอบ — เดิม append-only เลยค้างค่าแรกไว้ถาวร)
             daily = stocks[sym].setdefault("daily", [])
-            if not daily or daily[-1].get("date") != trade_date:
+            if daily and daily[-1].get("date") == trade_date:
+                daily[-1] = snap
+            else:
                 daily.append(snap)
                 if len(daily) > 365:
                     stocks[sym]["daily"] = daily[-365:]
