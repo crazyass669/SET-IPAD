@@ -381,7 +381,7 @@ function confirmRefresh(period) {
     _drData   = null;
     const statusEl = document.getElementById('dr-status');
     if (statusEl) statusEl.textContent = 'กำลังอัปเดตข้อมูลหุ้นต่างประเทศ...';
-    fetch('/api/dr')
+    _fetchTimeout('/api/dr', 90000)
       .then(r => r.json())
       .then(d => {
         if (d.stocks) {
@@ -1591,9 +1591,9 @@ async function loadDRRotation() {
   if (!_drData || !_drData.length) {
     gate.style.display = ''; gate.textContent = 'กำลังดึงข้อมูลหุ้นต่างประเทศ (DR)...'; body.style.display = 'none';
     try {
-      const d = await (await fetch('/api/dr')).json();
+      const d = await (await _fetchTimeout('/api/dr', 90000)).json();
       if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
-    } catch (e) { gate.textContent = 'โหลดข้อมูล DR ไม่สำเร็จ'; return; }
+    } catch (e) { gate.textContent = 'โหลดข้อมูล DR ไม่สำเร็จ: ' + e.message; return; }
   }
   if (!_drData || !_drData.length) { gate.style.display = ''; gate.textContent = 'ไม่มีข้อมูล DR'; body.style.display = 'none'; return; }
   gate.style.display = 'none'; body.style.display = '';
@@ -2903,7 +2903,7 @@ function renderWatchlist() {
       document.getElementById("wl-tbody").innerHTML =
         `<tr><td colspan="17"><div class="empty" style="font-size:12px">กำลังโหลดข้อมูล DR/DRx, US Index และ HK Index...</div></td></tr>`;
       Promise.all([
-        (_drData || !need.has("DR")) ? Promise.resolve() : fetch('/api/dr').then(r => r.json()).then(d => {
+        (_drData || !need.has("DR")) ? Promise.resolve() : _fetchTimeout('/api/dr', 90000).then(r => r.json()).then(d => {
           if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
         }).catch(() => {}),
         (_usData || !need.has("US")) ? Promise.resolve() : fetch('/api/us-index-metrics').then(r => r.json()).then(d => {
@@ -5381,7 +5381,7 @@ let _scrInsiderLoaded = false;
 async function _loadScrInsider() {
   if (_scrInsiderLoaded) return;
   try {
-    const res = await fetch('/api/insider-trades?days=90').then(r => r.json());
+    const res = await _fetchTimeout('/api/insider-trades?days=90', 200000).then(r => r.json());
     // เวอร์ชันเว็บ (static) เก็บ 180 วันคงที่ — กรองซ้ำฝั่ง client ให้เหลือ 90 วันจริง
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 90);
     const cutoffStr = cutoff.toISOString().slice(0, 10);
@@ -5404,7 +5404,7 @@ async function runScreener() {
     const resultBox = document.getElementById('screener-results');
     if (resultBox) resultBox.innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูลหุ้นต่างประเทศ (DR) — อาจใช้เวลา 1-2 นาทีตอนโหลดครั้งแรก...</div>';
     try {
-      const r = await fetch('/api/dr');
+      const r = await _fetchTimeout('/api/dr', 150000);
       const d = await r.json();
       if (d.stocks) { _drData = d.stocks; _drLoaded = true; _mergeFinAnalyticsInto(_drData, s => s.sym, 'dr'); }
     } catch (e) { /* เงียบ — ถ้าดึงไม่ได้ก็กรองแค่หุ้นไทยไปก่อน */ }
@@ -6135,7 +6135,7 @@ async function fsOpenDetail(sym, isDr) {
   if (isDr) {
     if (!_drData) {
       try {
-        const d = await (await fetch('/api/dr')).json();
+        const d = await (await _fetchTimeout('/api/dr', 90000)).json();
         if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
       } catch (e) { fsOpenFin(sym, true); return; }
     }
@@ -7079,7 +7079,8 @@ async function loadTearsheet(symArg, marketOverride) {
     // marketOverride: ใช้ตอนเปิดจาก modal หุ้น DR (ดู openTearsheetFromModal) — ต้องส่ง
     // market='DR' ให้ backend resolve DR sym เป็น underlying US/HK เอง (DR sym อาจไม่ตรงกับ
     // yf ticker จริง) ต่างจาก _tsMarket ที่เป็นแค่แท็บ UI ปกติ
-    const r = await fetch(`/api/tearsheet/${marketOverride || _tsMarket}/${encodeURIComponent(sym)}`);
+    const r = await _fetchTimeout(`/api/tearsheet/${marketOverride || _tsMarket}/${encodeURIComponent(sym)}`, 35000,
+      'หมดเวลารอข้อมูล (เกิน 35 วิ) — หุ้นตัวนี้อาจอยู่นอกดัชนีหลักและต้องดึงราคาสดจาก Yahoo ครั้งแรก ลองใหม่อีกครั้ง');
     const d = await r.json();
     if (d.error) { box.innerHTML = `<div class="empty">${d.error}</div>`; return; }
     _tsData = d;
@@ -7291,7 +7292,7 @@ function _tsLoadLiveValuation(d, h) {
   const yfSym = d.yf_symbol;
   const basePrice = h.price;
   if (!yfSym || !basePrice) return;
-  fetch(`/api/live-price/${encodeURIComponent(d.symbol)}?yf=${encodeURIComponent(yfSym)}`)
+  _fetchTimeout(`/api/live-price/${encodeURIComponent(d.symbol)}?yf=${encodeURIComponent(yfSym)}`, 20000)
     .then(r => r.json()).then(res => {
       if (_tsData?.symbol !== d.symbol) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
       if (res.error || !res.price) return;
@@ -7893,7 +7894,7 @@ async function _tsLoadNews(sym) {
   const mkt = _tsData?.market || 'TH';
   const qs = mkt === 'TH' ? '' : `?is_dr=1&market=${mkt}`;
   try {
-    const r = await fetch(`/api/stock-news/${encodeURIComponent(_tsRawSym(sym))}${qs}`);
+    const r = await _fetchTimeout(`/api/stock-news/${encodeURIComponent(_tsRawSym(sym))}${qs}`, 35000);
     const d = await r.json();
     if (_tsData?.symbol !== sym) return;
     const rows = (d.rows || []).slice(0, 5);
@@ -8124,8 +8125,8 @@ async function _tsLoadInsider(sym) {
   if (!el) return;
   try {
     const [r59res, r246res] = await Promise.all([
-      fetch('/api/insider-trades?days=180').then(r => r.json()),
-      fetch('/api/major-changes?days=180').then(r => r.json()),
+      _fetchTimeout('/api/insider-trades?days=180', 200000).then(r => r.json()),
+      _fetchTimeout('/api/major-changes?days=180', 200000).then(r => r.json()),
     ]);
     if (_tsData?.symbol !== sym) return;
     const r59 = (r59res.records || []).filter(x => x.symbol === sym);
@@ -9307,7 +9308,7 @@ function openDRChartModal(sym) {
 async function _fetchDRFullHistory(sym) {
   if (IS_STATIC) { _cmStaticLimitNote(); return; }   // เว็บ static ไม่มี endpoint นี้ — ใช้ preview close100 ที่วาดไว้แล้ว
   try {
-    const r = await fetch(`/api/dr-history/${encodeURIComponent(sym)}`);
+    const r = await _fetchTimeout(`/api/dr-history/${encodeURIComponent(sym)}`, 25000);
     const d = await r.json();
     if (d.error || !d.dates) return;
     const hist = d.dates.map((date, i) => [date, d.closes[i]]);
@@ -9589,7 +9590,7 @@ function _fetchOneDRDescription(sym, market) {
   // market: 'US'/'HK' — ใช้เดา yfinance ticker เฉพาะตอน sym ไม่อยู่ใน DR universe
   // ที่ curate ไว้ (หุ้น mirror ทั่วไป) ไม่จำเป็นสำหรับหุ้น DR ที่มี yf ticker แม็บอยู่แล้ว
   const q = market ? `?market=${encodeURIComponent(market)}` : '';
-  return fetch(`/api/dr-description/${encodeURIComponent(sym)}${q}`).then(r => r.json()).then(d => {
+  return _fetchTimeout(`/api/dr-description/${encodeURIComponent(sym)}${q}`, 20000).then(r => r.json()).then(d => {
     if (d.error) return null;
     _drDescData = _drDescData || {};
     _drDescData[sym] = d;
@@ -9923,7 +9924,7 @@ function openChartModal(symbol) {
   // ราคาสดจาก Yahoo (local-only — เว็บ static ไม่มี server ให้ยิง) ตัวเดียวกับที่แทป
   // งบการเงินใช้คำนวณ PE band สด — วาดซ้ำเมื่อโหลดเสร็จให้จุดสุดท้ายของกราฟโชว์เลขนี้แทน
   if (!IS_STATIC) {
-    fetch(`/api/live-price/${encodeURIComponent(s.symbol)}`).then(r => r.json()).then(d => {
+    _fetchTimeout(`/api/live-price/${encodeURIComponent(s.symbol)}`, 20000).then(r => r.json()).then(d => {
       if (_cmStock?.symbol !== s.symbol) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
       if (d.error || d.price == null) return;
       _cmLivePrice = d.price; _cmLivePriceSym = s.symbol;
@@ -10419,14 +10420,14 @@ function _loadCmFin() {
     document.getElementById('cm-fin-body').innerHTML = _renderCmFin(d, source);
     requestAnimationFrame(() => _drawCmFinChart(d, source));
   };
-  fetch(`/api/financials-full/${encodeURIComponent(finSym)}?source=finnomena_y${qs}`)
+  _fetchTimeout(`/api/financials-full/${encodeURIComponent(finSym)}?source=finnomena_y${qs}`, 30000)
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error('no-finnomena');
       showFin(d, 'finnomena_y');
     })
     .catch(() => {
-      fetch(`/api/financials-full/${encodeURIComponent(finSym)}?source=yahoo${qs}`)
+      _fetchTimeout(`/api/financials-full/${encodeURIComponent(finSym)}?source=yahoo${qs}`, 30000)
         .then(r => r.json())
         .then(d => {
           if (d.error) { document.getElementById('cm-fin-loading').style.display = 'none';
@@ -10449,7 +10450,7 @@ function _loadCmFinBand(sym, qs, fetchSym = sym) {
   const box = document.getElementById('cm-fin-band');
   if (!box) return;
   box.innerHTML = '';
-  fetch(`/api/financials-full/${encodeURIComponent(fetchSym)}?source=finnomena_q${qs}`)
+  _fetchTimeout(`/api/financials-full/${encodeURIComponent(fetchSym)}?source=finnomena_q${qs}`, 30000)
     .then(r => r.json())
     .then(d => {
       if (_cmStock?.symbol !== sym) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
@@ -11090,7 +11091,7 @@ async function checkUSIndexUpdates() {
   note.textContent = 'กำลังเช็คกับ Wikipedia...';
   box.style.display = 'none';
   try {
-    const r = await fetch('/api/us-index-check-updates');
+    const r = await _fetchTimeout('/api/us-index-check-updates', 30000);
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     const addedN = Object.values(d.new || {}).reduce((a, v) => a + v.length, 0);
@@ -11141,7 +11142,7 @@ async function checkHKIndexUpdates() {
   note.textContent = 'กำลังเช็คกับ Wikipedia...';
   box.style.display = 'none';
   try {
-    const r = await fetch('/api/hk-index-check-updates');
+    const r = await _fetchTimeout('/api/hk-index-check-updates', 30000);
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     const addedN = Object.values(d.new || {}).reduce((a, v) => a + v.length, 0);
@@ -11183,7 +11184,7 @@ async function checkJPIndexUpdates() {
   note.textContent = 'กำลังเช็คกับ Wikipedia...';
   box.style.display = 'none';
   try {
-    const r = await fetch('/api/jp-index-check-updates');
+    const r = await _fetchTimeout('/api/jp-index-check-updates', 30000);
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     const addedN = Object.values(d.new || {}).reduce((a, v) => a + v.length, 0);
@@ -12961,7 +12962,7 @@ async function searchStockNews() {
   const isDr = _newsTab === 'dr';
   const market = isDr ? (typeof _finGuessDrMarket === 'function' ? _finGuessDrMarket(sym) : 'US') : '';
   try {
-    const r = await fetch(`/api/stock-news/${encodeURIComponent(sym)}${isDr ? `?is_dr=1&market=${market}` : ''}`);
+    const r = await _fetchTimeout(`/api/stock-news/${encodeURIComponent(sym)}${isDr ? `?is_dr=1&market=${market}` : ''}`, 35000);
     if (!r.ok || !(r.headers.get('content-type') || '').includes('application/json')) {
       throw new Error('เมนูนี้ต้องรัน Flask server ในเครื่อง — ใช้บนเวอร์ชัน static/GitHub Pages ไม่ได้ (ดึงข่าวสดต่อหุ้น bake ล่วงหน้าไม่ได้)');
     }
@@ -13135,10 +13136,10 @@ async function _finCompareFetch(sym, isDr) {
   const market = isDr ? _finGuessDrMarket(sym) : null;
   const base = `/api/financials-full/${encodeURIComponent(sym)}`;
   const qs = src => `?source=${src}${isDr ? '&is_dr=1' : ''}${market ? `&market=${market}` : ''}`;
-  let r = await fetch(base + qs('finnomena_q'));
+  let r = await _fetchTimeout(base + qs('finnomena_q'), 30000);
   let d = await r.json();
   if (d.error) {
-    r = await fetch(base + qs('yahoo_q'));
+    r = await _fetchTimeout(base + qs('yahoo_q'), 30000);
     d = await r.json();
   }
   d._isDr = isDr;
@@ -13589,7 +13590,7 @@ function initFinPage() {
     if (_drData && _drData.length) {
       _buildDrDatalist();
     } else {
-      fetch('/api/dr').then(r => r.json()).then(d => {
+      _fetchTimeout('/api/dr', 90000).then(r => r.json()).then(d => {
         if (d.stocks) { _drData = _drData || d.stocks; _buildDrDatalist(); }
       }).catch(() => {});
     }
@@ -13665,13 +13666,13 @@ function setFinView(view, btn) {
 // ไม่เคย sync ในเครื่อง จะ fallback ไปดึงสดจาก network (yfinance/Finnomena) ซึ่งฝั่ง backend
 // มี timeout ต่อ request ย่อยอยู่แล้วแต่รวมหลายรอบ (income/balance/cashflow/info) อาจกินเวลา
 // นาทีกว่า — ถ้าไม่ตั้ง timeout ฝั่งนี้ด้วย spinner จะค้างเงียบๆ โดยผู้ใช้ไม่รู้ว่ากำลังรออะไรอยู่
-async function _fetchTimeout(url, ms = 25000) {
+async function _fetchTimeout(url, ms = 25000, errMsg) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
     return await fetch(url, { signal: ctrl.signal });
   } catch (e) {
-    if (e.name === 'AbortError') throw new Error('หมดเวลารอข้อมูล (เกิน 25 วิ) — หุ้นนี้อาจยังไม่เคย sync ในเครื่อง กำลังลองดึงสดจากแหล่งข้อมูลแต่ช้าเกินไป ลองใหม่อีกครั้งหรือเปลี่ยนแหล่งข้อมูล');
+    if (e.name === 'AbortError') throw new Error(errMsg || 'หมดเวลารอข้อมูล (เกิน 25 วิ) — หุ้นนี้อาจยังไม่เคย sync ในเครื่อง กำลังลองดึงสดจากแหล่งข้อมูลแต่ช้าเกินไป ลองใหม่อีกครั้งหรือเปลี่ยนแหล่งข้อมูล');
     throw e;
   } finally {
     clearTimeout(t);
@@ -13783,7 +13784,8 @@ async function loadDividendsView(sym, market, hint, refresh) {
   document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงประวัติปันผล...</div>';
   try {
     const qs = refresh ? '?refresh=1' : '';
-    const r = await fetch(`/api/dividends/${market}/${encodeURIComponent(sym)}${qs}`);
+    const r = await _fetchTimeout(`/api/dividends/${market}/${encodeURIComponent(sym)}${qs}`, 25000,
+      'หมดเวลารอข้อมูล (เกิน 25 วิ) — ข้อมูลปันผลหุ้นนี้เก่าเกิน 30 วัน กำลังลองดึงสดจาก Yahoo แต่ช้าเกินไป ลองใหม่อีกครั้ง');
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     hint.innerHTML = (d.stale ? '⚠ ข้อมูลอาจเก่ากว่า 30 วัน · ' : '') +
@@ -13989,7 +13991,7 @@ async function loadCalendarPage(refresh) {
     const qs = refresh ? '?refresh=1' : '';
     const results = await Promise.all(list.map(async it => {
       try {
-        const r = await fetch(`/api/calendar-events/${it.market}/${encodeURIComponent(it.symbol)}${qs}`);
+        const r = await _fetchTimeout(`/api/calendar-events/${it.market}/${encodeURIComponent(it.symbol)}${qs}`, 15000);
         const d = await r.json();
         return (d.events || []).map(e => ({ ...e, symbol: it.display, market: it.market }));
       } catch (e) { return []; }
@@ -13999,7 +14001,7 @@ async function loadCalendarPage(refresh) {
     box.innerHTML = `<div class="empty" style="padding:24px">กำลังโหลดปฏิทิน...</div>`;
     const qs = _calScope === 'market' ? `?market=${_calScopeMarket}` : '';
     try {
-      const r = await fetch(`/api/calendar-events-all${qs}`);
+      const r = await _fetchTimeout(`/api/calendar-events-all${qs}`, 25000);
       const d = await r.json();
       _calCache = (d.events || []).map(e => ({ ...e, symbol: _calDisplayFor(e.market, e.symbol) }));
     } catch (e) { _calCache = []; }
@@ -16036,7 +16038,7 @@ async function checkSetUniverseUpdates() {
   note.textContent = 'กำลังเช็คกับ SET.or.th...';
   box.style.display = 'none';
   try {
-    const r = await fetch('/api/set-universe-check-updates');
+    const r = await _fetchTimeout('/api/set-universe-check-updates', 30000);
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     note.textContent = `SET.or.th มี ${d.live_count} ตัว · เครื่องนี้มี ${d.local_count} ตัว` +
@@ -16079,7 +16081,7 @@ async function checkMirrorUpdates() {
   box.style.display = 'none';
   syncBtn.style.display = 'none';
   try {
-    const r = await fetch('/api/mirror-check-updates');
+    const r = await _fetchTimeout('/api/mirror-check-updates', 30000);
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     const totalNew = (d.new_counts.US || 0) + (d.new_counts.HK || 0);
@@ -16125,7 +16127,7 @@ async function checkDRUpdates() {
   note.textContent = 'กำลังเช็คกับ SET.or.th...';
   box.style.display = 'none';
   try {
-    const r = await fetch('/api/dr/check-updates');
+    const r = await _fetchTimeout('/api/dr/check-updates', 30000);
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     const renamedN = (d.renamed_new?.length || 0) + (d.renamed_removed?.length || 0);
@@ -16207,7 +16209,7 @@ function loadDRPage() {
   document.getElementById('dr-table-wrap').innerHTML =
     '<div class="dr-loading"><span class="dr-load-spin"></span>กำลังโหลดข้อมูล DR/DRx... (ช้าเฉพาะการรันครั้งแรกสุดของเครื่อง ~1 นาที — ปกติขึ้นทันที)</div>';
 
-  fetch('/api/dr')
+  _fetchTimeout('/api/dr', 90000)
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -16240,7 +16242,7 @@ function loadDRPage() {
 function _drPollRefresh(attempt) {
   if (attempt >= 8) return;   // เกินนี้ปล่อย — เปิดหน้าครั้งถัดไปก็ได้ชุดใหม่เอง
   setTimeout(() => {
-    fetch('/api/dr').then(r => r.json()).then(d => {
+    _fetchTimeout('/api/dr', 30000).then(r => r.json()).then(d => {
       if (!d.stocks || !d.stocks.length) return;
       if (d.refreshing) { _drPollRefresh(attempt + 1); return; }
       _drData = d.stocks;
@@ -16280,7 +16282,7 @@ function drQuickUpdate() {
               if (statusEl) statusEl.textContent = 'อัปเดตไม่สำเร็จ: ' + s.error;
               if (btn) { btn.disabled = false; btn.textContent = '⚡ อัปเดตราคา'; }
             } else {
-              fetch('/api/dr').then(r => r.json()).then(d => {
+              _fetchTimeout('/api/dr', 30000).then(r => r.json()).then(d => {
                 if (d.stocks) {
                   _drData = d.stocks;
                   const ts = d.ts ? d.ts.replace('T',' ').slice(0,16) : '—';
@@ -17792,7 +17794,7 @@ async function loadValDailyBox() {
   const box = document.getElementById('val-daily-box');
   if (!box) return;
   try {
-    const r = await fetch('/api/set-daily-valuation?t=' + Date.now());
+    const r = await _fetchTimeout('/api/set-daily-valuation?t=' + Date.now(), 25000);
     const d = await r.json();
     if (d.error || !d.SET) { box.style.display = 'none'; return; }
     const row = (label, key, suffix = '') => `
@@ -19618,9 +19620,11 @@ async function fetchInsiderData() {
   document.getElementById('ins-table-wrap').innerHTML =
     '<div style="padding:20px;color:var(--muted);font-size:13px;text-align:center">กำลังโหลดข้อมูลจาก SEC...</div>';
   try {
+    const syncMsg = 'หมดเวลารอข้อมูล — ถ้าเป็นการเปิดหน้านี้ครั้งแรก backend ต้อง sync ข้อมูลจาก SEC ' +
+      'ย้อนหลัง 180 วัน (ใช้เวลา ~2-3 นาที) ลองรออีกสักครู่แล้วโหลดหน้านี้ใหม่';
     const [r59res, r246res] = await Promise.all([
-      fetch(`/api/insider-trades?days=${_insDays}`).then(r => r.json()),
-      fetch(`/api/major-changes?days=${_insDays}`).then(r => r.json()),
+      _fetchTimeout(`/api/insider-trades?days=${_insDays}`, 200000, syncMsg).then(r => r.json()),
+      _fetchTimeout(`/api/major-changes?days=${_insDays}`, 200000, syncMsg).then(r => r.json()),
     ]);
     // เวอร์ชันเว็บ (static) เก็บข้อมูลไว้ที่ 180 วันคงที่ ไม่สนใจ query string
     // days= ที่ส่งไป -> กรองซ้ำฝั่ง client ด้วยวันที่จริง กันปุ่ม 7/30/90 วัน
@@ -19834,8 +19838,8 @@ async function loadInsiderForStock(symbol) {
 
   try {
     const [r59res, r246res] = await Promise.all([
-      fetch('/api/insider-trades?days=180').then(r => r.json()),
-      fetch('/api/major-changes?days=180').then(r => r.json()),
+      _fetchTimeout('/api/insider-trades?days=180', 200000).then(r => r.json()),
+      _fetchTimeout('/api/major-changes?days=180', 200000).then(r => r.json()),
     ]);
     const sym = symbol.toUpperCase();
     const r59  = (r59res.records  || []).filter(x => x.symbol === sym);
