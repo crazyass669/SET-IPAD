@@ -5962,7 +5962,7 @@ const _CLI_FIN_NOTE_HTML = `
   <div style="color:var(--text2);margin-bottom:10px">ทุกไตรมาส (ก.พ. / พ.ค. / ส.ค. / พ.ย.) บริษัทประกาศงบใหม่ — ข้อมูลนี้ไม่อัพเดทเองอัตโนมัติ ต้องกดเอง เดิมต้องเปิด command line รันสคริปต์ ตอนนี้ย้ายมาเป็นปุ่มในหน้านี้แล้วทั้งหมด (การ์ด "📊 อัพเดทงบไตรมาส" ด้านบน) — ปุ่มแต่ละอันเรียกโค้ดชุดเดียวกับสคริปต์เดิมตรงๆ ไม่ได้ตัดอะไรออก</div>
 
   <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#1f6feb22;color:#58a6ff;font-weight:600;margin-bottom:6px">① 🔄 อัพเดทงบการเงินทั้งหมด — ทำทุกครั้งหลังงบออก ใช้บ่อยสุด</div>
-  <div style="color:var(--text2);margin-bottom:8px">เช็ค DR ใหม่ → ดึงงบหุ้นไทยทุกตัว (Yahoo+SET+Finnomena รวมกับของเดิม ไม่ทับของเก่า) → ดึงงบ DR → รีเฟรชหุ้น US/HK ที่มีคนค้นบ่อยใน 90 วัน → คำนวณ factor snapshot ใหม่ให้หน้า Screener (เดิมคือ <code>python update_financials.py</code>)<br>
+  <div style="color:var(--text2);margin-bottom:8px">เช็ค DR ใหม่ → ดึงงบหุ้นไทยทุกตัว (Yahoo+SET+Finnomena รวมกับของเดิม ไม่ทับของเก่า) → ดึงงบ DR (Yahoo+Finnomena) → ดึงงบสมาชิกดัชนีหลัก US (S&amp;P500+Dow+NDX)/HK (HSI+HSCEI+HSTECH)/JP (Nikkei 225) ผ่าน Yahoo annual (สแกนข้าม ticker ที่มีงบซ้ำกับ DR/DRx อยู่แล้วอัตโนมัติ ไม่ดึงซ้ำ) → รีเฟรชหุ้น US/HK ที่มีคนค้นบ่อยใน 90 วัน → คำนวณ factor snapshot ใหม่ให้หน้า Screener (เดิมคือ <code>python update_financials.py</code>)<br>
   ใช้เวลาไม่กี่นาที มี progress bar ให้ดู เสร็จแล้วข้อมูลรีเฟรชในหน้าเว็บให้เองอัตโนมัติ</div>
 
   <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#3fb95022;color:#3fb950;font-weight:600;margin-bottom:6px">② 📥 Mirror ทั้งตลาด (force) — ไตรมาสละครั้ง ใช้เวลานาน</div>
