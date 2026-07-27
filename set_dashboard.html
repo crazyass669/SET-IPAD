@@ -3692,13 +3692,15 @@
   <!-- ปุ่มดึงราคาดัชนี US/HK/JP + Sync Mirror — ย้ายมาจาก top nav เพราะกดมือเป็นครั้งคราวเท่านั้น
        ไม่ผูกกับ Quick Update ประจำวัน ไม่จำเป็นต้องอยู่ติดจอตลอด -->
   <div class="card" style="padding:14px 16px;margin-bottom:12px">
-    <div style="font-size:13px;font-weight:600;margin-bottom:8px">📈 อัพเดทราคาดัชนี US/HK/JP + Sync Mirror — กดมือเป็นครั้งคราว</div>
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">📈 อัพเดทราคาดัชนี US/HK/JP + Sync Mirror — กดมือเป็นครั้งคราว
+      <span class="badge badge-blue" style="margin-left:6px">แหล่งข้อมูล: Yahoo ล้วนๆ — ไม่แตะ Finnomena</span></div>
     <div style="display:flex;gap:14px;flex-wrap:wrap">
       <div class="btn-wrap">
         <button class="refresh-btn" id="us-index-refresh-btn" onclick="startUsIndexFullRefresh()">📈 US Index Max</button>
         <div class="btn-note">
-          <b>📈 US Index Max — S&amp;P 500 + Dow + Nasdaq 100</b><br>
-          ดึงราคา OHLC ย้อนหลัง<b>สูงสุด</b>ทั้ง ~518 ตัว<br>
+          <b>📈 US Index Max — S&amp;P 500 + Dow + Nasdaq 100</b>
+          <span class="badge badge-blue" style="margin-left:4px">Yahoo</span><br>
+          ดึง<b>ราคา OHLC</b> (ไม่ใช่งบการเงิน) ย้อนหลัง<b>สูงสุด</b>ทั้ง ~518 ตัว จาก Yahoo Finance<br>
           📦 เก็บลง us_prices.db (แยกจาก set_prices.db)<br>
           ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
           <span id="us-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
@@ -3707,8 +3709,9 @@
       <div class="btn-wrap">
         <button class="refresh-btn" id="hk-index-refresh-btn" onclick="startHkIndexFullRefresh()">📈 HK Index Max</button>
         <div class="btn-note">
-          <b>📈 HK Index Max — HSI + HSTECH + HSCEI</b><br>
-          ดึงราคา OHLC ย้อนหลัง<b>สูงสุด</b>ทั้ง ~105 ตัว<br>
+          <b>📈 HK Index Max — HSI + HSTECH + HSCEI</b>
+          <span class="badge badge-blue" style="margin-left:4px">Yahoo</span><br>
+          ดึง<b>ราคา OHLC</b> (ไม่ใช่งบการเงิน) ย้อนหลัง<b>สูงสุด</b>ทั้ง ~105 ตัว จาก Yahoo Finance<br>
           📦 เก็บลง hk_prices.db (แยกจาก set_prices.db/us_prices.db)<br>
           ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
           <span id="hk-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
@@ -3717,8 +3720,9 @@
       <div class="btn-wrap">
         <button class="refresh-btn" id="jp-index-refresh-btn" onclick="startJpIndexFullRefresh()">📈 JP Index Max</button>
         <div class="btn-note">
-          <b>📈 JP Index Max — Nikkei 225</b><br>
-          ดึงราคา OHLC ย้อนหลัง<b>สูงสุด</b>ทั้ง ~225 ตัว<br>
+          <b>📈 JP Index Max — Nikkei 225</b>
+          <span class="badge badge-blue" style="margin-left:4px">Yahoo</span><br>
+          ดึง<b>ราคา OHLC</b> (ไม่ใช่งบการเงิน) ย้อนหลัง<b>สูงสุด</b>ทั้ง ~225 ตัว จาก Yahoo Finance<br>
           📦 เก็บลง jp_prices.db (แยกจาก set_prices.db/us_prices.db/hk_prices.db)<br>
           ⏱ กดมือเป็นครั้งคราว ไม่ผูกกับ Quick Update ประจำวัน<br>
           <span id="jp-index-last-run" style="color:var(--text2)">กดล่าสุด: —</span>
@@ -3727,8 +3731,10 @@
       <div class="btn-wrap">
         <button class="refresh-btn" id="mirror-yahoo-sync-btn" onclick="startMirrorYahooIndexSync()">🌐 Sync Mirror US/HK เต็ม</button>
         <div class="btn-note">
-          <b>🌐 Sync งบ Yahoo Mirror US/HK — ทั้ง universe</b><br>
-          ดึงงบ Yahoo annual ให้หุ้น mirror US/HK ทั้งหมด (~5,108 ตัว ไม่ใช่แค่ดัชนีหลัก)<br>
+          <b>🌐 Sync งบ Yahoo Mirror US/HK — ทั้ง universe</b>
+          <span class="badge badge-blue" style="margin-left:4px">Yahoo</span><br>
+          ดึง<b>งบ Yahoo annual</b> ให้หุ้น mirror US/HK ทั้งหมด (~5,108 ตัว ไม่ใช่แค่ดัชนีหลัก) — <b>ไม่ใช่</b> Finnomena
+          (คนละตัวกับปุ่ม "📥 Mirror ทั้งตลาด (force)" ด้านล่างที่ดึงจาก Finnomena)<br>
           📦 ปลดล็อก F-Score/Z-Score/FCF/มูลค่าตลาดใน Screener+ ให้ครบทุกตัว<br>
           ⏱ กดมือเป็นครั้งคราว ใช้เวลานาน (เป็นชั่วโมง) — Full Refresh sync ให้เองทีละ 300 ตัวอยู่แล้ว
         </div>
@@ -3740,15 +3746,19 @@
        update_financials.py/mirror_finnomena.py/build_snapshot.py/build_mirror_names.py เอง
        ย้ายมาเป็นปุ่มในแอป ใช้ job system เดียวกับด้านบน (progress bar + กันกดซ้ำ) -->
   <div class="card" style="padding:14px 16px;margin-bottom:12px">
-    <div style="font-size:13px;font-weight:600;margin-bottom:8px">📊 อัพเดทงบไตรมาส (ก.พ. / พ.ค. / ส.ค. / พ.ย.) — เดิมต้องรัน command line ตอนนี้กดปุ่มได้เลย</div>
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">📊 อัพเดทงบไตรมาส (ก.พ. / พ.ค. / ส.ค. / พ.ย.) — เดิมต้องรัน command line ตอนนี้กดปุ่มได้เลย
+      <span class="badge badge-yellow" style="margin-left:6px">พึ่ง Finnomena เป็นหลัก — คนละแหล่งกับปุ่มด้านบน</span></div>
     <div style="display:flex;gap:14px;flex-wrap:wrap">
       <div class="btn-wrap">
         <button class="refresh-btn" id="fin-update-all-btn" onclick="startFinancialsUpdateAll()">🔄 อัพเดทงบการเงินทั้งหมด</button>
         <div class="btn-note">
-          <b>🔄 อัพเดทงบการเงินทั้งหมด — ใช้บ่อยสุด</b><br>
+          <b>🔄 อัพเดทงบการเงินทั้งหมด — ใช้บ่อยสุด</b>
+          <span class="badge badge-blue" style="margin-left:4px">Yahoo</span>
+          <span class="badge badge-green" style="margin-left:2px">SET</span>
+          <span class="badge badge-yellow" style="margin-left:2px">Finnomena</span><br>
           เช็ค DR ใหม่ → งบหุ้นไทยทุกตัว (Yahoo+SET+Finnomena) → งบ DR (Yahoo+Finnomena) →
-          งบสมาชิกดัชนีหลัก US (S&amp;P500+Dow+NDX)/HK (HSI+HSCEI+HSTECH)/JP (Nikkei 225) ผ่าน Yahoo
-          (ข้ามตัวที่มีงบซ้ำกับ DR/DRx อยู่แล้วอัตโนมัติ ไม่ดึงซ้ำ) → หุ้น US/HK ที่ค้นบ่อยใน 90 วัน →
+          งบสมาชิกดัชนีหลัก US (S&amp;P500+Dow+NDX)/HK (HSI+HSCEI+HSTECH)/JP (Nikkei 225) <b>ผ่าน Yahoo เท่านั้น</b>
+          (ข้ามตัวที่มีงบซ้ำกับ DR/DRx อยู่แล้วอัตโนมัติ ไม่ดึงซ้ำ) → หุ้น US/HK ที่ค้นบ่อยใน 90 วัน (ผ่าน Finnomena) →
           คำนวณ factor snapshot ใหม่ให้ Screener<br>
           📦 แทน <code>python update_financials.py</code><br>
           ⏱ ไม่กี่นาที - เกือบครึ่งชั่วโมง (ขึ้นกับจำนวนหุ้น/DR) — <b>กดทุกครั้งหลังงบไตรมาสออก</b>
@@ -3757,9 +3767,10 @@
       <div class="btn-wrap">
         <button class="refresh-btn" id="mirror-force-btn" onclick="startMirrorFinnomenaForceFull()">📥 Mirror ทั้งตลาด (force)</button>
         <div class="btn-note">
-          <b>📥 Mirror งบ Finnomena ทั้งตลาด (force) + rebuild snapshot</b><br>
+          <b>📥 Mirror งบ Finnomena ทั้งตลาด (force) + rebuild snapshot</b>
+          <span class="badge badge-yellow" style="margin-left:4px">Finnomena เท่านั้น</span><br>
           ยิงซ้ำงบ Finnomena ทุกตัวที่มีอยู่แล้วทั้ง TH+HK+US เพื่อดึงงวดใหม่มา merge (ไม่ใช่แค่ตัวที่ค้นบ่อย) แล้ว
-          rebuild factor snapshot ต่อให้เอง<br>
+          rebuild factor snapshot ต่อให้เอง — <b>ไม่ใช่</b> Yahoo (คนละตัวกับปุ่ม "🌐 Sync Mirror US/HK เต็ม" ด้านบนที่ดึงจาก Yahoo)<br>
           📦 แทน <code>python mirror_finnomena.py force</code> + <code>python build_snapshot.py</code><br>
           ⏱ <b>นานมาก (เป็นชั่วโมง)</b> — ไตรมาสละครั้งพอ ปิดแท็บ/ปิดคอมได้ระหว่างรัน กดใหม่จะรันต่อจากเดิมเอง
         </div>
@@ -3767,8 +3778,9 @@
       <div class="btn-wrap">
         <button class="refresh-btn" id="build-mirror-names-btn" onclick="startBuildMirrorNames()">🏷️ ดึงชื่อหุ้น mirror ใหม่</button>
         <div class="btn-note">
-          <b>🏷️ ดึงชื่อบริษัทหุ้น mirror US/HK ใหม่</b><br>
-          ดึงชื่อบริษัทของหุ้น US/HK ที่เพิ่งมีงบเข้ามาใหม่ — ไม่กดก็ไม่พัง แค่ตัวใหม่โชว์แค่ ticker เปล่าตอนค้นหา<br>
+          <b>🏷️ ดึงชื่อบริษัทหุ้น mirror US/HK ใหม่</b>
+          <span class="badge badge-yellow" style="margin-left:4px">Finnomena เท่านั้น</span><br>
+          ดึงชื่อบริษัทของหุ้น US/HK ที่เพิ่งมีงบเข้ามาใหม่จาก Finnomena (ไม่ใช่ Yahoo) — ไม่กดก็ไม่พัง แค่ตัวใหม่โชว์แค่ ticker เปล่าตอนค้นหา<br>
           📦 แทน <code>python build_mirror_names.py</code><br>
           ⏱ ไม่กี่วินาที — กดหลัง "Mirror ทั้งตลาด (force)" เจอหุ้นใหม่
         </div>
