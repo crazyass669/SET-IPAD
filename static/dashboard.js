@@ -13661,6 +13661,23 @@ function setFinView(view, btn) {
   if (inp && inp.value.trim()) searchFinancials();
 }
 
+// fetch มี timeout — endpoint งบการเงินบางแหล่ง (finnomena_q/yahoo/yahoo_q) ถ้าหุ้นนั้นยัง
+// ไม่เคย sync ในเครื่อง จะ fallback ไปดึงสดจาก network (yfinance/Finnomena) ซึ่งฝั่ง backend
+// มี timeout ต่อ request ย่อยอยู่แล้วแต่รวมหลายรอบ (income/balance/cashflow/info) อาจกินเวลา
+// นาทีกว่า — ถ้าไม่ตั้ง timeout ฝั่งนี้ด้วย spinner จะค้างเงียบๆ โดยผู้ใช้ไม่รู้ว่ากำลังรออะไรอยู่
+async function _fetchTimeout(url, ms = 25000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { signal: ctrl.signal });
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('หมดเวลารอข้อมูล (เกิน 25 วิ) — หุ้นนี้อาจยังไม่เคย sync ในเครื่อง กำลังลองดึงสดจากแหล่งข้อมูลแต่ช้าเกินไป ลองใหม่อีกครั้งหรือเปลี่ยนแหล่งข้อมูล');
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function searchFinancials() {
   const inputId = _finTab === 'set' ? 'fin-sym-set' : 'fin-sym-dr';
   const hintId  = _finTab === 'set' ? 'fin-set-hint' : 'fin-dr-hint';
@@ -13696,11 +13713,11 @@ async function searchFinancials() {
   hint.textContent = 'กำลังโหลด...';
   document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูลงบการเงิน...</div>';
   try {
-    let r = await fetch(`/api/financials-full/${encodeURIComponent(sym)}?source=${source}${isDrSym ? '&is_dr=1' : ''}${marketQS}`);
+    let r = await _fetchTimeout(`/api/financials-full/${encodeURIComponent(sym)}?source=${source}${isDrSym ? '&is_dr=1' : ''}${marketQS}`);
     let d = await r.json();
     if (d.error && fallback) {
       source = fallback;
-      r = await fetch(`/api/financials-full/${encodeURIComponent(sym)}?source=${source}${isDrSym ? '&is_dr=1' : ''}${marketQS}`);
+      r = await _fetchTimeout(`/api/financials-full/${encodeURIComponent(sym)}?source=${source}${isDrSym ? '&is_dr=1' : ''}${marketQS}`);
       d = await r.json();
     }
     // หุ้น DR/US/HK นอกพอร์ต (mirror) ไม่มีงบ Yahoo — ลอง Finnomena ย้อนยาวเป็นทางสุดท้าย
@@ -13709,7 +13726,7 @@ async function searchFinancials() {
     // ก็พังอีก จะยิง finnomena_q ซ้ำเป็นครั้งที่สามทั้งที่รู้อยู่แล้วว่าพัง)
     if (d.error && isDrSym && reqSrc !== 'finnomena_q' && fallback !== 'finnomena_q') {
       source = 'finnomena_q';
-      r = await fetch(`/api/financials-full/${encodeURIComponent(sym)}?source=finnomena_q&is_dr=1`);
+      r = await _fetchTimeout(`/api/financials-full/${encodeURIComponent(sym)}?source=finnomena_q&is_dr=1`);
       d = await r.json();
     }
     if (d.error) throw new Error(d.error);
