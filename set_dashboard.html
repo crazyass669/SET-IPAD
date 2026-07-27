@@ -694,6 +694,8 @@
     <button class="wl-add-btn" onclick="addToWatchlist()">+ เพิ่ม</button>
     <button class="filter-btn" onclick="wlExport()" title="คัดลอกรายชื่อ watchlist เป็นข้อความ เอาไปวางบนอีกเครื่อง (มือถือ/ไอแพด/โน้ตบุ๊ค)" style="font-size:11px">📤 คัดลอกไปเครื่องอื่น</button>
     <button class="filter-btn" onclick="wlImport()" title="วางข้อความ watchlist ที่คัดลอกมาจากอีกเครื่อง" style="font-size:11px">📥 วางจากเครื่องอื่น</button>
+    <button class="filter-btn" id="wl-live-btn" onclick="wlRefreshLivePrices()" title="ดึงราคาล่าสุดจาก Yahoo Finance สดๆ ทีละตัว (หุ้นใน Watchlist มีไม่เยอะ ทำได้ไว ต่างจาก Heatmap ทั้งดัชนีที่ช้าเกินไป)" style="font-size:11px">⚡ ราคาล่าสุด</button>
+    <span id="wl-live-note" class="text2" style="font-size:11px"></span>
   </div>
 
   <div class="card">

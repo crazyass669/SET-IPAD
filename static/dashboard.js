@@ -2922,6 +2922,71 @@ function _wlAlertCell(sym) {
   return tags;
 }
 
+// ราคาสดจาก Yahoo Finance (fast_info เบา — ไม่โหลด history) ที่ผู้ใช้กดปุ่ม "⚡ ราคาล่าสุด"
+// ดึงเอง ต่างจาก _drLiveTag ที่ backend แนบมาให้อัตโนมัติเฉพาะหน้า DR (ตลาดยังไม่ปิด) — US/HK
+// Index metrics ไม่มีแนวคิดนี้เลยเพราะคำนวณจาก prices.db ไม่ใช่ดึงสด (ดู index_metrics_common.py)
+// Watchlist มีหุ้นน้อยพอจะยิง /api/live-price ทีละตัวได้โดยไม่หนักเหมือน Heatmap ทั้งดัชนี (500+ ตัว)
+let _wlLive = {};   // key = watchlist entry ("PTT"/"DR:AAPL"/"US:AAPL"/"HK:0700.HK") -> {price, ts}
+
+function _wlLiveTag(basePrice, live) {
+  if (live == null || basePrice == null) return '';
+  const chg = (live - basePrice) / basePrice * 100;
+  const chgStr = ` <span style="color:${chg >= 0 ? 'var(--green)' : 'var(--red)'}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>`;
+  return `<span title="ราคาล่าสุดจาก Yahoo Finance — ดึงตอนกดปุ่ม ⚡ ราคาล่าสุด (ต่างจากราคาปิดหลักด้านบนที่เป็นราคาปิดแท่งล่าสุดในเครื่อง)" style="display:block;font-size:9px;color:var(--text2);white-space:nowrap;cursor:help">⚡ ${live.toFixed(2)}${chgStr}</span>`;
+}
+
+// ลำดับความสำคัญ: ราคาที่ผู้ใช้กดดึงเองใน _wlLive ก่อน (สดสุด, ครอบคลุมทุกตลาด) ถ้ายังไม่เคยกด
+// fallback ไปใช้ live_price ที่ติดมากับข้อมูล DR อยู่แล้ว (เฉพาะแถว DR — drRow เท่านั้นที่มี field นี้)
+function _wlLiveCell(key, basePrice, drRow) {
+  const live = _wlLive[key];
+  if (live && live.price != null) return _wlLiveTag(basePrice, live.price);
+  if (drRow && drRow.live_price != null) return _drLiveTag(drRow);
+  return '';
+}
+
+// ปุ่ม "⚡ ราคาล่าสุด" — ยิง /api/live-price ทีละตัวขนานกันทุก symbol ใน watchlist (เบา, fast_info
+// อย่างเดียวไม่โหลด history) DR ส่ง yf ticker ตรงจาก _drData ถ้ามีแล้ว (กัน resolve ซ้ำ) ไม่มีก็
+// ส่ง is_dr=1 ให้ backend resolve เอง · US/HK ส่ง yf=รหัสหลัง prefix ตรงๆ (เป็น yf ticker อยู่แล้ว
+// ดู renderWatchlist ด้านบน) · SET ไม่ต้องส่ง param อะไร (backend เติม .BK เอง)
+async function wlRefreshLivePrices() {
+  if (!watchlist.length) return;
+  const btn = document.getElementById('wl-live-btn');
+  const note = document.getElementById('wl-live-note');
+  if (btn) { btn.disabled = true; btn.textContent = '⚡ กำลังดึง...'; }
+  if (note) note.textContent = '';
+  const drMap = Object.fromEntries((_drData || []).map(s => [s.sym, s]));
+  let ok = 0, fail = 0;
+  await Promise.all(watchlist.map(async (sym) => {
+    let code, qs;
+    if (sym.startsWith('DR:')) {
+      const under = sym.slice(3);
+      const d = drMap[under];
+      code = under;
+      qs = d?.yf ? `?yf=${encodeURIComponent(d.yf)}` : '?is_dr=1';
+    } else if (sym.startsWith('US:') || sym.startsWith('HK:')) {
+      code = sym.slice(3);
+      qs = `?yf=${encodeURIComponent(code)}`;
+    } else {
+      code = sym;
+      qs = '';
+    }
+    try {
+      const r = await _fetchTimeout(`/api/live-price/${encodeURIComponent(code)}${qs}`, 15000);
+      const d = await r.json();
+      if (d.price != null) { _wlLive[sym] = { price: d.price, ts: Date.now() }; ok++; }
+      else fail++;
+    } catch { fail++; }
+  }));
+  if (btn) { btn.disabled = false; btn.textContent = '⚡ ราคาล่าสุด'; }
+  // เช็ค 🔔 alert ด้วยราคาสดชุดนี้ทันที — ไวกว่ารอ checkAlerts() รอบถัดไป (ทุก 5 นาที จาก
+  // /api/prices ที่เป็นราคาปิด/แคชแบบ batch) ใช้ตัวเช็คเดียวกับที่ setInterval เรียกอยู่แล้ว
+  const livePriceMap = Object.fromEntries(Object.entries(_wlLive).map(([k, v]) => [k, v.price]));
+  const triggeredN = _applyAlertPrices(livePriceMap);
+  const alertNote = triggeredN ? ` · 🔔 ทริกเกอร์ ${triggeredN} รายการ` : '';
+  if (note) note.textContent = `ราคาสด ณ ${new Date().toLocaleTimeString('th-TH')} · สำเร็จ ${ok}/${watchlist.length} ตัว${fail ? ` (พลาด ${fail})` : ''}${alertNote}`;
+  renderWatchlist();
+}
+
 function renderWatchlist() {
   _wlPopulateSymList();
   if (!DATA) {
@@ -3002,6 +3067,7 @@ function renderWatchlist() {
           <td style="font-size:11px;color:var(--text2)">${d.region}</td>
           <td class="r"><span style="font-size:12px;font-weight:600">${_drFmtPrice(d.price)}</span>
             <br><span class="${chgCls}" style="font-size:10px">${(d.chg??0)>=0?"+":""}${(d.chg??0).toFixed(2)}%</span>
+            ${_wlLiveCell(sym, d.price, d)}
           </td>
           <td class="r text2" style="font-size:11px">—</td>
           <td class="r">${pct(d.ret_1w)}</td>
@@ -3041,7 +3107,7 @@ function renderWatchlist() {
           </td>
           <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.name||"—"}</td>
           <td style="font-size:11px">${u.sector||"—"}</td>
-          <td class="r">${u.price!=null?u.price.toFixed(2):"—"}</td>
+          <td class="r">${u.price!=null?u.price.toFixed(2):"—"}${_wlLiveCell(sym, u.price)}</td>
           <td class="r">${pct(u.ret_1d)}</td>
           <td class="r">${pct(u.ret_1w)}</td>
           <td class="r">${pct(u.ret_1m)}</td>
@@ -3080,7 +3146,7 @@ function renderWatchlist() {
           </td>
           <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h.name||"—"}</td>
           <td style="font-size:11px">${h.sector||"—"}</td>
-          <td class="r">${h.price!=null?h.price.toFixed(2):"—"}</td>
+          <td class="r">${h.price!=null?h.price.toFixed(2):"—"}${_wlLiveCell(sym, h.price)}</td>
           <td class="r">${pct(h.ret_1d)}</td>
           <td class="r">${pct(h.ret_1w)}</td>
           <td class="r">${pct(h.ret_1m)}</td>
@@ -3128,6 +3194,7 @@ function renderWatchlist() {
             <td style="font-size:11px;color:var(--text2)">${d.region}</td>
             <td class="r"><span style="font-size:12px;font-weight:600">${_drFmtPrice(d.price)}</span>
               <br><span class="${chgCls2}" style="font-size:10px">${(d.chg??0)>=0?"+":""}${(d.chg??0).toFixed(2)}%</span>
+              ${_wlLiveCell(newSym, d.price, d)}
             </td>
             <td class="r text2" style="font-size:11px">—</td>
             <td class="r">${pct(d.ret_1w)}</td>
@@ -3164,7 +3231,7 @@ function renderWatchlist() {
             </td>
             <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.name||"—"}</td>
             <td style="font-size:11px">${u.sector||"—"}</td>
-            <td class="r">${u.price!=null?u.price.toFixed(2):"—"}</td>
+            <td class="r">${u.price!=null?u.price.toFixed(2):"—"}${_wlLiveCell(newSym, u.price)}</td>
             <td class="r">${pct(u.ret_1d)}</td>
             <td class="r">${pct(u.ret_1w)}</td>
             <td class="r">${pct(u.ret_1m)}</td>
@@ -3200,7 +3267,7 @@ function renderWatchlist() {
             </td>
             <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h.name||"—"}</td>
             <td style="font-size:11px">${h.sector||"—"}</td>
-            <td class="r">${h.price!=null?h.price.toFixed(2):"—"}</td>
+            <td class="r">${h.price!=null?h.price.toFixed(2):"—"}${_wlLiveCell(newSym, h.price)}</td>
             <td class="r">${pct(h.ret_1d)}</td>
             <td class="r">${pct(h.ret_1w)}</td>
             <td class="r">${pct(h.ret_1m)}</td>
@@ -3228,7 +3295,7 @@ function renderWatchlist() {
         <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}${dqBadge(s)}</td>
         <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
         <td style="font-size:11px">${s.sector||"—"}</td>
-        <td class="r">${s.price?.toFixed(2)??"—"}</td>
+        <td class="r">${s.price?.toFixed(2)??"—"}${_wlLiveCell(s.symbol, s.price)}</td>
         <td class="r">${pct(s.ret_1d)}</td>
         <td class="r">${pct(s.ret_1w)}</td>
         <td class="r">${pct(s.ret_1m)}</td>
@@ -20252,6 +20319,38 @@ function _updateBellBadge() {
 }
 
 /* ---------- PRICE CHECK ---------- */
+// เทียบ alert ที่ยังไม่ triggered กับ price map {symbol: price} ที่ส่งมา — แยกออกจาก checkAlerts()
+// ให้เรียกซ้ำได้จากแหล่งราคาอื่น เช่น wlRefreshLivePrices() (ปุ่ม "⚡ ราคาล่าสุด" ในหน้า Watchlist)
+// ที่มีราคาสดกว่า /api/prices (เป็นราคาปิด/แคชแบบ batch รีเช็คทุก 5 นาที) คืนจำนวน alert ที่เพิ่ง trigger
+function _applyAlertPrices(prices) {
+  const alerts = _loadAlerts();
+  let changed = 0;
+  const now = new Date().toISOString();
+
+  for (const a of alerts) {
+    if (a.triggered) continue;
+    const price = prices[a.symbol];
+    if (price == null) continue;
+    const hit = (a.condition === "above" && price >= a.targetPrice)
+             || (a.condition === "below" && price <= a.targetPrice);
+    if (hit) {
+      a.triggered = true;
+      a.triggeredAt = now;
+      a.triggeredPrice = price;
+      changed++;
+      _showAlertToast(a, price);
+      _showBrowserNotification(a, price);
+    }
+  }
+
+  if (changed) {
+    _saveAlerts(alerts);
+    _updateBellBadge();
+    if (_alertPanelOpen) renderAlertPanel();
+  }
+  return changed;
+}
+
 async function checkAlerts() {
   const alerts = _loadAlerts();
   const active = alerts.filter(a => !a.triggered);
@@ -20261,32 +20360,7 @@ async function checkAlerts() {
     const r = await fetch("/api/prices?t=" + Date.now());
     const d = await r.json();
     if (d.error) return;
-    const prices = d.prices; // { symbol: price }
-
-    let changed = false;
-    const now = new Date().toISOString();
-
-    for (const a of alerts) {
-      if (a.triggered) continue;
-      const price = prices[a.symbol];
-      if (price == null) continue;
-      const hit = (a.condition === "above" && price >= a.targetPrice)
-               || (a.condition === "below" && price <= a.targetPrice);
-      if (hit) {
-        a.triggered = true;
-        a.triggeredAt = now;
-        a.triggeredPrice = price;
-        changed = true;
-        _showAlertToast(a, price);
-        _showBrowserNotification(a, price);
-      }
-    }
-
-    if (changed) {
-      _saveAlerts(alerts);
-      _updateBellBadge();
-      if (_alertPanelOpen) renderAlertPanel();
-    }
+    _applyAlertPrices(d.prices);   // { symbol: price }
 
     const checkEl = document.getElementById("al-last-check");
     if (checkEl) {
