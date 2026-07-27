@@ -4460,6 +4460,7 @@ _UPDATE_STATUS_LABEL = {
     "financials_sync": "🔄 อัพเดทงบการเงิน (update_financials.py)",
     "mirror_finnomena": "📥 Mirror US/HK ทั้งตลาด (mirror_finnomena.py)",
     "build_mirror_names": "🏷️ ดึงชื่อหุ้น mirror ใหม่ (build_mirror_names.py)",
+    "mirror_yahoo_index_sync": "🌐 Sync Mirror Yahoo US/HK ทั้ง universe",
     "us_index_full_refresh": "📈 ดึงราคา US Index ย้อนหลังสูงสุด",
     "hk_index_full_refresh": "📈 ดึงราคา HK Index ย้อนหลังสูงสุด",
     "jp_index_full_refresh": "📈 ดึงราคา JP Index ย้อนหลังสูงสุด",
@@ -4612,13 +4613,15 @@ def _run_mirror_yahoo_index_sync(limit=None):
         mirror_counts = factor_snapshot.build_mirror_snapshot(BASE_DIR, exchanges=("US", "HK"))
         _fin_analytics_cache.clear()
 
-        _update(running=False, done=True,
-                message=f"เสร็จแล้ว! ดึงงบ Yahoo ได้ {result['ok']} ตัว "
-                        f"(ข้าม {result['skipped']} ที่มีอยู่แล้ว"
-                        + (f", ล้มเหลว {result['fail']}" if result["fail"] else "") + ") · "
-                        f"rebuild mirror snapshot: US {mirror_counts.get('US', 0)} / HK {mirror_counts.get('HK', 0)} ตัว")
+        summary = (f"เสร็จแล้ว! ดึงงบ Yahoo ได้ {result['ok']} ตัว "
+                   f"(ข้าม {result['skipped']} ที่มีอยู่แล้ว"
+                   + (f", ล้มเหลว {result['fail']}" if result["fail"] else "") + ") · "
+                   f"rebuild mirror snapshot: US {mirror_counts.get('US', 0)} / HK {mirror_counts.get('HK', 0)} ตัว")
+        _update(running=False, done=True, message=summary)
+        run_log.record_run(BASE_DIR, "mirror_yahoo_index_sync", True, summary)
     except Exception as e:
         _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        run_log.record_run(BASE_DIR, "mirror_yahoo_index_sync", False, str(e))
 
 
 @app.route("/api/mirror-yahoo-index-sync", methods=["POST"])

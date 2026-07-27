@@ -15777,6 +15777,13 @@ async function loadLastRuns() {
       { key: 'quick_update', label: '⚡ Quick Update' },
       { key: 'full_refresh', label: '⟳ Full Refresh' },
       { key: 'hedge_refresh', label: '🐋 Hedge Holdings' },
+      { key: 'us_index_full_refresh', label: '📈 US Index Max' },
+      { key: 'hk_index_full_refresh', label: '📈 HK Index Max' },
+      { key: 'jp_index_full_refresh', label: '📈 JP Index Max' },
+      { key: 'mirror_yahoo_index_sync', label: '🌐 Sync Mirror US/HK เต็ม' },
+      { key: 'financials_sync', label: '🔄 อัพเดทงบการเงินทั้งหมด' },
+      { key: 'mirror_finnomena', label: '📥 Mirror ทั้งตลาด (force)' },
+      { key: 'build_mirror_names', label: '🏷️ ดึงชื่อหุ้น mirror ใหม่' },
     ];
     wrap.innerHTML = rows.map(({ key, label }) => {
       const v = d.all[key];
