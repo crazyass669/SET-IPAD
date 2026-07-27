@@ -2864,18 +2864,41 @@ function renderStocksTable() {
 // ============================================================
 // WATCHLIST
 // ============================================================
+let _wlSymListReady = false;    // true เมื่อ build ด้วย DR/US/HK ครบแล้ว (ไม่ใช่แค่ SET)
+let _wlSymListFetching = false;
 function _wlPopulateSymList() {
   const dl = document.getElementById("wl-sym-list");
-  if (dl && dl.children.length === 0) {
+  if (!dl) return;
+  if (dl.children.length === 0 || !_wlSymListReady) {
     const setSyms = (DATA?.stocks || []).map(s => s.symbol).sort();
     const drSyms  = (_drData || []).map(s => s.sym).sort();
     const usSyms  = (_usData?.stocks || []).map(s => s.symbol).sort();
     const hkSyms  = (_hkData?.stocks || []).map(s => s.symbol).sort();
+    // value ต้องมี prefix DR:/US:/HK: (เหมือน key ที่ addToWatchlist ใช้จริง) ไม่งั้นถ้า
+    // symbol ชนกับ SET (เช่น META มีทั้ง SET, DR, US Index) ตัว value ของทั้ง 3 ตัวเลือกจะ
+    // เหมือนกันหมด — เลือกจาก dropdown ตัวไหนก็ได้ text "META" เฉยๆ กลับมา แล้ว
+    // addToWatchlist จะ resolve เป็น SET เสมอ (ลำดับ SET > DR > US > HK) ทั้งที่ผู้ใช้ตั้งใจ
+    // เลือก DR หรือ US
     dl.innerHTML =
       setSyms.map(s => `<option value="${s}" label="${s} (SET)">`).join("") +
-      drSyms.map(s => `<option value="${s}" label="${s} (DR/DRx)">`).join("") +
-      usSyms.map(s => `<option value="${s}" label="${s} (US Index)">`).join("") +
-      hkSyms.map(s => `<option value="${s}" label="${s} (HK Index)">`).join("");
+      drSyms.map(s => `<option value="DR:${s}" label="${s} (DR/DRx)">`).join("") +
+      usSyms.map(s => `<option value="US:${s}" label="${s} (US Index)">`).join("") +
+      hkSyms.map(s => `<option value="HK:${s}" label="${s} (HK Index)">`).join("");
+    _wlSymListReady = !!(_drData && _usData && _hkData);
+    // ถ้ายังไม่มี DR/US/HK (เช่นเปิดหน้า Watchlist เป็นหน้าแรกโดยไม่เคยเข้าหน้า DR/US/HK
+    // มาก่อน) ให้ดึงมาเบื้องหลังเพื่อให้ค้นหาเจอหุ้นต่างประเทศด้วย ไม่ใช่แค่ SET
+    if (!_wlSymListReady && !_wlSymListFetching) {
+      _wlSymListFetching = true;
+      Promise.all([
+        _drData ? Promise.resolve() : _fetchTimeout('/api/dr', 90000).then(r => r.json()).then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; } }).catch(() => {}),
+        _usData ? Promise.resolve() : fetch('/api/us-index-metrics').then(r => r.json()).then(d => { _usData = d; }).catch(() => {}),
+        _hkData ? Promise.resolve() : fetch('/api/hk-index-metrics').then(r => r.json()).then(d => { _hkData = d; }).catch(() => {}),
+      ]).then(() => {
+        _wlSymListFetching = false;
+        dl.innerHTML = "";   // reset ให้ rebuild ครบชุดรอบถัดไป
+        _wlPopulateSymList();
+      });
+    }
   }
 }
 
