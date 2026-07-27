@@ -873,6 +873,7 @@ function calcFGI(stocks) {
 // ============================================================
 function renderOverview() {
   if (!DATA) return;
+  _ensureIdxDataLoaded(renderOverview);
   const stocks = DATA.stocks;
   const total  = stocks.length;
 
@@ -1037,8 +1038,8 @@ function renderOverview() {
   document.getElementById("tbl-gainers").innerHTML = miniTbl(gainers, true);
   document.getElementById("tbl-losers").innerHTML  = miniTbl(losers, false);
 
-  // --- industry bars ---
-  const industries = [...DATA.industries].sort((a,b) => (b.ret_1m||0)-(a.ret_1m||0));
+  // --- industry bars --- (ret_1m ใช้ดัชนีถ่วงน้ำหนักจริงถ้ามี ไม่ใช่ค่าเฉลี่ยหุ้นดิบ)
+  const industries = DATA.industries.map(_sectorWithIdxOverride).sort((a,b) => (b.ret_1m||0)-(a.ret_1m||0));
   const maxAbs = Math.max(...industries.map(ig => Math.abs(ig.ret_1m||0)));
   document.getElementById("industry-bars").innerHTML = industries.map(ig => {
     const r = ig.ret_1m || 0;
@@ -1354,7 +1355,10 @@ let _multiSortKey = 'ret_1w';
 
 function renderRotMulti(sortKey) {
   if (sortKey) _multiSortKey = sortKey;
-  const data = rotView === 'sector' ? DATA.sectors : DATA.industries;
+  _ensureIdxDataLoaded(renderRotMulti);
+  // ret_1d/1w/1m/3m/6m/1y ใช้ดัชนีถ่วงน้ำหนักจริงถ้ามี (ตารางนี้เป็นแค่มุมมองแสดงผล — คนละจุด
+  // กับแกน X/Y ของ Scatter Plot/Momentum Playbook ที่ยังตั้งใจใช้ค่าเฉลี่ยหุ้นเดิมอยู่)
+  const data = (rotView === 'sector' ? DATA.sectors : DATA.industries).map(_sectorWithIdxOverride);
   const sorted = [...data].sort((a,b) => (b[_multiSortKey]||0)-(a[_multiSortKey]||0));
   const pc = (v) => v == null ? '<span class="text2">—</span>'
     : `<span class="${v>0?'green':v<0?'red':'text2'}">${v>0?'+':''}${v.toFixed(2)}%</span>`;
@@ -2525,7 +2529,8 @@ function renderSectorRankTable() {
   if (!DATA) return;
   const el = document.getElementById('sector-rank-tbody');
   if (!el) return;
-  const groups = [...(sectorView === 'sector' ? DATA.sectors : DATA.industries)];
+  _ensureIdxDataLoaded(renderSectorRankTable);
+  const groups = (sectorView === 'sector' ? DATA.sectors : DATA.industries).map(_sectorWithIdxOverride);
 
   // จัดอันดับต่อ horizon (1 = return สูงสุด) — กลุ่มที่ค่าเป็น null ไม่ถูกจัด
   const H = [['ret_1w', 'r1w'], ['ret_1m', 'r1m'], ['ret_3m', 'r3m'], ['ret_6m', 'r6m'], ['ret_1y', 'r1y']];
@@ -2597,8 +2602,47 @@ function renderSectors() {
   if (sectorMode === 'rank') renderSectorRankTable();
   else renderSectorTable();
 }
+// ดึง _idxData มาถ้ายังไม่เคยโหลด (หน้า Sectors & Industries/Overview/Rotation ไม่ได้บังคับ
+// เปิดหน้า "ดัชนีกลุ่มอุตสาหกรรม" มาก่อนเสมอไป) แล้วสั่ง render ซ้ำเมื่อโหลดเสร็จ — ใช้ cache
+// เดียวกัน ไม่ยิงซ้ำถ้ากำลังโหลดอยู่ และเก็บ callback ของ "ทุก" หน้าที่แวะเรียกระหว่างรอ (ไม่ใช่
+// แค่หน้าแรก) เผื่อผู้ใช้สลับหน้าเร็วก่อน fetch จะเสร็จ ไม่งั้นหน้าหลังๆ จะไม่ได้ re-render อัตโนมัติ
+let _idxDataLoading = false;
+let _idxDataWaiters = [];
+function _ensureIdxDataLoaded(onLoaded) {
+  if (_idxData) return;
+  _idxDataWaiters.push(onLoaded);
+  if (_idxDataLoading) return;
+  _idxDataLoading = true;
+  fetch('/api/indices').then(r => r.json()).then(d => {
+    _idxDataLoading = false;
+    if (!d.error) {
+      _idxData = d;
+      _idxDataWaiters.forEach(fn => fn());
+    }
+    _idxDataWaiters = [];
+  }).catch(() => { _idxDataLoading = false; _idxDataWaiters = []; });
+}
+
+// override ret_1d/1w/1m/3m/6m/1y ของ sector/industry group ด้วยดัชนีถ่วงน้ำหนัก market cap
+// จริงของ SET (indices_cache.json) แทนค่าเฉลี่ยหุ้นรายตัวแบบไม่ถ่วงน้ำหนัก (summarize_groups)
+// — สองค่านี้คำนวณคนละสูตร ต่างกันได้มากถ้ากลุ่มมีหุ้นเล็ก outlier (เช่น Home & Office มีหุ้น
+// เล็กบวก 8% ลากค่าเฉลี่ยให้เป็นบวกทั้งที่ดัชนีจริงติดลบ) ไม่มี mapping/ข้อมูลดัชนี (เช่นกลุ่ม
+// "Mining" ที่ไม่มีดัชนีให้ map) → fallback ใช้ค่าเฉลี่ยหุ้นเดิม
+function _sectorWithIdxOverride(s) {
+  const idxSym = SECTOR_NAME_TO_IDX_SYM[s.name];
+  const idx = idxSym ? _idxData?.[idxSym] : null;
+  if (!idx) return s;
+  return {
+    ...s,
+    ret_1d: idx.ret_1d ?? s.ret_1d, ret_1w: idx.ret_1w ?? s.ret_1w,
+    ret_1m: idx.ret_1m ?? s.ret_1m, ret_3m: idx.ret_3m ?? s.ret_3m,
+    ret_6m: idx.ret_6m ?? s.ret_6m, ret_1y: idx.ret_1y ?? s.ret_1y,
+  };
+}
+
 function renderSectorTable() {
   if (!DATA) return;
+  _ensureIdxDataLoaded(renderSectorTable);
 
   // นับหุ้นที่ทำ 52W High ใหม่ (price >= high_52w) ต่อ sector/industry
   const groupKey = sectorView === 'sector' ? 'sector' : 'industry';
@@ -2610,16 +2654,21 @@ function renderSectorTable() {
     if (s.high_52w > 0 && s.price >= s.high_52w) nhMap[key]++;
   });
 
-  // คำนวณค่าเฉลี่ย 1M% ของหุ้นทุกตัวในตลาด
+  // ฐานเทียบ "1M VS SET" — ใช้ ret_1m ของดัชนี SET Index จริงถ้ามี (สอดคล้องกับ ret_1m ของ
+  // แต่ละกลุ่มที่ตอนนี้เป็นดัชนีถ่วงน้ำหนักแล้วเช่นกัน) ไม่งั้น fallback เป็นค่าเฉลี่ยหุ้นทั้งตลาด
   const stocks1m = DATA.stocks.filter(s => s.ret_1m != null);
-  const mktRet1m = stocks1m.length ? stocks1m.reduce((a, s) => a + s.ret_1m, 0) / stocks1m.length : 0;
+  const mktRet1m = _idxData?.['^SET.BK']?.ret_1m ??
+    (stocks1m.length ? stocks1m.reduce((a, s) => a + s.ret_1m, 0) / stocks1m.length : 0);
 
-  const data = [...(sectorView === "sector" ? DATA.sectors : DATA.industries)].map(s => ({
-    ...s,
-    newHighCount: nhMap[s.name] ?? 0,
-    newHighPct:   s.count > 0 ? (nhMap[s.name] ?? 0) / s.count * 100 : 0,
-    vs_set_1m:   s.ret_1m != null ? s.ret_1m - mktRet1m : null,
-  }));
+  const data = [...(sectorView === "sector" ? DATA.sectors : DATA.industries)].map(s => {
+    const merged = _sectorWithIdxOverride(s);
+    return {
+      ...merged,
+      newHighCount: nhMap[s.name] ?? 0,
+      newHighPct:   s.count > 0 ? (nhMap[s.name] ?? 0) / s.count * 100 : 0,
+      vs_set_1m:    merged.ret_1m != null ? merged.ret_1m - mktRet1m : null,
+    };
+  });
   data.sort((a,b) => {
     const av = a[sectorSort.key], bv = b[sectorSort.key];
     return ((bv ?? -Infinity) - (av ?? -Infinity)) * sectorSort.dir;
@@ -4113,6 +4162,64 @@ function startHedgeFetchMissing() {
 // ============================================================
 // SECTOR ABBREVIATION MAP
 // ============================================================
+// ชื่อ sector/industry (English, ตรงกับ DATA.sectors[].name/DATA.industries[].name) -> symbol
+// ในดัชนีจริงถ่วงน้ำหนัก market cap ของ SET (indices_cache.json) — ใช้ override ret_1d/1w/1m/3m/1y
+// ในตาราง Sectors & Industries แทนค่าเฉลี่ยหุ้นรายตัวแบบไม่ถ่วงน้ำหนัก (summarize_groups)
+// เพราะสองค่านี้คำนวณคนละสูตร ต่างกันได้มากถ้ากลุ่มมีหุ้นเล็ก outlier (ดู PLAN/บทสนทนา 2026-07-28)
+// "Industrial"/"Industrials" เป็นชื่อ industry group ที่ปนกันอยู่ในข้อมูลหุ้น (data quality
+// ไม่ตรงกัน) เลย map ทั้งคู่ไปที่ ^INDUS.BK ตัวเดียว — ไม่มี entry สำหรับ "Mining" เพราะ
+// summarize_groups ไม่เคยสร้างกลุ่มนี้ขึ้นมา (ไม่มีหุ้นในกลุ่มนี้ในข้อมูลปัจจุบัน)
+const SECTOR_NAME_TO_IDX_SYM = {
+  // sectors (mainboard)
+  "Agribusiness":                          "^AGRI.BK",
+  "Food & Beverage":                       "^FOOD.BK",
+  "Fashion":                               "^FASHION.BK",
+  "Home & Office Products":                "^HOME.BK",
+  "Personal Products & Pharmaceuticals":   "^PERSON.BK",
+  "Banking":                               "^BANK.BK",
+  "Finance & Securities":                  "^FIN.BK",
+  "Insurance":                             "^INSUR.BK",
+  "Automotive":                            "^AUTO.BK",
+  "Industrial Materials & Machinery":      "^IMM.BK",
+  "Paper & Printing Materials":            "^PAPER.BK",
+  "Petrochemicals & Chemicals":            "^PETRO.BK",
+  "Packaging":                             "^PKG.BK",
+  "Steel and Metal Products":              "^STEEL.BK",
+  "Construction Materials":                "^CONMAT.BK",
+  "Construction Services":                 "^CONS.BK",
+  "Property Development":                  "^PROP.BK",
+  "Property Fund & REITs":                 "^PFREIT.BK",
+  "Energy & Utilities":                     "^ENERG.BK",
+  "Commerce":                              "^COMM.BK",
+  "Health Care Services":                  "^HELTH.BK",
+  "Media & Publishing":                    "^MEDIA.BK",
+  "Professional Services":                 "^PROF.BK",
+  "Tourism & Leisure":                     "^TOURISM.BK",
+  "Transportation & Logistics":            "^TRANS.BK",
+  "Electronic Components":                 "^ETRON.BK",
+  "Information & Communication Technology":"^ICT.BK",
+  // industry groups
+  "Agro & Food Industry":                  "^AGRO.BK",
+  "Consumer Products":                     "^CONSUMP.BK",
+  "Financials":                            "^FINCIAL.BK",
+  "Industrial":                            "^INDUS.BK",
+  "Industrials":                           "^INDUS.BK",
+  "Property & Construction":               "^PROPCON.BK",
+  "Resources":                             "^RESOURC.BK",
+  "Services":                              "^SERVICE.BK",
+  "Technology":                            "^TECH.BK",
+  // mai (sectors ลง -mai ในตาราง แต่ map ไปดัชนีระดับ industry group ของ mai แทน
+  // เพราะ mai ไม่มีดัชนีย่อยระดับ sector)
+  "Agro & Food Industry -mai":             "^AGRO-M.BK",
+  "Consumer Products -mai":                "^CONSUMP-M.BK",
+  "Financials -mai":                       "^FINCIAL-M.BK",
+  "Industrial -mai":                       "^INDUS-M.BK",
+  "Property & Construction -mai":          "^PROPCON-M.BK",
+  "Resources -mai":                        "^RESOURC-M.BK",
+  "Services -mai":                         "^SERVICE-M.BK",
+  "Technology -mai":                       "^TECH-M.BK",
+};
+
 const SECTOR_ABBR = {
   "Agro & Food Industry":                  "AGRO",
   "Agribusiness":                          "AGRI",
