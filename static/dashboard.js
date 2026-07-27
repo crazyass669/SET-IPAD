@@ -6458,12 +6458,13 @@ async function _runFscreenerMirror(uni, conds) {
     note.innerHTML = 'ℹ หุ้น US/HK ชุดนี้ใช้งบ <b>Finnomena ล้วน</b> — ตัวกรองที่ต้องใช้งบ Yahoo (net cash, cash cycle, goodwill, buyback, FCF, CAGR รายปี, interest coverage, dilution) จะไม่มีค่าและกรองไม่ได้'
       + (uni === 'us'
         ? ' · ค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) มีเฉพาะหุ้นใน S&P500/Dow/Nasdaq 100'
-        : ' และค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) ก็ไม่มีเช่นกัน');
-    // เปิดฟิลเตอร์ราคาใน universe US = ตัดหุ้นนอกดัชนีหลัก (ไม่มีค่า rs/ema/52w/rvol)
+        : ' · ค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) มีเฉพาะหุ้นใน HSI/HSCEI/HSTECH');
+    // เปิดฟิลเตอร์ราคาใน universe US/HK = ตัดหุ้นนอกดัชนีหลัก (ไม่มีค่า rs/ema/52w/rvol)
     // ออกจากผลทั้งหมดโดยปริยาย — เตือนชัดๆ ไม่ให้เข้าใจว่าหุ้นหาย/บั๊ก
-    if (uni === 'us' && conds.some(c => FS_PRICE_ONLY.has(c.k))) {
+    if (conds.some(c => FS_PRICE_ONLY.has(c.k))) {
+      const idxLabel = uni === 'us' ? 'S&P500 / Dow / Nasdaq 100' : 'HSI / HSCEI / HSTECH';
       note.innerHTML = '<span style="color:#e3b341">⚠ เปิดฟิลเตอร์ราคา (RS / EMA200 / high 52wk / RVOL) อยู่ — '
-        + 'ฟิลเตอร์กลุ่มนี้มีค่าเฉพาะหุ้นใน S&P500 / Dow / Nasdaq 100 หุ้น US นอกดัชนีถูกตัดออกจากผลทั้งหมด</span><br>'
+        + `ฟิลเตอร์กลุ่มนี้มีค่าเฉพาะหุ้นใน ${idxLabel} หุ้น ${uni.toUpperCase()} นอกดัชนีถูกตัดออกจากผลทั้งหมด</span><br>`
         + note.innerHTML;
     }
     box.insertBefore(note, box.firstChild);

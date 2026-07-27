@@ -2873,7 +2873,7 @@
 <!-- PAGE: PEER COMPARE -->
 <div id="page-peer" class="page">
   <div class="page-title">🆚 เทียบเพื่อนร่วมกลุ่ม (Peer Compare)</div>
-  <div class="page-sub">เลือกหุ้น 1 ตัวหรือเลือก Sector ตรง ๆ — เห็นเพื่อนร่วมกลุ่มวางเทียบกันด้าน valuation/คุณภาพ/growth ในตารางเดียว ตอบคำถาม "ถูกหรือแพงเทียบเพื่อน" (หุ้นไทยทุกตัว / US-HK เฉพาะสมาชิกดัชนีหลัก — local-only)</div>
+  <div class="page-sub">เลือกหุ้น 1 ตัวหรือเลือก Sector ตรง ๆ — เห็นเพื่อนร่วมกลุ่มวางเทียบกันด้าน valuation/คุณภาพ/growth ในตารางเดียว ตอบคำถาม "ถูกหรือแพงเทียบเพื่อน" (หุ้นไทยทุกตัว / US-HK-JP เฉพาะสมาชิกดัชนีหลัก (S&P500+Dow+NDX, HSI+HSCEI+HSTECH, Nikkei 225) — local-only)</div>
   <div class="card" style="padding:14px 16px;margin-bottom:12px">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <button class="filter-btn active" id="peer-tab-th" onclick="setPeerMarket('TH',this)" style="border-radius:6px 0 0 6px;min-width:90px">🇹🇭 ไทย</button>
@@ -2911,7 +2911,7 @@
 <!-- PAGE: TEARSHEET -->
 <div id="page-tearsheet" class="page">
   <div class="page-title">📋 Tearsheet — หุ้น 1 ตัว ครบในหน้าเดียว</div>
-  <div class="page-sub">Header + Valuation + งบย่อ + เงินทุน & คนวงใน + ฤดูกาล + ข่าว + เอกสารทางการ ในหน้าเดียว — หุ้นไทยทุกตัว / US-HK เฉพาะสมาชิกดัชนีหลัก (S&P500+Dow+NDX, HSI+HSCEI+HSTECH) — local-only</div>
+  <div class="page-sub">Header + Valuation + งบย่อ + เงินทุน & คนวงใน + ฤดูกาล + ข่าว + เอกสารทางการ ในหน้าเดียว — หุ้นไทยทุกตัว / US-HK-JP เฉพาะสมาชิกดัชนีหลัก (S&P500+Dow+NDX, HSI+HSCEI+HSTECH, Nikkei 225) — local-only</div>
   <div class="card" style="padding:14px 16px;margin-bottom:12px">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <button class="filter-btn active" id="ts-tab-th" onclick="setTsMarket('TH',this)" style="border-radius:6px 0 0 6px;min-width:96px">🇹🇭 ไทย</button>
@@ -3345,7 +3345,7 @@
 
 <div id="page-jp-stocks" class="page">
   <div class="page-title">🇯🇵 หุ้น JP — Nikkei 225</div>
-  <div class="page-sub">RS / Stage / 52W High / Momentum / EMA — คำนวณสูตรเดียวกับหุ้นไทย/US/HK (core/metrics.py) จากราคา OHLC ใน jp_prices.db · อัพเดทตอนกด Quick Update หรือปุ่ม 📈 JP Index Max · รายชื่อสมาชิกจาก ja.wikipedia (日経平均株価) · Phase 1: ยังไม่มี Tearsheet/เทียบเพื่อน/งบการเงิน mirror</div>
+  <div class="page-sub">RS / Stage / 52W High / Momentum / EMA — คำนวณสูตรเดียวกับหุ้นไทย/US/HK (core/metrics.py) จากราคา OHLC ใน jp_prices.db · อัพเดทตอนกด Quick Update หรือปุ่ม 📈 JP Index Max · รายชื่อสมาชิกจาก ja.wikipedia (日経平均株価) · Tearsheet/เทียบเพื่อน/งบการเงิน mirror มีครบเหมือน US/HK — เหลือแค่ P/E &amp; P/BV ที่ยังไม่มี (ไม่มี Finnomena JP)</div>
 
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
     <div class="filter-row" style="gap:0;margin:0" id="jp-view-btns">
@@ -3382,7 +3382,7 @@
       <button class="filter-btn" id="hm-idx-ndx" onclick="setHeatmapIndex('NDX',this)" style="border-radius:0 6px 6px 0;min-width:100px">Nasdaq 100</button>
     </div>
     <input id="hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderHeatmap(_hmData[_hmIndex])">
-    <button class="filter-btn" id="hm-refresh-btn" onclick="loadHeatmapPage(true)" title="ข้าม cache 15 นาทีของ server แล้วคำนวณใหม่จากราคาล่าสุดในเครื่อง — ปกติไม่ต้องกด เพราะ cache หมดอายุแล้วโหลดหน้าใหม่จะได้ข้อมูลล่าสุดอัตโนมัติ">⚡ อัพเดทราคา</button>
+    <button class="filter-btn" id="hm-refresh-btn" onclick="loadHeatmapPage(true)" title="ดึงข้อมูลล่าสุดจาก us_index_metrics.json ที่คำนวณไว้แล้ว (ไม่ได้ยิง Yahoo สด) — ปุ่มนี้แค่ข้าม cache ในหน้าเว็บเอง ถ้าอยากได้ราคาล่าสุดจริงๆ ต้องกด ⚡ Quick Update หรือ 📈 US Index Max ก่อน">⚡ อัพเดทราคา</button>
     <button class="filter-btn" onclick="_hmOpenTradingView()" title="เปิด Heatmap ของดัชนีที่เลือกอยู่บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
     <span id="hm-note" style="font-size:11px;color:var(--text2)"></span>
   </div>
@@ -3419,7 +3419,7 @@
       <button class="filter-btn" id="hk-hm-idx-hscei" onclick="setHkHeatmapIndex('HSCEI',this)" style="border-radius:0 6px 6px 0;min-width:100px">HSCEI</button>
     </div>
     <input id="hk-hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderHkHeatmap(_hkHmData[_hkHmIndex])">
-    <button class="filter-btn" id="hk-hm-refresh-btn" onclick="loadHkHeatmapPage(true)" title="ข้าม cache 15 นาทีของ server แล้วคำนวณใหม่จากราคาล่าสุดในเครื่อง — ปกติไม่ต้องกด">⚡ รีเฟรช</button>
+    <button class="filter-btn" id="hk-hm-refresh-btn" onclick="loadHkHeatmapPage(true)" title="ดึงข้อมูลล่าสุดจาก hk_index_metrics.json ที่คำนวณไว้แล้ว (ไม่ได้ยิง Yahoo สด) — ปุ่มนี้แค่ข้าม cache ในหน้าเว็บเอง ถ้าอยากได้ราคาล่าสุดจริงๆ ต้องกด ⚡ Quick Update หรือ 📈 HK Index Max ก่อน">⚡ รีเฟรช</button>
     <button class="filter-btn" onclick="_hkHmOpenTradingView()" title="เปิด Heatmap ของดัชนีที่เลือกอยู่บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
     <span id="hk-hm-note" style="font-size:11px;color:var(--text2)"></span>
   </div>
@@ -3451,7 +3451,7 @@
 
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
     <input id="jp-hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderJpHeatmap(_jpHmData)">
-    <button class="filter-btn" id="jp-hm-refresh-btn" onclick="loadJpHeatmapPage(true)" title="ข้าม cache 15 นาทีของ server แล้วคำนวณใหม่จากราคาล่าสุดในเครื่อง — ปกติไม่ต้องกด">⚡ รีเฟรช</button>
+    <button class="filter-btn" id="jp-hm-refresh-btn" onclick="loadJpHeatmapPage(true)" title="ดึงข้อมูลล่าสุดจาก jp_index_metrics.json ที่คำนวณไว้แล้ว (ไม่ได้ยิง Yahoo สด) — ปุ่มนี้แค่ข้าม cache ในหน้าเว็บเอง ถ้าอยากได้ราคาล่าสุดจริงๆ ต้องกด ⚡ Quick Update หรือ 📈 JP Index Max ก่อน">⚡ รีเฟรช</button>
     <button class="filter-btn" onclick="window.open('https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22NI225%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D','_blank','noopener')" title="เปิด Heatmap Nikkei 225 บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
     <span id="jp-hm-note" style="font-size:11px;color:var(--text2)"></span>
   </div>
@@ -3477,7 +3477,7 @@
 <!-- PAGE: STOCK NEWS — ข่าวรายหุ้นรวม 3 แหล่ง (SET.or.th + Yahoo + Google News) -->
 <div id="page-stock-news" class="page">
   <div class="page-title">📰 ข่าวหุ้น</div>
-  <div class="page-sub">รวมข่าวจากทุกแหล่งในหน้าเดียว — ประกาศทางการ SET.or.th · Yahoo Finance · Google News (สื่อไทย/สากล) แค่พิมพ์ชื่อย่อหุ้น (ดึงสดต่อหุ้นทุกครั้ง ต้องรันผ่าน Flask ในเครื่อง — local-only)</div>
+  <div class="page-sub">รวมข่าวจากทุกแหล่งในหน้าเดียว — ประกาศทางการ SET.or.th · Yahoo Finance · Google News (สื่อไทย/สากล) แค่พิมพ์ชื่อย่อหุ้น (ดึงสดต่อหุ้น cache 15 นาที ต้องรันผ่าน Flask ในเครื่อง — local-only)</div>
 
   <div class="card" style="padding:14px 16px;margin-bottom:12px">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -3883,7 +3883,7 @@
           <b style="color:var(--text)">🔍 เช็คหุ้นใหม่/ถูกถอดจาก SET.or.th</b> หน้า "DR / DRx"
           — เช็คให้อัตโนมัติตอนเปิดหน้าอยู่แล้ว กดเองเมื่ออยากยืนยัน<br>
           <b style="color:var(--text)">🔍 เช็คหุ้นใหม่/ถูกถอดจากดัชนี</b> หน้า "งบการเงิน" → แท็บต่างประเทศ (DR)
-          — สลับปุ่ม <b>US</b> / <b>HK</b> เพื่อเช็คคนละชุดดัชนี (S&amp;P500/Dow/NDX · HSI/HSCEI/HSTECH)<br>
+          — สลับปุ่ม <b>US</b> / <b>HK</b> / <b>JP</b> เพื่อเช็คคนละชุดดัชนี (S&amp;P500/Dow/NDX · HSI/HSCEI/HSTECH · Nikkei 225)<br>
           <b style="color:var(--text)">📖 ดึงคำอธิบายบริษัท DR</b> หน้า "DR / DRx"
           — เฉพาะตอนมี DR ใหม่เข้ามา (cache 180 วัน ปกติไม่ต้องกด)
         </div>
@@ -3956,17 +3956,26 @@
     <div style="padding:10px 0;border-bottom:1px solid var(--border)">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <strong style="font-size:12.5px;min-width:110px">📈 ดัชนี US (S&amp;P500/DOW/NDX)</strong>
-        <span style="font-size:11px;color:var(--text2)">มีปุ่มเช็คอยู่แล้วในหน้า "🗺️ Heatmap US"</span>
-        <button class="filter-btn" onclick="showPage('us-heatmap', [...document.querySelectorAll('.nav-btn')].find(b=>b.getAttribute('onclick')?.includes(`'us-heatmap'`)))">ไปหน้า Heatmap US</button>
+        <span style="font-size:11px;color:var(--text2)">มีปุ่มเช็คอยู่แล้วในหน้า "งบการเงิน" → แท็บต่างประเทศ (DR) → ปุ่ม US</span>
+        <button class="filter-btn" onclick="_dhGoto('financials')">ไปหน้างบการเงิน</button>
       </div>
     </div>
 
     <!-- ดัชนี HK -->
-    <div style="padding:10px 0 0">
+    <div style="padding:10px 0;border-bottom:1px solid var(--border)">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <strong style="font-size:12.5px;min-width:110px">📈 ดัชนี HK (HSI/HSTECH/HSCEI)</strong>
-        <span style="font-size:11px;color:var(--text2)">มีปุ่มเช็คอยู่แล้วในหน้า "🗺️ Heatmap HK"</span>
-        <button class="filter-btn" onclick="showPage('hk-heatmap', [...document.querySelectorAll('.nav-btn')].find(b=>b.getAttribute('onclick')?.includes(`'hk-heatmap'`)))">ไปหน้า Heatmap HK</button>
+        <span style="font-size:11px;color:var(--text2)">มีปุ่มเช็คอยู่แล้วในหน้า "งบการเงิน" → แท็บต่างประเทศ (DR) → ปุ่ม HK</span>
+        <button class="filter-btn" onclick="_dhGoto('financials')">ไปหน้างบการเงิน</button>
+      </div>
+    </div>
+
+    <!-- ดัชนี JP -->
+    <div style="padding:10px 0 0">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <strong style="font-size:12.5px;min-width:110px">📈 ดัชนี JP (Nikkei 225)</strong>
+        <span style="font-size:11px;color:var(--text2)">มีปุ่มเช็คอยู่แล้วในหน้า "งบการเงิน" → แท็บต่างประเทศ (DR) → ปุ่ม JP</span>
+        <button class="filter-btn" onclick="_dhGoto('financials')">ไปหน้างบการเงิน</button>
       </div>
     </div>
   </div>
