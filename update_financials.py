@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """อัพเดทงบการเงินทั้งหมดในคำสั่งเดียว — sync 3 แหล่ง (Yahoo + SET + Finnomena)
-ของหุ้นไทย + DR แล้ว build factor snapshot ต่อให้เลย (ไม่ต้องกดหลายที่ในแอป)
+ของหุ้นไทย + DR + สมาชิกดัชนีหลัก US (S&P500+Dow+NDX)/HK (HSI+HSCEI+HSTECH)/JP (Nikkei 225)
+ผ่าน Yahoo แล้ว build factor snapshot ต่อให้เลย (ไม่ต้องกดหลายที่ในแอป) — เทียบเท่าปุ่ม
+'🔄 อัพเดทงบการเงินทั้งหมด' ในหน้า Data Health
 
 ใช้:
-    python update_financials.py            อัพเดทหุ้นไทย + DR แล้ว build snapshot
+    python update_financials.py            อัพเดทหุ้นไทย + DR + ดัชนีหลัก US/HK/JP แล้ว build snapshot
     python update_financials.py th         เฉพาะหุ้นไทย (Yahoo+SET+Finnomena รายไตรมาส)
     python update_financials.py dr          เฉพาะ DR (Yahoo+Finnomena — ไม่มี SET)
     python update_financials.py all mirror  อัพเดททั้งหมด + rebuild mirror US/HK ด้วย
@@ -13,7 +15,9 @@
 - ดึงสด + merge งวดใหม่เข้าของเดิม (ประวัติเก่าไม่หาย) เหมือนปุ่มในแอป
 - เป็น local-only — financials.db ไม่ขึ้น GitHub
 - ควรรันหลังบริษัทประกาศงบไตรมาส (ก.พ./พ.ค./ส.ค./พ.ย.)
-- ไม่รีเฟรชหุ้น US/HK 'นอกพอร์ต' (ใช้ mirror_finnomena.py แยก)
+- ดัชนีหลัก US/HK/JP: sync งบ Yahoo annual ครั้งเดียว (ข้ามตัวที่มีงบซ้ำกับ DR/DRx อยู่แล้ว
+  อัตโนมัติ ดู sync_mirror_yahoo_index) ไม่ใช่รายไตรมาสเหมือนหุ้นไทย/DR
+- ไม่รีเฟรชหุ้น US/HK 'นอกพอร์ต' นอกดัชนีหลัก (ใช้ mirror_finnomena.py แยก)
 """
 import io
 import os
@@ -87,6 +91,27 @@ try:
                         callback=_progress("DR"), is_dr=True)
         print(f"[งบ DR] เสร็จ: สำเร็จ {r['ok']}/{r['total']} (พลาด {r['fail']})", flush=True)
 
+    # สมาชิกดัชนีหลัก US (S&P500+Dow+NDX)/HK (HSI+HSCEI+HSTECH)/JP (Nikkei 225) ผ่าน Yahoo
+    # annual — sync_mirror_yahoo_index สแกน namespace 'DR:'/'FINN:{ex}:' ที่มี source='yahoo'
+    # อยู่แล้วก่อนเสมอ จึงข้ามตัวที่ซ้ำกับ DR/DRx ที่ sync ไปแล้วข้างบนโดยอัตโนมัติ
+    idx_result = {"ok": 0, "fail": 0, "total": 0, "skipped": 0}
+    jp_syms_idx = []
+    jp_price_by_ticker = {}
+    if scope in ("all", "dr"):
+        from sources import us_index_metrics, hk_index_metrics, jp_index_metrics
+        us_syms = [s["symbol"] for s in us_index_metrics.load_local(BASE).get("stocks", [])]
+        hk_syms = [s["symbol"].replace(".HK", "") for s in hk_index_metrics.load_local(BASE).get("stocks", [])]
+        jp_stocks = jp_index_metrics.load_local(BASE).get("stocks", [])
+        jp_syms_idx = [s["symbol"][:-2] for s in jp_stocks if s["symbol"].endswith(".T")]
+        jp_price_by_ticker = {s["symbol"][:-2]: s["price"] for s in jp_stocks
+                               if s.get("price") and s["symbol"].endswith(".T")}
+        print(f"[ดัชนีหลัก] sync งบ US {len(us_syms)} · HK {len(hk_syms)} · JP {len(jp_syms_idx)} "
+              f"ตัว · แหล่ง Yahoo annual ...", flush=True)
+        idx_result = fs.sync_mirror_yahoo_index(
+            BASE, {"US": us_syms, "HK": hk_syms, "JP": jp_syms_idx}, callback=_progress("ดัชนีหลัก"))
+        print(f"[ดัชนีหลัก] เสร็จ: สำเร็จ {idx_result['ok']}/{idx_result['total']} "
+              f"(ข้าม {idx_result['skipped']} ที่มีแล้ว, พลาด {idx_result['fail']})", flush=True)
+
     # หุ้น US/HK 'นอกพอร์ต' ที่ค้นบ่อย (จาก search_log) — refresh งวดใหม่รายตัว
     refreshed_mirror = False
     if scope in ("all", "dr"):
@@ -108,11 +133,17 @@ try:
     print("[Snapshot] กำลัง build factor snapshot ...", flush=True)
     res = snap.build_snapshot(BASE)
     print(f"[Snapshot] หลัก: ไทย {res['set']} + DR {res['dr']} = {res['total']} แถว", flush=True)
-    # rebuild mirror snapshot ถ้าสั่ง mirror หรือมีการ refresh หุ้นค้นบ่อย (ให้ Screener สดตาม)
-    if with_mirror or refreshed_mirror:
+    idx_changed = bool(idx_result["ok"] or idx_result["fail"])
+    # rebuild mirror snapshot ถ้าสั่ง mirror หรือมีการ refresh หุ้นค้นบ่อย/ดัชนีหลัก (ให้ Screener สดตาม)
+    if with_mirror or refreshed_mirror or idx_changed:
         print("[Snapshot] กำลัง rebuild mirror snapshot ...", flush=True)
         m = snap.build_mirror_snapshot(BASE)
         print(f"[Snapshot] mirror: US {m.get('US', 0)} + HK {m.get('HK', 0)}", flush=True)
+    if idx_changed:
+        print("[Snapshot] กำลัง rebuild mirror snapshot JP (Yahoo-only) ...", flush=True)
+        n_jp = snap.build_mirror_snapshot_yahoo_only(
+            BASE, "JP", jp_syms_idx, price_by_ticker=jp_price_by_ticker)
+        print(f"[Snapshot] mirror JP: {n_jp}", flush=True)
 
     elapsed_min = (time.time() - t0) / 60
     print(f"\n✅ เสร็จทั้งหมดใน {elapsed_min:.0f} นาที — รีเฟรชหน้าเว็บได้เลย (ไม่ต้อง restart)", flush=True)

@@ -4645,8 +4645,10 @@ def mirror_yahoo_index_sync():
 
 def _run_financials_update_all():
     """เทียบเท่า `python update_financials.py` (scope=all) — เช็ค DR ใหม่ → sync งบหุ้นไทย
-    (Yahoo+SET+Finnomena) → sync งบ DR (Yahoo+Finnomena) → refresh งบ mirror US/HK ที่ค้น
-    บ่อยใน 90 วัน → build factor snapshot ใหม่ ปุ่มที่ใช้บ่อยสุด (ทุกครั้งหลังงบไตรมาสออก)"""
+    (Yahoo+SET+Finnomena) → sync งบ DR (Yahoo+Finnomena) → sync งบสมาชิกดัชนีหลัก US
+    (S&P500+Dow+NDX)/HK (HSI+HSCEI+HSTECH)/JP (Nikkei 225) ผ่าน Yahoo (ข้าม ticker ที่มีงบ
+    อยู่แล้วจาก DR/DRx โดยอัตโนมัติ — ดู sync_mirror_yahoo_index) → refresh งบ mirror US/HK
+    ที่ค้นบ่อยใน 90 วัน → build factor snapshot ใหม่ ปุ่มที่ใช้บ่อยสุด (ทุกครั้งหลังงบไตรมาสออก)"""
     t0 = time.time()
     searched = []
     try:
@@ -4670,18 +4672,39 @@ def _run_financials_update_all():
         _update(current=50, total=100, message=f"sync งบ DR {len(syms_dr)} ตัว...")
 
         def _dr_cb(done, total, msg):
-            pct = 50 + (done / max(total, 1) * 30)
+            pct = 50 + (done / max(total, 1) * 20)
             _update(current=round(pct), total=100, message=f"งบ DR: {done}/{total}")
         r_dr = financials_store.sync_all(BASE_DIR, syms_dr,
                                           sources=("yahoo", "yahoo_q", "finnomena_q"),
                                           callback=_dr_cb, is_dr=True)
+
+        # sync งบสมาชิกดัชนีหลัก US (S&P500+Dow+NDX) / HK (HSI+HSCEI+HSTECH) / JP (Nikkei 225)
+        # ผ่าน Yahoo — sync_mirror_yahoo_index สแกน namespace 'DR:{sym}'/'FINN:{ex}:{sym}' ที่มี
+        # source='yahoo' อยู่แล้วก่อนเสมอ (ดู docstring ในฟังก์ชัน) จึงข้ามตัวที่ซ้ำกับ DR/DRx ที่
+        # sync ไปแล้วข้างบนโดยอัตโนมัติ ไม่ต้องกรองมือซ้ำที่นี่
+        from sources import us_index_metrics, hk_index_metrics, jp_index_metrics
+        us_syms = [s["symbol"] for s in us_index_metrics.load_local(BASE_DIR).get("stocks", [])]
+        hk_syms = [s["symbol"].replace(".HK", "") for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", [])]
+        jp_stocks = jp_index_metrics.load_local(BASE_DIR).get("stocks", [])
+        jp_syms = [s["symbol"][:-2] for s in jp_stocks if s["symbol"].endswith(".T")]
+        jp_price_by_ticker = {s["symbol"][:-2]: s["price"] for s in jp_stocks
+                               if s.get("price") and s["symbol"].endswith(".T")}
+
+        _update(current=70, total=100,
+                message=f"sync งบดัชนีหลัก US {len(us_syms)} · HK {len(hk_syms)} · JP {len(jp_syms)} ตัว...")
+
+        def _idx_cb(done, total, msg):
+            pct = 70 + (done / max(total, 1) * 15)
+            _update(current=round(pct), total=100, message=f"งบดัชนีหลัก US/HK/JP: {done}/{total}")
+        r_idx = financials_store.sync_mirror_yahoo_index(
+            BASE_DIR, {"US": us_syms, "HK": hk_syms, "JP": jp_syms}, callback=_idx_cb)
 
         refreshed_mirror = 0
         port = set(syms_dr)
         searched = [s for s in financials_store.get_recent_searches(BASE_DIR, days=90) if s not in port]
         if searched:
             for i, s in enumerate(searched):
-                _update(current=80 + round(i / len(searched) * 12), total=100,
+                _update(current=85 + round(i / len(searched) * 7), total=100,
                         message=f"refresh งบ mirror US/HK ที่ค้นบ่อย {i}/{len(searched)}...")
                 try:
                     if financials_store.refresh_mirror_stock(BASE_DIR, s):
@@ -4692,14 +4715,20 @@ def _run_financials_update_all():
 
         _update(current=93, total=100, message="กำลังคำนวณ factor snapshot ใหม่...")
         factor_snapshot.build_snapshot(BASE_DIR)
-        if refreshed_mirror:
-            _update(current=98, total=100, message="กำลัง rebuild mirror snapshot...")
-            factor_snapshot.build_mirror_snapshot(BASE_DIR)
+        idx_changed = bool(r_idx["ok"] or r_idx["fail"])
+        if refreshed_mirror or idx_changed:
+            _update(current=97, total=100, message="กำลัง rebuild mirror snapshot US/HK...")
+            factor_snapshot.build_mirror_snapshot(BASE_DIR, exchanges=("US", "HK"))
+        if idx_changed:
+            _update(current=99, total=100, message="กำลัง rebuild mirror snapshot JP...")
+            factor_snapshot.build_mirror_snapshot_yahoo_only(
+                BASE_DIR, "JP", jp_syms, price_by_ticker=jp_price_by_ticker)
         _fin_analytics_cache.clear()
 
         elapsed_min = (time.time() - t0) / 60
         summary = (f"เสร็จแล้ว! หุ้นไทย {r_th['ok']}/{r_th['total']} (พลาด {r_th['fail']}) · "
-                   f"DR {r_dr['ok']}/{r_dr['total']} (พลาด {r_dr['fail']})"
+                   f"DR {r_dr['ok']}/{r_dr['total']} (พลาด {r_dr['fail']}) · "
+                   f"ดัชนีหลัก US/HK/JP {r_idx['ok']}/{r_idx['total']} (ข้าม {r_idx['skipped']} ที่มีแล้ว)"
                    + (f" · mirror ค้นบ่อย {refreshed_mirror}/{len(searched)}" if searched else "")
                    + f" · ใช้เวลา {elapsed_min:.0f} นาที")
         _update(running=False, done=True, message=summary)
@@ -4712,7 +4741,9 @@ def _run_financials_update_all():
 @app.route("/api/financials-update-all", methods=["POST"])
 def financials_update_all():
     """ปุ่ม '🔄 อัพเดทงบการเงินทั้งหมด' (หน้า Data Health) — แทน `python update_financials.py`
-    ใช้เวลาไม่กี่นาทีถึงเกือบครึ่งชั่วโมง (ขึ้นกับจำนวนหุ้น/DR) ใช้บ่อยสุด (ทุกครั้งหลังงบไตรมาสออก)"""
+    ครอบคลุมหุ้นไทย/DR/DRx + สมาชิกดัชนีหลัก US/HK/JP (สแกนข้าม ticker ที่มีงบซ้ำกับ DR/DRx
+    อยู่แล้วอัตโนมัติ) ใช้เวลาไม่กี่นาทีถึงเกือบครึ่งชั่วโมง (ขึ้นกับจำนวนหุ้น/DR) ใช้บ่อยสุด
+    (ทุกครั้งหลังงบไตรมาสออก)"""
     with _lock:
         if _state["running"]:
             return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
