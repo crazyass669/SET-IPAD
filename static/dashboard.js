@@ -586,6 +586,64 @@ function yfToTVSym(yf) {
   return yf.replace(/-/g, '.');                                 // BRK-B → BRK.B (US stocks)
 }
 
+// ============================================================
+// JITTA FACTSHEET LINK — เปิดหน้า jitta.com/stock/{exchange}:{sym}/factsheet
+// ของหุ้นที่เลือกในแท็บใหม่ (แนวเดียวกับปุ่ม TradingView) ไม่เก็บข้อมูลอะไรฝั่งเรา
+// ใช้ Algolia search index สาธารณะที่ jitta.com เองใช้ (app id/key แบบ search-only
+// ฝังอยู่ใน bundle ของเว็บ jitta.com อยู่แล้ว) เพื่อ resolve exchange ที่ถูกต้อง
+// (NYSE/NASDAQ ฯลฯ) ก่อนเปิด — เดา exchange ผิดแล้ว Jitta จะขึ้นหน้าว่าง
+// ============================================================
+const _JITTA_ALGOLIA_APP = 'L6HU33HKS0';
+const _JITTA_ALGOLIA_KEY = '8fa6652dfc7f2225015b6d6613466a82';
+const _JITTA_ALGOLIA_IDX = 'jitta_explore_ciq';
+
+// yfinance suffix → market code ที่ Jitta ใช้ (ดู acl.view-stock ของ jitta.com)
+function _yfToJittaMarket(yf) {
+  const suf = { '.HK':'HK', '.T':'JP', '.SS':'CN', '.SZ':'CN', '.SI':'SG',
+                '.VN':'VN', '.TW':'TW', '.PA':'FR', '.MI':'IT' };
+  for (const s in suf) if (yf && yf.endsWith(s)) return suf[s];
+  return 'US';
+}
+function _yfToJittaSymbol(yf) {
+  // หมายเหตุ: ห้ามตัดเลข 0 นำหน้า — Algolia index เก็บโค้ด HK แบบเติม 0 เต็ม
+  // (เช่น "0700" ไม่ใช่ "700") ตัดออกแล้วค้นไม่เจอ ต้องส่งตามที่ yfinance ให้มา
+  return yf.replace(/\.(HK|T|SS|SZ|SI|VN|TW|PA|MI)$/i, '').replace(/-/g, '.'); // BRK-B → BRK.B
+}
+
+// เปิดแท็บใหม่ก่อน (sync) กัน popup blocker แล้วค่อย redirect หลัง resolve เสร็จ
+// ใช้ id ที่ได้จาก Algolia ตรงๆ เสมอ (ไม่เดา exchange เอง) เพราะ market facet
+// (HK/JP/CN/...) กับ prefix จริงที่ใช้ในลิงก์ (hkg/tyo/sse/...) เป็นคนละค่ากัน
+async function _openJittaResolved(market, symbol, ev) {
+  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+  if (!symbol) return;
+  const win = window.open('', '_blank');
+  const safeFallback = 'https://www.jitta.com';   // ไม่เดา URL หุ้นตรงๆ กันเปิดหน้าเปล่า
+  try {
+    const resp = await fetch(
+      `https://${_JITTA_ALGOLIA_APP}-dsn.algolia.net/1/indexes/${_JITTA_ALGOLIA_IDX}/query`, {
+        method: 'POST',
+        headers: {
+          'X-Algolia-API-Key': _JITTA_ALGOLIA_KEY,
+          'X-Algolia-Application-Id': _JITTA_ALGOLIA_APP,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ params:
+          `query=${encodeURIComponent(symbol)}&hitsPerPage=5&filters=market:${market}` })
+      });
+    const data = await resp.json();
+    const hits = data.hits || [];
+    const hit = hits.find(h => (h.symbol || '').toUpperCase() === symbol.toUpperCase()) || hits[0];
+    const url = hit ? `https://www.jitta.com/stock/${hit.id.toLowerCase()}/factsheet` : safeFallback;
+    if (win) win.location = url; else window.open(url, '_blank');
+  } catch (e) {
+    if (win) win.location = safeFallback; else window.open(safeFallback, '_blank');
+  }
+}
+// หุ้นไทย: market คงที่ TH เสมอ ไม่ต้อง resolve
+function openJittaTH(sym, ev) { return _openJittaResolved('TH', sym, ev); }
+// หุ้น DR/mirror US/HK/JP/อื่นๆ: แปลงจาก yfinance ticker ก่อน
+function openJittaFromYf(yf, ev) { return _openJittaResolved(_yfToJittaMarket(yf), _yfToJittaSymbol(yf), ev); }
+
 // แปลง Yahoo Finance index symbol → TradingView symbol (^BANK.BK → SET:BANK)
 function idxToTVSym(sym) {
   if (sym === '^PFREIT.BK') return 'SET:PF_REIT';
@@ -9174,6 +9232,9 @@ function openDRChartModal(sym) {
   _cmTitleEl1.title = `${s.sym}  ${s.name}`;
   document.getElementById('cm-sub').textContent   = `${s.ind || '—'} · RS ${s.rs_score ?? '—'} · ${_drExchBadge(s.yf)}`;
   document.getElementById('cm-tv-link').href = `https://www.tradingview.com/chart/?symbol=${yfToTVSym(s.yf)}&interval=D`;
+  const jittaLinkDR = document.getElementById('cm-jitta-link');
+  jittaLinkDR.style.display = 'inline-flex';
+  jittaLinkDR.onclick = ev => openJittaFromYf(s.yf, ev);
 
   const mk = (val, lbl, cls = '') =>
     `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
@@ -9275,6 +9336,9 @@ function openUsChartModal(symbol) {
     .filter(k => s[k]).map(k => ({ in_sp500: 'S&P500', in_dow: 'Dow', in_ndx: 'NDX' }[k])).join(' · ');
   document.getElementById('cm-sub').textContent = `${s.sector || '—'} · RS ${s.rs_score ?? '—'} · ${idxTags}`;
   document.getElementById('cm-tv-link').href = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(_usTvSymbol(s.symbol))}&interval=D`;
+  const jittaLinkUsIdx = document.getElementById('cm-jitta-link');
+  jittaLinkUsIdx.style.display = 'inline-flex';
+  jittaLinkUsIdx.onclick = ev => openJittaFromYf(s.symbol, ev);
   const fsLink = document.getElementById('cm-factsheet-link');
   if (fsLink) fsLink.style.display = 'none';
   const setLink = document.getElementById('cm-set-link');
@@ -9357,6 +9421,10 @@ function openHkChartModal(symbol) {
   document.getElementById('cm-sub').textContent = `${s.sector || '—'} · RS ${s.rs_score ?? '—'} · ${idxTags}`;
   const tvCode = s.symbol.replace(/\.HK$/i, '').replace(/^0+/, '') || '0';
   document.getElementById('cm-tv-link').href = `https://www.tradingview.com/chart/?symbol=HKEX%3A${encodeURIComponent(tvCode)}&interval=D`;
+  const jittaLinkHkIdx = document.getElementById('cm-jitta-link');
+  jittaLinkHkIdx.style.display = 'inline-flex';
+  // ใช้โค้ดเติม 0 นำหน้าเดิม (s.symbol) ไม่ใช่ tvCode ที่ตัด 0 ออกแล้ว — Algolia ต้องการแบบเติม 0
+  jittaLinkHkIdx.onclick = ev => _openJittaResolved('HK', s.symbol.replace(/\.HK$/i, ''), ev);
   const fsLink = document.getElementById('cm-factsheet-link');
   if (fsLink) fsLink.style.display = 'none';
   const setLink = document.getElementById('cm-set-link');
@@ -9434,6 +9502,9 @@ function openJpChartModal(symbol) {
   document.getElementById('cm-sub').textContent = `${s.sector || '—'} · RS ${s.rs_score ?? '—'} · Nikkei 225`;
   const tvCode = s.symbol.replace(/\.T$/i, '');
   document.getElementById('cm-tv-link').href = `https://www.tradingview.com/chart/?symbol=TSE%3A${encodeURIComponent(tvCode)}&interval=D`;
+  const jittaLinkJpIdx = document.getElementById('cm-jitta-link');
+  jittaLinkJpIdx.style.display = 'inline-flex';
+  jittaLinkJpIdx.onclick = ev => _openJittaResolved('JP', tvCode, ev);
   const fsLink = document.getElementById('cm-factsheet-link');
   if (fsLink) fsLink.style.display = 'none';
   const setLink = document.getElementById('cm-set-link');
@@ -9608,6 +9679,13 @@ function _loadFinTVLink(sym, market) {
     if (a) {
       a.href = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSym)}&interval=D`;
       a.style.display = 'inline-flex';
+    }
+    // ปุ่ม Jitta ใช้ yf ticker เดียวกันที่ resolve มาแล้ว — ไม่ต้องยิง API ซ้ำ
+    const jittaLinkFin = document.getElementById('fin-jitta-link');
+    if (jittaLinkFin) {
+      jittaLinkFin.onclick = ev => openJittaFromYf(d.yf, ev);
+      jittaLinkFin.removeAttribute('href');
+      jittaLinkFin.style.display = 'inline-flex';
     }
     // ฝัง widget จริงเฉพาะ DR US (ตลาดอื่นข้อมูลฟรีของ TradingView ไม่ครบ)
     if (market === 'US') _loadFinTVWidget(sym, tvSym);
@@ -9795,6 +9873,9 @@ function openChartModal(symbol) {
   _cmTitleEl2.title = `${s.symbol}  ${s.name}`;
   document.getElementById('cm-sub').textContent   = `${s.sector || '—'} · RS ${s.rs_score ?? '—'} · ${s.market || ''}`;
   document.getElementById('cm-tv-link').href = `https://www.tradingview.com/chart/?symbol=SET:${s.symbol}&interval=D`;
+  const jittaLinkTh = document.getElementById('cm-jitta-link');
+  jittaLinkTh.style.display = 'inline-flex';
+  jittaLinkTh.onclick = ev => openJittaTH(s.symbol, ev);
   const fsLink = document.getElementById('cm-factsheet-link');
   if (fsLink) { fsLink.href = `https://www.set.or.th/th/market/product/stock/quote/${encodeURIComponent(s.symbol.toLowerCase())}/factsheet`; fsLink.style.display = 'inline-flex'; }
   const setLink = document.getElementById('cm-set-link');
@@ -14900,6 +14981,15 @@ function _renderFinancialsFull(d, source) {
       // หุ้นไทย: symbol ตรงกับ TradingView namespace "SET:" อยู่แล้ว ไม่ต้อง resolve
       tvHtml = `<a href="https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(d.sym)}&interval=D" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="เปิดใน TradingView">${tvIcon}TradingView</a>`;
     }
+    // ปุ่ม Jitta — เทียบงบ Finnomena ที่โชว์อยู่ในหน้านี้กับ Jitta ได้ในคลิกเดียว
+    const jittaDot = `<span style="width:8px;height:8px;border-radius:50%;background:#1fd18f;display:inline-block"></span>`;
+    let jittaHtml = '';
+    if (_finTab === 'dr' && !IS_STATIC) {
+      // เหมือน fin-tv-link: ต้อง resolve yf ก่อนถึงจะรู้ exchange ที่ถูกต้อง (เติมใน _loadFinTVLink)
+      jittaHtml = `<a id="fin-jitta-link" href="#" target="_blank" rel="noopener" style="${tvLinkStyle}" title="เปิดใน Jitta (Jitta Score/Line + งบรายปี 10 ปี)">${jittaDot}Jitta</a>`;
+    } else if (_finTab === 'set') {
+      jittaHtml = `<a href="https://www.jitta.com/stock/bkk:${encodeURIComponent(d.sym.toLowerCase())}/factsheet" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="เปิดใน Jitta (Jitta Score/Line + งบรายปี 10 ปี)">${jittaDot}Jitta</a>`;
+    }
     // ปุ่ม Factsheet / SET — เฉพาะหุ้นไทย ลิงก์ตรงไปหน้า SET.or.th ของหุ้นนั้น
     // (URL เดียวกับที่ chart modal ใช้อยู่แล้ว — ดู openChartModal ด้านบน)
     let fsSetHtml = '';
@@ -14925,6 +15015,7 @@ function _renderFinancialsFull(d, source) {
         ${srcBadge}
         <span style="font-size:13px;color:var(--text2)">${dispName || ''}</span>
         ${tvHtml}
+        ${jittaHtml}
         ${fsSetHtml}
         <span style="font-size:11px;color:var(--text2);margin-left:auto">สกุลเงิน: <strong>${d.currency || '—'}</strong></span>
       </div>
@@ -17007,6 +17098,8 @@ function openIdxChartModal(sym) {
   _cmTitleEl3.title = idx.name;
   document.getElementById('cm-sub').textContent   = sym;
   document.getElementById('cm-tv-link').href = `https://www.tradingview.com/chart/?symbol=${idxToTVSym(sym)}&interval=D`;
+  const jittaLinkIdx = document.getElementById('cm-jitta-link');
+  if (jittaLinkIdx) jittaLinkIdx.style.display = 'none';   // ดัชนี/กลุ่มอุตสาหกรรม — Jitta ไม่มี factsheet รายดัชนี
 
   const mk = (val, lbl, cls='') =>
     `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
