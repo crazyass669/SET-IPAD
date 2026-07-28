@@ -8427,11 +8427,26 @@ function _hmCmp(getV, dir) {
 // rebuild <mkt>_index_metrics.json) แล้ว poll /api/heatmap-live-status/<region> ทุก 1.5 วิ
 // จนเสร็จ (pattern เดียวกับ drQuickUpdate) ใช้ร่วมกันทั้ง 3 ตลาด ต่างแค่ region + callback
 // โหลดข้อมูลใหม่ตอนจบ (loadHeatmapPage/loadHkHeatmapPage/loadJpHeatmapPage)
-function _hmLiveUpdate(region, btn, idleLabel, onDone) {
+//
+// indexKey (optional) — ดัชนีย่อยที่กำลังดูอยู่ (เช่น "DOW") ส่งไปให้ backend กรองแค่สมาชิก
+// ของดัชนีนั้น แทนที่จะกด gap-update ทั้ง union ของ region (US ~518 ตัว, HK ~105 ตัว) —
+// ไม่งั้นดูอยู่แค่แท็บ Dow (30 ตัว) แต่ต้องรอ Yahoo ทั้ง 518 ตัวเหมือนเดิมทุกครั้ง (JP ไม่มี
+// ดัชนีย่อยให้เลือกอยู่แล้ว เลยไม่ส่ง)
+function _hmLiveUpdate(region, btn, idleLabel, onDone, indexKey) {
   if (btn) { btn.disabled = true; btn.textContent = '⚡ กำลังดึงราคา Live...'; }
-  fetch(`/api/heatmap-live-update/${region}`, { method: 'POST' })
+  const qs = indexKey ? `?index=${encodeURIComponent(indexKey)}` : '';
+  fetch(`/api/heatmap-live-update/${region}${qs}`, { method: 'POST' })
     .then(r => r.json())
-    .then(() => _hmLiveUpdatePoll(region, btn, idleLabel, onDone))
+    .then(res => {
+      // status "running" = มีงานของ region นี้ (แท็บย่อยอื่น/คลิกก่อนหน้า) ทำงานค้างอยู่แล้ว
+      // ปุ่มนี้เลย "ไม่ได้" เริ่มงานใหม่ตามที่ผู้ใช้เพิ่งกด แค่ไปรอผลงานเก่าแทน — ต้องบอกผู้ใช้
+      // ตรงๆ กันเข้าใจผิดว่าราคาที่ได้ท้ายสุดคือของรอบที่เพิ่งกด (อาจเป็นราคาจากรอบก่อนหน้า
+      // ที่ scope ต่างกัน เช่นกดตอนแท็บ Dow ขณะแท็บ SP500 ยังดึงไม่เสร็จ)
+      if (res.status === 'running' && btn) {
+        btn.textContent = '⏳ มีงานอัพเดทค้างอยู่ กำลังรอผล...';
+      }
+      _hmLiveUpdatePoll(region, btn, idleLabel, onDone);
+    })
     .catch(e => {
       if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
       alert('อัพเดทราคา Live ไม่สำเร็จ: ' + e.message);
@@ -8488,10 +8503,13 @@ const HM_CFG = {
   from_52wh: { getV:s=>s.high_52w>0?(s.price-s.high_52w)/s.high_52w*100:null, clr:v=>_heatColor(v,40), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>16?'#fff':'var(--text)', hint:'เขียว = ใกล้/ทำ 52W High · แดง = ห่างจาก 52W High มาก' },
   ath_dist:  { getV:s=>s.ath_pct??null, clr:v=>_heatColor(v,50), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>20?'#fff':'var(--text)', hint:'เขียว = ใกล้/ทำ ATH · แดง = ห่างจาก All-Time High มาก (คำนวณจากข้อมูลที่โหลด)' },
   // ราคาระหว่างวันที่ยังไม่ปิด (pre-market/กำลังเทรด) — มีเฉพาะ US/HK/JP heatmap หลังกด
-  // "⚡ อัพเดทราคา" (ดู _run_heatmap_live_update ใน app.py) หุ้นที่ไม่มี live_chg (ตลาดปิด/
-  // ยังไม่เคยกดปุ่ม) จะไม่ขึ้นกล่อง (_hmCmp ดันไปท้ายสุด) — ไอคอน ⚡ ใน fmt ทำหน้าที่
-  // "แทนที่ตัวเลข % เดิม" ในกล่องไปเลยเวลาเลือก metric นี้ ไม่ต้องมี logic แยกใน _hmGridCellHtml
-  live_chg:  { getV:s=>s.live_chg, clr:v=>_heatColor(v,15), fmt:v=>'⚡'+(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'⚡ avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>6?'#fff':'var(--text)', hint:'⚡ ราคา Live ระหว่างวัน (ยังไม่ปิดตลาด) เขียว = ขึ้น · แดง = ลง — กด "⚡ อัพเดทราคา" เพื่อดึงล่าสุด' },
+  // "⚡ อัพเดทราคา" (ดู _run_heatmap_live_update ใน app.py) ถ้าตลาดปิดไปแล้ว/ยังไม่เคยกดปุ่ม
+  // (live_chg เป็น null) fallback ไปใช้ ret_1d (% ปิดของวัน) แทน แทนที่จะโชว์ "—" ว่างเปล่า —
+  // ทำ fallback ที่ getV เลย (ไม่ใช่แค่ตอน format) เพื่อให้ sort/สีพื้น/ค่าเฉลี่ยต่อ sector
+  // (ดู _hmGridHtml) ใช้ค่าเดียวกับที่โชว์ในกล่องเสมอ ไม่ใช่ sort ด้วย live_chg (null สุดท้าย)
+  // แต่โชว์ ret_1d — ส่วนไอคอน ⚡ ตัดออกตอน fallback (ดู _hmGridCellHtml) กันเข้าใจผิดว่าเป็น
+  // ราคาสด ทั้งที่จริงคือราคาปิดของวัน
+  live_chg:  { getV:s=>s.live_chg!=null?s.live_chg:s.ret_1d, clr:v=>_heatColor(v,15), fmt:v=>'⚡'+(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'⚡ avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>6?'#fff':'var(--text)', hint:'⚡ ราคา Live ระหว่างวัน (ยังไม่ปิดตลาด) เขียว = ขึ้น · แดง = ลง — ปุ่ม "👁 Live" นี้แค่เปลี่ยนมุมมอง ไม่ได้ดึงข้อมูลใหม่ ต้องกด "⚡ อัพเดทราคา"/"⚡ รีเฟรช" ด้านบนก่อนทุกครั้งที่ต้องการราคาล่าสุด · ตลาดปิดแล้วจะโชว์ % ปิดของวันแทน' },
 };
 
 function renderHeatmap() {
@@ -12659,7 +12677,7 @@ function _hmOpenTradingView() {
 }
 
 function usHmLiveUpdate() {
-  _hmLiveUpdate('US', document.getElementById('hm-refresh-btn'), '⚡ อัพเดทราคา', () => loadHeatmapPage(true));
+  _hmLiveUpdate('US', document.getElementById('hm-refresh-btn'), '⚡ อัพเดทราคา', () => loadHeatmapPage(true), _hmIndex);
 }
 
 function setHeatmapIndex(idx, btn) {
@@ -12790,7 +12808,13 @@ function _hmColor(chg) {
 function _hmGridCellHtml(r, cfgKey, search, popupFn) {
   const cfg = HM_CFG[cfgKey] || HM_CFG.ret_1d;
   const v = cfg.getV(r);
-  const lbl = v != null ? cfg.fmt(v) : '—';
+  let lbl = v != null ? cfg.fmt(v) : '—';
+  // เมตริก "⚡ Live" fallback ไปโชว์ ret_1d ตอนไม่มี live_chg จริง (ตลาดปิด/ยังไม่กดปุ่ม —
+  // ดู getV ใน HM_CFG.live_chg) ตัดไอคอน ⚡ ออกตอน fallback กันเข้าใจผิดว่าเป็นราคาสด
+  // ทั้งที่จริงคือ % ปิดของวันปกติ
+  if (cfgKey === 'live_chg' && v != null && r.live_chg == null) {
+    lbl = (v > 0 ? '+' : '') + v.toFixed(2) + '%';
+  }
   const dim = search && !r.symbol.toLowerCase().includes(search) && !(r.name || '').toLowerCase().includes(search);
   return `<div class="hm-cell" onclick="${popupFn}(event,'${r.symbol}')"
     title="${(r.name || '').replace(/"/g, '&quot;')} (${r.symbol}): ${lbl}"
@@ -12911,7 +12935,7 @@ function _hkHmOpenTradingView() {
 }
 
 function hkHmLiveUpdate() {
-  _hmLiveUpdate('HK', document.getElementById('hk-hm-refresh-btn'), '⚡ รีเฟรช', () => loadHkHeatmapPage(true));
+  _hmLiveUpdate('HK', document.getElementById('hk-hm-refresh-btn'), '⚡ รีเฟรช', () => loadHkHeatmapPage(true), _hkHmIndex);
 }
 
 function setHkHeatmapIndex(idx, btn) {
@@ -16552,7 +16576,14 @@ function drQuickUpdate() {
 
   fetch('/api/dr-quick-update', { method: 'POST' })
     .then(r => r.json())
-    .then(() => {
+    .then(res => {
+      // status "running" = มีงาน DR quick-update ค้างอยู่แล้วจากที่อื่น (เช่นปุ่ม "⚡ Quick
+      // Update" หลักที่ยิง /api/dr-quick-update คู่กันอัตโนมัติทุกครั้ง — ดู startQuickUpdate())
+      // ปุ่มนี้เลยไม่ได้เริ่มงานใหม่ตามที่กด แค่ไปรอผลรอบเก่าแทน ต้องบอกผู้ใช้ตรงๆ กันเข้าใจผิด
+      // ว่าราคาที่ได้ท้ายสุดคือของรอบที่เพิ่งกด
+      if (res.status === 'running' && btn) {
+        btn.textContent = '⏳ มีงานอัปเดตค้างอยู่ กำลังรอผล...';
+      }
       const poll = setInterval(() => {
         fetch('/api/dr-quick-status').then(r => r.json()).then(s => {
           if (!s.running) {

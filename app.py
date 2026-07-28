@@ -799,9 +799,16 @@ def dr_quick_update():
             cached_stocks = (cached or {}).get("stocks", [])
             last_dates_dr = [s["dates"][-1] for s in cached_stocks if s.get("dates")]
             if last_dates_dr:
-                from datetime import date as _date, timedelta as _td
+                # ไม่ +1 วัน — ต้อง include แท่งล่าสุดที่เก็บไว้แล้วซ้ำ (overlap) ด้วย ไม่งั้น
+                # Yahoo คืนมาว่างเปล่า 0 แถวเสมอเวลา start=วันนี้ (ยืนยันแล้วว่า yf.download
+                # กับ start=today ไม่คืนอะไรเลยแม้ตลาดกำลังเทรดอยู่) เดิม +1 วันทำให้ start
+                # กลายเป็น "วันนี้" ทุกครั้ง (เพราะ min_last_dr ค้างที่ "เมื่อวาน" เสมอ — ไม่มี
+                # แท่งวันนี้ให้ขยับต่อ) → raw ว่างตลอด → ทุก ticker เข้า len(close)<2 แล้ว skip
+                # ทั้งหมด → ราคา DR ไม่อัพเดทเลยไม่ว่าจะกดกี่รอบ (นี่คือสาเหตุที่ผู้ใช้รายงานว่า
+                # DR/DRx กดอัพเดทแล้วข้อมูลเดิม) ดู logic เดียวกันใน _run_index_gap_update (app.py)
+                # ที่ทำถูกอยู่แล้วสำหรับ Heatmap US/HK/JP
                 min_last_dr = min(last_dates_dr)
-                start_dr = (pd.to_datetime(min_last_dr) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+                start_dr = pd.to_datetime(min_last_dr).strftime("%Y-%m-%d")
                 dl_kwargs = {"start": start_dr}
                 print(f"[DR quick] gap fetch from {start_dr}")
             else:
@@ -1040,7 +1047,7 @@ def _run_us_index_full_refresh():
         print(f"[US Index] metrics build error: {e}")
 
 
-def _run_index_gap_update(membership, store, region, label, progress_cb=None, sleep_s=0.3):
+def _run_index_gap_update(membership, store, region, label, progress_cb=None, sleep_s=0.3, index_key=None):
     """ดึงเฉพาะวันที่ขาดของสมาชิกดัชนี (gap-update, เร็ว) ต่างจาก full-refresh ที่ดึง
     ย้อนหลังสูงสุดทั้งประวัติ (ใช้เฉพาะกดมือ) ใช้จาก Quick Update ประจำวัน — คืนจำนวน
     ticker ที่อัพเดทสำเร็จ
@@ -1052,12 +1059,19 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
     sleep_s — เวลาพักระหว่าง batch ที่ยิง Yahoo (ส่งต่อให้ fetch_gap_batch/fetch_all_batch)
     default 0.3 วิ (เหมือนเดิม) ตัวเรียกที่ universe ใหญ่และอาจถูกกดถี่ (เช่นปุ่ม Live ของ
     Heatmap US ~518 ticker) ควรส่งค่าสูงกว่านี้กัน Yahoo rate-limit/แบน — ดู
-    _run_heatmap_live_update"""
+    _run_heatmap_live_update
+
+    index_key — ถ้าระบุ (เช่น "DOW") จะดึงเฉพาะสมาชิกของดัชนีย่อยนั้น แทนที่จะเป็น union
+    ทั้งหมดของ membership (all_tickers) — ใช้ตอนผู้ใช้กดปุ่ม Live ของ Heatmap ขณะดูแค่แท็บ
+    ดัชนีย่อยเดียว (เช่น Dow 30 ตัว) ไม่ต้องรอไล่ยิง Yahoo ทั้ง ~518 ตัวของ US ทุกครั้ง"""
     from sources.yahoo import fetch_all_batch, fetch_gap_batch
     from sources.dr_universe import is_latest_bar_stable, region_today_date
     from services.refresh import detect_ca_mismatch, _repair_ca_tickers
 
-    tickers = membership.all_tickers(BASE_DIR)
+    if index_key:
+        tickers = sorted(set(membership.load_local(BASE_DIR).get(index_key, [])))
+    else:
+        tickers = membership.all_tickers(BASE_DIR)
     if not tickers:
         return 0, {}
 
@@ -1128,16 +1142,65 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
                         data[t][k] = s.iloc[:-1]
                 if len(data[t]["close"]) == 0:
                     del data[t]
+    elif is_latest_bar_stable(region):
+        # ตลาดปิดไปแล้วจริง (พ้นช่วง buffer) แต่บางครั้ง Yahoo ยังไม่เติมช่อง Close ของแท่ง
+        # รายวันล่าสุดให้ (เจอจริง 28 ก.ค. 2026 — หุ้นญี่ปุ่นทั้งกระดาน 225 ตัว มี Open/High/
+        # Low/Volume ครบ แต่ Close เป็น NaN ทั้งวันแม้ผ่านมา 10+ ชม. — fetch_gap_batch/
+        # _extract_ohlcav (sources/yahoo.py) dropna() ทิ้งแท่งนั้นไปทั้งแท่ง) ราคาปิดทางการ
+        # ยังไม่มา แต่ Yahoo มีข้อมูลเทรดจริงรายนาที (ยืนยันด้วย yf.Ticker().history(interval=
+        # '1m') ตอน debug) — กู้ราคาล่าสุดจาก intraday 1m มาโชว์เป็น live_price แทน (ไม่บันทึก
+        # ลง DB ถาวรเพราะอาจไม่ตรงเป๊ะกับตัวเลขทางการที่ Yahoo จะเติมย้อนหลังทีหลัง)
+        from datetime import timedelta
+        today = region_today_date(region)
+        if today is not None:
+            expected = today
+            while expected.weekday() >= 5:   # เสาร์=5, อาทิตย์=6 — ย้อนหาวันทำการล่าสุด
+                expected -= timedelta(days=1)
+            stale = []
+            for t in tickers:
+                close = data.get(t, {}).get("close")
+                last_date = close.index[-1].date() if close is not None and len(close) else None
+                if last_date is None or last_date < expected:
+                    stale.append(t)
+            if stale:
+                print(f"[{label}] {len(stale)} ticker ราคาปิดล่าสุด stale (Yahoo ยังไม่เติม Close) "
+                      f"— ลอง fallback ดึง intraday 1m")
+                import yfinance as yf
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                def _intraday_last_close(tick):
+                    try:
+                        h = yf.Ticker(tick).history(period="5d", interval="1m")
+                        if h is None or not len(h):
+                            return tick, None
+                        h = h.dropna(subset=["Close"])
+                        return (tick, float(h["Close"].iloc[-1])) if len(h) else (tick, None)
+                    except Exception:
+                        return tick, None
+
+                with ThreadPoolExecutor(max_workers=8) as ex:
+                    futures = [ex.submit(_intraday_last_close, t) for t in stale]
+                    for f in as_completed(futures):
+                        tick, live_price = f.result()
+                        if live_price is None:
+                            continue
+                        prev_close = data.get(tick, {}).get("close")
+                        prev_price = float(prev_close.iloc[-1]) if prev_close is not None and len(prev_close) else None
+                        if prev_price:
+                            live_map[tick] = {
+                                "live_price": round(live_price, 4),
+                                "live_chg": round((live_price - prev_price) / prev_price * 100, 2),
+                            }
 
     if data:
         store.upsert_bars(BASE_DIR, data)
     return len(data), live_map
 
 
-def _run_us_index_gap_update(progress_cb=None, sleep_s=0.3):
+def _run_us_index_gap_update(progress_cb=None, sleep_s=0.3, index_key=None):
     from sources import us_index_membership
     from core import us_store
-    return _run_index_gap_update(us_index_membership, us_store, "US", "US Index", progress_cb, sleep_s=sleep_s)
+    return _run_index_gap_update(us_index_membership, us_store, "US", "US Index", progress_cb, sleep_s=sleep_s, index_key=index_key)
 
 
 @app.route("/api/us-index-metrics")
@@ -1230,10 +1293,10 @@ def _run_hk_index_full_refresh():
         print(f"[HK Index] metrics build error: {e}")
 
 
-def _run_hk_index_gap_update(progress_cb=None):
+def _run_hk_index_gap_update(progress_cb=None, index_key=None):
     from sources import hk_index_membership
     from core import hk_store
-    return _run_index_gap_update(hk_index_membership, hk_store, "HK", "HK Index", progress_cb)
+    return _run_index_gap_update(hk_index_membership, hk_store, "HK", "HK Index", progress_cb, index_key=index_key)
 
 
 @app.route("/api/hk-index-metrics")
@@ -3463,21 +3526,27 @@ _HM_LIVE_STATE = {
     "JP": {"running": False, "error": None, "done": False},
 }
 
+# ดัชนีย่อยที่ยอมให้กรอง (query param ?index=) ต่อ region — ใช้ตอนผู้ใช้กดปุ่ม Live ขณะ
+# ดูอยู่แค่แท็บเดียว (เช่น Dow 30 ตัว) จะได้ไม่ต้องไล่ยิง Yahoo ทั้ง union ของ region นั้น
+# ทุกครั้ง (US ~518 ตัว, HK ~105 ตัว) — JP มีดัชนีเดียว (Nikkei 225) ไม่ต้องกรอง
+_HM_REGION_INDEXES = {"US": ("SP500", "DOW", "NDX"), "HK": ("HSI", "HSCEI", "HSTECH"), "JP": ()}
 
-def _run_heatmap_live_update(region):
+
+def _run_heatmap_live_update(region, index_key=None):
     state = _HM_LIVE_STATE[region]
     try:
         if region == "US":
             # S&P500+Dow+NDX รวมกัน ~518 ticker (union ไม่ซ้ำ) — universe ใหญ่กว่า HK/JP
             # หลายเท่า และปุ่มนี้ผู้ใช้กดเองได้ถี่กว่า Quick Update ประจำวันมาก จึงต้องพัก
             # ระหว่าง batch นานขึ้น (1.5 วิ แทน 0.3 วิ default) กัน Yahoo rate-limit/แบน —
-            # HK (~105 ตัว) และ JP (~225 ตัว) ยังน้อยพอที่จะใช้ค่า default ปกติได้
-            n, live_map = _run_us_index_gap_update(sleep_s=1.5)
+            # HK (~105 ตัว) และ JP (~225 ตัว) ยังน้อยพอที่จะใช้ค่า default ปกติได้ ถ้าผู้ใช้
+            # ระบุ index_key (เช่น ดูแค่แท็บ Dow) จะดึงเฉพาะ 30 ตัวนั้นแทนทั้ง union — เร็วขึ้นมาก
+            n, live_map = _run_us_index_gap_update(sleep_s=1.5, index_key=index_key)
             from sources import us_index_metrics as mod
             mod.build(BASE_DIR, live_map=live_map)
             _us_breadth_cache.clear()
         elif region == "HK":
-            n, live_map = _run_hk_index_gap_update()
+            n, live_map = _run_hk_index_gap_update(index_key=index_key)
             from sources import hk_index_metrics as mod
             mod.build(BASE_DIR, live_map=live_map)
             _hk_breadth_cache.clear()
@@ -3486,7 +3555,24 @@ def _run_heatmap_live_update(region):
             from sources import jp_index_metrics as mod
             mod.build(BASE_DIR, live_map=live_map)
         state["done"] = True
-        print(f"[Heatmap live] {region}: gap-updated {n} ticker, {len(live_map)} live price")
+        idx_note = f" (index={index_key})" if index_key else ""
+        print(f"[Heatmap live] {region}: gap-updated {n} ticker, {len(live_map)} live price{idx_note}")
+        # ตลาดยังเปิดอยู่ (ควรได้ live_map) แต่ได้ราคาสดมาน้อยผิดปกติหรือ 0 ตัว — เกิดจาก Yahoo
+        # rate-limit/บล็อกบางส่วนหรือทั้ง batch เงียบๆ (fetch_gap_batch/fetch_all_batch แค่ print
+        # error แล้วข้ามไป ไม่ raise) เดิม build() จะ merge เท่าที่มีใน live_map เข้าไป ตัวที่ไม่ติด
+        # จะไม่มี live_price/live_chg เลย หน้า Heatmap เลย fallback ไปโชว์ ret_1d เหมือนเดิมแบบ
+        # เงียบๆ ทำให้ผู้ใช้เข้าใจผิดว่า "กดแล้วราคาไม่อัพเดท" ทั้งที่จริงคือ Yahoo ปฏิเสธไปบางส่วน/
+        # ทั้งหมด — ต้อง surface เป็น error ให้ผู้ใช้เห็นแทนที่จะเงียบ (เกณฑ์ <20% ของที่ดึงได้จริง
+        # กันเคส false-positive ตอนตลาดเพิ่งเปิดไม่กี่นาทีที่บาง ticker ยังไม่มีแท่งของวันนี้)
+        if not is_latest_bar_stable(region):
+            if n == 0:
+                state["error"] = ("ตลาดยังเปิดอยู่แต่ดึงราคาจาก Yahoo ไม่ได้เลยสักตัว — Yahoo Finance "
+                                   "อาจ rate-limit ชั่วคราว (กดถี่เกินไป) หรือเน็ตมีปัญหา "
+                                   "ลองรอสัก 1-2 นาทีแล้วกดใหม่")
+            elif len(live_map) < n * 0.2:
+                state["error"] = (f"ตลาดยังเปิดอยู่แต่ได้ราคา Live แค่ {len(live_map)}/{n} ตัว — "
+                                   "Yahoo Finance น่าจะ rate-limit บางส่วน หุ้นที่เหลือจะโชว์ % ปิด"
+                                   "เมื่อวานแทนราคาสด ลองรอสัก 1-2 นาทีแล้วกดใหม่")
     except Exception as e:
         state["error"] = str(e)
         print(f"[Heatmap live] {region} ERROR: {e}")
@@ -3499,11 +3585,14 @@ def heatmap_live_update(region):
     region = region.upper()
     if region not in _HM_LIVE_STATE:
         return jsonify({"error": "region ต้องเป็น US, HK หรือ JP เท่านั้น"}), 400
+    index_key = (request.args.get("index") or "").upper() or None
+    if index_key not in _HM_REGION_INDEXES.get(region, ()):
+        index_key = None   # ค่าที่ไม่รู้จัก/ไม่ส่งมา -> ดึงทั้ง union เหมือนเดิม
     state = _HM_LIVE_STATE[region]
     if state["running"]:
         return jsonify({"status": "running"})
     state.update(running=True, error=None, done=False)
-    threading.Thread(target=_run_heatmap_live_update, args=(region,), daemon=True).start()
+    threading.Thread(target=_run_heatmap_live_update, args=(region, index_key), daemon=True).start()
     return jsonify({"status": "started"})
 
 
