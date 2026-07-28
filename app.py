@@ -3555,6 +3555,12 @@ def _run_heatmap_live_update(region, index_key=None):
             from sources import jp_index_metrics as mod
             mod.build(BASE_DIR, live_map=live_map)
         state["done"] = True
+        # n_fetched/n_live — ให้ frontend โชว์ข้อความ "⚡ ราคาสด ณ HH:MM:SS · สำเร็จ N/M ตัว"
+        # แบบเดียวกับปุ่ม "⚡ ราคาล่าสุด" ของ Watchlist (ดู wlRefreshLivePrices ใน dashboard.js)
+        # M = n (จำนวน ticker ที่ gap-update ได้จริงรอบนี้ — ตาม scope index_key ที่ขอ),
+        # N = len(live_map) (ในนั้นกี่ตัวที่ได้ราคาสด ไม่ใช่แค่ราคาปิดเก่า)
+        state["n_fetched"] = n
+        state["n_live"] = len(live_map)
         idx_note = f" (index={index_key})" if index_key else ""
         print(f"[Heatmap live] {region}: gap-updated {n} ticker, {len(live_map)} live price{idx_note}")
         # ตลาดยังเปิดอยู่ (ควรได้ live_map) แต่ได้ราคาสดมาน้อยผิดปกติหรือ 0 ตัว — เกิดจาก Yahoo
@@ -3591,7 +3597,7 @@ def heatmap_live_update(region):
     state = _HM_LIVE_STATE[region]
     if state["running"]:
         return jsonify({"status": "running"})
-    state.update(running=True, error=None, done=False)
+    state.update(running=True, error=None, done=False, n_fetched=None, n_live=None)
     threading.Thread(target=_run_heatmap_live_update, args=(region, index_key), daemon=True).start()
     return jsonify({"status": "started"})
 

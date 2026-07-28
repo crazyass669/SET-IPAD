@@ -8432,7 +8432,7 @@ function _hmCmp(getV, dir) {
 // ของดัชนีนั้น แทนที่จะกด gap-update ทั้ง union ของ region (US ~518 ตัว, HK ~105 ตัว) —
 // ไม่งั้นดูอยู่แค่แท็บ Dow (30 ตัว) แต่ต้องรอ Yahoo ทั้ง 518 ตัวเหมือนเดิมทุกครั้ง (JP ไม่มี
 // ดัชนีย่อยให้เลือกอยู่แล้ว เลยไม่ส่ง)
-function _hmLiveUpdate(region, btn, idleLabel, onDone, indexKey) {
+function _hmLiveUpdate(region, btn, idleLabel, onDone, indexKey, noteId) {
   if (btn) { btn.disabled = true; btn.textContent = '⚡ กำลังดึงราคา Live...'; }
   const qs = indexKey ? `?index=${encodeURIComponent(indexKey)}` : '';
   fetch(`/api/heatmap-live-update/${region}${qs}`, { method: 'POST' })
@@ -8445,7 +8445,7 @@ function _hmLiveUpdate(region, btn, idleLabel, onDone, indexKey) {
       if (res.status === 'running' && btn) {
         btn.textContent = '⏳ มีงานอัพเดทค้างอยู่ กำลังรอผล...';
       }
-      _hmLiveUpdatePoll(region, btn, idleLabel, onDone);
+      _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId);
     })
     .catch(e => {
       if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
@@ -8453,14 +8453,29 @@ function _hmLiveUpdate(region, btn, idleLabel, onDone, indexKey) {
     });
 }
 
-function _hmLiveUpdatePoll(region, btn, idleLabel, onDone) {
+function _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId) {
   fetch(`/api/heatmap-live-status/${region}`)
     .then(r => r.json())
     .then(st => {
-      if (st.running) { setTimeout(() => _hmLiveUpdatePoll(region, btn, idleLabel, onDone), 1500); return; }
+      if (st.running) { setTimeout(() => _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId), 1500); return; }
       if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
       if (st.error) { alert('อัพเดทราคา Live ไม่สำเร็จ: ' + st.error); return; }
-      onDone();
+      // ต่อท้าย note เดิม (ที่ loadHeatmapPage/loadHkHeatmapPage/loadJpHeatmapPage เซ็ตตอน
+      // โหลดข้อมูลใหม่เสร็จ) ด้วยสรุปผลรอบ live-update นี้ — แบบเดียวกับปุ่ม "⚡ ราคาล่าสุด"
+      // ของ Watchlist (ดู wlRefreshLivePrices) ต้องรอ onDone() (โหลด/render ข้อมูลใหม่เสร็จ
+      // ก่อน — มัน return promise ของ fetch เอง) ไม่งั้น note จะถูกเขียนทับด้วย "ข้อมูล ณ ..."
+      // ของมันทีหลัง
+      const p = onDone();
+      if (noteId && st.n_fetched != null) {
+        const appendNote = () => {
+          const note = document.getElementById(noteId);
+          if (note) {
+            const time = new Date().toLocaleTimeString('th-TH');
+            note.textContent += ` · ราคาสด ณ ${time} · สำเร็จ ${st.n_live}/${st.n_fetched} ตัว`;
+          }
+        };
+        if (p && typeof p.then === 'function') p.then(appendNote); else appendNote();
+      }
     });
 }
 
@@ -12677,7 +12692,7 @@ function _hmOpenTradingView() {
 }
 
 function usHmLiveUpdate() {
-  _hmLiveUpdate('US', document.getElementById('hm-refresh-btn'), '⚡ อัพเดทราคา', () => loadHeatmapPage(true), _hmIndex);
+  _hmLiveUpdate('US', document.getElementById('hm-refresh-btn'), '⚡ อัพเดทราคา', () => loadHeatmapPage(true), _hmIndex, 'hm-note');
 }
 
 function setHeatmapIndex(idx, btn) {
@@ -12707,7 +12722,7 @@ function loadHeatmapPage(forceRefresh = false) {
   if (forceRefresh && btn) { btn.disabled = true; btn.textContent = '⚡ กำลังอัพเดท...'; }
   box.innerHTML = `<div id="hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
   note.textContent = '';
-  fetch(`/api/us-index-heatmap?index=${_hmIndex}`)
+  return fetch(`/api/us-index-heatmap?index=${_hmIndex}`)
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -12935,7 +12950,7 @@ function _hkHmOpenTradingView() {
 }
 
 function hkHmLiveUpdate() {
-  _hmLiveUpdate('HK', document.getElementById('hk-hm-refresh-btn'), '⚡ รีเฟรช', () => loadHkHeatmapPage(true), _hkHmIndex);
+  _hmLiveUpdate('HK', document.getElementById('hk-hm-refresh-btn'), '⚡ รีเฟรช', () => loadHkHeatmapPage(true), _hkHmIndex, 'hk-hm-note');
 }
 
 function setHkHeatmapIndex(idx, btn) {
@@ -12965,7 +12980,7 @@ function loadHkHeatmapPage(forceRefresh = false) {
   if (forceRefresh && btn) { btn.disabled = true; btn.textContent = '⚡ กำลังอัพเดท...'; }
   box.innerHTML = `<div id="hk-hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
   note.textContent = '';
-  fetch(`/api/hk-index-heatmap?index=${_hkHmIndex}`)
+  return fetch(`/api/hk-index-heatmap?index=${_hkHmIndex}`)
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -13051,7 +13066,7 @@ let _jpHmData = null;      // {rows,ts,requested,missing}
 let _jpHmPopupSym = null;
 
 function jpHmLiveUpdate() {
-  _hmLiveUpdate('JP', document.getElementById('jp-hm-refresh-btn'), '⚡ รีเฟรช', () => loadJpHeatmapPage(true));
+  _hmLiveUpdate('JP', document.getElementById('jp-hm-refresh-btn'), '⚡ รีเฟรช', () => loadJpHeatmapPage(true), null, 'jp-hm-note');
 }
 
 function setJpHeatmapPeriod(period, btn) {
@@ -13074,7 +13089,7 @@ function loadJpHeatmapPage(forceRefresh = false) {
   if (forceRefresh && btn) { btn.disabled = true; btn.textContent = '⚡ กำลังอัพเดท...'; }
   box.innerHTML = `<div id="jp-hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
   note.textContent = '';
-  fetch('/api/jp-index-heatmap')
+  return fetch('/api/jp-index-heatmap')
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
