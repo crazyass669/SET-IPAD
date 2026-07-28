@@ -12,12 +12,15 @@ Pattern เดียวกับ sources/sec_store.py: DB แยกไฟล์�
 import json
 import math
 import os
+import random
 import re
 import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+
+import requests
 
 from sources.set_api import _bootstrap_headers, _get_json
 from sources.dr_universe import _DR_STATIC, load_dr_universe
@@ -336,7 +339,7 @@ def _df_to_dict_full(df):
     return out
 
 
-def fetch_yahoo_full(symbol, is_dr=False, market=None):
+def fetch_yahoo_full(symbol, is_dr=False, market=None, session=None):
     """ดึงงบการเงินเต็มทุก field จาก Yahoo Finance — คืน dict พร้อมเก็บลง DB
 
     is_dr=True บอกชัดเจนว่า symbol นี้มาจาก universe หุ้นต่างประเทศ (DR) — ต้องระบุ
@@ -345,7 +348,13 @@ def fetch_yahoo_full(symbol, is_dr=False, market=None):
 
     market: ใช้เดา yf ticker เฉพาะตอน is_dr=True แต่ symbol ไม่อยู่ใน DR universe ที่
     curate ไว้ (หุ้น mirror US/HK ทั่วไป) — ไม่งั้นจะพลาดไปดึงเป็นหุ้นไทย .BK (ดู
-    resolve_yf_ticker ใน dr_descriptions.py ที่ใช้ logic เดียวกัน)"""
+    resolve_yf_ticker ใน dr_descriptions.py ที่ใช้ logic เดียวกัน)
+
+    session: ใส่ requests.Session() ร่วมกันตอนยิงหลาย ticker พร้อมกัน (เช่น
+    sync_mirror_yahoo_index) เพื่อให้ crumb/cookie ใช้ซ้ำชุดเดียว — ไม่งั้น yf.Ticker()
+    เปล่าแต่ละครั้งจะขอ crumb ใหม่ของตัวเอง ยิ่งยิง thread ขนานเยอะยิ่งโดน Yahoo
+    มองว่าผิดปกติแล้วเพิกถอน crumb ทั้ง IP (ดู fetch_market_caps_parallel ใน
+    sources/yahoo.py ที่ใช้ pattern นี้อยู่แล้ว)"""
     import yfinance as yf
 
     sym = symbol.upper().strip()
@@ -363,7 +372,7 @@ def fetch_yahoo_full(symbol, is_dr=False, market=None):
     else:
         yf_ticker, stock_type, stock_name = sym + ".BK", "set", sym
 
-    t = yf.Ticker(yf_ticker)
+    t = yf.Ticker(yf_ticker, session=session)
 
     income = {}
     for attr in ("income_stmt", "financials"):
@@ -398,13 +407,14 @@ def fetch_yahoo_full(symbol, is_dr=False, market=None):
     }
 
 
-def fetch_yahoo_quarterly(symbol, is_dr=False, market=None):
+def fetch_yahoo_quarterly(symbol, is_dr=False, market=None, session=None):
     """ดึงงบการเงิน 'รายไตรมาส' เต็มทุก field จาก Yahoo — โครงสร้างเดียวกับ fetch_yahoo_full
     (section -> field -> {วันสิ้นงวด: ค่า}) เก็บใต้ source 'yahoo_q' และ merge สะสม
     ได้ด้วยกลไกเดิม — Yahoo ให้ครั้งละ ~5-6 ไตรมาส สะสมทุกรอบ sync ประวัติจะยาวขึ้นเอง
     หมายเหตุ: HK/EU รายงานครึ่งปีตามกฎตลาด, JP มักได้ไม่ครบ — ได้เท่าที่ตลาดนั้นมีจริง
 
-    market: ดูคอมเมนต์ใน fetch_yahoo_full — เดา yf ticker ตอนไม่อยู่ใน DR universe"""
+    market: ดูคอมเมนต์ใน fetch_yahoo_full — เดา yf ticker ตอนไม่อยู่ใน DR universe
+    session: ดูคอมเมนต์ session ใน fetch_yahoo_full — ใส่ตอนยิงหลาย ticker พร้อมกัน"""
     import yfinance as yf
 
     sym = symbol.upper().strip()
@@ -420,7 +430,7 @@ def fetch_yahoo_quarterly(symbol, is_dr=False, market=None):
     else:
         yf_ticker, stock_type, stock_name = sym + ".BK", "set", sym
 
-    t = yf.Ticker(yf_ticker)
+    t = yf.Ticker(yf_ticker, session=session)
 
     income = {}
     for attr in ("quarterly_income_stmt", "quarterly_financials"):
@@ -447,12 +457,13 @@ def fetch_yahoo_quarterly(symbol, is_dr=False, market=None):
     }
 
 
-def fetch_dividends(sym, market=None):
+def fetch_dividends(sym, market=None, session=None):
     """ดึงประวัติปันผล (ex-date -> DPS) จาก yfinance ย้อนสูงสุดที่ Yahoo มี (มักเกิน 20 ปี
     สำหรับหุ้นไทย) — ใช้ ticker เดียวกับ resolve_yf_ticker (dr_descriptions.py) เพื่อให้
     TH/US/HK resolve เป็น ticker เดียวกับที่หน้าอื่นในโปรเจกต์ใช้อยู่แล้ว
     yfinance ปรับ dividends ตาม split ให้อัตโนมัติแล้ว (ต่างจาก EPS ของ Finnomena ที่ไม่ปรับ
     — ดูคอมเมนต์ใน dividend_stats.py ตอนคำนวณ payout ratio)
+    session: ดูคอมเมนต์ session ใน fetch_yahoo_full — ใส่ตอนยิงหลาย ticker พร้อมกัน
     คืน list [{ "ex_date": "YYYY-MM-DD", "dps": float }, ...] เรียงตามวันที่"""
     import yfinance as yf
     from sources.dr_descriptions import resolve_yf_ticker
@@ -462,7 +473,7 @@ def fetch_dividends(sym, market=None):
     if not yf_ticker:
         yf_ticker = sym + ".BK"
 
-    series = yf.Ticker(yf_ticker).dividends
+    series = yf.Ticker(yf_ticker, session=session).dividends
     if series is None or series.empty:
         return []
     out = []
@@ -1473,6 +1484,79 @@ def mirror_finnomena(base_dir, exchanges=("TH", "HK", "US"), limit=None,
     return {"ok": ok, "empty": empty, "fail": fail, "total": total}
 
 
+def _new_yahoo_session():
+    """requests.Session() เดียวใช้ร่วมกันทุก thread ในหนึ่งรอบ batch sync — yfinance ต้องขอ
+    'crumb' (token คู่กับ cookie) ก่อนยิง query จริงทุกครั้ง ถ้าไม่ reuse session แต่ละ
+    thread/ticker จะขอ crumb ของตัวเอง ยิ่งยิงขนานเยอะยิ่งเพิ่มโอกาสโดน Yahoo มองว่า
+    ผิดปกติแล้วเพิกถอน crumb ทั้ง IP (ต้นเหตุ HTTP 401 "Invalid Crumb" ที่เจอบ่อยตอน sync ก้อนใหญ่)"""
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    })
+    return session
+
+
+def _is_yahoo_throttle_err(e):
+    s = str(e).lower()
+    return "429" in s or "401" in s or "crumb" in s or "rate" in s or "too many" in s
+
+
+class _YahooThrottle:
+    """สถานะ throttle ร่วมข้าม thread ของ batch sync เดียว (คู่กับ session จาก
+    _new_yahoo_session) — คนละก้อนต่อการเรียก sync_mirror_yahoo_index/sync_all/
+    sync_dividends_batch แต่ละครั้ง ห้าม share ข้าม batch เพราะ cooldown ควรผูกกับ
+    session/รอบนั้นๆ เท่านั้น"""
+
+    def __init__(self, consec_fail_limit=15, cooldown_s=60):
+        self._lock = threading.Lock()
+        self._cooldown_until = 0.0
+        self._consec_fail = 0
+        self._consec_fail_limit = consec_fail_limit
+        self._cooldown_s = cooldown_s
+
+    def wait_if_cooling(self):
+        with self._lock:
+            wait_s = self._cooldown_until - time.time()
+        if wait_s > 0:
+            time.sleep(wait_s)
+
+    def _extend_cooldown(self, seconds):
+        with self._lock:
+            self._cooldown_until = max(self._cooldown_until, time.time() + seconds)
+
+    def call_with_backoff(self, fetch_fn, attempts=3):
+        """เรียก fetch_fn() พร้อม retry แบบ exponential backoff เฉพาะ error ที่เข้าข่าย
+        โดน Yahoo throttle (401/429/crumb/rate) — error อื่น (เช่น delisted/ไม่มีข้อมูลจริง)
+        โยนออกทันที ไม่ retry ให้เสียเวลาเปล่า"""
+        self.wait_if_cooling()
+        last_err = None
+        for attempt in range(attempts):
+            try:
+                return fetch_fn()
+            except Exception as e:
+                last_err = e
+                if not _is_yahoo_throttle_err(e):
+                    raise
+                backoff = (2 ** attempt) + random.uniform(1, 3)
+                self._extend_cooldown(backoff)
+                time.sleep(backoff)
+        raise last_err
+
+    def note_outcome(self, ok):
+        """เรียกจาก completion loop (single-threaded ผ่าน as_completed) หลังรู้ผลแต่ละตัว —
+        พลาดติดกันครบ limit ถือว่า Yahoo บล็อกทั้ง session แล้ว สั่งพักคิวทุก thread
+        (เดิมแค่ print เตือนแล้วยิงต่อรัว ทำให้พังยกชุดทั้งที่รู้อยู่แล้วว่าโดน rate-limit)"""
+        if ok:
+            self._consec_fail = 0
+            return
+        self._consec_fail += 1
+        if self._consec_fail >= self._consec_fail_limit:
+            print(f"[YahooThrottle] ล้มเหลวติดกัน {self._consec_fail_limit} ตัว — น่าจะโดน Yahoo "
+                  f"บล็อกทั้ง session แล้ว สั่งพักคิวทุก thread {self._cooldown_s}s ก่อนยิงต่อ")
+            self._extend_cooldown(self._cooldown_s)
+            self._consec_fail = 0
+
+
 def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, callback=None):
     """ดึงงบ Yahoo annual ('yahoo' source) ให้หุ้น mirror US/HK — เดิมจำกัดแค่สมาชิกดัชนีหลัก
     (S&P500+Dow+NDX / HSI+HSCEI+HSTECH) ตอนนี้ผู้เรียกส่ง ticker ทั้ง mirror universe
@@ -1489,8 +1573,12 @@ def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, call
     limit: จำกัดจำนวนตัวที่ sync ต่อรอบ (สุ่มก่อนตัด — pattern เดียวกับ sync_dividends_batch)
     กัน mirror ทั้งก้อนที่ยังไม่เคย sync เลยทำให้รอบแรกช้ามาก — ตัวที่เหลือ resume รอบถัดไปได้เอง
     เพราะเช็คจาก 'have' (source='yahoo') เสมอ ไม่ fetch ซ้ำตัวที่ sync แล้ว
+
+    หลบ rate-limit (Yahoo "Invalid Crumb" HTTP 401): session เดียวร่วมกันทุก thread (กัน
+    crumb ขอใหม่ถี่ๆ ต่อ ticker) + retry แบบ exponential backoff เฉพาะ error ที่เข้าข่ายโดน
+    throttle + circuit breaker พักคิวทั้ง batch ถ้าพลาดติดกันเยอะ — ดู _new_yahoo_session/
+    _YahooThrottle ด้านบน (ใช้ pattern เดียวกับ sync_all/sync_dividends_batch)
     คืน {"ok": n, "fail": n, "total": n, "skipped": n}"""
-    import random
     init_db(base_dir)
     con = _connect(base_dir)
     try:
@@ -1511,19 +1599,19 @@ def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, call
         todo = todo[:limit]
     total = len(todo)
     ok = fail = 0
-    consec_fail = 0
     gate = threading.Semaphore(3)
+    session = _new_yahoo_session()
+    throttle = _YahooThrottle()
 
     def _one(ex, name):
         with gate:
             try:
-                payload = fetch_yahoo_full(name, is_dr=True, market=ex)
-            except Exception:
-                time.sleep(1.0)
-                payload = fetch_yahoo_full(name, is_dr=True, market=ex)
+                def _fetch():
+                    payload = fetch_yahoo_full(name, is_dr=True, market=ex, session=session)
+                    upsert(base_dir, _mirror_key(ex, name), "yahoo", payload, is_dr=False)
+                throttle.call_with_backoff(_fetch)
             finally:
-                time.sleep(0.3)
-        upsert(base_dir, _mirror_key(ex, name), "yahoo", payload, is_dr=False)
+                time.sleep(0.3)   # throttle เบาๆ ทุก request กัน Yahoo บล็อก IP ตอน sync รวด
 
     done = 0
     with ThreadPoolExecutor(max_workers=workers) as ex_pool:
@@ -1534,15 +1622,11 @@ def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, call
             try:
                 f.result()
                 ok += 1
-                consec_fail = 0
+                throttle.note_outcome(True)
             except Exception as e:
                 fail += 1
-                consec_fail += 1
                 print(f"[MirrorYahooIndex] {ex}:{name} ล้มเหลว: {str(e)[:80]}")
-                if consec_fail >= 15:
-                    print("[MirrorYahooIndex] ล้มเหลวติดกัน 15 ตัว — เสี่ยงโดนบล็อคชั่วคราว "
-                          "แต่ยังปล่อยงานที่เหลือใน pool ทำต่อ (ไม่ hard-stop เหมือน mirror_finnomena "
-                          "เพราะ ThreadPoolExecutor ยิงคำขอออกไปพร้อมกันแล้ว)")
+                throttle.note_outcome(False)
             if callback and (done % 10 == 0 or done == total):
                 callback(done, total, f"Yahoo mirror index {done}/{total} | ok={ok} fail={fail}")
 
@@ -1571,7 +1655,6 @@ def sync_dividends_batch(base_dir, symbols_by_market, workers=4, min_age_days=30
     Throttle เบากว่า sync_mirror_yahoo_index (gate=2 ไม่ใช่ 3) เพราะ fetch_dividends เป็น
     endpoint yfinance คนละตัว (.dividends) ไม่เคยวัด rate-limit threshold มาก่อน — เผื่อไว้ก่อน
     คืน {"ok": n, "fail": n, "total": n, "skipped": n}"""
-    import random
     init_db(base_dir)
     con = _connect(base_dir)
     try:
@@ -1600,17 +1683,18 @@ def sync_dividends_batch(base_dir, symbols_by_market, workers=4, min_age_days=30
     total = len(todo)
     ok = fail = 0
     gate = threading.Semaphore(2)
+    session = _new_yahoo_session()
+    throttle = _YahooThrottle()
 
     def _one(market, sym):
         with gate:
             try:
-                rows = fetch_dividends(sym, market=market)
-            except Exception:
-                time.sleep(1.0)
-                rows = fetch_dividends(sym, market=market)
+                def _fetch():
+                    rows = fetch_dividends(sym, market=market, session=session)
+                    save_dividends(base_dir, sym, market, rows)
+                throttle.call_with_backoff(_fetch)
             finally:
                 time.sleep(0.3)
-        save_dividends(base_dir, sym, market, rows)
 
     done = 0
     with ThreadPoolExecutor(max_workers=workers) as ex_pool:
@@ -1621,9 +1705,11 @@ def sync_dividends_batch(base_dir, symbols_by_market, workers=4, min_age_days=30
             try:
                 f.result()
                 ok += 1
+                throttle.note_outcome(True)
             except Exception as e:
                 fail += 1
                 print(f"[DividendsBatch] {market}:{sym} ล้มเหลว: {str(e)[:80]}")
+                throttle.note_outcome(False)
             if callback and (done % 20 == 0 or done == total):
                 callback(done, total, f"Batch fetch ปันผล {done}/{total} | ok={ok} fail={fail}")
 
@@ -1651,8 +1737,9 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
     Yahoo throttle: จาก bulk sync จริง (930 หุ้น) พบว่า ~60% ของหุ้นที่ล้มเหลว
     เป็นเพราะโดน rate-limit ชั่วคราว ไม่ใช่ไม่มีข้อมูลจริง (สุ่มทดสอบซ้ำ 25 ตัวที่
     เคยล้มเหลวผ่านหมด 25/25) — จึงจำกัดจำนวน Yahoo request พร้อมกันแยกจาก
-    SET.or.th ด้วย semaphore + throttle หลังทุก request + retry 1 ครั้งถ้าล้มเหลว
-    (SET.or.th เจอปัญหานี้น้อยกว่ามาก เพราะ reuse cookie เดียวกันทุก request)"""
+    SET.or.th ด้วย semaphore + session ร่วม + retry แบบ exponential backoff + circuit
+    breaker (ดู _new_yahoo_session/_YahooThrottle — pattern เดียวกับ sync_mirror_yahoo_index/
+    sync_dividends_batch) (SET.or.th เจอปัญหานี้น้อยกว่ามาก เพราะ reuse cookie เดียวกันทุก request)"""
     init_db(base_dir)
     try:
         backup_db(base_dir)   # สำรอง DB แยกไว้อีกชุดก่อนเขียนชุดใหญ่ กันไฟล์เสียกลาง bulk sync
@@ -1695,16 +1782,16 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
 
     _yahoo_gate = threading.Semaphore(3)   # จำกัด Yahoo request พร้อมกันไม่เกิน 3 (แยกจาก SET.or.th)
     _finn_gate  = threading.Semaphore(2)   # Finnomena ไม่รู้เพดาน rate-limit — ยิงสุภาพไว้ก่อน
+    _yahoo_session = _new_yahoo_session()
+    _yahoo_throttle = _YahooThrottle()
 
     def _one(sym, src):
         if src in ("yahoo", "yahoo_q"):
             fetch = fetch_yahoo_full if src == "yahoo" else fetch_yahoo_quarterly
             with _yahoo_gate:
                 try:
-                    payload = fetch(sym, is_dr=is_dr, market=market)
-                except Exception:
-                    time.sleep(1.0)          # เผื่อโดน rate-limit ชั่วคราว — พักแล้วลองอีกครั้ง
-                    payload = fetch(sym, is_dr=is_dr, market=market)
+                    payload = _yahoo_throttle.call_with_backoff(
+                        lambda: fetch(sym, is_dr=is_dr, market=market, session=_yahoo_session))
                 finally:
                     time.sleep(0.3)           # throttle เบาๆ กัน Yahoo บล็อก IP ตอน sync รวด
         elif src == "finnomena_q":
@@ -1730,9 +1817,13 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
             try:
                 f.result()
                 ok += 1
+                if src in ("yahoo", "yahoo_q"):
+                    _yahoo_throttle.note_outcome(True)
             except Exception as e:
                 fail += 1
                 print(f"[FinancialsSync] {sym} ({src}) failed: {e}")
+                if src in ("yahoo", "yahoo_q"):
+                    _yahoo_throttle.note_outcome(False)
             if callback:
                 callback(done, total, f"งบการเงิน {done}/{total} ({sym} · {src})...")
 

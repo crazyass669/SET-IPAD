@@ -436,7 +436,8 @@ def _dr_light(result, refreshing=False):
     (cache ในหน่วยความจำ/ไฟล์ยังเก็บเต็มเหมือนเดิม — quick-update ก็ใช้ dates ต่อได้)"""
     out = {"stocks": [{k: v for k, v in s.items() if k not in ("dates", "closes", "_full_vols")}
                       for s in result.get("stocks", [])],
-           "ts": result.get("ts")}
+           "ts": result.get("ts"),
+           "warnings": result.get("warnings") or []}
     if refreshing:
         out["refreshing"] = True   # ให้ UI ติดป้าย 'กำลังอัพเดทเบื้องหลัง' แล้ว poll ซ้ำ
     return out
@@ -531,16 +532,26 @@ def _dr_do_rebuild():
     def _mc_one(t):
         try:
             v = getattr(yf.Ticker(t).fast_info, "market_cap", None)
-            return t, (float(v) if v else None)
-        except Exception:
-            return t, None
+            return t, (float(v) if v else None), None
+        except Exception as e:
+            return t, None, str(e)
 
     mkt_map = {}
+    mkt_cap_failed = []   # ticker ที่ fetch พลาดจริง (ต่าง จาก "ไม่มี market cap" ที่ v=None ปกติ)
     try:
         with ThreadPoolExecutor(max_workers=12) as _mc_ex:
-            mkt_map = dict(_mc_ex.map(_mc_one, yf_tickers))
+            for t, v, err in _mc_ex.map(_mc_one, yf_tickers):
+                mkt_map[t] = v
+                if err is not None:
+                    mkt_cap_failed.append(t)
     except Exception as e:
         print(f"[DR] market cap batch ล้มเหลว (ใช้ค่าเก่าจาก cache): {e}")
+        mkt_cap_failed = list(yf_tickers)
+    if mkt_cap_failed:
+        # เดิม fallback เงียบๆ ใช้ค่าเก่าโดยไม่บอกใคร — print ให้เห็นใน server log อย่างน้อย
+        # + ส่งสรุปกลับใน result["warnings"] ให้ UI แจ้งผู้ใช้ด้วย (ดูท้ายฟังก์ชัน)
+        print(f"[DR] market cap ดึงไม่สำเร็จ {len(mkt_cap_failed)}/{len(yf_tickers)} ตัว (ใช้ค่าเก่าแทน): "
+              + ", ".join(mkt_cap_failed[:15]) + (" ..." if len(mkt_cap_failed) > 15 else ""))
     _old_mc = {s["sym"]: s.get("mkt_cap")
                for s in (_dr_cache.get("result") or {}).get("stocks", [])}
 
@@ -564,6 +575,7 @@ def _dr_do_rebuild():
         return round((n - p) / p * 100, 2) if p else None
 
     results = []
+    price_failed = []   # sym ที่ดึงราคาไม่สำเร็จ/ข้อมูลไม่พอ — เก็บไว้แจ้งใน result["warnings"]
     for stock in _dr_universe:
         yticker = stock["yf"]
         try:
@@ -573,6 +585,7 @@ def _dr_do_rebuild():
             low_s  = _series(yticker, "Low")
             vol_s  = _series(yticker, "Volume")
             if len(close) < 2:
+                price_failed.append(stock["sym"])
                 continue
 
             # ตลาดยังไม่ปิดจริง/ยังอยู่ pre-market-after-hours -> แท่งล่าสุดยังไม่นิ่ง
@@ -598,6 +611,7 @@ def _dr_do_rebuild():
                     if len(low_s):  low_s  = low_s.iloc[:-1]
                     if len(vol_s):  vol_s  = vol_s.iloc[:-1]
                     if len(close) < 2:
+                        price_failed.append(stock["sym"])
                         continue
 
             price = float(close.iloc[-1])
@@ -719,6 +733,7 @@ def _dr_do_rebuild():
             })
         except Exception as e:
             print(f"[DR] {stock['sym']}: {e}")
+            price_failed.append(stock["sym"])
 
     # RS rank within DR universe
     valid_rs = [r for r in results if r.get("rs_raw") is not None]
@@ -727,7 +742,16 @@ def _dr_do_rebuild():
     for i, r in enumerate(valid_rs):
         r["rs_score"] = int(round(i / n_rs * 99)) if n_rs > 0 else None
 
-    result = {"stocks": results, "ts": _dt.now().isoformat()}
+    # แจ้งผู้ใช้ว่ามีตัวไหนบ้างที่ดึงพลาด (เดิม fallback เงียบๆ ใช้ค่าเก่า ไม่มีใครรู้ว่าพัง
+    # ตรงไหน) — เก็บสั้นๆ พอโชว์เป็น banner ได้ ดูรายละเอียดเต็มใน server log (print ด้านบน)
+    warnings = []
+    if price_failed:
+        warnings.append(f"ดึงราคาไม่สำเร็จ {len(price_failed)} ตัว: "
+                         + ", ".join(price_failed[:10]) + (" ..." if len(price_failed) > 10 else ""))
+    if mkt_cap_failed:
+        warnings.append(f"Market cap ดึงไม่สำเร็จ {len(mkt_cap_failed)} ตัว (ใช้ค่าเก่าแทน)")
+
+    result = {"stocks": results, "ts": _dt.now().isoformat(), "warnings": warnings}
     _dr_cache.update(result=result, ts=time.time())
     _save_dr_cache_to_file(result)
     return result

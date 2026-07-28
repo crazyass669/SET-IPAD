@@ -45,6 +45,11 @@
   }
   .nav-btn:hover { background: var(--bg3); color: var(--text); }
   .nav-btn.active { background: var(--accent); color: #fff; }
+  /* เมนูที่ใช้บ่อยแต่จมไปกับปุ่มเทาๆ อีก 30 กว่าปุ่ม (เช่น Watchlist) — ย้อมสีเหลืองให้
+     เด่นแยกจากปุ่มอื่นตลอดเวลา ไม่ต้องรอ hover/active ถึงจะสังเกตเห็น */
+  .nav-btn-highlight { background: color-mix(in srgb, var(--yellow) 16%, transparent); color: var(--yellow); font-weight: 600; }
+  .nav-btn-highlight:hover { background: color-mix(in srgb, var(--yellow) 26%, transparent); color: var(--yellow); }
+  .nav-btn-highlight.active { background: var(--accent); color: #fff; }
   /* Windows ไม่มีฟอนต์ธงอีโมจิ (regional-indicator) ให้เรนเดอร์เป็นธงจริง — ใช้ SVG inline แทน
      ที่เมนู US/HK/JP กันปัญหาขึ้นเป็นตัวอักษร 2 ตัวแทนธง */
   .nav-flag {

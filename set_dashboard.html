@@ -54,7 +54,7 @@
   <button class="nav-btn" onclick="showPage('ema-breadth',this)">EMA Breadth</button>
   <button class="nav-btn" onclick="showPage('fundamentals',this)">Fundamentals</button>
   <button class="nav-btn" onclick="showPage('band',this)">Val. Band</button>
-  <button class="nav-btn" onclick="showPage('watchlist',this)">Watchlist</button>
+  <button class="nav-btn nav-btn-highlight" onclick="showPage('watchlist',this)">⭐ Watchlist</button>
   <button class="nav-btn" onclick="showPage('dr',this)">DR/DRx</button>
   <button class="nav-btn" onclick="showPage('dr-rotation',this)" title="DR Rotation — RRG ของหุ้นต่างประเทศ (DR underlying) เทียบกันในกลุ่ม">🔄 DR Rotation</button>
   <button class="nav-btn" onclick="showPage('valuation',this)">Valuation</button>
@@ -3868,6 +3868,12 @@
           ปุ่ม <b>US</b> — งบหุ้น S&amp;P500/Dow/Nasdaq 100</span><br>
           <b>🔄 ดึงเฉพาะที่ขาด/เก่า</b> <span style="color:var(--text2)">หน้าเดียวกัน → ปุ่ม <b>HK</b>
           — งบหุ้น HSI/HSCEI/HSTECH</span>
+          <div style="color:var(--yellow);margin-top:8px">
+            📋 มีเครื่องอื่นรันแอปนี้ด้วย? กดครบ <b>🔄 อัพเดทงบการเงินทั้งหมด</b> + <b>📥 Mirror ทั้งตลาด (force)</b>
+            ที่เครื่องหลักแล้ว <b>copy financials.db ไปทับเครื่องที่สอง</b> แทนกดอัพเดทซ้ำสองที่ (สองปุ่มนี้
+            เขียนลงไฟล์เดียวกันคนละ source — Yahoo/Finnomena — copy ทีเดียวได้ครบ) ปิดโปรแกรมที่เครื่องปลายทางก่อน
+            copy ทับ กัน SQLite lock/ไฟล์เสีย
+          </div>
           <div style="margin-top:8px">
             <button class="filter-btn" onclick="toggleBtNote('dh-cli-note')" style="font-size:11px">🧑‍💻 ปุ่มพวกนี้ทำอะไรอยู่ข้างในบ้าง — กดอ่าน (สำหรับคนอยากรู้/แก้ปัญหา)</button>
             <div id="dh-cli-note" style="display:none;margin-top:8px;padding:12px;background:#0d1117;border:1px solid var(--border);border-radius:8px"></div>

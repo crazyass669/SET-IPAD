@@ -16429,6 +16429,13 @@ function _renderDRDiff(d) {
   </div>`;
 }
 
+function _drWarningsHtml(d) {
+  // เดิม market cap/ราคาที่ดึงพลาด fallback เงียบๆ ใช้ค่าเก่า ไม่มีใครรู้ — ต่อจากนี้
+  // server แนบ d.warnings (สรุปสั้นๆ ว่าตัวไหนพัง) มาด้วยเสมอ โชว์เป็นบรรทัดเตือนใต้ dr-status
+  if (!d.warnings || !d.warnings.length) return '';
+  return `<br><span style="color:var(--yellow)">⚠ ${d.warnings.join(' · ')}</span>`;
+}
+
 function loadDRPage() {
   if (_drLoaded && _drData) { renderDRTable(); return; }
   document.getElementById('dr-status').textContent = 'กำลังดึงข้อมูล...';
@@ -16448,7 +16455,8 @@ function loadDRPage() {
         `ราคาและ Performance ของ Underlying Stocks ที่มี DR/DRx เทรดบน SET (${drTotal} DR จาก ${_drData.length} หุ้นต่างประเทศ)`;
       document.getElementById('dr-status').innerHTML =
         `อัปเดต: ${ts} &nbsp;|&nbsp; ${_drData.length} underlying stocks &nbsp;|&nbsp; cache 4 ชั่วโมง` +
-        (d.refreshing ? ' &nbsp;|&nbsp; <span style="color:var(--accent)">⟳ กำลังดึงข้อมูลชุดใหม่เบื้องหลัง...</span>' : '');
+        (d.refreshing ? ' &nbsp;|&nbsp; <span style="color:var(--accent)">⟳ กำลังดึงข้อมูลชุดใหม่เบื้องหลัง...</span>' : '') +
+        _drWarningsHtml(d);
       if (d.refreshing) _drPollRefresh(0);   // server กำลัง rebuild — poll จนได้ชุดใหม่
       _updateDRRegionCounts();
       renderDRTable();
@@ -16477,7 +16485,8 @@ function _drPollRefresh(attempt) {
       const ts = d.ts ? d.ts.replace('T', ' ').slice(0, 16) : '—';
       const st = document.getElementById('dr-status');
       if (st) st.innerHTML =
-        `อัปเดต: ${ts} &nbsp;|&nbsp; ${_drData.length} underlying stocks &nbsp;|&nbsp; cache 4 ชั่วโมง <span style="color:var(--green)">✓ ข้อมูลชุดใหม่แล้ว</span>`;
+        `อัปเดต: ${ts} &nbsp;|&nbsp; ${_drData.length} underlying stocks &nbsp;|&nbsp; cache 4 ชั่วโมง <span style="color:var(--green)">✓ ข้อมูลชุดใหม่แล้ว</span>` +
+        _drWarningsHtml(d);
       _updateDRRegionCounts();
       if (document.getElementById('page-dr')?.classList.contains('active')) renderDRTable();
     }).catch(() => _drPollRefresh(attempt + 1));
