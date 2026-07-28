@@ -109,6 +109,7 @@ BACKUP_FILE  = os.path.join(BASE_DIR, "set_data_backup.json")
 HTML_FILE    = os.path.join(BASE_DIR, "set_dashboard.html")
 HISTORY_FILE = os.path.join(BASE_DIR, "set_history.json")
 DR_CACHE_FILE = os.path.join(BASE_DIR, "dr_cache.json")
+WATCHLIST_FILE = os.path.join(BASE_DIR, "data", "watchlist.json")
 
 # ── Logging: rotating file (5MB × 3) รับทั้ง log แอปและ werkzeug ──
 import logging
@@ -6394,6 +6395,35 @@ def nvdr_symbol(symbol):
     if not v:
         return jsonify({"error": "not found"}), 404
     return jsonify({**v, "symbol": sym, "updated_at": data.get("updated_at")})
+
+
+# ============================================================
+# Watchlist sync ข้ามเครื่อง — เก็บเป็นไฟล์ data/watchlist.json ให้ git push/pull
+# พาไปด้วยได้ (แยกจาก localStorage ที่ผูกกับเบราว์เซอร์/เครื่องเดียว) frontend เรียก
+# GET ตอนโหลดหน้าเพื่อ merge เข้า localStorage แล้วยิง POST กลับทุกครั้งที่ watchlist
+# เปลี่ยน (ดู _wlSave() ใน dashboard.js) — merge แบบ union เท่านั้น ไม่มีการลบข้ามเครื่อง
+# ============================================================
+@app.route("/api/watchlist", methods=["GET"])
+def get_watchlist():
+    if not os.path.exists(WATCHLIST_FILE):
+        return jsonify([])
+    try:
+        with open(WATCHLIST_FILE, encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify([])
+
+
+@app.route("/api/watchlist", methods=["POST"])
+def save_watchlist():
+    body = request.get_json(silent=True) or {}
+    syms = body.get("symbols")
+    if not isinstance(syms, list):
+        return jsonify({"error": "invalid symbols"}), 400
+    os.makedirs(os.path.dirname(WATCHLIST_FILE), exist_ok=True)
+    with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
+        json.dump(syms, f, ensure_ascii=False, indent=2)
+    return jsonify({"ok": True, "count": len(syms)})
 
 
 # ============================================================

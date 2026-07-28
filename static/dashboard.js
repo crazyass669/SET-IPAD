@@ -4,6 +4,32 @@
 // ============================================================
 let DATA = null;
 let watchlist = (() => { try { return JSON.parse(localStorage.getItem("set_wl") || "[]"); } catch { return []; } })();
+
+// บันทึก watchlist ทั้ง localStorage (ทันที) และไฟล์ data/watchlist.json ฝั่งเซิร์ฟเวอร์
+// (ให้ git push/pull พาไปเครื่องอื่นได้ — ดู /api/watchlist ใน app.py) merge แบบ union
+// เท่านั้น ไม่มีการลบข้ามเครื่องอัตโนมัติ กันข้อมูลหายถ้าอีกเครื่องยังไม่ pull ล่าสุด
+function _wlSave() {
+  localStorage.setItem("set_wl", JSON.stringify(watchlist));
+  fetch('/api/watchlist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbols: watchlist }),
+  }).catch(() => {});
+}
+
+(function _wlSyncFromServer() {
+  fetch('/api/watchlist').then(r => r.json()).then(serverList => {
+    if (!Array.isArray(serverList)) return;
+    let changed = false;
+    serverList.forEach(s => { if (typeof s === 'string' && !watchlist.includes(s)) { watchlist.push(s); changed = true; } });
+    if (changed) {
+      localStorage.setItem("set_wl", JSON.stringify(watchlist));
+      if (document.getElementById('page-watchlist')?.classList.contains('active')) renderWatchlist();
+    }
+    // เผื่อเครื่องนี้มีตัวใหม่ที่อีกเครื่องยังไม่มี ก็ sync กลับขึ้นไฟล์ด้วย
+    if (watchlist.length && (changed || watchlist.length !== serverList.length)) _wlSave();
+  }).catch(() => {});
+})();
 let stockSort = { key: "rs_score", dir: -1 };
 let sectorSort = { key: "ret_1m", dir: -1 };
 let rotView = "sector";
@@ -2922,14 +2948,14 @@ function addToWatchlist() {
 
   if (!watchlist.includes(sym)) {
     watchlist.push(sym);
-    localStorage.setItem("set_wl", JSON.stringify(watchlist));
+    _wlSave();
   }
   document.getElementById("wl-input").value = "";
   renderWatchlist();
 }
 function removeFromWatchlist(sym) {
   watchlist = watchlist.filter(s => s !== sym);
-  localStorage.setItem("set_wl", JSON.stringify(watchlist));
+  _wlSave();
   renderWatchlist();
 }
 function _wlAlertCell(sym) {
@@ -3196,7 +3222,7 @@ function renderWatchlist() {
         const idx = watchlist.indexOf(sym);
         if (idx !== -1) {
           watchlist[idx] = "DR:" + sym;
-          localStorage.setItem("set_wl", JSON.stringify(watchlist));
+          _wlSave();
         }
         // render ในรอบนี้เป็น DR row โดยใช้ key ใหม่
         const newSym = "DR:" + sym;
@@ -3240,7 +3266,7 @@ function renderWatchlist() {
         const idx = watchlist.indexOf(sym);
         if (idx !== -1) {
           watchlist[idx] = "US:" + sym;
-          localStorage.setItem("set_wl", JSON.stringify(watchlist));
+          _wlSave();
         }
         const u = usMatch;
         const newSym = "US:" + sym;
@@ -3276,7 +3302,7 @@ function renderWatchlist() {
         const idx = watchlist.indexOf(sym);
         if (idx !== -1) {
           watchlist[idx] = "HK:" + sym;
-          localStorage.setItem("set_wl", JSON.stringify(watchlist));
+          _wlSave();
         }
         const h = hkMatch;
         const newSym = "HK:" + sym;
@@ -8120,7 +8146,7 @@ function _tsWlKey(sym) {
 
 function _tsToggleWl(sym) {
   const key = _tsWlKey(sym);
-  if (watchlist.includes(key)) removeFromWatchlist(key); else { watchlist.push(key); localStorage.setItem('set_wl', JSON.stringify(watchlist)); renderWatchlist(); }
+  if (watchlist.includes(key)) removeFromWatchlist(key); else { watchlist.push(key); _wlSave(); renderWatchlist(); }
   const btn = document.getElementById('ts-wl-btn');
   if (btn) btn.textContent = watchlist.includes(key) ? '⭐ อยู่ใน Watchlist แล้ว' : '☆ เพิ่มเข้า Watchlist';
 }
@@ -9282,7 +9308,7 @@ function wlImport() {
   if (!syms.length) { alert('ไม่พบรายชื่อหุ้นในข้อความ'); return; }
   const before = watchlist.length;
   syms.forEach(s => { if (!watchlist.includes(s)) watchlist.push(s); });
-  localStorage.setItem('set_wl', JSON.stringify(watchlist));
+  _wlSave();
   alert(`นำเข้าแล้ว ${watchlist.length - before} ตัวใหม่ (รวมทั้งหมด ${watchlist.length} ตัว — ตัวที่มีอยู่แล้วไม่ซ้ำ)`);
   if (document.getElementById('page-watchlist')?.classList.contains('active')) renderWatchlist();
 }
