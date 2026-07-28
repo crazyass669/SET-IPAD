@@ -16611,8 +16611,14 @@ function drQuickUpdate() {
                 if (d.stocks) {
                   _drData = d.stocks;
                   const ts = d.ts ? d.ts.replace('T',' ').slice(0,16) : '—';
+                  // ราคาสด ณ HH:MM:SS · สำเร็จ N/M ตัว — แบบเดียวกับปุ่ม "⚡ ราคาล่าสุด" ของ
+                  // Watchlist (ดู wlRefreshLivePrices) n_updated/n_total มาจาก _dr_refresh_state
+                  // ฝั่ง backend (ดู _do_quick ใน app.py) นับเฉพาะตัวที่อัปเดตราคาสำเร็จจริง
+                  const liveNote = s.n_total != null
+                    ? ` &nbsp;|&nbsp; ราคาสด ณ ${new Date().toLocaleTimeString('th-TH')} · สำเร็จ ${s.n_updated}/${s.n_total} ตัว`
+                    : '';
                   if (statusEl) statusEl.innerHTML =
-                    `อัปเดต: ${ts} &nbsp;|&nbsp; ${_drData.length} stocks &nbsp;|&nbsp; <span style="color:var(--green)">✓ อัปเดตราคาสำเร็จ</span>`;
+                    `อัปเดต: ${ts} &nbsp;|&nbsp; ${_drData.length} stocks &nbsp;|&nbsp; <span style="color:var(--green)">✓ อัปเดตราคาสำเร็จ</span>${liveNote}`;
                   _updateDRRegionCounts();
                   renderDRTable();
                 }

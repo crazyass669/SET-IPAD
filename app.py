@@ -790,7 +790,7 @@ def dr_quick_update():
         return jsonify({"error": "ยังไม่มี DR cache — กรุณาโหลดหน้า DR ก่อน"}), 400
 
     def _do_quick():
-        _dr_refresh_state.update(running=True, error=None, done=False)
+        _dr_refresh_state.update(running=True, error=None, done=False, n_total=None, n_updated=None)
         try:
             _universe = load_dr_universe(BASE_DIR)
             yf_tickers = list({s["yf"] for s in _universe})
@@ -827,6 +827,8 @@ def dr_quick_update():
 
             # Build lookup จาก sym → stock entry เพื่ออัปเดต
             stock_map = {s["sym"]: s for s in cached["stocks"]}
+            updated = 0   # นับตัวที่อัปเดตราคาสำเร็จจริง — ให้ frontend โชว์ "สำเร็จ N/M ตัว"
+                          # แบบเดียวกับปุ่ม "⚡ ราคาล่าสุด" ของ Watchlist (ดู wlRefreshLivePrices)
             for st in _universe:
                 sym, yticker = st["sym"], st["yf"]
                 try:
@@ -860,15 +862,29 @@ def dr_quick_update():
                             if len(high_s): high_s = high_s.iloc[:-1]
                             if len(low_s):  low_s  = low_s.iloc[:-1]
                             if len(vol_s):  vol_s  = vol_s.iloc[:-1]
-                            if len(close) < 2:
-                                continue
+
+                    entry = stock_map.get(sym)
+                    if len(close) < 2:
+                        # gap fetch ปกติได้แค่ 2 แท่ง (เมื่อวาน+วันนี้ — overlap ที่ตั้งใจ) พอ
+                        # ตัดแท่งวันนี้ทิ้งเพราะยังไม่นิ่ง (ตลาดกำลังเทรดอยู่) จะเหลือแค่ 1 แท่ง
+                        # ไม่พอคำนวณ chg/ต่อ history ใหม่ — เดิม continue ทิ้งทั้งตัวเลย ทำให้
+                        # live_price ที่เพิ่งดึงมาได้ (ตัวแปร live_price ด้านบน) ถูกทิ้งไปด้วย
+                        # ทั้งที่ใช้ได้ ผลคือ DR เกือบทั้งกระดาน (โดยเฉพาะหุ้น US ที่ตลาดเปิดอยู่
+                        # ตอนกด quick update) ไม่ได้ราคาสดเลยสักตัว — แก้โดยอัปเดตแค่ live_price/
+                        # live_chg (เทียบกับราคาปิดเดิมที่ entry มีอยู่แล้ว) แทนการทิ้งทั้งหมด
+                        if entry and live_price is not None:
+                            entry["live_price"] = round(live_price, 2)
+                            base_price = entry.get("price")
+                            entry["live_chg"] = (round((live_price - base_price) / base_price * 100, 2)
+                                                  if base_price else None)
+                            updated += 1
+                        continue
 
                     price = float(close.iloc[-1])
                     prev  = float(close.iloc[-2])
                     chg   = round((price - prev) / prev * 100, 2) if prev else 0
                     live_chg = round((live_price - price) / price * 100, 2) if live_price and price else None
 
-                    entry = stock_map.get(sym)
                     if entry:
                         entry["price"] = round(price, 2)
                         entry["chg"]   = chg
@@ -961,6 +977,7 @@ def dr_quick_update():
                                 entry["ret_ytd"] = round((price - first_ytd) / first_ytd * 100, 2) if first_ytd else None
                         except Exception:
                             pass
+                        updated += 1
                 except Exception as e:
                     print(f"[DR quick] {sym}: {e}")
 
@@ -968,6 +985,9 @@ def dr_quick_update():
             _dr_cache.update(result=cached, ts=time.time())
             _save_dr_cache_to_file(cached)
             _dr_refresh_state["done"] = True
+            _dr_refresh_state["n_total"] = len(_universe)
+            _dr_refresh_state["n_updated"] = updated
+            print(f"[DR quick] updated {updated}/{len(_universe)} ticker")
         except Exception as e:
             _dr_refresh_state["error"] = str(e)
             print(f"[DR quick] ERROR: {e}")
