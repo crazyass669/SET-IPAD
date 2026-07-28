@@ -16100,6 +16100,44 @@ async function loadDataHealth() {
 
 // กดล่าสุดของ Quick Update / Full Refresh — ใช้ /api/update-status ตัวเดียวกับที่
 // checkRunFailures() ใช้ทำ banner แดง (core/run_log.py เขียนตอนจบแต่ละรอบ)
+// จัดกลุ่มตาม 3 การ์ดจริงในหน้า Data Health (แถบเมนูบนสุด / การ์ด "อัพเดทราคาดัชนี
+// US/HK/JP + Sync Mirror" / การ์ด "อัพเดทงบไตรมาส") ให้เห็นชัดว่าปุ่มไหนอยู่กลุ่มไหน
+// กดไปหรือยัง แทนที่จะเป็น list เดียวเรียงปนกันเดาไม่ออกว่าอันไหนคู่กับปุ่มไหน
+const _DH_LAST_RUN_GROUPS = [
+  { title: '📅 ทุกวันทำการ (แถบเมนูบนสุด)', rows: [
+    { key: 'quick_update', label: '⚡ Quick Update' },
+    { key: 'full_refresh', label: '⟳ Full Refresh' },
+    { key: 'hedge_refresh', label: '🐋 Hedge Holdings' },
+  ]},
+  { title: '📈 อัพเดทราคาดัชนี US/HK/JP + Sync Mirror (กดมือเป็นครั้งคราว)', rows: [
+    { key: 'us_index_full_refresh', label: '📈 US Index Max' },
+    { key: 'hk_index_full_refresh', label: '📈 HK Index Max' },
+    { key: 'jp_index_full_refresh', label: '📈 JP Index Max' },
+    { key: 'mirror_yahoo_index_sync', label: '🌐 Sync Mirror US/HK เต็ม' },
+  ]},
+  { title: '📊 อัพเดทงบไตรมาส (ก.พ. / พ.ค. / ส.ค. / พ.ย.)', rows: [
+    { key: 'financials_sync', label: '🔄 อัพเดทงบการเงินทั้งหมด' },
+    { key: 'mirror_finnomena', label: '📥 Mirror ทั้งตลาด (force)' },
+    { key: 'build_mirror_names', label: '🏷️ ดึงชื่อหุ้น mirror ใหม่' },
+  ]},
+];
+
+function _dhLastRunItemHtml(label, v) {
+  if (!v) return `<div><b>${label}</b><br><span style="color:var(--text2)">ยังไม่เคยกด</span></div>`;
+  const at = new Date(v.at.replace(' ', 'T'));
+  const hAgo = (Date.now() - at.getTime()) / 3600000;
+  const ageTxt = hAgo < 1 ? `${Math.round(hAgo * 60)} นาทีก่อน`
+    : hAgo < 48 ? `${hAgo.toFixed(1)} ชม.ก่อน`
+    : `${(hAgo / 24).toFixed(1)} วันก่อน`;
+  const color = !v.ok ? 'var(--red)' : hAgo >= 48 ? 'var(--yellow)' : 'var(--green)';
+  const statusIcon = v.ok ? '🟢' : '🔴';
+  return `<div><b>${label}</b><br>
+    <span style="color:${color};font-weight:600">${statusIcon} ${v.at}</span>
+    <span style="color:var(--text2)"> (${ageTxt})</span>
+    ${!v.ok ? `<br><span style="color:var(--red);font-size:11px">${_escHtml(v.message || '')}</span>` : ''}
+  </div>`;
+}
+
 async function loadLastRuns() {
   const wrap = document.getElementById('dh-last-runs-wrap');
   if (!wrap) return;
@@ -16107,34 +16145,13 @@ async function loadLastRuns() {
   try {
     const r = await fetch('/api/update-status');
     const d = await r.json();
-    const rows = [
-      { key: 'quick_update', label: '⚡ Quick Update' },
-      { key: 'full_refresh', label: '⟳ Full Refresh' },
-      { key: 'hedge_refresh', label: '🐋 Hedge Holdings' },
-      { key: 'us_index_full_refresh', label: '📈 US Index Max' },
-      { key: 'hk_index_full_refresh', label: '📈 HK Index Max' },
-      { key: 'jp_index_full_refresh', label: '📈 JP Index Max' },
-      { key: 'mirror_yahoo_index_sync', label: '🌐 Sync Mirror US/HK เต็ม' },
-      { key: 'financials_sync', label: '🔄 อัพเดทงบการเงินทั้งหมด' },
-      { key: 'mirror_finnomena', label: '📥 Mirror ทั้งตลาด (force)' },
-      { key: 'build_mirror_names', label: '🏷️ ดึงชื่อหุ้น mirror ใหม่' },
-    ];
-    wrap.innerHTML = rows.map(({ key, label }) => {
-      const v = d.all[key];
-      if (!v) return `<div><b>${label}</b><br><span style="color:var(--text2)">ยังไม่เคยกด</span></div>`;
-      const at = new Date(v.at.replace(' ', 'T'));
-      const hAgo = (Date.now() - at.getTime()) / 3600000;
-      const ageTxt = hAgo < 1 ? `${Math.round(hAgo * 60)} นาทีก่อน`
-        : hAgo < 48 ? `${hAgo.toFixed(1)} ชม.ก่อน`
-        : `${(hAgo / 24).toFixed(1)} วันก่อน`;
-      const color = !v.ok ? 'var(--red)' : hAgo >= 48 ? 'var(--yellow)' : 'var(--green)';
-      const statusIcon = v.ok ? '🟢' : '🔴';
-      return `<div><b>${label}</b><br>
-        <span style="color:${color};font-weight:600">${statusIcon} ${v.at}</span>
-        <span style="color:var(--text2)"> (${ageTxt})</span>
-        ${!v.ok ? `<br><span style="color:var(--red);font-size:11px">${_escHtml(v.message || '')}</span>` : ''}
-      </div>`;
-    }).join('');
+    wrap.innerHTML = _DH_LAST_RUN_GROUPS.map(({ title, rows }) => `
+      <div style="flex:1 1 100%">
+        <div style="font-size:11.5px;font-weight:600;color:var(--text2);margin:${title.startsWith('📅') ? '0' : '10px'} 0 6px">${title}</div>
+        <div style="display:flex;gap:24px;flex-wrap:wrap">
+          ${rows.map(({ key, label }) => _dhLastRunItemHtml(label, d.all[key])).join('')}
+        </div>
+      </div>`).join('');
   } catch (e) {
     wrap.innerHTML = `<span style="color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</span>`;
   }
@@ -16179,16 +16196,9 @@ async function loadBackupFilesStatus() {
 
 // เรียกตอนเปิดแอป (เงียบๆ) — แค่เอาไว้เติม badge แดงบนปุ่ม nav ถ้ามีรายการค้าง
 // ไม่ render ตารางเต็ม (ตารางเต็มโหลดตอนกดเข้าเมนูเองผ่าน loadDataHealth)
-function _dhLastRunText(item) {
-  if (!item || !item.last_at) return 'ยังไม่เคยกด';
-  const h = item.age_hours;
-  const rel = h == null ? '' : h < 1 ? ' (เมื่อสักครู่)' :
-    h < 24 ? ` (${Math.round(h)} ชม.ที่แล้ว)` : ` (${Math.round(h / 24)} วันที่แล้ว)`;
-  return `กดล่าสุด: ${item.last_at}${rel}`;
-}
-
-// ใช้ผลจาก /api/data-health ที่ fetch มาแล้ว (เช่นจาก loadDataHealth) เติม badge/
-// last-run text ได้เลยโดยไม่ต้องยิง fetch ซ้ำ
+// ใช้ผลจาก /api/data-health ที่ fetch มาแล้ว (เช่นจาก loadDataHealth) เติม badge
+// แดงบนปุ่ม nav ได้เลยโดยไม่ต้องยิง fetch ซ้ำ (สถานะรายปุ่มดูที่การ์ด "สถานะ /
+// อัพเดทล่าสุด" — loadLastRuns — ที่เดียวพอ ไม่ต้องมี last-run แยกที่นี่ซ้ำ)
 function _dhApplyBadge(d) {
   const badge = document.getElementById('dh-nav-badge');
   if (badge) {
@@ -16199,14 +16209,6 @@ function _dhApplyBadge(d) {
       badge.style.display = 'none';
     }
   }
-  const byKey = {};
-  (d.items || []).forEach(it => byKey[it.key] = it);
-  const usEl = document.getElementById('us-index-last-run');
-  if (usEl) usEl.textContent = _dhLastRunText(byKey.us_prices);
-  const hkEl = document.getElementById('hk-index-last-run');
-  if (hkEl) hkEl.textContent = _dhLastRunText(byKey.hk_prices);
-  const jpEl = document.getElementById('jp-index-last-run');
-  if (jpEl) jpEl.textContent = _dhLastRunText(byKey.jp_prices);
 }
 
 async function checkDataHealthBadge() {
