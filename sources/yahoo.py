@@ -48,11 +48,13 @@ def _extract_ohlcav(df, min_bars=5):
     }
 
 
-def fetch_all_batch(tickers, callback=None, period="max"):
+def fetch_all_batch(tickers, callback=None, period="max", sleep_s=0.3):
     """
     ดาวน์โหลดราคาทุกตัวด้วย yf.download() แบบ batch
     คืนค่า dict: ticker -> {'open','high','low','close','adj_close','volume': pd.Series}
     (ทุก series align index เดียวกับ close — ดู _extract_ohlcav)
+
+    sleep_s — เวลาพักระหว่าง chunk (ดูคอมเมนต์เดียวกันใน fetch_gap_batch)
     """
     chunks = [tickers[i:i + BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
     n_chunks = len(chunks)
@@ -88,15 +90,20 @@ def fetch_all_batch(tickers, callback=None, period="max"):
         except Exception as e:
             print(f"  [batch {ci + 1}] error: {e}")
 
-        time.sleep(0.3)
+        time.sleep(sleep_s)
 
     return all_data
 
 
-def fetch_gap_batch(tickers, start_date, callback=None):
+def fetch_gap_batch(tickers, start_date, callback=None, sleep_s=0.3):
     """
     ดาวน์โหลดเฉพาะวันใหม่ตั้งแต่ start_date (สำหรับ Quick Update)
     คืนค่า dict: ticker -> {'open','high','low','close','adj_close','volume': pd.Series}
+
+    sleep_s — เวลาพักระหว่าง chunk (default 0.3 วิ) เพิ่มได้เวลาเรียกถี่ๆ กับ universe ใหญ่
+    (เช่นปุ่ม "⚡ อัพเดทราคา" ของ Heatmap US ที่ผู้ใช้อาจกดซ้ำหลายรอบ/วัน กับ ~518 ticker —
+    ดู _run_heatmap_live_update ใน app.py ที่ส่ง sleep_s สูงกว่า default เฉพาะ region US
+    กัน Yahoo rate-limit/แบน ส่วน HK/JP ตัวน้อยกว่ามาก ใช้ default ปกติได้)
     """
     chunks = [tickers[i:i + BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
     n_chunks = len(chunks)
@@ -132,7 +139,7 @@ def fetch_gap_batch(tickers, start_date, callback=None):
         except Exception as e:
             print(f"  [gap batch {ci + 1}] error: {e}")
 
-        time.sleep(0.3)
+        time.sleep(sleep_s)
 
     return all_data
 

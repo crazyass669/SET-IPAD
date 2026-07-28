@@ -8422,6 +8422,33 @@ function _hmCmp(getV, dir) {
   };
 }
 
+// ปุ่ม "⚡ อัพเดทราคา" ของ Heatmap US/HK/JP — POST /api/heatmap-live-update/<region> (background
+// thread ฝั่ง Flask กด gap-update + คำนวณ live_price/live_chg แบบเดียวกับ dr_quick_update แล้ว
+// rebuild <mkt>_index_metrics.json) แล้ว poll /api/heatmap-live-status/<region> ทุก 1.5 วิ
+// จนเสร็จ (pattern เดียวกับ drQuickUpdate) ใช้ร่วมกันทั้ง 3 ตลาด ต่างแค่ region + callback
+// โหลดข้อมูลใหม่ตอนจบ (loadHeatmapPage/loadHkHeatmapPage/loadJpHeatmapPage)
+function _hmLiveUpdate(region, btn, idleLabel, onDone) {
+  if (btn) { btn.disabled = true; btn.textContent = '⚡ กำลังดึงราคา Live...'; }
+  fetch(`/api/heatmap-live-update/${region}`, { method: 'POST' })
+    .then(r => r.json())
+    .then(() => _hmLiveUpdatePoll(region, btn, idleLabel, onDone))
+    .catch(e => {
+      if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
+      alert('อัพเดทราคา Live ไม่สำเร็จ: ' + e.message);
+    });
+}
+
+function _hmLiveUpdatePoll(region, btn, idleLabel, onDone) {
+  fetch(`/api/heatmap-live-status/${region}`)
+    .then(r => r.json())
+    .then(st => {
+      if (st.running) { setTimeout(() => _hmLiveUpdatePoll(region, btn, idleLabel, onDone), 1500); return; }
+      if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
+      if (st.error) { alert('อัพเดทราคา Live ไม่สำเร็จ: ' + st.error); return; }
+      onDone();
+    });
+}
+
 function setHmPeriod(key, btn) {
   hmSortDir = (key === hmPeriod) ? -hmSortDir : 1;
   hmPeriod = key;
@@ -8460,6 +8487,11 @@ const HM_CFG = {
   vol_ratio: { getV:s=>(s.vol_today&&s.vol_avg20>0)?s.vol_today/s.vol_avg20*100:null, clr:v=>_heatColorVol(v), fmt:v=>(v/100).toFixed(1)+'x', aFmt:v=>'avg '+(v/100).toFixed(1)+'x', aPos:v=>v>=100, txt:v=>(v??0)>175?'#fff':'var(--text)', hint:'น้ำเงินเข้ม = Volume สูงกว่าเฉลี่ย · น้ำเงินจาง = Volume ต่ำกว่าเฉลี่ย' },
   from_52wh: { getV:s=>s.high_52w>0?(s.price-s.high_52w)/s.high_52w*100:null, clr:v=>_heatColor(v,40), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>16?'#fff':'var(--text)', hint:'เขียว = ใกล้/ทำ 52W High · แดง = ห่างจาก 52W High มาก' },
   ath_dist:  { getV:s=>s.ath_pct??null, clr:v=>_heatColor(v,50), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>20?'#fff':'var(--text)', hint:'เขียว = ใกล้/ทำ ATH · แดง = ห่างจาก All-Time High มาก (คำนวณจากข้อมูลที่โหลด)' },
+  // ราคาระหว่างวันที่ยังไม่ปิด (pre-market/กำลังเทรด) — มีเฉพาะ US/HK/JP heatmap หลังกด
+  // "⚡ อัพเดทราคา" (ดู _run_heatmap_live_update ใน app.py) หุ้นที่ไม่มี live_chg (ตลาดปิด/
+  // ยังไม่เคยกดปุ่ม) จะไม่ขึ้นกล่อง (_hmCmp ดันไปท้ายสุด) — ไอคอน ⚡ ใน fmt ทำหน้าที่
+  // "แทนที่ตัวเลข % เดิม" ในกล่องไปเลยเวลาเลือก metric นี้ ไม่ต้องมี logic แยกใน _hmGridCellHtml
+  live_chg:  { getV:s=>s.live_chg, clr:v=>_heatColor(v,15), fmt:v=>'⚡'+(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'⚡ avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>6?'#fff':'var(--text)', hint:'⚡ ราคา Live ระหว่างวัน (ยังไม่ปิดตลาด) เขียว = ขึ้น · แดง = ลง — กด "⚡ อัพเดทราคา" เพื่อดึงล่าสุด' },
 };
 
 function renderHeatmap() {
@@ -12626,6 +12658,10 @@ function _hmOpenTradingView() {
   if (url) window.open(url, '_blank', 'noopener');
 }
 
+function usHmLiveUpdate() {
+  _hmLiveUpdate('US', document.getElementById('hm-refresh-btn'), '⚡ อัพเดทราคา', () => loadHeatmapPage(true));
+}
+
 function setHeatmapIndex(idx, btn) {
   _hmIndex = idx;
   document.querySelectorAll('#hm-idx-sp500,#hm-idx-dow,#hm-idx-ndx').forEach(b => b.classList.remove('active'));
@@ -12874,6 +12910,10 @@ function _hkHmOpenTradingView() {
   if (url) window.open(url, '_blank', 'noopener');
 }
 
+function hkHmLiveUpdate() {
+  _hmLiveUpdate('HK', document.getElementById('hk-hm-refresh-btn'), '⚡ รีเฟรช', () => loadHkHeatmapPage(true));
+}
+
 function setHkHeatmapIndex(idx, btn) {
   _hkHmIndex = idx;
   document.querySelectorAll('#hk-hm-idx-hsi,#hk-hm-idx-hstech,#hk-hm-idx-hscei').forEach(b => b.classList.remove('active'));
@@ -12985,6 +13025,10 @@ let _jpHmPeriod = 'ret_1d';   // key ใน HM_CFG (ดูคอมเมนต�
 let _jpHmSortDir = 1;    // 1 = มากไปน้อย, -1 = น้อยไปมาก — คลิกปุ่ม metric เดิมซ้ำเพื่อสลับ
 let _jpHmData = null;      // {rows,ts,requested,missing}
 let _jpHmPopupSym = null;
+
+function jpHmLiveUpdate() {
+  _hmLiveUpdate('JP', document.getElementById('jp-hm-refresh-btn'), '⚡ รีเฟรช', () => loadJpHeatmapPage(true));
+}
 
 function setJpHeatmapPeriod(period, btn) {
   _jpHmSortDir = (period === _jpHmPeriod) ? -_jpHmSortDir : 1;

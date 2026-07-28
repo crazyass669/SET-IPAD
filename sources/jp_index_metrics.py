@@ -27,8 +27,8 @@ _CFG = dict(
 )
 
 
-def build(base_dir, callback=None):
-    return _common.build(base_dir, _CFG, callback)
+def build(base_dir, callback=None, live_map=None):
+    return _common.build(base_dir, _CFG, callback, live_map=live_map)
 
 
 def load_local(base_dir):

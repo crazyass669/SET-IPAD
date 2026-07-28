@@ -106,7 +106,7 @@ def _compute_all_rows_cached(base_dir, cfg):
     return list(stocks)
 
 
-def build(base_dir, cfg, callback=None):
+def build(base_dir, cfg, callback=None, live_map=None):
     """คำนวณ metrics ทุกตัวในดัชนีตาม cfg แล้วเขียนทับ cfg['out_file'] คืนจำนวนตัวที่สำเร็จ
 
     cfg keys:
@@ -121,8 +121,18 @@ def build(base_dir, cfg, callback=None):
                              เป็นของตลาดนี้หรือไม่ (ใช้เอาชื่อบริษัทมาเติม)
       market_code          — "US"/"HK" ฯลฯ ใส่ใน info['market']
       out_file             — path (relative to base_dir) ของ JSON output
-    """
+
+    live_map — {ticker: {"live_price":, "live_chg":}} จาก _run_index_gap_update (app.py) —
+    ราคาที่ยังไม่นิ่ง (pre-market/ระหว่างวัน) ที่ถูกตัดออกจาก <mkt>_prices.db ก่อนคำนวณ
+    ret_1d ฯลฯ (เพื่อไม่ให้ history ถาวรมีแท่งที่ยังไหลอยู่) — merge เข้า stock row เป็น field
+    เสริม live_price/live_chg ให้ Heatmap US/HK/JP โชว์ราคา Live ได้เหมือน DR/DRx"""
     stocks = _compute_all_rows(base_dir, cfg, callback)
+    if live_map:
+        for row in stocks:
+            live = live_map.get(row["symbol"])
+            if live:
+                row["live_price"] = live["live_price"]
+                row["live_chg"] = live["live_chg"]
     stocks = rank_rs(stocks)
 
     out = {
