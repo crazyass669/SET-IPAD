@@ -31,5 +31,9 @@ def build(base_dir, callback=None, live_map=None):
     return _common.build(base_dir, _CFG, callback, live_map=live_map)
 
 
+def update_live_prices(base_dir, live_map):
+    return _common.update_live_prices(base_dir, _CFG, live_map)
+
+
 def load_local(base_dir):
     return _common.load_local(base_dir, OUT_FILE)

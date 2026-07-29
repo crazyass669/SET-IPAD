@@ -3536,9 +3536,11 @@ def us_index_heatmap():
 
 # ============================================================
 # ปุ่ม "⚡ อัพเดทราคา" (Heatmap US/HK/JP) — ดึงราคาล่าสุด (gap-update) + คำนวณ live_price/
-# live_chg แบบเดียวกับ dr_quick_update แล้ว rebuild <mkt>_index_metrics.json ให้ Heatmap
-# อ่านราคา Live ได้ทันที ต่างจาก Quick Update ประจำวันที่ลากทำทุกอย่าง (insider/indices/
-# short sales ฯลฯ) ตัวนี้ทำแค่ตลาดเดียวที่ผู้ใช้กำลังดูอยู่ — เร็วกว่ามาก
+# live_chg แบบเดียวกับ dr_quick_update แล้ว merge เข้า <mkt>_index_metrics.json ที่มีอยู่แล้ว
+# ตรงๆ (update_live_prices — ไม่ build() เต็มรูปแบบ) ให้ Heatmap อ่านราคา Live ได้ทันที
+# RS/EMA/Stage เต็มรูปแบบคำนวณเฉพาะตอน Quick Update/Index Max วันละครั้งพอ (ดู
+# _run_heatmap_live_update) ต่างจาก Quick Update ประจำวันที่ลากทำทุกอย่าง (insider/
+# indices/short sales ฯลฯ) ตัวนี้ทำแค่ตลาดเดียวที่ผู้ใช้กำลังดูอยู่ — เร็วกว่ามาก
 # ============================================================
 _HM_LIVE_STATE = {
     "US": {"running": False, "error": None, "done": False},
@@ -3563,17 +3565,25 @@ def _run_heatmap_live_update(region, index_key=None):
             # ระบุ index_key (เช่น ดูแค่แท็บ Dow) จะดึงเฉพาะ 30 ตัวนั้นแทนทั้ง union — เร็วขึ้นมาก
             n, live_map = _run_us_index_gap_update(sleep_s=1.5, index_key=index_key)
             from sources import us_index_metrics as mod
-            mod.build(BASE_DIR, live_map=live_map)
+            # แค่ merge live_price/live_chg เข้าไฟล์เดิม ไม่ build() เต็มรูปแบบ — เดิม build()
+            # คำนวณ RS/EMA/Stage ใหม่ทั้ง ~518 ตัวของ union ทุกครั้งแม้ gap-update มาแค่ 30 ตัว
+            # ของ Dow (RS percentile ต้อง rank เทียบทั้งกลุ่มถึงจะแม่น คำนวณแค่ scope ที่ขอไม่ได้)
+            # ทำให้ปุ่มที่ควรเร็วกลับช้าเท่าดึงทั้งดัชนี — ตอนนี้ RS/EMA/Stage เต็มรูปแบบ
+            # คำนวณเฉพาะตอน Quick Update/Index Max (วันละครั้ง) พอ ปุ่มนี้ใช้แค่โชว์ราคาสด
+            if not mod.update_live_prices(BASE_DIR, live_map):
+                mod.build(BASE_DIR, live_map=live_map)
             _us_breadth_cache.clear()
         elif region == "HK":
             n, live_map = _run_hk_index_gap_update(index_key=index_key)
             from sources import hk_index_metrics as mod
-            mod.build(BASE_DIR, live_map=live_map)
+            if not mod.update_live_prices(BASE_DIR, live_map):
+                mod.build(BASE_DIR, live_map=live_map)
             _hk_breadth_cache.clear()
         else:
             n, live_map = _run_jp_index_gap_update()
             from sources import jp_index_metrics as mod
-            mod.build(BASE_DIR, live_map=live_map)
+            if not mod.update_live_prices(BASE_DIR, live_map):
+                mod.build(BASE_DIR, live_map=live_map)
         state["done"] = True
         # n_fetched/n_live — ให้ frontend โชว์ข้อความ "⚡ ราคาสด ณ HH:MM:SS · สำเร็จ N/M ตัว"
         # แบบเดียวกับปุ่ม "⚡ ราคาล่าสุด" ของ Watchlist (ดู wlRefreshLivePrices ใน dashboard.js)

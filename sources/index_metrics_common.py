@@ -149,6 +149,37 @@ def build(base_dir, cfg, callback=None, live_map=None):
     return len(stocks)
 
 
+def update_live_prices(base_dir, cfg, live_map):
+    """Merge live_price/live_chg เข้า cfg['out_file'] ที่มีอยู่แล้วตรงๆ โดยไม่คำนวณ
+    RS/EMA/Stage/52W ใหม่ทั้งดัชนี — ใช้ตอนผู้ใช้กดปุ่ม Live ของ Heatmap ขณะดูแค่แท็บ
+    ดัชนีย่อยเดียว (เช่น Dow 30 ตัว) ซึ่งเดิมเรียก build() เต็มรูปแบบทุกครั้ง (คำนวณทั้ง
+    ~518 ตัวของ US แม้ gap-update มาแค่ 30 ตัว เพราะ RS percentile ต้อง rank เทียบกลุ่ม
+    ทั้งหมด) ทำให้ปุ่มที่ควรเร็ว (แค่ 30 ตัว) กลับช้าเท่าดึงทั้งดัชนี — ตอนนี้ RS/EMA/Stage
+    เต็มรูปแบบคำนวณเฉพาะตอน Quick Update/Index Max เท่านั้น (วันละครั้ง) ปุ่มนี้แค่อัพเดท
+    ราคาที่โชว์บน Heatmap ให้สดขึ้น ไม่กระทบอันดับ/สถิติที่เหลือ
+
+    คืน True ถ้า merge สำเร็จ (มีไฟล์เดิมอยู่แล้ว), False ถ้ายังไม่เคยมีไฟล์ (ต้องให้ build()
+    เต็มรูปแบบรันก่อนอย่างน้อย 1 ครั้ง)"""
+    path = os.path.join(base_dir, cfg["out_file"])
+    try:
+        with open(path, encoding="utf-8") as f:
+            out = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+    if live_map:
+        for row in out.get("stocks", []):
+            live = live_map.get(row.get("symbol"))
+            if live:
+                row["live_price"] = live["live_price"]
+                row["live_chg"] = live["live_chg"]
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False)
+    os.replace(tmp, path)
+    _load_cache.pop((base_dir, cfg["out_file"]), None)
+    return True
+
+
 def compute_ondemand_row(base_dir, cfg, ticker, close, volume, high, low, name, sector, industry):
     """คำนวณ metrics (ราคา/return/RS/stage/EMA/ATR/sparkline) ของหุ้นตัวเดียวที่ไม่ใช่สมาชิก
     ดัชนีหลัก โดย rank RS เทียบกับสมาชิกดัชนีหลักทั้งหมดที่มีราคาอยู่แล้วใน <mkt>_prices.db
