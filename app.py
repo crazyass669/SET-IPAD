@@ -3672,7 +3672,7 @@ def _news_from_set(sym):
         rows.append({
             "title": n["headline"],
             "url": n.get("url") or "",
-            "ts": (n.get("datetime") or "")[:19],
+            "ts": n.get("datetime") or "",   # ISO ครบพร้อม offset +07:00 — ห้ามตัดทิ้ง ไม่งั้น JS แปลผิดเป็น local time
             "source": "set",
             "publisher": "SET.or.th (ประกาศบริษัท)",
             "summary": "",
@@ -3684,7 +3684,7 @@ def _news_from_yahoo(yf_ticker):
     """ข่าวจาก Yahoo Finance ผ่าน yfinance — รองรับทั้ง payload รุ่นใหม่ (ห่อใน 'content')
     และรุ่นเก่า (field แบนราบ providerPublishTime เป็น epoch)"""
     import yfinance as yf
-    from datetime import datetime
+    from datetime import datetime, timezone
     rows = []
     for n in (yf.Ticker(yf_ticker).news or []):
         c = n.get("content") or n   # รุ่นใหม่ห่อใน content, รุ่นเก่าอยู่ชั้นนอกเลย
@@ -3694,9 +3694,11 @@ def _news_from_yahoo(yf_ticker):
         url = (((c.get("canonicalUrl") or {}).get("url"))
                or ((c.get("clickThroughUrl") or {}).get("url"))
                or n.get("link") or "")
-        ts = (c.get("pubDate") or c.get("displayTime") or "")[:19]
+        # เก็บ 'Z'/offset ไว้เสมอ — ตัดทิ้งแล้ว JS ฝั่ง frontend จะแปล string เป็น local time แทน UTC
+        # ทำให้เวลาข่าวคลาดเคลื่อนไปเท่า timezone offset ของเครื่องผู้ใช้ (ไทย +7 ชม.)
+        ts = c.get("pubDate") or c.get("displayTime") or ""
         if not ts and n.get("providerPublishTime"):
-            ts = datetime.fromtimestamp(n["providerPublishTime"]).strftime("%Y-%m-%dT%H:%M:%S")
+            ts = datetime.fromtimestamp(n["providerPublishTime"], tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         publisher = ((c.get("provider") or {}).get("displayName")) or n.get("publisher") or "Yahoo Finance"
         summary = re.sub(r"<[^>]+>", "", c.get("summary") or c.get("description") or "")[:250]
         rows.append({"title": title, "url": url, "ts": ts, "source": "yahoo",
@@ -3712,6 +3714,7 @@ def _news_from_google(query, lang_th):
     import ssl as _ssl
     import xml.etree.ElementTree as _ET
     from email.utils import parsedate_to_datetime
+    from datetime import timezone as _dt_timezone
     loc = "hl=th&gl=TH&ceid=TH:th" if lang_th else "hl=en-US&gl=US&ceid=US:en"
     url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&{loc}"
     req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"})
@@ -3725,7 +3728,8 @@ def _news_from_google(query, lang_th):
             continue
         ts = ""
         try:
-            ts = parsedate_to_datetime(it.findtext("pubDate")).strftime("%Y-%m-%dT%H:%M:%S")
+            # ต้องคง 'Z' ต่อท้ายไว้ — ไม่งั้น JS ฝั่ง frontend ตีความ UTC เป็น local time ผิด (คลาดเคลื่อน +7 ชม.)
+            ts = parsedate_to_datetime(it.findtext("pubDate")).astimezone(_dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         except Exception:
             pass
         src_el = it.find("source")
@@ -3781,7 +3785,15 @@ def stock_news(symbol):
             continue
         seen.add(k)
         deduped.append(r)
-    deduped.sort(key=lambda r: r["ts"] or "0000", reverse=True)
+    # เรียงตามเวลาจริง (แปลงเป็น UTC epoch ก่อนเทียบ) — เทียบ string ตรงๆ ไม่ได้เพราะ
+    # SET ใช้ offset +07:00 ส่วน Yahoo/Google ใช้ 'Z' (UTC) รูปแบบ suffix ต่างกัน
+    def _ts_key(r):
+        from datetime import datetime as _dt
+        try:
+            return _dt.fromisoformat(r["ts"].replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0
+    deduped.sort(key=_ts_key, reverse=True)
 
     result = {"rows": deduped[:80], "ts": time.time(), "symbol": sym, "errors": errors}
     _stock_news_cache[cache_key] = result
