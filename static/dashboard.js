@@ -9564,6 +9564,8 @@ function openDRChartModal(sym) {
   // เสร็จผ่าน _refreshCmFinButton() ไม่ต้องปิดเปิด modal ใหม่
   _refreshCmFinButton();
   if (drStocksBtn) drStocksBtn.style.display = 'none';
+  const drFullFinBtn = document.getElementById('cm-fullfin-link');
+  if (drFullFinBtn) drFullFinBtn.style.display = '';   // restore if hidden by index modal
   const drFsLink = document.getElementById('cm-factsheet-link');
   if (drFsLink) drFsLink.style.display = 'none';
   const drSetLink = document.getElementById('cm-set-link');
@@ -9670,6 +9672,8 @@ function openUsChartModal(symbol) {
   // กับหน้างบการเงินเต็ม — financials.db เป็น local-only เลยเปิดเฉพาะเวอร์ชันบนเครื่อง
   if (finBtn)    finBtn.style.display    = IS_STATIC ? 'none' : '';
   if (stocksBtn) stocksBtn.style.display = 'none';
+  const usFullFinBtn = document.getElementById('cm-fullfin-link');
+  if (usFullFinBtn) usFullFinBtn.style.display = IS_STATIC ? 'none' : '';   // restore if hidden by index modal
   _renderDRDescription(symbol, 'US');
   setCmMode('chart');
   document.querySelectorAll('#chart-modal .filter-btn').forEach(b => b.classList.remove('active'));
@@ -9753,6 +9757,8 @@ function openHkChartModal(symbol) {
   // — _loadCmFin ตัด suffix ให้เอง (local-only เหมือนฝั่ง US)
   if (finBtn)    finBtn.style.display    = IS_STATIC ? 'none' : '';
   if (stocksBtn) stocksBtn.style.display = 'none';
+  const hkFullFinBtn = document.getElementById('cm-fullfin-link');
+  if (hkFullFinBtn) hkFullFinBtn.style.display = IS_STATIC ? 'none' : '';   // restore if hidden by index modal
   _renderDRDescription(symbol.replace(/\.HK$/i, ''), 'HK', symbol);
   setCmMode('chart');
   document.querySelectorAll('#chart-modal .filter-btn').forEach(b => b.classList.remove('active'));
@@ -9833,6 +9839,8 @@ function openJpChartModal(symbol) {
   // — _loadCmFin ตัด suffix ให้เอง (local-only เหมือน US/HK)
   if (finBtn)    finBtn.style.display    = IS_STATIC ? 'none' : '';
   if (stocksBtn) stocksBtn.style.display = 'none';
+  const jpFullFinBtn = document.getElementById('cm-fullfin-link');
+  if (jpFullFinBtn) jpFullFinBtn.style.display = IS_STATIC ? 'none' : '';   // restore if hidden by index modal
   _renderDRDescription(symbol.replace(/\.T$/i, ''), 'JP', symbol);
   setCmMode('chart');
   document.querySelectorAll('#chart-modal .filter-btn').forEach(b => b.classList.remove('active'));
@@ -10187,6 +10195,7 @@ function openChartModal(symbol) {
     s.pe        != null ? mk(s.pe.toFixed(2),        'P/E',      'text2') : '',
     s.pbv       != null ? mk(s.pbv.toFixed(2),       'P/BV',     'text2') : '',
     s.div_yield != null ? mk(s.div_yield.toFixed(2)+'%', 'Div Yield', s.div_yield >= 4 ? 'green' : 'text2') : '',
+    mk(_drFmtCap(s.mkt_cap), 'MKT CAP', 'text2'),
   ].join('');
 
   _cmStock = s;
@@ -10202,6 +10211,8 @@ function openChartModal(symbol) {
   const stocksBtn2 = document.getElementById('cm-mode-stocks');
   if (finBtn)     finBtn.style.display     = '';    // restore if hidden by index modal
   if (stocksBtn2) stocksBtn2.style.display = 'none'; // hide stocks btn for normal stocks
+  const fullFinBtn = document.getElementById('cm-fullfin-link');
+  if (fullFinBtn) fullFinBtn.style.display = '';     // restore if hidden by index modal
   _renderDRDescription(s.symbol, 'TH');
   setCmMode('chart');
   document.querySelectorAll('#chart-modal .filter-btn').forEach(b => b.classList.remove('active'));
@@ -10451,6 +10462,33 @@ function closeChartModal() {
   if (parent) {
     // return to the index chart modal with stocks tab
     setTimeout(() => { openIdxChartModal(parent); setTimeout(() => setCmMode('stocks'), 50); }, 60);
+  }
+}
+
+// ปุ่ม "🔗 หน้างบการเงิน" บน popup กราฟ (chart-modal) — ไปหน้าเมนู "งบการเงิน" จริงพร้อมค้นหุ้น
+// ตัวนี้ให้ทันที คนละอันกับแท็บ "🧾 งบการเงิน" (cm-mode-fin) ที่แค่สลับ panel ภายใน popup เดิม
+// (แท็บนั้นคงไว้เหมือนเดิม ไม่แตะ) — ใช้ hash เดียวกับ _spopGoFin/_hmGoFin/_hkHmGoFin/_jpHmGoFin
+// ปิด modal ตรงๆ แทนเรียก closeChartModal() เพราะถ้า _cmParentIdx ค้างอยู่ (เปิดมาจากแท็บ
+// "หุ้นในกลุ่ม" ของ index modal) closeChartModal จะ setTimeout เปิด index modal ซ้อนทับ
+// หน้างบการเงินที่เรากำลังจะนำทางไป
+function _cmGoFullFin() {
+  if (!_cmStock) return;
+  const sym = _cmStock.symbol;
+  _cmParentIdx = null;
+  document.getElementById('chart-modal').classList.remove('open');
+  document.body.style.overflow = '';
+  if (_cmStock._isUSIdx) {
+    openInternalHash('#fin/dr/US:' + encodeURIComponent(sym));
+  } else if (_cmStock._isHKIdx) {
+    _finMirSelectMarket('HK');
+    openInternalHash('#fin/dr/HK:' + encodeURIComponent(sym.replace(/\.HK$/i, '')));
+  } else if (_cmStock._isJPIdx) {
+    _finMirSelectMarket('JP');
+    openInternalHash('#fin/dr/JP:' + encodeURIComponent(sym.replace(/\.T$/i, '')));
+  } else if (_cmStock._isDR) {
+    openInternalHash('#fin/dr/' + encodeURIComponent(sym));
+  } else {
+    openInternalHash('#fin/set/' + encodeURIComponent(sym));
   }
 }
 
@@ -17470,6 +17508,8 @@ function openIdxChartModal(sym) {
   const stocksBtn = document.getElementById('cm-mode-stocks');
   if (finBtn)    finBtn.style.display    = 'none';
   if (stocksBtn) stocksBtn.style.display = IDX_TO_SECTOR[sym]?.length ? '' : 'none';
+  const fullFinLinkIdx = document.getElementById('cm-fullfin-link');
+  if (fullFinLinkIdx) fullFinLinkIdx.style.display = 'none';   // ดัชนี/กลุ่มอุตสาหกรรม — ไม่มีงบการเงินรายดัชนี
   const fsLinkIdx = document.getElementById('cm-factsheet-link');
   if (fsLinkIdx) fsLinkIdx.style.display = 'none';
   const setLinkIdx = document.getElementById('cm-set-link');

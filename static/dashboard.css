@@ -240,6 +240,7 @@
   .static-mode #val-refresh-btn,
   .static-mode #dr-quick-btn,
   .static-mode #cm-mode-fin,
+  .static-mode #cm-fullfin-link,
   .static-mode #spop-btn-fin,
   .static-mode #cm-tf-5y,
   .static-mode .nav-btn[onclick*="'financials'"],
