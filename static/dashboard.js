@@ -35,12 +35,15 @@ let sectorSort = { key: "ret_1m", dir: -1 };
 let rotView = "sector";
 let rotTimeframe = 'short';  // 'long'=3M/1M, 'short'=1M/1W — default Short
 let sectorView = "sector";
-let rsFilter = "ALL";
 let industryFilter = "ALL";
 let sectorFilter = "ALL";
 let stageFilter = "ALL";
 let stockSearch = "";
 let dqOnlyFilter = false;
+let stockRsMin = 0;
+let stockEma200Only = false;
+let _stocksView = 'all';
+let _stocksMode = 'stocks';
 
 // ============================================================
 // STATIC MODE — รันบน GitHub Pages (ไม่มี Flask server)
@@ -497,13 +500,12 @@ async function restartServer() {
 function renderAll() {
   renderOverview();
   renderRotation();
-  renderRSLeaders();
-  renderStage();
   renderSectors();
   renderStocks();
   renderWatchlist();
   renderBreakout();
   renderMomentum();
+  renderEmergingLeaders();
   renderHeatmap();
   renderEMABreadth();
   renderFundamentals();
@@ -2207,77 +2209,9 @@ function drawRotationScatter(sectors, opts = {}) {
 
 
 // ============================================================
-// RS LEADERS
+// RS EMERGING (RS 80+ Leaders ใช้ตาราง Stocks หลัก + filter stockRsMin=80 แทนแล้ว
+// — ดู setStocksView('rs80') — เหลือแค่ Emerging ที่ยังมีสูตรกรองเฉพาะตัว)
 // ============================================================
-function renderRSLeaders() {
-  if (!DATA) return;
-  const stocks = DATA.stocks.filter(s => (s.rs_score||0) >= 80);
-
-  // stat cards
-  const rs90 = stocks.filter(s => s.rs_score >= 90).length;
-  const rs80 = stocks.filter(s => s.rs_score >= 80 && s.rs_score < 90).length;
-  const avgRS = stocks.length ? Math.round(stocks.reduce((a,s) => a+(s.rs_score||0),0)/stocks.length) : 0;
-  const avgRet1m = stocks.length ? (stocks.reduce((a,s)=>a+(s.ret_1m||0),0)/stocks.length).toFixed(2) : '0.00';
-
-  document.getElementById("rs-stat-cards").innerHTML = `
-    <div class="card"><div class="card-title">RS 90-99</div><div class="stat-val green">${rs90}</div><div class="stat-label">หุ้น</div></div>
-    <div class="card"><div class="card-title">RS 80-89</div><div class="stat-val blue">${rs80}</div><div class="stat-label">หุ้น</div></div>
-    <div class="card"><div class="card-title">Avg RS Score</div><div class="stat-val">${avgRS}</div><div class="stat-label">เฉลี่ย RS 80+</div></div>
-    <div class="card"><div class="card-title">Avg 1M Return</div><div class="stat-val ${avgRet1m>0?'green':'red'}">${avgRet1m>0?"+":""}${avgRet1m}%</div><div class="stat-label">เฉลี่ย RS 80+</div></div>
-  `;
-
-  // sector filter buttons
-  const sectors = ["ALL", ...new Set(stocks.map(s=>s.sector||"—").sort())];
-  document.getElementById("rs-sector-filters").innerHTML = sectors.map(s =>
-    `<button class="filter-btn ${s===rsFilter?'active':''}" onclick="setRSFilter('${s}',this)">${s}</button>`
-  ).join("");
-
-  renderRSTable();
-}
-
-function setRSFilter(val, btn) {
-  rsFilter = val;
-  document.querySelectorAll("#rs-sector-filters .filter-btn").forEach(b => b.classList.remove("active"));
-  btn.classList.add("active");
-  renderRSTable();
-}
-
-function renderRSTable() {
-  if (!DATA) return;
-  let stocks = DATA.stocks.filter(s => (s.rs_score||0) >= 80);
-  if (rsFilter !== "ALL") stocks = stocks.filter(s => s.sector === rsFilter);
-  stocks.sort((a,b) => (b.rs_score||0)-(a.rs_score||0));
-
-  document.getElementById("rs-tbody").innerHTML = stocks.map(s => `
-    <tr>
-      <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score}</span></td>
-      <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}${dqBadge(s)}</td>
-      <td style="font-size:11px;color:var(--text2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
-      <td style="font-size:11px">${s.sector||"—"}</td>
-      <td class="r">${s.price?.toFixed(2) ?? "—"}</td>
-      <td class="r">${pct(s.ret_1d)}</td>
-      <td class="r">${pct(s.ret_1w)}</td>
-      <td class="r">${pct(s.ret_1m)}</td>
-      <td class="r">${pct(s.ret_3m)}</td>
-      <td class="r">${pct(s.ret_ytd)}</td>
-      <td class="r">${emaBadge(s.above_ema50)}</td>
-      <td class="r">${emaBadge(s.above_ema200)}</td>
-    </tr>`).join("");
-}
-
-// ── RS Leaders tab switch ──────────────────────────────────────
-let _rsTab = 'leaders';
-function setRsTab(tab, btn) {
-  _rsTab = tab;
-  // scope แค่แถวปุ่มแท็บ — เดิมกวาดทั้งหน้ารวมปุ่มกรอง sector (#rs-sector-filters ก็
-  // ใช้ class filter-btn เหมือนกัน) ทำให้สลับแท็บแล้วปุ่มกรอง sector ที่เลือกอยู่หายไฮไลต์
-  document.querySelectorAll("#rs-tab-row .filter-btn").forEach(b => b.classList.remove("active"));
-  btn.classList.add("active");
-  document.getElementById("rs-panel-leaders").style.display  = tab === 'leaders'  ? '' : 'none';
-  document.getElementById("rs-panel-emerging").style.display = tab === 'emerging' ? '' : 'none';
-  if (tab === 'emerging') renderEmergingLeaders();
-}
-
 function renderEmergingLeaders() {
   if (!DATA) return;
   // หุ้นที่ RS กำลังไต่ขึ้น: RS 35-79 + ret_1m > 3% + above_ema50
@@ -2311,82 +2245,6 @@ function renderEmergingLeaders() {
       <td class="r">${mom}</td>
       <td class="r">${emaBadge(s.above_ema50)}</td>
       <td class="r">${emaBadge(s.above_ema200)}</td>
-    </tr>`;
-  }).join("");
-}
-
-// ── Stage Analysis ─────────────────────────────────────────────
-let _stageFilter = 'all';
-
-function setStageFilter(val, btn) {
-  _stageFilter = val;
-  document.querySelectorAll("#page-stage .filter-btn").forEach(b => b.classList.remove("active"));
-  btn.classList.add("active");
-  renderStageTable();
-}
-
-function renderStage() {
-  if (!DATA) return;
-  const stocks = DATA.stocks;
-  const counts = {1:0, 2:0, 3:0, 4:0, null:0};
-  stocks.forEach(s => { const st = getStage(s); counts[st] = (counts[st]||0)+1; });
-
-  document.getElementById("stage-stat-cards").innerHTML = `
-    <div class="card" style="border-top:3px solid #3fb950">
-      <div class="card-title">Stage 2 — Advancing</div>
-      <div class="stat-val green">${counts[2]||0}</div>
-      <div class="stat-label">หุ้น ✅ โซนซื้อ</div>
-    </div>
-    <div class="card" style="border-top:3px solid #58a6ff">
-      <div class="card-title">Stage 1 — Basing</div>
-      <div class="stat-val blue">${counts[1]||0}</div>
-      <div class="stat-label">หุ้น — รอสัญญาณ</div>
-    </div>
-    <div class="card" style="border-top:3px solid #e3b341">
-      <div class="card-title">Stage 3 — Topping</div>
-      <div class="stat-val yellow">${counts[3]||0}</div>
-      <div class="stat-label">หุ้น — ระวัง</div>
-    </div>
-    <div class="card" style="border-top:3px solid #f85149">
-      <div class="card-title">Stage 4 — Declining</div>
-      <div class="stat-val red">${counts[4]||0}</div>
-      <div class="stat-label">หุ้น — หลีกเลี่ยง</div>
-    </div>
-  `;
-  renderStageTable();
-}
-
-function renderStageTable() {
-  if (!DATA) return;
-  let stocks = DATA.stocks.map(s => ({ ...s, _stage: getStage(s) }));
-  if (_stageFilter !== 'all') stocks = stocks.filter(s => s._stage === +_stageFilter);
-  // Priority: Stage 2 (โซนซื้อ) → 1 (Basing) → 3 (Topping) → 4 (Declining) → null
-  const stagePrio = { 2:1, 1:2, 3:3, 4:4 };
-  stocks.sort((a, b) => {
-    const pa = stagePrio[a._stage] ?? 9, pb = stagePrio[b._stage] ?? 9;
-    if (pa !== pb) return pa - pb;
-    return (b.rs_score||0) - (a.rs_score||0);
-  });
-
-  document.getElementById("stage-count").textContent = `แสดง ${stocks.length} หุ้น`;
-  document.getElementById("stage-tbody").innerHTML = stocks.map(s => {
-    const slope = s.ema200_slope_pct;
-    const slopeHtml = slope != null
-      ? `<span style="color:${slope>=0?'#3fb950':slope>=-1.5?'#e3b341':'#f85149'};font-size:11px">${slope>0?'+':''}${slope.toFixed(2)}%</span>`
-      : `<span class="text2" style="font-size:10px">Quick Update</span>`;
-    const atr = s.atr14_pct != null ? s.atr14_pct.toFixed(2)+'%' : '—';
-    return `<tr>
-      <td>${stageBadge(s._stage)}</td>
-      <td class="r"><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score??'—'}</span></td>
-      <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}${dqBadge(s)}</td>
-      <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
-      <td style="font-size:11px">${s.sector||'—'}</td>
-      <td class="r">${s.price?.toFixed(2)??"—"}</td>
-      <td class="r">${emaBadge(s.above_ema200)}</td>
-      <td class="r">${slopeHtml}</td>
-      <td class="r">${pct(s.ret_1m)}</td>
-      <td class="r">${pct(s.ret_3m)}</td>
-      <td class="r" style="font-size:11px;color:var(--text2)">${atr}</td>
     </tr>`;
   }).join("");
 }
@@ -2773,6 +2631,52 @@ function setStocksStageFilter(val, btn) {
   renderStocksTable();
 }
 
+// ============================================================
+// STOCKS VIEW TABS + SECTOR MODE — เหมือน setUsView/setUsMode ของหน้า US
+// all/rs80/stage2/ema200 ใช้ตาราง Stocks หลักร่วมกัน (แค่เปลี่ยน filter preset)
+// emerging/breakout/momentum สลับไปตารางเฉพาะของตัวเอง (reuse render เดิม 100%)
+// ============================================================
+const _STOCKS_VIEW_WRAPS = ['stocks-view-all', 'stocks-view-emerging', 'stocks-view-breakout', 'stocks-view-momentum'];
+const _STOCKS_VIEW_WRAP_OF = { all: 'stocks-view-all', rs80: 'stocks-view-all', stage2: 'stocks-view-all', ema200: 'stocks-view-all',
+                                emerging: 'stocks-view-emerging', breakout: 'stocks-view-breakout', momentum: 'stocks-view-momentum' };
+
+function setStocksView(view, btn) {
+  _stocksView = view;
+  document.querySelectorAll('#stocks-view-btns .filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+
+  stockRsMin = view === 'rs80' ? 80 : 0;
+  stockEma200Only = view === 'ema200';
+  if (view === 'stage2' || view === 'all' || view === 'rs80' || view === 'ema200') {
+    stageFilter = view === 'stage2' ? 2 : 'ALL';
+    document.querySelectorAll('#stage-filter-btns .filter-btn').forEach(b => b.classList.remove('active'));
+    const stageBtns = [...document.querySelectorAll('#stage-filter-btns .filter-btn')];
+    (view === 'stage2' ? stageBtns.find(b => b.getAttribute('onclick')?.includes('setStocksStageFilter(2')) : stageBtns[0])
+      ?.classList.add('active');
+  }
+
+  _STOCKS_VIEW_WRAPS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = (_STOCKS_VIEW_WRAP_OF[view] === id) ? '' : 'none';
+  });
+
+  if (view === 'emerging')      renderEmergingLeaders();
+  else if (view === 'breakout') renderBreakout();
+  else if (view === 'momentum') renderMomentum();
+  else                          renderStocksTable();
+}
+
+function setStocksMode(mode) {
+  _stocksMode = mode;
+  const btn = document.getElementById('stocks-mode-sectors');
+  if (btn) btn.classList.toggle('active', mode === 'sectors');
+  const stocksWrap  = document.getElementById('stocks-mode-stocks-wrap');
+  const sectorsWrap = document.getElementById('stocks-mode-sectors-wrap');
+  if (stocksWrap)  stocksWrap.style.display  = mode === 'sectors' ? 'none' : '';
+  if (sectorsWrap) sectorsWrap.style.display = mode === 'sectors' ? '' : 'none';
+  if (mode === 'sectors') { renderSectors(); renderEMABreadth(); }
+}
+
 function setDqOnlyFilter(v) {
   dqOnlyFilter = v;
   renderStocksTable();
@@ -2782,6 +2686,10 @@ function setDqOnlyFilter(v) {
 function goToDqStocks() {
   const btn = [...document.querySelectorAll(".nav-btn")].find(b => b.getAttribute("onclick")?.includes("'stocks'"));
   showPage("stocks", btn);
+  // banner นี้ต้องพาไปที่ตาราง "ทั้งหมด" เสมอ — ถ้า view/mode ค้างอยู่ที่ breakout/momentum/
+  // emerging/sectors จากการเข้าชมครั้งก่อน filter DQ จะไปกรอง #stocks-tbody ที่ถูกซ่อนอยู่แทน
+  setStocksMode('stocks');
+  setStocksView('all', document.querySelector('#stocks-view-btns .filter-btn[data-view="all"]'));
   setDqOnlyFilter(true);
 }
 
@@ -2823,6 +2731,8 @@ function renderStocksTable() {
     _stage: getStage(s),
   }));
   if (stageFilter !== "ALL") stocks = stocks.filter(s => s._stage === stageFilter || s._stage === Number(stageFilter));
+  if (stockRsMin) stocks = stocks.filter(s => (s.rs_score||0) >= stockRsMin);
+  if (stockEma200Only) stocks = stocks.filter(s => s.above_ema200 === true);
 
   stocks.sort((a,b) => {
     const av = a[stockSort.key], bv = b[stockSort.key];
@@ -3449,10 +3359,23 @@ function openInternalHash(hash, forceNew) {
 
 // URL hash deep-link ของ "หน้า" ธรรมดา: #page/screener — ใช้ตอนเปิดเมนูเป็นแท็บใหม่
 // (deep-link รายหุ้นมี #fin/ #ts/ #stock/ อยู่แล้ว ดูท้ายไฟล์)
+// id เก่าของ 6 เมนูที่รวมเข้า "หุ้นทั้งหมด" แล้ว (ดู setStocksView/setStocksMode) —
+// hash แบบนี้ยังถูกสร้างจริงทุกครั้งที่คลิก nav ตอน nav-open-mode = "เปิดแท็บใหม่" (ดีฟอลต์)
+// ต้อง alias ไม่งั้น tab/bookmark เก่าจะเงียบไปเฉยๆ (page-<id> เดิมไม่มีแล้ว)
+const _STOCKS_PAGE_ALIAS = {
+  'rs-leaders': 'rs80', stage: 'stage2', breakout: 'breakout', momentum: 'momentum', sectors: null,
+};
+
 function _pageApplyHash() {
   const m = location.hash.match(/^#page\/([\w-]+)$/);
   if (!m) return;
-  const id = m[1];
+  let id = m[1];
+  let stocksView = null, stocksMode = null;
+  if (id === 'ema-breadth') { id = 'stocks'; stocksMode = 'sectors'; }
+  else if (id in _STOCKS_PAGE_ALIAS) {
+    id = 'stocks';
+    if (_STOCKS_PAGE_ALIAS[m[1]] === null) stocksMode = 'sectors'; else stocksView = _STOCKS_PAGE_ALIAS[m[1]];
+  }
   if (!document.getElementById('page-' + id)) return;
   const btn = document.querySelector(`.nav-btn[onclick*="'${id}'"]`);
   // เว็บ static (GitHub Pages) ซ่อนปุ่ม nav ของหน้า local-only ไว้ด้วย CSS (.static-mode)
@@ -3460,6 +3383,11 @@ function _pageApplyHash() {
   // ที่ควรถูกซ่อนแล้วเจอ error แทน กันด้วยการเช็คว่าปุ่มนี้ถูกซ่อนอยู่หรือไม่ก่อนเปิด
   if (btn && getComputedStyle(btn).display === 'none') return;
   showPage(id, btn);
+  if (stocksMode) setStocksMode(stocksMode);
+  if (stocksView) {
+    const viewBtn = document.querySelector(`#stocks-view-btns .filter-btn[data-view="${stocksView}"]`);
+    setStocksView(stocksView, viewBtn);
+  }
 }
 
 (function _navOpenModeInit() {
@@ -3495,7 +3423,7 @@ function showPage(id, btn) {
   document.getElementById("page-"+id).classList.add("active");
   if (btn) btn.classList.add("active");
   // Re-draw canvas charts once the page is visible and has real dimensions
-  if (id === "sectors")      renderSectors();
+  if (id === "stocks")       { loadBreadthCharts(); if (_stocksMode === 'sectors') { renderSectors(); renderEMABreadth(); } }
   if (id === "rotation")     renderRotation();
   if (id === "fundamentals") renderFundamentals();
   if (id === "dr")           loadDRPage();
@@ -3518,8 +3446,6 @@ function showPage(id, btn) {
   if (id === "confluence")   loadConfluencePage();
   if (id === "flow")         loadFlowPage();
   if (id === "indices")      loadIndicesPage();
-  if (id === "stage")        renderStage();
-  if (id === "ema-breadth")  loadBreadthCharts();
   if (id === "us-rotation")  loadUsRotation();
   if (id === "hk-rotation")  loadHkRotation();
   if (id === "hk-heatmap")   loadHkHeatmapPage();
@@ -9005,7 +8931,7 @@ function setBO(type, val, btn) {
   // map type -> id prefix ของกลุ่มปุ่ม (dist ใช้ id "bo-d-*" ไม่ใช่ "bo-dist*"
   // — บั๊กเดิม: prefix ไม่ match ทำให้สี active ของกลุ่มระยะไม่เคยถูกล้าง)
   const prefix = { rs: 'bo-rs-', dist: 'bo-d-', ema: 'bo-ema-', side: 'bo-side-' }[type];
-  document.querySelectorAll(`#page-breakout .filter-btn[id^="${prefix}"]`)
+  document.querySelectorAll(`#stocks-view-breakout .filter-btn[id^="${prefix}"]`)
     .forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   renderBreakout();
@@ -9113,7 +9039,7 @@ function momTh(col, label, cls='') {
 
 function setMomFilter(val, btn) {
   _momFilter = val;
-  document.querySelectorAll('#page-momentum .filter-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#stocks-view-momentum .filter-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   renderMomentum();
 }
@@ -11703,87 +11629,126 @@ function drawUsBreadthChart() {
 }
 
 // ============================================================
-// US ROTATION — RRG ของหุ้น US เทียบค่าเฉลี่ยดัชนี/sector ที่เลือก
-// reuse drawRotationScatter (ตัวเดียวกับหน้า Rotation ไทย/DR Rotation)
+// US/HK/JP ROTATION — RRG ของหุ้นรายตัวเทียบค่าเฉลี่ยดัชนี/sector ที่เลือก
+// เดิมเป็น 3 ชุดก็อปวางเหมือนกัน 100% (ต่างแค่ prefix/endpoint/index-flag) —
+// รวมเป็นเอนจินเดียว (_rotXxx) พารามิเตอร์ด้วย _ROT_CFG ต่อตลาด ส่วนชื่อฟังก์ชันเดิม
+// (setUsRotTf, renderHkRotation, ...) เก็บไว้เป็น wrapper บาง ๆ เพราะ HTML onclick เรียกตรง ๆ
 // ============================================================
-let _usRotIndex = 'SP500';   // SP500 | DOW | NDX | ALL
-let _usRotTf = 'long';
-let _usRotBenchmark = 'index';   // index | sector — 'sector' มีผลก็ต่อเมื่อเลือก sector เจาะจง (ไม่ใช่ ALL)
+let _usRotIndex = 'SP500', _usRotTf = 'long', _usRotBenchmark = 'index';   // SP500|DOW|NDX|ALL, long|short, index|sector
+let _hkRotIndex = 'HSI', _hkRotTf = 'long', _hkRotBenchmark = 'index';     // HSI|HSTECH|HSCEI|ALL
+let _jpRotTf = 'long', _jpRotBenchmark = 'index';                          // ไม่มีสลับดัชนี (Nikkei 225 ทั้งหมด)
 
-function setUsRotBenchmark(mode, btn) {
-  _usRotBenchmark = mode;
-  document.querySelectorAll('#usrot-bm-index,#usrot-bm-sector').forEach(b => b.classList.remove('active'));
+const _ROT_CFG = {
+  us: {
+    prefix: 'usrot', endpoint: '/api/us-index-metrics', marketName: 'US',
+    canvasId: 'us-rotation-map', legendId: 'us-rot-legend', onOpen: (sym) => openUsChartModal(sym),
+    idxFlag: () => _US_IDX_FLAG,
+    getData: () => _usData, setData: v => { _usData = v; },
+    getIndex: () => _usRotIndex, setIndex: v => { _usRotIndex = v; },
+    getTf: () => _usRotTf, setTf: v => { _usRotTf = v; },
+    getBenchmark: () => _usRotBenchmark, setBenchmark: v => { _usRotBenchmark = v; },
+  },
+  hk: {
+    prefix: 'hkrot', endpoint: '/api/hk-index-metrics', marketName: 'HK',
+    canvasId: 'hk-rotation-map', legendId: 'hk-rot-legend', onOpen: (sym) => openHkChartModal(sym),
+    idxFlag: () => _HK_IDX_FLAG,
+    getData: () => _hkData, setData: v => { _hkData = v; },
+    getIndex: () => _hkRotIndex, setIndex: v => { _hkRotIndex = v; },
+    getTf: () => _hkRotTf, setTf: v => { _hkRotTf = v; },
+    getBenchmark: () => _hkRotBenchmark, setBenchmark: v => { _hkRotBenchmark = v; },
+  },
+  jp: {
+    prefix: 'jprot', endpoint: '/api/jp-index-metrics', marketName: 'JP',
+    canvasId: 'jp-rotation-map', legendId: 'jp-rot-legend', onOpen: (sym) => openJpChartModal(sym),
+    idxFlag: null,   // JP ไม่มีสลับดัชนี
+    getData: () => _jpData, setData: v => { _jpData = v; },
+    getIndex: () => null, setIndex: () => {},
+    getTf: () => _jpRotTf, setTf: v => { _jpRotTf = v; },
+    getBenchmark: () => _jpRotBenchmark, setBenchmark: v => { _jpRotBenchmark = v; },
+  },
+};
+
+function _rotSetBenchmark(mkt, mode, btn) {
+  _ROT_CFG[mkt].setBenchmark(mode);
+  btn?.closest('.filter-row')?.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
-  renderUsRotation();
+  _rotRender(mkt);
 }
 
-function setUsRotIndex(idx, btn) {
-  _usRotIndex = idx;
-  document.querySelectorAll('#usrot-idx-sp500,#usrot-idx-dow,#usrot-idx-ndx,#usrot-idx-all').forEach(b => b.classList.remove('active'));
+function _rotSetIndex(mkt, idx, btn) {
+  _ROT_CFG[mkt].setIndex(idx);
+  btn?.closest('.filter-row')?.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
-  _rebuildUsRotSectorFilter();
-  renderUsRotation();
+  _rotRebuildSectorFilter(mkt);
+  _rotRender(mkt);
 }
 
-function setUsRotTf(tf, btn) {
-  _usRotTf = tf;
-  document.querySelectorAll('#usrot-tf-long,#usrot-tf-short').forEach(b => b.classList.remove('active'));
+function _rotSetTf(mkt, tf, btn) {
+  const c = _ROT_CFG[mkt];
+  c.setTf(tf);
+  btn?.closest('.filter-row')?.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
-  const sub = document.getElementById('usrot-subtitle');
-  if (sub) sub.innerHTML = 'RRG ของหุ้น US แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · ' +
+  const sub = document.getElementById(`${c.prefix}-subtitle`);
+  if (sub) sub.innerHTML = `RRG ของหุ้น ${c.marketName} แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · ` +
     (tf === 'short' ? 'แกน X = 1M% Y = 1W% (เทียบกลุ่ม)' : 'แกน X = 3M% Y = 1M% (เทียบกลุ่ม)');
-  renderUsRotation();
+  _rotRender(mkt);
 }
 
-async function loadUsRotation() {
-  const gate = document.getElementById('usrot-gate'), body = document.getElementById('usrot-body');
-  if (!_usData) {
-    gate.style.display = ''; gate.textContent = 'กำลังดึงข้อมูลหุ้น US...'; body.style.display = 'none';
+async function _rotLoad(mkt) {
+  const c = _ROT_CFG[mkt];
+  const gate = document.getElementById(`${c.prefix}-gate`), body = document.getElementById(`${c.prefix}-body`);
+  if (!c.getData()) {
+    gate.style.display = ''; gate.textContent = `กำลังดึงข้อมูลหุ้น ${c.marketName}...`; body.style.display = 'none';
     try {
-      const d = await (await fetch('/api/us-index-metrics')).json();
+      const d = await (await fetch(c.endpoint)).json();
       if (d.error) throw new Error(d.error);
-      _usData = d;
+      c.setData(d);
     } catch (e) {
-      gate.textContent = 'โหลดข้อมูลหุ้น US ไม่สำเร็จ: ' + e.message;
+      gate.textContent = `โหลดข้อมูลหุ้น ${c.marketName} ไม่สำเร็จ: ` + e.message;
       return;
     }
   }
-  if (!_usData || !_usData.stocks || !_usData.stocks.length) {
+  const data = c.getData();
+  if (!data || !data.stocks || !data.stocks.length) {
     gate.style.display = ''; body.style.display = 'none';
-    gate.textContent = 'ยังไม่มีข้อมูล — กดปุ่ม 📈 US Index Max หรือ ⚡ Quick Update ก่อน';
+    gate.textContent = `ยังไม่มีข้อมูล — กดปุ่ม 📈 ${c.marketName} Index Max หรือ ⚡ Quick Update ก่อน`;
     return;
   }
   gate.style.display = 'none'; body.style.display = '';
-  _rebuildUsRotSectorFilter();
-  renderUsRotation();
+  _rotRebuildSectorFilter(mkt);
+  _rotRender(mkt);
 }
 
-function _rebuildUsRotSectorFilter() {
-  if (!_usData || !_usData.stocks) return;
-  const flag = _US_IDX_FLAG[_usRotIndex];
-  const inIdx = flag ? _usData.stocks.filter(s => s[flag]) : _usData.stocks;
+function _rotRebuildSectorFilter(mkt) {
+  const c = _ROT_CFG[mkt];
+  const data = c.getData();
+  if (!data || !data.stocks) return;
+  const flag = c.idxFlag ? c.idxFlag()[c.getIndex()] : null;
+  const inIdx = flag ? data.stocks.filter(s => s[flag]) : data.stocks;
   const sectors = ['ALL', ...[...new Set(inIdx.map(s => s.sector || 'Unknown'))].sort()];
-  const sel = document.getElementById('usrot-sector');
+  const sel = document.getElementById(`${c.prefix}-sector`);
   if (!sel) return;
   const cur = sel.value;
   sel.innerHTML = sectors.map(s => `<option value="${s}">${s === 'ALL' ? 'ทุก Sector' : s}</option>`).join('');
   sel.value = sectors.includes(cur) ? cur : 'ALL';
 }
 
-function renderUsRotation() {
-  if (!_usData || !_usData.stocks) return;
-  const flag = _US_IDX_FLAG[_usRotIndex];
-  const universe = flag ? _usData.stocks.filter(s => s[flag]) : _usData.stocks;
-  const isShort = _usRotTf === 'short';
+function _rotRender(mkt) {
+  const c = _ROT_CFG[mkt];
+  const data = c.getData();
+  if (!data || !data.stocks) return;
+  const flag = c.idxFlag ? c.idxFlag()[c.getIndex()] : null;
+  const universe = flag ? data.stocks.filter(s => s[flag]) : data.stocks;
+  const isShort = c.getTf() === 'short';
   const valid = universe.filter(s => isShort
     ? (s.ret_1m != null && s.ret_1w != null)
     : (s.ret_3m != null && s.ret_1m != null));
   if (!valid.length) return;
-  const sector = document.getElementById('usrot-sector')?.value || 'ALL';
+  const sector = document.getElementById(`${c.prefix}-sector`)?.value || 'ALL';
   const shown = sector === 'ALL' ? valid : valid.filter(s => (s.sector || 'Unknown') === sector);
   // benchmark = ค่าเฉลี่ยทั้งดัชนี (ปกติ) หรือค่าเฉลี่ยเฉพาะ sector ที่เลือก (ถ้าสลับโหมด
   // และเลือก sector เจาะจงแล้ว) — ใช้ดูว่าใครแรง/อ่อนกว่า "เพื่อนร่วม sector" แทนทั้งตลาด
-  const bmSet = (_usRotBenchmark === 'sector' && sector !== 'ALL') ? shown : valid;
+  const bmSet = (c.getBenchmark() === 'sector' && sector !== 'ALL') ? shown : valid;
   const avg = f => { const v = bmSet.filter(s => s[f] != null); return v.length ? v.reduce((a, s) => a + s[f], 0) / v.length : 0; };
   const a3m = avg('ret_3m'), a1m = avg('ret_1m'), a1w = avg('ret_1w'), a6m = avg('ret_6m'), a1y = avg('ret_1y');
   const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
@@ -11792,192 +11757,36 @@ function renderUsRotation() {
     ret_3m: rel(s.ret_3m, a3m), ret_1m: rel(s.ret_1m, a1m), ret_1w: rel(s.ret_1w, a1w),
     ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
   }));
-  const info = document.getElementById('usrot-info');
+  const info = document.getElementById(`${c.prefix}-info`);
   const bmLabel = bmSet === shown ? `เฉลี่ย sector "${sector}"` : 'เฉลี่ยทั้งดัชนี';
   if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmLabel} (${bmSet.length} ตัว)` +
     (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
              : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
-  drawRotationScatter(items, { canvasId: 'us-rotation-map', legendId: 'us-rot-legend', tf: _usRotTf, onOpen: openUsChartModal });
+  drawRotationScatter(items, { canvasId: c.canvasId, legendId: c.legendId, tf: c.getTf(), onOpen: c.onOpen });
 }
 
-// ============================================================
-// HK ROTATION — RRG ของหุ้น HK เทียบค่าเฉลี่ยดัชนี/sector ที่เลือก
-// ก็อปโครงจาก US ROTATION ด้านบนทั้งหมด — reuse drawRotationScatter ตัวเดิม 100%
-// ============================================================
-let _hkRotIndex = 'HSI';   // HSI | HSTECH | HSCEI | ALL
-let _hkRotTf = 'long';
-let _hkRotBenchmark = 'index';   // index | sector — เหตุผลเดียวกับ _usRotBenchmark
+function setUsRotBenchmark(mode, btn) { _rotSetBenchmark('us', mode, btn); }
+function setHkRotBenchmark(mode, btn) { _rotSetBenchmark('hk', mode, btn); }
+function setJpRotBenchmark(mode, btn) { _rotSetBenchmark('jp', mode, btn); }
 
-function setHkRotBenchmark(mode, btn) {
-  _hkRotBenchmark = mode;
-  document.querySelectorAll('#hkrot-bm-index,#hkrot-bm-sector').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-  renderHkRotation();
-}
+function setUsRotIndex(idx, btn) { _rotSetIndex('us', idx, btn); }
+function setHkRotIndex(idx, btn) { _rotSetIndex('hk', idx, btn); }
 
-function setHkRotIndex(idx, btn) {
-  _hkRotIndex = idx;
-  document.querySelectorAll('#hkrot-idx-hsi,#hkrot-idx-hstech,#hkrot-idx-hscei,#hkrot-idx-all').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-  _rebuildHkRotSectorFilter();
-  renderHkRotation();
-}
+function setUsRotTf(tf, btn) { _rotSetTf('us', tf, btn); }
+function setHkRotTf(tf, btn) { _rotSetTf('hk', tf, btn); }
+function setJpRotTf(tf, btn) { _rotSetTf('jp', tf, btn); }
 
-function setHkRotTf(tf, btn) {
-  _hkRotTf = tf;
-  document.querySelectorAll('#hkrot-tf-long,#hkrot-tf-short').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-  const sub = document.getElementById('hkrot-subtitle');
-  if (sub) sub.innerHTML = 'RRG ของหุ้น HK แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · ' +
-    (tf === 'short' ? 'แกน X = 1M% Y = 1W% (เทียบกลุ่ม)' : 'แกน X = 3M% Y = 1M% (เทียบกลุ่ม)');
-  renderHkRotation();
-}
+async function loadUsRotation() { return _rotLoad('us'); }
+async function loadHkRotation() { return _rotLoad('hk'); }
+async function loadJpRotation() { return _rotLoad('jp'); }
 
-async function loadHkRotation() {
-  const gate = document.getElementById('hkrot-gate'), body = document.getElementById('hkrot-body');
-  if (!_hkData) {
-    gate.style.display = ''; gate.textContent = 'กำลังดึงข้อมูลหุ้น HK...'; body.style.display = 'none';
-    try {
-      const d = await (await fetch('/api/hk-index-metrics')).json();
-      if (d.error) throw new Error(d.error);
-      _hkData = d;
-    } catch (e) {
-      gate.textContent = 'โหลดข้อมูลหุ้น HK ไม่สำเร็จ: ' + e.message;
-      return;
-    }
-  }
-  if (!_hkData || !_hkData.stocks || !_hkData.stocks.length) {
-    gate.style.display = ''; body.style.display = 'none';
-    gate.textContent = 'ยังไม่มีข้อมูล — กดปุ่ม 📈 HK Index Max หรือ ⚡ Quick Update ก่อน';
-    return;
-  }
-  gate.style.display = 'none'; body.style.display = '';
-  _rebuildHkRotSectorFilter();
-  renderHkRotation();
-}
+function _rebuildUsRotSectorFilter() { _rotRebuildSectorFilter('us'); }
+function _rebuildHkRotSectorFilter() { _rotRebuildSectorFilter('hk'); }
+function _rebuildJpRotSectorFilter() { _rotRebuildSectorFilter('jp'); }
 
-function _rebuildHkRotSectorFilter() {
-  if (!_hkData || !_hkData.stocks) return;
-  const flag = _HK_IDX_FLAG[_hkRotIndex];
-  const inIdx = flag ? _hkData.stocks.filter(s => s[flag]) : _hkData.stocks;
-  const sectors = ['ALL', ...[...new Set(inIdx.map(s => s.sector || 'Unknown'))].sort()];
-  const sel = document.getElementById('hkrot-sector');
-  if (!sel) return;
-  const cur = sel.value;
-  sel.innerHTML = sectors.map(s => `<option value="${s}">${s === 'ALL' ? 'ทุก Sector' : s}</option>`).join('');
-  sel.value = sectors.includes(cur) ? cur : 'ALL';
-}
-
-function renderHkRotation() {
-  if (!_hkData || !_hkData.stocks) return;
-  const flag = _HK_IDX_FLAG[_hkRotIndex];
-  const universe = flag ? _hkData.stocks.filter(s => s[flag]) : _hkData.stocks;
-  const isShort = _hkRotTf === 'short';
-  const valid = universe.filter(s => isShort
-    ? (s.ret_1m != null && s.ret_1w != null)
-    : (s.ret_3m != null && s.ret_1m != null));
-  if (!valid.length) return;
-  const sector = document.getElementById('hkrot-sector')?.value || 'ALL';
-  const shown = sector === 'ALL' ? valid : valid.filter(s => (s.sector || 'Unknown') === sector);
-  const bmSet = (_hkRotBenchmark === 'sector' && sector !== 'ALL') ? shown : valid;
-  const avg = f => { const v = bmSet.filter(s => s[f] != null); return v.length ? v.reduce((a, s) => a + s[f], 0) / v.length : 0; };
-  const a3m = avg('ret_3m'), a1m = avg('ret_1m'), a1w = avg('ret_1w'), a6m = avg('ret_6m'), a1y = avg('ret_1y');
-  const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
-  const items = shown.map(s => ({
-    name: s.symbol, sector: s.sector,
-    ret_3m: rel(s.ret_3m, a3m), ret_1m: rel(s.ret_1m, a1m), ret_1w: rel(s.ret_1w, a1w),
-    ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
-  }));
-  const info = document.getElementById('hkrot-info');
-  const bmLabel = bmSet === shown ? `เฉลี่ย sector "${sector}"` : 'เฉลี่ยทั้งดัชนี';
-  if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmLabel} (${bmSet.length} ตัว)` +
-    (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
-             : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
-  drawRotationScatter(items, { canvasId: 'hk-rotation-map', legendId: 'hk-rot-legend', tf: _hkRotTf, onOpen: openHkChartModal });
-}
-
-// ============================================================
-// JP ROTATION — RRG ของหุ้น JP เทียบค่าเฉลี่ย sector ที่เลือก
-// ก็อปโครงจาก HK ROTATION ด้านบน — ต่างแค่ดัชนีเดียว (Nikkei 225 ทั้งหมด) ไม่มีปุ่มสลับดัชนี
-// ============================================================
-let _jpRotTf = 'long';
-let _jpRotBenchmark = 'index';   // index | sector — เหตุผลเดียวกับ _usRotBenchmark
-
-function setJpRotBenchmark(mode, btn) {
-  _jpRotBenchmark = mode;
-  document.querySelectorAll('#jprot-bm-index,#jprot-bm-sector').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-  renderJpRotation();
-}
-
-function setJpRotTf(tf, btn) {
-  _jpRotTf = tf;
-  document.querySelectorAll('#jprot-tf-long,#jprot-tf-short').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-  const sub = document.getElementById('jprot-subtitle');
-  if (sub) sub.innerHTML = 'RRG ของหุ้น JP แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · ' +
-    (tf === 'short' ? 'แกน X = 1M% Y = 1W% (เทียบกลุ่ม)' : 'แกน X = 3M% Y = 1M% (เทียบกลุ่ม)');
-  renderJpRotation();
-}
-
-async function loadJpRotation() {
-  const gate = document.getElementById('jprot-gate'), body = document.getElementById('jprot-body');
-  if (!_jpData) {
-    gate.style.display = ''; gate.textContent = 'กำลังดึงข้อมูลหุ้น JP...'; body.style.display = 'none';
-    try {
-      const d = await (await fetch('/api/jp-index-metrics')).json();
-      if (d.error) throw new Error(d.error);
-      _jpData = d;
-    } catch (e) {
-      gate.textContent = 'โหลดข้อมูลหุ้น JP ไม่สำเร็จ: ' + e.message;
-      return;
-    }
-  }
-  if (!_jpData || !_jpData.stocks || !_jpData.stocks.length) {
-    gate.style.display = ''; body.style.display = 'none';
-    gate.textContent = 'ยังไม่มีข้อมูล — กดปุ่ม 📈 JP Index Max หรือ ⚡ Quick Update ก่อน';
-    return;
-  }
-  gate.style.display = 'none'; body.style.display = '';
-  _rebuildJpRotSectorFilter();
-  renderJpRotation();
-}
-
-function _rebuildJpRotSectorFilter() {
-  if (!_jpData || !_jpData.stocks) return;
-  const sectors = ['ALL', ...[...new Set(_jpData.stocks.map(s => s.sector || 'Unknown'))].sort()];
-  const sel = document.getElementById('jprot-sector');
-  if (!sel) return;
-  const cur = sel.value;
-  sel.innerHTML = sectors.map(s => `<option value="${s}">${s === 'ALL' ? 'ทุก Sector' : s}</option>`).join('');
-  sel.value = sectors.includes(cur) ? cur : 'ALL';
-}
-
-function renderJpRotation() {
-  if (!_jpData || !_jpData.stocks) return;
-  const isShort = _jpRotTf === 'short';
-  const valid = _jpData.stocks.filter(s => isShort
-    ? (s.ret_1m != null && s.ret_1w != null)
-    : (s.ret_3m != null && s.ret_1m != null));
-  if (!valid.length) return;
-  const sector = document.getElementById('jprot-sector')?.value || 'ALL';
-  const shown = sector === 'ALL' ? valid : valid.filter(s => (s.sector || 'Unknown') === sector);
-  const bmSet = (_jpRotBenchmark === 'sector' && sector !== 'ALL') ? shown : valid;
-  const avg = f => { const v = bmSet.filter(s => s[f] != null); return v.length ? v.reduce((a, s) => a + s[f], 0) / v.length : 0; };
-  const a3m = avg('ret_3m'), a1m = avg('ret_1m'), a1w = avg('ret_1w'), a6m = avg('ret_6m'), a1y = avg('ret_1y');
-  const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
-  const items = shown.map(s => ({
-    name: s.symbol, sector: s.sector,
-    ret_3m: rel(s.ret_3m, a3m), ret_1m: rel(s.ret_1m, a1m), ret_1w: rel(s.ret_1w, a1w),
-    ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
-  }));
-  const info = document.getElementById('jprot-info');
-  const bmLabel = bmSet === shown ? `เฉลี่ย sector "${sector}"` : 'เฉลี่ยทั้งดัชนี';
-  if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmLabel} (${bmSet.length} ตัว)` +
-    (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
-             : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
-  drawRotationScatter(items, { canvasId: 'jp-rotation-map', legendId: 'jp-rot-legend', tf: _jpRotTf, onOpen: openJpChartModal });
-}
+function renderUsRotation() { _rotRender('us'); }
+function renderHkRotation() { _rotRender('hk'); }
+function renderJpRotation() { _rotRender('jp'); }
 
 function loadUsStocksPage() {
   if (_usData) { renderUsTable(); loadUsBreadthChart(); return; }
@@ -12746,7 +12555,7 @@ function setHeatmapPeriod(period, btn) {
   _hmPeriod = period;
   document.querySelectorAll('#hm-period-btns .filter-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
-  const hintEl = document.getElementById('hm-hint');
+  const hintEl = document.getElementById('us-hm-hint');
   if (hintEl) hintEl.textContent = (HM_CFG[period] || HM_CFG.ret_1d).hint +
     (_hmSortDir === 1 ? ' · เรียงมาก→น้อย' : ' · เรียงน้อย→มาก') + ' (คลิกปุ่มเดิมซ้ำเพื่อสลับ)';
   if (_hmData[_hmIndex]) _renderHeatmap(_hmData[_hmIndex]);
