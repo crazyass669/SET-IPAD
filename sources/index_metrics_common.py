@@ -149,7 +149,7 @@ def build(base_dir, cfg, callback=None, live_map=None):
     return len(stocks)
 
 
-def update_live_prices(base_dir, cfg, live_map):
+def update_live_prices(base_dir, cfg, live_map, scope_tickers):
     """Merge live_price/live_chg เข้า cfg['out_file'] ที่มีอยู่แล้วตรงๆ โดยไม่คำนวณ
     RS/EMA/Stage/52W ใหม่ทั้งดัชนี — ใช้ตอนผู้ใช้กดปุ่ม Live ของ Heatmap ขณะดูแค่แท็บ
     ดัชนีย่อยเดียว (เช่น Dow 30 ตัว) ซึ่งเดิมเรียก build() เต็มรูปแบบทุกครั้ง (คำนวณทั้ง
@@ -157,6 +157,12 @@ def update_live_prices(base_dir, cfg, live_map):
     ทั้งหมด) ทำให้ปุ่มที่ควรเร็ว (แค่ 30 ตัว) กลับช้าเท่าดึงทั้งดัชนี — ตอนนี้ RS/EMA/Stage
     เต็มรูปแบบคำนวณเฉพาะตอน Quick Update/Index Max เท่านั้น (วันละครั้ง) ปุ่มนี้แค่อัพเดท
     ราคาที่โชว์บน Heatmap ให้สดขึ้น ไม่กระทบอันดับ/สถิติที่เหลือ
+
+    scope_tickers — ticker ทั้งหมดที่ gap-update "เช็คแล้ว" รอบนี้ (ดู _run_index_gap_update)
+    ตัวที่อยู่ใน scope แต่ไม่ติดใน live_map (ราคานิ่งแล้ว/ตลาดปิด/แท่งวันนี้ยังไม่ขึ้น) ต้อง
+    เคลียร์ live_price/live_chg เก่าทิ้ง ไม่งั้นค้างราคาของรอบก่อน (อาจข้ามวัน) แสดงเป็น
+    ราคา "สด" ปลอมๆ ต่อไปเรื่อยๆ — เดิมโค้ดนี้ merge เฉพาะที่มีใน live_map แต่ไม่เคลียร์ตัว
+    ที่หลุด ทำให้กดปุ่ม Live ตอนตลาดปิด (live_map ว่าง) แล้ว live_price เก่าค้างอยู่ทั้งไฟล์
 
     คืน True ถ้า merge สำเร็จ (มีไฟล์เดิมอยู่แล้ว), False ถ้ายังไม่เคยมีไฟล์ (ต้องให้ build()
     เต็มรูปแบบรันก่อนอย่างน้อย 1 ครั้ง)"""
@@ -166,12 +172,21 @@ def update_live_prices(base_dir, cfg, live_map):
             out = json.load(f)
     except (OSError, json.JSONDecodeError):
         return False
-    if live_map:
-        for row in out.get("stocks", []):
-            live = live_map.get(row.get("symbol"))
-            if live:
-                row["live_price"] = live["live_price"]
-                row["live_chg"] = live["live_chg"]
+    scope = set(scope_tickers or ())
+    live_map = live_map or {}
+    for row in out.get("stocks", []):
+        sym = row.get("symbol")
+        if sym not in scope:
+            continue
+        live = live_map.get(sym)
+        if live:
+            live = sanitize(live)  # กัน NaN/Infinity หลุดเข้าไฟล์ (out.get("stocks") ผ่าน build()
+                                    # ที่ sanitize() ทั้งก้อนแล้ว แต่ path นี้ merge ตรงๆ ไม่ผ่าน build())
+            row["live_price"] = live["live_price"]
+            row["live_chg"] = live["live_chg"]
+        else:
+            row.pop("live_price", None)
+            row.pop("live_chg", None)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False)

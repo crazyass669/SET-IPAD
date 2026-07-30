@@ -1069,8 +1069,12 @@ def _run_us_index_full_refresh():
 
 def _run_index_gap_update(membership, store, region, label, progress_cb=None, sleep_s=0.3, index_key=None):
     """ดึงเฉพาะวันที่ขาดของสมาชิกดัชนี (gap-update, เร็ว) ต่างจาก full-refresh ที่ดึง
-    ย้อนหลังสูงสุดทั้งประวัติ (ใช้เฉพาะกดมือ) ใช้จาก Quick Update ประจำวัน — คืนจำนวน
-    ticker ที่อัพเดทสำเร็จ
+    ย้อนหลังสูงสุดทั้งประวัติ (ใช้เฉพาะกดมือ) ใช้จาก Quick Update ประจำวัน — คืน
+    (จำนวน ticker ที่อัพเดทสำเร็จ, live_map, scope ticker ทั้งหมดที่ขอรอบนี้)
+
+    scope ticker (ค่าที่ 3) ใช้บอกขอบเขตที่ "เช็คแล้ว" รอบนี้ — index_metrics_common.
+    update_live_prices ใช้แยกว่า ticker ไหนหลุดจาก live_map เพราะราคานิ่งแล้ว/ตลาดปิด (ต้อง
+    เคลียร์ live_price เก่าทิ้ง) กับ ticker ที่ไม่ได้อยู่ใน scope เลย (ไม่ต้องแตะ)
 
     เดิมมี _run_us_index_gap_update/_run_hk_index_gap_update แยกกัน 2 ฟังก์ชัน
     เหมือนกันทุกบรรทัดยกเว้น module/region code — รวมเป็นฟังก์ชันเดียวรับ membership/
@@ -1093,7 +1097,7 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
     else:
         tickers = membership.all_tickers(BASE_DIR)
     if not tickers:
-        return 0, {}
+        return 0, {}, tickers
 
     # last_dates อาจมี ticker ที่ถูกถอดจากดัชนีไปแล้วค้างอยู่ (ไม่อัพเดทต่อ) — ถ้าเอา
     # ไปหา min ทั้งก้อนจะยิ่งลากวันเริ่มดึง (start) ให้เก่าขึ้นเรื่อยๆ ทุกวันที่ผ่านไป
@@ -1104,7 +1108,7 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
         # แล้ว Quick Update ประจำวันแอบกลายเป็น full backfill period='max' หลายร้อยตัว
         # (งานหนักที่ตั้งใจให้กดปุ่ม Index Max เองเท่านั้น)
         print(f"[{label}] {store.DB_FILE} ยังว่าง — ข้าม gap-update (กดปุ่ม Index Max ก่อน)")
-        return 0, {}
+        return 0, {}, tickers
     last_dates = {t: d for t, d in last_dates_all.items() if t in set(tickers)}
     new_tickers = [t for t in tickers if t not in last_dates]
 
@@ -1214,7 +1218,7 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
 
     if data:
         store.upsert_bars(BASE_DIR, data)
-    return len(data), live_map
+    return len(data), live_map, tickers
 
 
 def _run_us_index_gap_update(progress_cb=None, sleep_s=0.3, index_key=None):
@@ -3563,26 +3567,26 @@ def _run_heatmap_live_update(region, index_key=None):
             # ระหว่าง batch นานขึ้น (1.5 วิ แทน 0.3 วิ default) กัน Yahoo rate-limit/แบน —
             # HK (~105 ตัว) และ JP (~225 ตัว) ยังน้อยพอที่จะใช้ค่า default ปกติได้ ถ้าผู้ใช้
             # ระบุ index_key (เช่น ดูแค่แท็บ Dow) จะดึงเฉพาะ 30 ตัวนั้นแทนทั้ง union — เร็วขึ้นมาก
-            n, live_map = _run_us_index_gap_update(sleep_s=1.5, index_key=index_key)
+            n, live_map, scope = _run_us_index_gap_update(sleep_s=1.5, index_key=index_key)
             from sources import us_index_metrics as mod
             # แค่ merge live_price/live_chg เข้าไฟล์เดิม ไม่ build() เต็มรูปแบบ — เดิม build()
             # คำนวณ RS/EMA/Stage ใหม่ทั้ง ~518 ตัวของ union ทุกครั้งแม้ gap-update มาแค่ 30 ตัว
             # ของ Dow (RS percentile ต้อง rank เทียบทั้งกลุ่มถึงจะแม่น คำนวณแค่ scope ที่ขอไม่ได้)
             # ทำให้ปุ่มที่ควรเร็วกลับช้าเท่าดึงทั้งดัชนี — ตอนนี้ RS/EMA/Stage เต็มรูปแบบ
             # คำนวณเฉพาะตอน Quick Update/Index Max (วันละครั้ง) พอ ปุ่มนี้ใช้แค่โชว์ราคาสด
-            if not mod.update_live_prices(BASE_DIR, live_map):
+            if not mod.update_live_prices(BASE_DIR, live_map, scope):
                 mod.build(BASE_DIR, live_map=live_map)
             _us_breadth_cache.clear()
         elif region == "HK":
-            n, live_map = _run_hk_index_gap_update(index_key=index_key)
+            n, live_map, scope = _run_hk_index_gap_update(index_key=index_key)
             from sources import hk_index_metrics as mod
-            if not mod.update_live_prices(BASE_DIR, live_map):
+            if not mod.update_live_prices(BASE_DIR, live_map, scope):
                 mod.build(BASE_DIR, live_map=live_map)
             _hk_breadth_cache.clear()
         else:
-            n, live_map = _run_jp_index_gap_update()
+            n, live_map, scope = _run_jp_index_gap_update()
             from sources import jp_index_metrics as mod
-            if not mod.update_live_prices(BASE_DIR, live_map):
+            if not mod.update_live_prices(BASE_DIR, live_map, scope):
                 mod.build(BASE_DIR, live_map=live_map)
         state["done"] = True
         # n_fetched/n_live — ให้ frontend โชว์ข้อความ "⚡ ราคาสด ณ HH:MM:SS · สำเร็จ N/M ตัว"
@@ -5688,7 +5692,7 @@ def _run_quick():
         def _us_index():
             def _us_cb(current, total, msg):
                 _update(message=f"US Index: {msg}")
-            n_us, live_us = _run_us_index_gap_update(progress_cb=_us_cb)
+            n_us, live_us, _scope_us = _run_us_index_gap_update(progress_cb=_us_cb)
             from sources import us_index_metrics
             us_index_metrics.build(BASE_DIR, live_map=live_us)
             _us_breadth_cache.clear()
@@ -5699,7 +5703,7 @@ def _run_quick():
         def _hk_index():
             def _hk_cb(current, total, msg):
                 _update(message=f"HK Index: {msg}")
-            n_hk, live_hk = _run_hk_index_gap_update(progress_cb=_hk_cb)
+            n_hk, live_hk, _scope_hk = _run_hk_index_gap_update(progress_cb=_hk_cb)
             from sources import hk_index_metrics
             hk_index_metrics.build(BASE_DIR, live_map=live_hk)
             _hk_breadth_cache.clear()
@@ -5710,7 +5714,7 @@ def _run_quick():
         def _jp_index():
             def _jp_cb(current, total, msg):
                 _update(message=f"JP Index: {msg}")
-            n_jp, live_jp = _run_jp_index_gap_update(progress_cb=_jp_cb)
+            n_jp, live_jp, _scope_jp = _run_jp_index_gap_update(progress_cb=_jp_cb)
             from sources import jp_index_metrics
             jp_index_metrics.build(BASE_DIR, live_map=live_jp)
             print(f"[QuickUpdate] JP Index: gap-updated {n_jp} ticker, metrics rebuilt")

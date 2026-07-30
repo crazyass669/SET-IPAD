@@ -10195,7 +10195,7 @@ function openChartModal(symbol) {
     s.pe        != null ? mk(s.pe.toFixed(2),        'P/E',      'text2') : '',
     s.pbv       != null ? mk(s.pbv.toFixed(2),       'P/BV',     'text2') : '',
     s.div_yield != null ? mk(s.div_yield.toFixed(2)+'%', 'Div Yield', s.div_yield >= 4 ? 'green' : 'text2') : '',
-    mk(_drFmtCap(s.mkt_cap), 'MKT CAP', 'text2'),
+    mk(fmtCap(s.mkt_cap, s.is_reit), 'MKT CAP', 'text2'),
   ].join('');
 
   _cmStock = s;
@@ -10468,22 +10468,23 @@ function closeChartModal() {
 // ปุ่ม "🔗 หน้างบการเงิน" บน popup กราฟ (chart-modal) — ไปหน้าเมนู "งบการเงิน" จริงพร้อมค้นหุ้น
 // ตัวนี้ให้ทันที คนละอันกับแท็บ "🧾 งบการเงิน" (cm-mode-fin) ที่แค่สลับ panel ภายใน popup เดิม
 // (แท็บนั้นคงไว้เหมือนเดิม ไม่แตะ) — ใช้ hash เดียวกับ _spopGoFin/_hmGoFin/_hkHmGoFin/_jpHmGoFin
-// ปิด modal ตรงๆ แทนเรียก closeChartModal() เพราะถ้า _cmParentIdx ค้างอยู่ (เปิดมาจากแท็บ
+// เคลียร์ _cmParentIdx ก่อนเรียก closeChartModal() เพราะถ้าค้างอยู่ (เปิดมาจากแท็บ
 // "หุ้นในกลุ่ม" ของ index modal) closeChartModal จะ setTimeout เปิด index modal ซ้อนทับ
-// หน้างบการเงินที่เรากำลังจะนำทางไป
+// หน้างบการเงินที่เรากำลังจะนำทางไป — เคลียร์ก่อนแล้วเรียกปกติ ได้ cleanup ครบ
+// (_cmVolumeData, setCmMode('chart')) โดยไม่ต้องก็อป logic ปิดซ้ำ
+// ไม่เรียก _finMirSelectMarket เองตรงนี้ — hash prefix "HK:"/"JP:" ให้ _finApplyHash เป็นคน
+// สลับตลาดแทน (เดิมเรียกซ้ำสองที่ ทำให้โหมด "🗗 แท็บใหม่" ไปสลับตลาด+re-render หน้างบการเงิน
+// ของแท็บปัจจุบันที่ผู้ใช้ไม่ได้กำลังจะดูแล้วทิ้งไว้เงียบๆ)
 function _cmGoFullFin() {
   if (!_cmStock) return;
   const sym = _cmStock.symbol;
-  _cmParentIdx = null;
-  document.getElementById('chart-modal').classList.remove('open');
-  document.body.style.overflow = '';
+  _cmParentIdx = null; // กัน closeChartModal() เด้งกลับไปเปิด index modal ซ้อน
+  closeChartModal();
   if (_cmStock._isUSIdx) {
     openInternalHash('#fin/dr/US:' + encodeURIComponent(sym));
   } else if (_cmStock._isHKIdx) {
-    _finMirSelectMarket('HK');
     openInternalHash('#fin/dr/HK:' + encodeURIComponent(sym.replace(/\.HK$/i, '')));
   } else if (_cmStock._isJPIdx) {
-    _finMirSelectMarket('JP');
     openInternalHash('#fin/dr/JP:' + encodeURIComponent(sym.replace(/\.T$/i, '')));
   } else if (_cmStock._isDR) {
     openInternalHash('#fin/dr/' + encodeURIComponent(sym));
@@ -11316,7 +11317,7 @@ function _finMirName(mk, sym) {
 // เซ็ต _finMirMarket + toggle class เองซ้ำๆ ทำให้ลืมอัพเดทส่วนที่เพิ่มมาทีหลัง (แถวปุ่ม
 // เช็ค/sync ดัชนี) รวมมาเรียก _finMirBrowse ทางเดียวกันหมดจะไม่หลุดอีก
 function _finMirSelectMarket(mk) {
-  _finMirBrowse(mk, document.getElementById(mk === 'HK' ? 'fin-mir-hk' : 'fin-mir-us'));
+  _finMirBrowse(mk, document.getElementById('fin-mir-' + mk.toLowerCase()));
 }
 
 // เรียกดูรายชื่อหุ้น US/HK ที่มีข้อมูล (ในแท็บต่างประเทศ) — คลิกเพื่อโหลดงบ
@@ -13085,11 +13086,11 @@ function _hkHmShowPopup(ev, sym) {
 function _hkHmGoFin() {
   if (!_hkHmPopupSym) return;
   // งบเก็บใต้ namespace mirror ด้วยรหัสดิบไม่มี .HK ("0700") — ส่ง "0700.HK" ทั้ง suffix
-  // จะค้นไม่เจอเสมอ และต้องสลับ market เป็น HK ก่อน ไม่งั้น searchFinancials ใช้
-  // _finMirMarket ที่ค้างอยู่ (default US) เดา yf ticker ผิดตลาด (ดู _loadCmFin ที่ทำแบบเดียวกัน)
+  // จะค้นไม่เจอเสมอ ต้องตัด suffix ออก — ส่วนการสลับ market เป็น HK ให้ _finApplyHash จัดการ
+  // เองจาก prefix "HK:" ใน hash (ไม่เรียก _finMirSelectMarket ตรงนี้ซ้ำ กันโหมด "🗗 แท็บใหม่"
+  // ไปสลับตลาด+re-render หน้างบการเงินของแท็บปัจจุบันทิ้งไว้เงียบๆ โดยไม่ตั้งใจ)
   const sym = _hkHmPopupSym.replace(/\.HK$/i, '');
   document.getElementById('hm-popup').style.display = 'none';
-  _finMirSelectMarket('HK');
   openInternalHash('#fin/dr/HK:' + sym);
 }
 
@@ -13193,11 +13194,10 @@ function _jpHmShowPopup(ev, sym) {
 
 function _jpHmGoFin() {
   if (!_jpHmPopupSym) return;
-  // งบเก็บใต้ namespace mirror ด้วยรหัสดิบไม่มี .T ("7203") — ต้องสลับ market เป็น JP ก่อน
-  // ไม่งั้น searchFinancials ใช้ _finMirMarket ที่ค้างอยู่ (default US) เดา yf ticker ผิดตลาด
+  // งบเก็บใต้ namespace mirror ด้วยรหัสดิบไม่มี .T ("7203") — ต้องตัด suffix ออก ส่วนการสลับ
+  // market เป็น JP ให้ _finApplyHash จัดการเองจาก prefix "JP:" ใน hash (ดูคอมเมนต์ใน _hkHmGoFin)
   const sym = _jpHmPopupSym.replace(/\.T$/i, '');
   document.getElementById('hm-popup').style.display = 'none';
-  _finMirSelectMarket('JP');
   openInternalHash('#fin/dr/JP:' + sym);
 }
 
