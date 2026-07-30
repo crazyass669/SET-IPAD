@@ -521,6 +521,7 @@
             <th class="r sortable" id="sh-e200" onclick="sortStocks('above_ema200_n')">EMA200<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ราคาอยู่เหนือเส้น EMA 200 วันหรือไม่ (✓ = แนวโน้มระยะยาวขาขึ้น)</div></span><span class="sort-ind">↕</span></th>
             <th class="r sortable" id="sh-ath"  onclick="sortStocks('ath_pct')">ATH%<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">% ห่างจากราคาสูงสุดตลอดกาล (All-Time High)</div></span><span class="sort-ind">↕</span></th>
             <th class="r sortable" id="sh-atr"  onclick="sortStocks('atr14_pct')">ATR%<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ATR14% = ช่วงแกว่งเฉลี่ยต่อวัน 14 วัน (true range: high–low + gap) ใช้ position sizing · ยิ่งต่ำ = นิ่งกว่า</div></span><span class="sort-ind">↕</span></th>
+            <th class="r sortable" id="sh-slope" onclick="sortStocks('ema200_slope_pct')">Slope%<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">ความชันของเส้น EMA200 — บวก = แนวโน้มระยะยาวชี้ขึ้น, ลบมาก = ชี้ลงแรง</div></span><span class="sort-ind">↕</span></th>
             <th class="r sortable" id="sh-stage" onclick="sortStocks('_stage')">Stage<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">Weinstein Stage: 1=สร้างฐาน, 2=ขาขึ้น (โซนซื้อ), 3=สร้างยอด, 4=ขาลง</div></span><span class="sort-ind">↕</span></th>
           </tr></thead>
           <tbody id="stocks-tbody"></tbody>

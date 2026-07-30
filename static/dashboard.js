@@ -2596,7 +2596,7 @@ function sortStocks(key) {
     ret_1d:'sh-1d', ret_1w:'sh-1w', ret_1m:'sh-1m', ret_3m:'sh-3m', ret_ytd:'sh-ytd',
     mkt_cap:'sh-cap', vol_today:'sh-vol',
     above_ema50_n:'sh-e50', above_ema200_n:'sh-e200', ath_pct:'sh-ath',
-    atr14_pct:'sh-atr', _stage:'sh-stage'
+    atr14_pct:'sh-atr', ema200_slope_pct:'sh-slope', _stage:'sh-stage'
   };
   document.querySelectorAll('#tbl-stocks th[id] .sort-ind').forEach(ind => {
     const th = ind.closest('th');
@@ -2773,13 +2773,14 @@ function renderStocksTable() {
         <td class="r">${emaBadge(s.above_ema200)}</td>
         <td class="r"><span class="${s.ath_pct != null ? (s.ath_pct >= -5 ? 'green' : s.ath_pct >= -20 ? 'yellow' : s.ath_pct >= -40 ? 'text2' : 'red') : 'text2'}" style="font-size:11px">${s.ath_pct != null ? s.ath_pct.toFixed(2)+'%' : '—'}</span></td>
         <td class="r" style="font-size:11px;color:var(--text2)">${s.atr14_pct != null ? s.atr14_pct.toFixed(2)+'%' : '—'}</td>
+        <td class="r"><span class="${s.ema200_slope_pct != null ? (s.ema200_slope_pct >= 0 ? 'green' : 'red') : 'text2'}" style="font-size:11px">${s.ema200_slope_pct != null ? s.ema200_slope_pct.toFixed(2)+'%' : '—'}</span></td>
         <td class="r">${stageBadge(s._stage)}</td>
       </tr>`).join("");
     renderSparklinesInTable("stocks-tbody", window._currentStockList);
 
     if (slice.length < list.length) {
       document.getElementById("stocks-tbody").innerHTML +=
-        `<tr><td colspan="19" style="text-align:center;padding:14px">
+        `<tr><td colspan="20" style="text-align:center;padding:14px">
           <button onclick="loadMoreStocks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:7px 20px;border-radius:6px;cursor:pointer;font-size:13px">
             โหลดเพิ่ม (${slice.length}/${list.length} ตัว)
           </button>
