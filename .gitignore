@@ -14,17 +14,20 @@ dr_cache.json
 set_market_stats.json
 *.json.tmp
 
-# indices_cache.json, short_sales_data.json, nvdr_data.json: ไม่ ignore แล้ว
-# (commit เข้า repo ตรงๆ) — เดิม gitignore ไว้ทำให้ CI (fresh checkout ทุกรอบ)
-# ไม่มีไฟล์นี้เลย /api/indices และ /api/short-sales อ่านจากไฟล์นี้อย่างเดียว
-# ไม่ fetch สดเอง เลย 404 ทุกรอบ auto-update เงียบๆ มาตลอด (required=False
-# เลยไม่มีใครสังเกต) — nvdr_data.json ก็เจอบัคแบบเดียวกัน: ประวัติ daily ไม่สะสม
-# บน CI ทำให้ NVDR Δ ranking + สัญญาณ NVDR ใน Flow Confluence เป็น 0 หมด
-# บนเวอร์ชันเว็บ (แก้ 2026-07-17)
+# indices_cache.json, short_sales_data.json, nvdr_data.json: ไฟล์สถานะสะสมข้ามรอบ
+# ของ CI เท่านั้น (ไม่ใช่ไฟล์ที่เว็บ/iPad อ่าน — เว็บอ่าน data/indices_data.json,
+# data/short_sales.json, data/nvdr_data.json ต่างหาก ซึ่ง commit ปกติ ไม่ ignore)
+# เดิม commit ตรงๆ เข้า repo ทำให้ history บวมหลักร้อย MiB โดยไม่มีใครอ่านเวอร์ชัน
+# ที่ commit นั้นนอกจาก CI เอง — 2026-08 ย้ายไปใช้ actions/cache แทนแล้ว (ดู
+# update.yml, ยืนยัน cache primed สำเร็จก่อนแล้ว) จึงเลิก commit ไฟล์นี้ได้จริง
 #
-# 2026-08: กำลังย้ายไปใช้ actions/cache แทน (ดู comment ใน update.yml) แต่ "ยังไม่
-# gitignore ที่นี่" จนกว่าจะรัน workflow_dispatch ยืนยันแล้วว่า cache รอบแรกเก็บ
-# ไฟล์เหล่านี้ได้จริง — ไม่งั้นรอบถัดไปจะ merge จากไฟล์ว่าง เหมือนบั๊ก 2026-07-17
+# *** ต่างจากบั๊ก 2026-07-17 (ตอนนั้น ignore ไว้แล้วไม่มี cache สำรอง เลย CI
+# เริ่มจากไฟล์ว่างทุกรอบ ทำให้ /api/indices, /api/short-sales 404 และ NVDR
+# history ไม่สะสม) — รอบนี้มี actions/cache รับหน้าที่แทนแล้ว ห้ามลบ cache step
+# ใน update.yml ออกโดยไม่เพิ่มอย่างอื่นมาแทน ไม่งั้นบั๊กเดิมจะกลับมา ***
+indices_cache.json
+short_sales_data.json
+nvdr_data.json
 
 # ไฟล์ข้อมูลดิบต้นทาง (local-only) — ดึงเข้า set_prices.db/s50_flow_data.json ไปแล้วผ่าน
 # import_delisted_stocks.py / import_s50_futures_xlsx.py — ตัว zip ใหญ่เกิน GitHub limit อยู่แล้ว

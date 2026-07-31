@@ -46,12 +46,12 @@ jobs:
       # indices_cache.json/short_sales_data.json/nvdr_data.json: ไฟล์สถานะสะสมข้าม
       # รอบรัน (ไม่ใช่ไฟล์ที่เว็บ/iPad อ่าน — เว็บอ่าน data/indices_data.json,
       # data/short_sales.json, data/nvdr_data.json ต่างหาก ซึ่ง bake+commit แยกด้านล่าง
-      # อยู่แล้ว) เพิ่มเข้า cache ไว้ก่อน (เผื่อ) แต่ "ยังคง" git commit ตามปกติด้วย —
-      # ขั้นต่อไป (หลังยืนยันว่า cache รอบแรกเก็บสำเร็จจริง) จะเลิก git add 3 ไฟล์นี้
-      # + gitignore กัน repo history บวม (เดิม commit ทุกรอบ ~4.9MB/1.6MB/0.6MB
-      # x 3-4 รอบ/วัน สะสมหลักร้อย MiB ใน history โดยไม่มีใครอ่านเวอร์ชันที่ commit
-      # นั้นเลยนอกจาก CI เอง) — ห้ามลบ git add ทิ้งก่อนยืนยัน cache รอบแรกสำเร็จ
-      # ไม่งั้นรอบถัดไปจะ merge จากไฟล์ว่างเหมือนบั๊ก 2026-07-17
+      # อยู่แล้ว) 2026-08: ย้ายมาอยู่ที่นี่แทน git commit แล้ว (ยืนยัน cache รอบแรก
+      # เก็บสำเร็จจริงก่อนแล้ว — ดู workflow run 30664863568) เดิม commit ตรงๆ ทุกรอบ
+      # ~4.9MB/1.6MB/0.6MB x 3-4 รอบ/วัน ทำให้ repo history บวมหลักร้อย MiB โดยไม่มี
+      # ใครอ่านเวอร์ชันที่ commit นั้นนอกจาก CI เอง — ห้ามลบ path 3 อันนี้ออกจาก cache
+      # โดยไม่เพิ่มอย่างอื่นมาแทน ไม่งั้นรอบถัดไปจะ merge จากไฟล์ว่างเหมือนบั๊ก
+      # 2026-07-17 (ตอนนั้น ignore ไว้เฉยๆ ไม่มี cache สำรอง)
       - name: Restore price store cache
         uses: actions/cache@v6
         with:
@@ -94,8 +94,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/ indices_cache.json short_sales_data.json market_flow_data.json \
-                  s50_flow_data.json bond_flow_data.json nvdr_data.json
+          git add data/ market_flow_data.json s50_flow_data.json bond_flow_data.json
           if git diff --cached --quiet; then
             echo "ไม่มีข้อมูลใหม่ — ข้าม commit"
             exit 0
