@@ -43,6 +43,15 @@ jobs:
 
       # SQLite price store (~130MB) — cache ระหว่างรันเพื่อให้เป็น quick update
       # (ไม่มี cache = full refresh 10 ปี ~30-60 นาที)
+      # indices_cache.json/short_sales_data.json/nvdr_data.json: ไฟล์สถานะสะสมข้าม
+      # รอบรัน (ไม่ใช่ไฟล์ที่เว็บ/iPad อ่าน — เว็บอ่าน data/indices_data.json,
+      # data/short_sales.json, data/nvdr_data.json ต่างหาก ซึ่ง bake+commit แยกด้านล่าง
+      # อยู่แล้ว) เพิ่มเข้า cache ไว้ก่อน (เผื่อ) แต่ "ยังคง" git commit ตามปกติด้วย —
+      # ขั้นต่อไป (หลังยืนยันว่า cache รอบแรกเก็บสำเร็จจริง) จะเลิก git add 3 ไฟล์นี้
+      # + gitignore กัน repo history บวม (เดิม commit ทุกรอบ ~4.9MB/1.6MB/0.6MB
+      # x 3-4 รอบ/วัน สะสมหลักร้อย MiB ใน history โดยไม่มีใครอ่านเวอร์ชันที่ commit
+      # นั้นเลยนอกจาก CI เอง) — ห้ามลบ git add ทิ้งก่อนยืนยัน cache รอบแรกสำเร็จ
+      # ไม่งั้นรอบถัดไปจะ merge จากไฟล์ว่างเหมือนบั๊ก 2026-07-17
       - name: Restore price store cache
         uses: actions/cache@v6
         with:
@@ -52,6 +61,9 @@ jobs:
             dr_cache.json
             sec_filings.db
             rotation_state.json
+            indices_cache.json
+            short_sales_data.json
+            nvdr_data.json
           key: set-prices-${{ github.run_id }}
           restore-keys: set-prices-
 

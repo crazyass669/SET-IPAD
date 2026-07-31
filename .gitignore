@@ -21,6 +21,10 @@ set_market_stats.json
 # เลยไม่มีใครสังเกต) — nvdr_data.json ก็เจอบัคแบบเดียวกัน: ประวัติ daily ไม่สะสม
 # บน CI ทำให้ NVDR Δ ranking + สัญญาณ NVDR ใน Flow Confluence เป็น 0 หมด
 # บนเวอร์ชันเว็บ (แก้ 2026-07-17)
+#
+# 2026-08: กำลังย้ายไปใช้ actions/cache แทน (ดู comment ใน update.yml) แต่ "ยังไม่
+# gitignore ที่นี่" จนกว่าจะรัน workflow_dispatch ยืนยันแล้วว่า cache รอบแรกเก็บ
+# ไฟล์เหล่านี้ได้จริง — ไม่งั้นรอบถัดไปจะ merge จากไฟล์ว่าง เหมือนบั๊ก 2026-07-17
 
 # ไฟล์ข้อมูลดิบต้นทาง (local-only) — ดึงเข้า set_prices.db/s50_flow_data.json ไปแล้วผ่าน
 # import_delisted_stocks.py / import_s50_futures_xlsx.py — ตัว zip ใหญ่เกิน GitHub limit อยู่แล้ว
@@ -107,6 +111,17 @@ logs/
 # static web data (สร้าง+commit โดย GitHub Actions — ห้าม ignore)
 !data/
 !data/**
+
+# data/us_index_metrics.json, jp_, hk_index_metrics.json: ไฟล์ local-only แท้ๆ —
+# เช็คแล้ว run_static_update.py/update.yml ไม่แตะไฟล์พวกนี้เลย และเว็บ/iPad
+# (STATIC_MAP ใน dashboard.js) ก็ไม่ fetch เลย ไม่มีใครใช้เวอร์ชันที่เคย commit
+# มาก่อนเลย (2026-08: เลิก commit, เดิมเป็นตัวการหลักบวม repo history ~220 MiB
+# รวมกัน) regenerate ได้เสมอด้วยปุ่ม US/JP/HK Index Max ในเครื่อง — ต้องอยู่ "หลัง"
+# !data/** ด้านบน ไม่งั้นการ negate จะทับกฎ ignore นี้ (gitignore ใช้ pattern
+# ล่าสุดที่ match เป็นหลัก)
+data/us_index_metrics.json
+data/jp_index_metrics.json
+data/hk_index_metrics.json
 
 # Backtest results (local-only เหมือน financials.db)
 backtest_screener_results_*.json
