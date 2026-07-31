@@ -350,10 +350,14 @@ def start_refresh():
 def progress_stream():
     """SSE endpoint — ส่ง progress ทุก 0.5 วิ"""
     def generate():
+        deadline = time.monotonic() + 20 * 60  # safety net กันค้างถ้า job ไม่ set done/error
         while True:
             snap = _snapshot()
             yield f"data: {json.dumps(snap, ensure_ascii=False)}\n\n"
             if snap["done"] or snap["error"]:
+                break
+            if time.monotonic() > deadline:
+                yield f"data: {json.dumps({'done': True, 'error': 'timeout: ไม่มีความคืบหน้าเกิน 20 นาที'}, ensure_ascii=False)}\n\n"
                 break
             time.sleep(0.5)
     return Response(
@@ -5336,8 +5340,8 @@ def _run_refresh(period="max"):
         try:
             shutil.copy2(DATA_FILE, BACKUP_FILE)
             has_backup = True
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"สำรองข้อมูลก่อน refresh ล้มเหลว: {e}")
 
     try:
         from services import refresh as _refresh_svc
