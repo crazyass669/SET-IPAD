@@ -247,18 +247,12 @@
   .static-mode .nav-btn[onclick*="'band'"],
   .static-mode .nav-btn[onclick*="'data-health'"],
   .static-mode .nav-btn[onclick*="'hedge'"],
-  /* หุ้น/Heatmap/Rotation US·HK·JP เรียก /api/{us,hk,jp}-index-metrics ตรงๆ ซึ่งไม่ได้
-     bake ไว้ใน STATIC_MAP (ดู dashboard.js) — เปิดบน GitHub Pages แล้วขึ้น error เสมอ
+  /* หุ้น US·HK·JP เรียก /api/{us,hk,jp}-index-metrics ตรงๆ ซึ่งไม่ได้ bake ไว้ใน STATIC_MAP
+     (ดู dashboard.js) — เปิดบน GitHub Pages แล้วขึ้น error เสมอ
      (ข่าวหุ้น/รายงานทางการ ซ่อนตามคำขอผู้ใช้ ไม่ได้พังจริงทุกฟีเจอร์) */
   .static-mode .nav-btn[onclick*="'us-stocks'"],
-  .static-mode .nav-btn[onclick*="'us-heatmap'"],
-  .static-mode .nav-btn[onclick*="'us-rotation'"],
   .static-mode .nav-btn[onclick*="'hk-stocks'"],
-  .static-mode .nav-btn[onclick*="'hk-heatmap'"],
-  .static-mode .nav-btn[onclick*="'hk-rotation'"],
   .static-mode .nav-btn[onclick*="'jp-stocks'"],
-  .static-mode .nav-btn[onclick*="'jp-heatmap'"],
-  .static-mode .nav-btn[onclick*="'jp-rotation'"],
   .static-mode .nav-btn[onclick*="'stock-news'"],
   .static-mode .nav-btn[onclick*="'filings'"],
   /* เทียบเพื่อน/Tearsheet/ปฏิทิน เรียก /api/peer-compare, /api/tearsheet/*, /api/calendar-events*
@@ -267,6 +261,14 @@
   .static-mode .nav-btn[onclick*="'tearsheet'"],
   .static-mode .nav-btn[onclick*="'calendar'"],
   .static-mode #pe-reminder-modal { display: none !important; }
+
+  /* page-heatmap/page-stock-rotation รวม TH/US/HK/JP ไว้หน้าเดียวด้วยแท็บเลือกตลาด — แท็บ TH
+     (heatmap ใช้ DATA.stocks, rotation DR ใช้ /api/dr ที่ bake ไว้ใน STATIC_MAP) ใช้ได้ปกติบน
+     GitHub Pages แต่แท็บ US/HK/JP เรียก /api/{us,hk,jp}-index-heatmap และ
+     /api/{us,hk,jp}-index-metrics ตรงๆ ซึ่งไม่ได้ bake ไว้ — ซ่อนเฉพาะแท็บเหล่านี้ (ไม่ซ่อนทั้ง
+     nav-btn เหมือนก่อนรวม เพราะแท็บ TH ยังต้องใช้งานได้) */
+  .static-mode #hm-tab-us, .static-mode #hm-tab-hk, .static-mode #hm-tab-jp,
+  .static-mode #sr-tab-us, .static-mode #sr-tab-hk, .static-mode #sr-tab-jp { display: none !important; }
 
   /* HEDGE HOLDINGS (13F) */
   .hedge-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -968,13 +970,13 @@
    เห็นชื่อเต็มได้เหมือนเดิม) ส่วนเวอร์ชัน local (Flask บนเครื่อง) ยังโชว์
    ชื่อเต็มตามปกติทุกขนาดจอ — ทำทุกตารางที่มีคอลัมน์นี้: RS Leaders &
    Emerging, หุ้นทั้งหมด, Stage Analysis, Watchlist, 52W High/Low &
-   Breakout, Momentum Alignment, Fundamental View
-   (Stock Screener แยกจัดการใน JS เพราะใช้ colgroup กำหนดความกว้างตรงๆ) */
+   Breakout, Momentum Alignment
+   (Stock Screener แยกจัดการใน JS เพราะใช้ colgroup กำหนดความกว้างตรงๆ —
+   Fundamental View ถูกยุบเข้า Screener แล้ว ไม่มี #tbl-fundamentals อีกต่อไป) */
 body.static-mode #tbl-rs-leaders th:nth-child(3),  body.static-mode #tbl-rs-leaders td:nth-child(3),
 body.static-mode #tbl-emerging   th:nth-child(3),  body.static-mode #tbl-emerging   td:nth-child(3),
 body.static-mode #tbl-stocks     th:nth-child(3),  body.static-mode #tbl-stocks     td:nth-child(3),
 body.static-mode #tbl-watchlist  th:nth-child(3),  body.static-mode #tbl-watchlist  td:nth-child(3),
-body.static-mode #tbl-fundamentals th:nth-child(3), body.static-mode #tbl-fundamentals td:nth-child(3),
 body.static-mode #tbl-stage      th:nth-child(4),  body.static-mode #tbl-stage      td:nth-child(4),
 body.static-mode #tbl-breakout   th:nth-child(4),  body.static-mode #tbl-breakout   td:nth-child(4),
 body.static-mode #tbl-momentum   th:nth-child(4),  body.static-mode #tbl-momentum   td:nth-child(4) {

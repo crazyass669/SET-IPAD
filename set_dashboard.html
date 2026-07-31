@@ -45,12 +45,11 @@
   <button class="nav-btn" onclick="showPage('peer',this)" title="Peer Compare — เทียบหุ้นในกลุ่ม sector/industry เดียวกันด้าน valuation/คุณภาพ/growth ในตารางเดียว (หุ้นไทย, local-only)">🆚 เทียบเพื่อน</button>
   <button class="nav-btn" onclick="showPage('tearsheet',this)" title="Tearsheet — หุ้น 1 ตัว ครบในหน้าเดียว: Header + Valuation Snapshot (เฟส A, หุ้นไทย, local-only)">📋 Tearsheet</button>
   <button class="nav-btn" onclick="showPage('calendar',this)" title="ปฏิทินงบ/ปันผล — วันประกาศงบ (yfinance ประมาณการ) + XD/จ่ายปันผล (SET.or.th ทางการ) ของหุ้นใน Watchlist ล่วงหน้า 30 วัน (เฟส A, local-only)">📅 ปฏิทิน</button>
-  <button class="nav-btn" onclick="showPage('heatmap',this)">Heatmap</button>
-  <button class="nav-btn" onclick="showPage('fundamentals',this)">Fundamentals</button>
+  <button class="nav-btn" onclick="showPage('heatmap',this)" title="Market Heatmap — รวมหุ้นไทย/US/HK/JP ในหน้าเดียว สลับตลาดด้วยแท็บ 🇹🇭🇺🇸🇭🇰🇯🇵">Heatmap</button>
+  <button class="nav-btn" onclick="showPage('stock-rotation',this)" title="Stock Rotation — RRG รายหุ้น ไทย(DR)/US/HK/JP รวมหน้าเดียว สลับตลาดด้วยแท็บ 🇹🇭🇺🇸🇭🇰🇯🇵">🔄 Stock Rotation</button>
   <button class="nav-btn" onclick="showPage('band',this)">Val. Band</button>
   <button class="nav-btn nav-btn-highlight" onclick="showPage('watchlist',this)">⭐ Watchlist</button>
   <button class="nav-btn" onclick="showPage('dr',this)">DR/DRx</button>
-  <button class="nav-btn" onclick="showPage('dr-rotation',this)" title="DR Rotation — RRG ของหุ้นต่างประเทศ (DR underlying) เทียบกันในกลุ่ม">🔄 DR Rotation</button>
   <button class="nav-btn" onclick="showPage('valuation',this)">Valuation</button>
   <button class="nav-btn" onclick="showPage('insider',this)">Insider</button>
   <button class="nav-btn" onclick="showPage('flow',this)" title="Capital Flow — net buy/sell สถาบัน/ต่างชาติ/รายย่อย">Capital Flow</button>
@@ -58,14 +57,8 @@
   <button class="nav-btn" onclick="showPage('confluence',this)" title="สัญญาณเงินทุนรวม — insider + short + NVDR ที่ตรงกันหลายชั้น">🎯 สัญญาณรวม</button>
   <button class="nav-btn" onclick="showPage('financials',this)">งบการเงิน</button>
   <button class="nav-btn" onclick="showPage('us-stocks',this)" title="หุ้น US — RS / Stage / 52W High / Momentum / EMA ของสมาชิก S&amp;P 500 · Dow Jones · Nasdaq 100 (ราคา OHLC ใน us_prices.db, คำนวณสูตรเดียวกับหุ้นไทย)"><span class="nav-flag nav-flag-us"></span>หุ้น US</button>
-  <button class="nav-btn" onclick="showPage('us-heatmap',this)" title="Heatmap S&amp;P 500 / Dow Jones / Nasdaq 100 (หุ้น US) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้ · คนละหน้ากับ &quot;Heatmap&quot; ของหุ้นไทยด้านซ้าย">🗺️ Heatmap US</button>
-  <button class="nav-btn" onclick="showPage('us-rotation',this)" title="US Rotation — RRG ของหุ้น US แต่ละตัว เทียบกับค่าเฉลี่ยดัชนี/sector ที่เลือก">🔄 US Rotation</button>
   <button class="nav-btn" onclick="showPage('hk-stocks',this)" title="หุ้น HK — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Hang Seng Index · Hang Seng TECH · Hang Seng China Enterprises (ราคา OHLC ใน hk_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US)"><span class="nav-flag nav-flag-hk"></span>หุ้น HK</button>
-  <button class="nav-btn" onclick="showPage('hk-heatmap',this)" title="Heatmap HSI / HSTECH / HSCEI (หุ้น HK) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้">🗺️ Heatmap HK</button>
-  <button class="nav-btn" onclick="showPage('hk-rotation',this)" title="HK Rotation — RRG ของหุ้น HK แต่ละตัว เทียบกับค่าเฉลี่ยดัชนี/sector ที่เลือก">🔄 HK Rotation</button>
   <button class="nav-btn" onclick="showPage('jp-stocks',this)" title="หุ้น JP — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Nikkei 225 (ราคา OHLC ใน jp_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US/HK) — มี Tearsheet/เทียบเพื่อน/งบการเงินครบแล้ว"><span class="nav-flag nav-flag-jp"></span>หุ้น JP</button>
-  <button class="nav-btn" onclick="showPage('jp-heatmap',this)" title="Heatmap Nikkei 225 (หุ้น JP) — ขนาดตาม market cap, สีตาม % เปลี่ยนแปลงวันนี้">🗺️ Heatmap JP</button>
-  <button class="nav-btn" onclick="showPage('jp-rotation',this)" title="JP Rotation — RRG ของหุ้น JP แต่ละตัว เทียบกับค่าเฉลี่ย sector ที่เลือก">🔄 JP Rotation</button>
   <button class="nav-btn" onclick="showPage('stock-news',this)" title="ข่าวรายหุ้น — รวมประกาศ SET.or.th + Yahoo Finance + Google News ในหน้าเดียว แค่พิมพ์ชื่อย่อหุ้น (ดึงสดต่อหุ้น local-only, ไม่มีบน GitHub Pages)">📰 ข่าวหุ้น</button>
   <button class="nav-btn" onclick="showPage('filings',this)" title="งบ &amp; รายงานทางการ — รวมลิงก์เอกสารต้นทาง (56-1 One Report / 10-K / Annual Report HKEX) + เว็บสรุปงบ + prompt วิเคราะห์ 13 ข้อ แค่พิมพ์ชื่อย่อหุ้น">📑 รายงานทางการ</button>
   <button class="nav-btn" onclick="showPage('hedge',this)" title="Hedge Holdings — การถือครองของ superinvestors/hedge funds (13F จาก Dataroma รายไตรมาส) หาหุ้นที่หลายกองถือซ้ำกัน (consensus/overlap) เพื่ออ้างอิงการเลือกหุ้น · local-only">🐋 Hedge Holdings</button>
@@ -787,32 +780,6 @@
   </div>
 </div>
 
-<!-- PAGE: FUNDAMENTALS -->
-<div id="page-fundamentals" class="page">
-  <div class="page-title">Fundamental View</div>
-  <div class="page-sub">ข้อมูล P/E · P/BV · Dividend Yield — เรียงและกรองตามปัจจัยพื้นฐาน</div>
-  <div class="filter-row" style="margin-bottom:8px">
-    <button class="filter-btn active" onclick="setFundView('all',this)">ทั้งหมด</button>
-    <button class="filter-btn" onclick="setFundView('high_yield',this)">High Yield ≥ 3%</button>
-    <button class="filter-btn" onclick="setFundView('low_pbv',this)">P/BV &lt; 1</button>
-    <button class="filter-btn" onclick="setFundView('low_pe',this)">P/E &lt; 15</button>
-    <button class="filter-btn" onclick="setFundView('has_data',this)">มีข้อมูลครบ</button>
-    <span style="margin-left:16px;font-size:11px;color:var(--text2);align-self:center">Sector:</span>
-    <select id="fund-sector-filter" class="scr-input" style="width:auto;padding:4px 8px" onchange="renderFundTable()">
-      <option value="ALL">ทั้งหมด</option>
-    </select>
-    <input id="fund-search" class="scr-input" type="text" placeholder="ค้นหา Symbol / ชื่อหุ้น..." style="width:200px;padding:4px 8px;margin-left:8px" oninput="renderFundTable()">
-  </div>
-  <div class="grid-4" style="margin-bottom:16px" id="fund-stat-cards"></div>
-  <div class="card">
-    <div id="fund-count" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
-    <table class="tbl" id="tbl-fundamentals">
-      <thead id="fund-thead"></thead>
-      <tbody id="fund-tbody"></tbody>
-    </table>
-  </div>
-</div>
-
 <!-- PAGE: VALUATION BAND -->
 <div id="page-band" class="page">
   <div class="page-title">Valuation Band</div>
@@ -1007,6 +974,26 @@
       รายได้โต YoY ไตรมาส ≥ 15% · RVOL ≥ 2 เท่า · Insider ซื้อสุทธิ ✓<br><br>
       combo 3 สัญญาณอิสระ: ธุรกิจโตจริง (งบ) + เงินไหลเข้าผิดปกติ (วอลุ่ม) + ผู้บริหารซื้อหุ้นตัวเอง (แบบ 59-1 ย้อนหลัง 90 วัน)<br><br>
       <span style="color:var(--text2)">⚠ เงื่อนไข RVOL เปลี่ยนทุกวัน — ผลลัพธ์จะน้อยและหมุนเวียน เหมาะกดดูรายวัน · ต้องอัพเดทงบการเงินก่อน · เฉพาะเวอร์ชันรันบนเครื่อง</span>
+    </div></span>
+    <button class="filter-btn" onclick="applyFundPreset('high_yield')">💵 High Yield ≥ 3%</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:240px">
+      <strong>💵 High Yield ≥ 3%</strong><br>
+      Div Yield ≥ 3%<br><br>
+      <span style="color:var(--text2)">ย้ายมาจากหน้า Fundamentals เดิม (ยุบรวมแล้ว) — ตั้งค่า filter Div Yield ให้อัตโนมัติแล้วค้นหา</span>
+    </div></span>
+    <button class="filter-btn" onclick="applyFundPreset('low_pbv')">📉 P/BV &lt; 1</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:240px">
+      <strong>📉 P/BV &lt; 1</strong><br>
+      P/BV ต่ำกว่ามูลค่าทางบัญชี<br><br>
+      <span style="color:var(--text2)">ย้ายมาจากหน้า Fundamentals เดิม (ยุบรวมแล้ว)</span>
+    </div></span>
+    <button class="filter-btn" onclick="applyFundPreset('low_pe')">📊 P/E &lt; 15</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:240px">
+      <strong>📊 P/E &lt; 15</strong><br>
+      หุ้น valuation ต่ำตาม P/E<br><br>
+      <span style="color:var(--text2)">ย้ายมาจากหน้า Fundamentals เดิม (ยุบรวมแล้ว)</span>
+    </div></span>
+    <button class="filter-btn" onclick="applyFundPreset('has_data')">✅ มีข้อมูลครบ</button><span class="scr-tip-icon">?<div class="scr-tip-box" style="width:240px">
+      <strong>✅ มีข้อมูลครบ</strong><br>
+      มี P/E, P/BV, Div Yield ครบทั้ง 3 ค่า<br><br>
+      <span style="color:var(--text2)">ย้ายมาจากหน้า Fundamentals เดิม (ยุบรวมแล้ว)</span>
     </div></span>
     <button class="filter-btn" onclick="applyPreset('clear')" style="color:var(--text2)">✕ ล้าง</button>
   </div>
@@ -1834,7 +1821,11 @@
   <div id="screener-results"><div class="empty">กำหนดเงื่อนไขแล้วกด ค้นหา</div></div>
 </div>
 
-<!-- PAGE: HEATMAP -->
+<!-- PAGE: HEATMAP — รวม TH/US/HK/JP เป็นหน้าเดียวพร้อมแท็บเลือกตลาด (เดิมแยก 4 หน้า:
+     page-heatmap, page-us-heatmap, page-hk-heatmap, page-jp-heatmap) แต่ละตลาดยังคง
+     controls เฉพาะตัวเดิมไว้ครบ ไม่ตัดฟีเจอร์ — TH ไม่มี index sub-tab/search/live-update/
+     popup เหมือนเดิม (ใช้ DATA.stocks ที่โหลดอยู่แล้ว), US/HK มี index sub-tabs, JP ไม่มี
+     index sub-tab (ดัชนีเดียว) ดู setHmMarket() ใน dashboard.js -->
 <div id="page-heatmap" class="page">
   <div class="page-title">Market Heatmap
     <span class="scr-tip-icon" style="font-size:11px;width:17px;height:17px;margin-left:8px;vertical-align:middle">?<div class="scr-tip-box" style="width:250px">
@@ -1846,21 +1837,128 @@
     </div></span>
   </div>
   <div class="page-sub">ทุกหุ้น จัดกลุ่มตาม Sector — เขียว = ขึ้น / แดง = ลง</div>
-  <div class="filter-row" style="margin-bottom:8px">
-    <button class="filter-btn active" onclick="setHmPeriod('ret_1d',this)" title="สีแสดง % เปลี่ยนแปลงราคาวันนี้">1D%</button>
-    <button class="filter-btn" onclick="setHmPeriod('ret_1w',this)" title="สีแสดง % เปลี่ยนแปลง 1 สัปดาห์">1W%</button>
-    <button class="filter-btn" onclick="setHmPeriod('ret_1m',this)" title="สีแสดง % เปลี่ยนแปลง 1 เดือน">1M%</button>
-    <button class="filter-btn" onclick="setHmPeriod('ret_3m',this)" title="สีแสดง % เปลี่ยนแปลง 3 เดือน">3M%</button>
-    <button class="filter-btn" onclick="setHmPeriod('ret_6m',this)" title="สีแสดง % เปลี่ยนแปลง 6 เดือน">6M%</button>
-    <button class="filter-btn" onclick="setHmPeriod('ret_ytd',this)" title="สีแสดง % เปลี่ยนแปลงตั้งแต่ต้นปี">YTD%</button>
-    <button class="filter-btn" onclick="setHmPeriod('ret_1y',this)" title="สีแสดง % เปลี่ยนแปลง 1 ปี">1Y%</button>
-    <button class="filter-btn" onclick="setHmPeriod('rs_score',this)" title="สีแสดง RS Score (0–99) — เขียว = แข็งแกร่ง / แดง = อ่อนแอ">RS Score</button>
-    <button class="filter-btn" onclick="setHmPeriod('vol_ratio',this)" title="สีแสดง Volume วันนี้ ÷ เฉลี่ย 20 วัน — น้ำเงินเข้ม = ปริมาณซื้อขายสูงผิดปกติ">Vol Ratio</button>
-    <button class="filter-btn" onclick="setHmPeriod('from_52wh',this)" title="สีแสดง % ห่างจาก 52W High — เขียว = ใกล้ High / แดง = ห่าง High มาก">% from 52W High</button>
-    <button class="filter-btn" onclick="setHmPeriod('ath_dist',this)" title="สีแสดง % ห่างจาก All-Time High — เขียว = ใกล้ ATH / แดง = ห่าง ATH มาก">ATH Distance</button>
+
+  <div class="filter-row" style="margin-bottom:12px">
+    <button class="filter-btn active" id="hm-tab-th" onclick="setHmMarket('TH',this)" style="border-radius:6px 0 0 6px;min-width:90px">🇹🇭 ไทย</button>
+    <button class="filter-btn" id="hm-tab-us" onclick="setHmMarket('US',this)" style="border-radius:0;min-width:90px">🇺🇸 US</button>
+    <button class="filter-btn" id="hm-tab-hk" onclick="setHmMarket('HK',this)" style="border-radius:0;min-width:90px">🇭🇰 HK</button>
+    <button class="filter-btn" id="hm-tab-jp" onclick="setHmMarket('JP',this)" style="border-radius:0 6px 6px 0;min-width:90px">🇯🇵 JP</button>
   </div>
-  <div id="hm-hint" style="font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
-  <div id="heatmap-grid"></div>
+
+  <div id="hm-mkt-th">
+    <div class="filter-row" style="margin-bottom:8px">
+      <button class="filter-btn active" onclick="setHmPeriod('ret_1d',this)" title="สีแสดง % เปลี่ยนแปลงราคาวันนี้">1D%</button>
+      <button class="filter-btn" onclick="setHmPeriod('ret_1w',this)" title="สีแสดง % เปลี่ยนแปลง 1 สัปดาห์">1W%</button>
+      <button class="filter-btn" onclick="setHmPeriod('ret_1m',this)" title="สีแสดง % เปลี่ยนแปลง 1 เดือน">1M%</button>
+      <button class="filter-btn" onclick="setHmPeriod('ret_3m',this)" title="สีแสดง % เปลี่ยนแปลง 3 เดือน">3M%</button>
+      <button class="filter-btn" onclick="setHmPeriod('ret_6m',this)" title="สีแสดง % เปลี่ยนแปลง 6 เดือน">6M%</button>
+      <button class="filter-btn" onclick="setHmPeriod('ret_ytd',this)" title="สีแสดง % เปลี่ยนแปลงตั้งแต่ต้นปี">YTD%</button>
+      <button class="filter-btn" onclick="setHmPeriod('ret_1y',this)" title="สีแสดง % เปลี่ยนแปลง 1 ปี">1Y%</button>
+      <button class="filter-btn" onclick="setHmPeriod('rs_score',this)" title="สีแสดง RS Score (0–99) — เขียว = แข็งแกร่ง / แดง = อ่อนแอ">RS Score</button>
+      <button class="filter-btn" onclick="setHmPeriod('vol_ratio',this)" title="สีแสดง Volume วันนี้ ÷ เฉลี่ย 20 วัน — น้ำเงินเข้ม = ปริมาณซื้อขายสูงผิดปกติ">Vol Ratio</button>
+      <button class="filter-btn" onclick="setHmPeriod('from_52wh',this)" title="สีแสดง % ห่างจาก 52W High — เขียว = ใกล้ High / แดง = ห่าง High มาก">% from 52W High</button>
+      <button class="filter-btn" onclick="setHmPeriod('ath_dist',this)" title="สีแสดง % ห่างจาก All-Time High — เขียว = ใกล้ ATH / แดง = ห่าง ATH มาก">ATH Distance</button>
+    </div>
+    <div id="hm-hint" style="font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
+    <div id="heatmap-grid"></div>
+  </div>
+
+  <div id="hm-mkt-us" style="display:none">
+    <div class="page-sub">ทุกหุ้นในดัชนี จัดกลุ่มตาม Sector — เลือกสีตาม metric ได้ 11 แบบ (return หลายช่วง/RS/Volume/52W High/ATH) อ่านจาก us_index_metrics.json (อัพเดทตอน Quick Update หรือ 📈 US Index Max)</div>
+
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+      <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn active" id="hm-idx-sp500" onclick="setHeatmapIndex('SP500',this)" style="border-radius:6px 0 0 6px;min-width:100px">S&amp;P 500</button>
+        <button class="filter-btn" id="hm-idx-dow" onclick="setHeatmapIndex('DOW',this)" style="min-width:100px">Dow Jones</button>
+        <button class="filter-btn" id="hm-idx-ndx" onclick="setHeatmapIndex('NDX',this)" style="border-radius:0 6px 6px 0;min-width:100px">Nasdaq 100</button>
+      </div>
+      <input id="hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderHeatmap(_hmData[_hmIndex])">
+      <button class="filter-btn" id="hm-refresh-btn" onclick="usHmLiveUpdate()" title="ดึงราคาล่าสุดจาก Yahoo สด (gap-update เฉพาะดัชนีที่กำลังดูอยู่ เช่น Dow 30 ตัว — ไม่ใช่ทั้ง union US) แล้วคำนวณราคา Live ระหว่างวัน — ปุ่มนี้เท่านั้นที่ไปดึงข้อมูลใหม่จริง กด ทุกครั้งที่ต้องการราคาล่าสุด แล้วดูผลที่ปุ่มเมตริก 👁 Live ด้านล่าง">⚡ อัพเดทราคา</button>
+      <button class="filter-btn" onclick="_hmOpenTradingView()" title="เปิด Heatmap ของดัชนีที่เลือกอยู่บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
+      <span id="hm-note" style="font-size:11px;color:var(--text2)"></span>
+    </div>
+
+    <div class="filter-row" id="hm-period-btns" style="margin-bottom:8px">
+      <button class="filter-btn active" onclick="setHeatmapPeriod('ret_1d',this)" title="สีแสดง % เปลี่ยนแปลงราคาวันนี้">1D%</button>
+      <button class="filter-btn" onclick="setHeatmapPeriod('ret_1w',this)" title="สีแสดง % เปลี่ยนแปลง 1 สัปดาห์">1W%</button>
+      <button class="filter-btn" onclick="setHeatmapPeriod('ret_1m',this)" title="สีแสดง % เปลี่ยนแปลง 1 เดือน">1M%</button>
+      <button class="filter-btn" onclick="setHeatmapPeriod('ret_3m',this)" title="สีแสดง % เปลี่ยนแปลง 3 เดือน">3M%</button>
+      <button class="filter-btn" onclick="setHeatmapPeriod('ret_6m',this)" title="สีแสดง % เปลี่ยนแปลง 6 เดือน">6M%</button>
+      <button class="filter-btn" onclick="setHeatmapPeriod('ret_ytd',this)" title="สีแสดง % เปลี่ยนแปลงตั้งแต่ต้นปี">YTD%</button>
+      <button class="filter-btn" onclick="setHeatmapPeriod('ret_1y',this)" title="สีแสดง % เปลี่ยนแปลง 1 ปี">1Y%</button>
+      <button class="filter-btn" onclick="setHeatmapPeriod('rs_score',this)" title="สีแสดง RS Score (0–99) — เขียว = แข็งแกร่ง / แดง = อ่อนแอ">RS Score</button>
+      <button class="filter-btn" onclick="setHeatmapPeriod('vol_ratio',this)" title="สีแสดง Volume วันนี้ ÷ เฉลี่ย 20 วัน — น้ำเงินเข้ม = ปริมาณซื้อขายสูงผิดปกติ">Vol Ratio</button>
+      <button class="filter-btn" onclick="setHeatmapPeriod('from_52wh',this)" title="สีแสดง % ห่างจาก 52W High — เขียว = ใกล้ High / แดง = ห่าง High มาก">% from 52W High</button>
+      <button class="filter-btn" onclick="setHeatmapPeriod('ath_dist',this)" title="สีแสดง % ห่างจาก All-Time High — เขียว = ใกล้ ATH / แดง = ห่าง ATH มาก">ATH Distance</button>
+      <button class="filter-btn" onclick="setHeatmapPeriod('live_chg',this)" title="แค่เปลี่ยนมุมมองมาโชว์ % Live ที่ดึงไว้ล่าสุด — ปุ่มนี้ไม่ได้ไปดึงข้อมูลใหม่ กดซ้ำจะแค่สลับเรียงมาก↔น้อยเท่านั้น ตัวเลขจะไม่ขยับจนกว่าจะกด ⚡ อัพเดทราคา ด้านบนก่อน">👁 Live</button>
+    </div>
+    <div id="us-hm-hint" style="font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
+
+    <div id="hm-box"></div>
+  </div>
+
+  <div id="hm-mkt-hk" style="display:none">
+    <div class="page-sub">ทุกหุ้นในดัชนี จัดกลุ่มตาม Sector — เลือกสีตาม metric ได้ 11 แบบ (return หลายช่วง/RS/Volume/52W High/ATH) อ่านจาก hk_index_metrics.json (อัพเดทตอน Quick Update หรือ 📈 HK Index Max)</div>
+
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+      <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn active" id="hk-hm-idx-hsi" onclick="setHkHeatmapIndex('HSI',this)" style="border-radius:6px 0 0 6px;min-width:100px">HSI</button>
+        <button class="filter-btn" id="hk-hm-idx-hstech" onclick="setHkHeatmapIndex('HSTECH',this)" style="min-width:100px">HSTECH</button>
+        <button class="filter-btn" id="hk-hm-idx-hscei" onclick="setHkHeatmapIndex('HSCEI',this)" style="border-radius:0 6px 6px 0;min-width:100px">HSCEI</button>
+      </div>
+      <input id="hk-hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderHkHeatmap(_hkHmData[_hkHmIndex])">
+      <button class="filter-btn" id="hk-hm-refresh-btn" onclick="hkHmLiveUpdate()" title="ดึงราคาล่าสุดจาก Yahoo สด (gap-update เฉพาะดัชนีที่กำลังดูอยู่ ไม่ใช่ทั้ง union HK) แล้วคำนวณราคา Live ระหว่างวัน — ปุ่มนี้เท่านั้นที่ไปดึงข้อมูลใหม่จริง กด ทุกครั้งที่ต้องการราคาล่าสุด แล้วดูผลที่ปุ่มเมตริก 👁 Live ด้านล่าง">⚡ รีเฟรช</button>
+      <button class="filter-btn" onclick="_hkHmOpenTradingView()" title="เปิด Heatmap ของดัชนีที่เลือกอยู่บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
+      <span id="hk-hm-note" style="font-size:11px;color:var(--text2)"></span>
+    </div>
+
+    <div class="filter-row" id="hk-hm-period-btns" style="margin-bottom:8px">
+      <button class="filter-btn active" onclick="setHkHeatmapPeriod('ret_1d',this)" title="สีแสดง % เปลี่ยนแปลงราคาวันนี้">1D%</button>
+      <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_1w',this)" title="สีแสดง % เปลี่ยนแปลง 1 สัปดาห์">1W%</button>
+      <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_1m',this)" title="สีแสดง % เปลี่ยนแปลง 1 เดือน">1M%</button>
+      <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_3m',this)" title="สีแสดง % เปลี่ยนแปลง 3 เดือน">3M%</button>
+      <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_6m',this)" title="สีแสดง % เปลี่ยนแปลง 6 เดือน">6M%</button>
+      <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_ytd',this)" title="สีแสดง % เปลี่ยนแปลงตั้งแต่ต้นปี">YTD%</button>
+      <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_1y',this)" title="สีแสดง % เปลี่ยนแปลง 1 ปี">1Y%</button>
+      <button class="filter-btn" onclick="setHkHeatmapPeriod('rs_score',this)" title="สีแสดง RS Score (0–99) — เขียว = แข็งแกร่ง / แดง = อ่อนแอ">RS Score</button>
+      <button class="filter-btn" onclick="setHkHeatmapPeriod('vol_ratio',this)" title="สีแสดง Volume วันนี้ ÷ เฉลี่ย 20 วัน — น้ำเงินเข้ม = ปริมาณซื้อขายสูงผิดปกติ">Vol Ratio</button>
+      <button class="filter-btn" onclick="setHkHeatmapPeriod('from_52wh',this)" title="สีแสดง % ห่างจาก 52W High — เขียว = ใกล้ High / แดง = ห่าง High มาก">% from 52W High</button>
+      <button class="filter-btn" onclick="setHkHeatmapPeriod('ath_dist',this)" title="สีแสดง % ห่างจาก All-Time High — เขียว = ใกล้ ATH / แดง = ห่าง ATH มาก">ATH Distance</button>
+      <button class="filter-btn" onclick="setHkHeatmapPeriod('live_chg',this)" title="แค่เปลี่ยนมุมมองมาโชว์ % Live ที่ดึงไว้ล่าสุด — ปุ่มนี้ไม่ได้ไปดึงข้อมูลใหม่ กดซ้ำจะแค่สลับเรียงมาก↔น้อยเท่านั้น ตัวเลขจะไม่ขยับจนกว่าจะกด ⚡ รีเฟรช ด้านบนก่อน">👁 Live</button>
+    </div>
+    <div id="hk-hm-hint" style="font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
+
+    <div id="hk-hm-box"></div>
+  </div>
+
+  <div id="hm-mkt-jp" style="display:none">
+    <div class="page-sub">ทุกหุ้นในดัชนี จัดกลุ่มตาม Sector — เลือกสีตาม metric ได้ 11 แบบ (return หลายช่วง/RS/Volume/52W High/ATH) อ่านจาก jp_index_metrics.json (อัพเดทตอน Quick Update หรือ 📈 JP Index Max)</div>
+
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+      <input id="jp-hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderJpHeatmap(_jpHmData)">
+      <button class="filter-btn" id="jp-hm-refresh-btn" onclick="jpHmLiveUpdate()" title="ดึงราคาล่าสุดจาก Yahoo สด (gap-update เฉพาะดัชนี JP) แล้วคำนวณราคา Live ระหว่างวัน — ปุ่มนี้เท่านั้นที่ไปดึงข้อมูลใหม่จริง กด ทุกครั้งที่ต้องการราคาล่าสุด แล้วดูผลที่ปุ่มเมตริก 👁 Live ด้านล่าง">⚡ รีเฟรช</button>
+      <button class="filter-btn" onclick="window.open('https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22NI225%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D','_blank','noopener')" title="เปิด Heatmap Nikkei 225 บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
+      <span id="jp-hm-note" style="font-size:11px;color:var(--text2)"></span>
+    </div>
+
+    <div class="filter-row" id="jp-hm-period-btns" style="margin-bottom:8px">
+      <button class="filter-btn active" onclick="setJpHeatmapPeriod('ret_1d',this)" title="สีแสดง % เปลี่ยนแปลงราคาวันนี้">1D%</button>
+      <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_1w',this)" title="สีแสดง % เปลี่ยนแปลง 1 สัปดาห์">1W%</button>
+      <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_1m',this)" title="สีแสดง % เปลี่ยนแปลง 1 เดือน">1M%</button>
+      <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_3m',this)" title="สีแสดง % เปลี่ยนแปลง 3 เดือน">3M%</button>
+      <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_6m',this)" title="สีแสดง % เปลี่ยนแปลง 6 เดือน">6M%</button>
+      <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_ytd',this)" title="สีแสดง % เปลี่ยนแปลงตั้งแต่ต้นปี">YTD%</button>
+      <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_1y',this)" title="สีแสดง % เปลี่ยนแปลง 1 ปี">1Y%</button>
+      <button class="filter-btn" onclick="setJpHeatmapPeriod('rs_score',this)" title="สีแสดง RS Score (0–99) — เขียว = แข็งแกร่ง / แดง = อ่อนแอ">RS Score</button>
+      <button class="filter-btn" onclick="setJpHeatmapPeriod('vol_ratio',this)" title="สีแสดง Volume วันนี้ ÷ เฉลี่ย 20 วัน — น้ำเงินเข้ม = ปริมาณซื้อขายสูงผิดปกติ">Vol Ratio</button>
+      <button class="filter-btn" onclick="setJpHeatmapPeriod('from_52wh',this)" title="สีแสดง % ห่างจาก 52W High — เขียว = ใกล้ High / แดง = ห่าง High มาก">% from 52W High</button>
+      <button class="filter-btn" onclick="setJpHeatmapPeriod('ath_dist',this)" title="สีแสดง % ห่างจาก All-Time High — เขียว = ใกล้ ATH / แดง = ห่าง ATH มาก">ATH Distance</button>
+      <button class="filter-btn" onclick="setJpHeatmapPeriod('live_chg',this)" title="แค่เปลี่ยนมุมมองมาโชว์ % Live ที่ดึงไว้ล่าสุด — ปุ่มนี้ไม่ได้ไปดึงข้อมูลใหม่ กดซ้ำจะแค่สลับเรียงมาก↔น้อยเท่านั้น ตัวเลขจะไม่ขยับจนกว่าจะกด ⚡ รีเฟรช ด้านบนก่อน">👁 Live</button>
+    </div>
+    <div id="jp-hm-hint" style="font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
+
+    <div id="jp-hm-box"></div>
+  </div>
 </div>
 
 <!-- PAGE: DR / DRx -->
@@ -2586,129 +2684,136 @@
   </div>
 </div>
 
-<!-- PAGE: DR ROTATION -->
-<div id="page-dr-rotation" class="page">
-  <div class="page-title">🔄 DR Rotation</div>
-  <div class="page-sub" id="drrot-subtitle">RRG ของหุ้นต่างประเทศ (DR underlying) แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของ DR ทั้งกลุ่ม</b> (ราคาท้องถิ่น ไม่แปลงค่าเงิน) · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
-  <div id="drrot-gate" class="empty" style="display:none;padding:24px"></div>
-  <div id="drrot-body" style="display:none">
-    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
-      <div class="filter-row" style="gap:0;margin:0">
-        <button class="filter-btn active" id="drrot-tf-long" onclick="setDrRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
-        <button class="filter-btn" id="drrot-tf-short" onclick="setDrRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+<!-- PAGE: STOCK ROTATION — รวม TH(DR)/US/HK/JP เป็นหน้าเดียวพร้อมแท็บเลือกตลาด (เดิมแยก 4 หน้า:
+     page-dr-rotation, page-us-rotation, page-hk-rotation, page-jp-rotation) ไม่แตะ page-rotation
+     (sector-level, คนละ chart type) — TH(DR) เป็น special-case ไม่ผ่าน engine _ROT_CFG กลางที่
+     US/HK/JP ใช้ร่วมกัน (ดู loadDRRotation/renderDRRotation ใน dashboard.js) เพราะโครงสร้าง
+     data/UI ต่างกันมาก (region-select แทน index-buttons, ไม่มี benchmark toggle) -->
+<div id="page-stock-rotation" class="page">
+  <div class="page-title">🔄 Stock Rotation</div>
+  <div class="page-sub">RRG (Relative Rotation Graph) รายหุ้น — เทียบ Momentum/RS ของแต่ละตัวกับค่าเฉลี่ยกลุ่ม</div>
+
+  <div class="filter-row" style="margin-bottom:12px">
+    <button class="filter-btn active" id="sr-tab-th" onclick="setSrMarket('TH',this)" style="border-radius:6px 0 0 6px;min-width:100px">🇹🇭 ไทย (DR)</button>
+    <button class="filter-btn" id="sr-tab-us" onclick="setSrMarket('US',this)" style="border-radius:0;min-width:90px">🇺🇸 US</button>
+    <button class="filter-btn" id="sr-tab-hk" onclick="setSrMarket('HK',this)" style="border-radius:0;min-width:90px">🇭🇰 HK</button>
+    <button class="filter-btn" id="sr-tab-jp" onclick="setSrMarket('JP',this)" style="border-radius:0 6px 6px 0;min-width:90px">🇯🇵 JP</button>
+  </div>
+
+  <div id="sr-mkt-th">
+    <div class="page-sub" id="drrot-subtitle">RRG ของหุ้นต่างประเทศ (DR underlying) แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของ DR ทั้งกลุ่ม</b> (ราคาท้องถิ่น ไม่แปลงค่าเงิน) · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
+    <div id="drrot-gate" class="empty" style="display:none;padding:24px"></div>
+    <div id="drrot-body" style="display:none">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn active" id="drrot-tf-long" onclick="setDrRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
+          <button class="filter-btn" id="drrot-tf-short" onclick="setDrRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+        </div>
+        <select id="drrot-region" onchange="renderDRRotation()" style="font-size:13px"></select>
+        <span id="drrot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
       </div>
-      <select id="drrot-region" onchange="renderDRRotation()" style="font-size:13px"></select>
-      <span id="drrot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
-    </div>
-    <div class="card" style="padding:8px">
-      <canvas id="dr-rotation-map" style="width:100%;display:block"></canvas>
-    </div>
-    <div id="dr-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
-    <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
-      🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
-      🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่<br>
-      <span style="color:var(--yellow)">⚠ ราคาท้องถิ่น (ไม่แปลงค่าเงิน) — หุ้นคนละตลาดมีค่าเงินปนอยู่บ้าง เหมาะดู "ตัวไหนนำ/ตามในกลุ่ม DR" มากกว่าเทียบ absolute</span>
+      <div class="card" style="padding:8px">
+        <canvas id="dr-rotation-map" style="width:100%;display:block"></canvas>
+      </div>
+      <div id="dr-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
+      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
+        🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
+        🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่<br>
+        <span style="color:var(--yellow)">⚠ ราคาท้องถิ่น (ไม่แปลงค่าเงิน) — หุ้นคนละตลาดมีค่าเงินปนอยู่บ้าง เหมาะดู "ตัวไหนนำ/ตามในกลุ่ม DR" มากกว่าเทียบ absolute</span>
+      </div>
     </div>
   </div>
-</div>
 
-<!-- PAGE: US ROTATION — RRG ของหุ้น US (RS/momentum เทียบค่าเฉลี่ยดัชนี/sector ที่เลือก) -->
-<div id="page-us-rotation" class="page">
-  <div class="page-title">🔄 US Rotation</div>
-  <div class="page-sub" id="usrot-subtitle">RRG ของหุ้น US แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
-  <div id="usrot-gate" class="empty" style="display:none;padding:24px"></div>
-  <div id="usrot-body" style="display:none">
-    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
-      <div class="filter-row" style="gap:0;margin:0">
-        <button class="filter-btn active" id="usrot-idx-sp500" onclick="setUsRotIndex('SP500',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">S&amp;P 500</button>
-        <button class="filter-btn" id="usrot-idx-dow" onclick="setUsRotIndex('DOW',this)" style="font-size:12px;padding:5px 12px">Dow Jones</button>
-        <button class="filter-btn" id="usrot-idx-ndx" onclick="setUsRotIndex('NDX',this)" style="font-size:12px;padding:5px 12px">Nasdaq 100</button>
-        <button class="filter-btn" id="usrot-idx-all" onclick="setUsRotIndex('ALL',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">ทั้งหมด</button>
+  <div id="sr-mkt-us" style="display:none">
+    <div class="page-sub" id="usrot-subtitle">RRG ของหุ้น US แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
+    <div id="usrot-gate" class="empty" style="display:none;padding:24px"></div>
+    <div id="usrot-body" style="display:none">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn active" id="usrot-idx-sp500" onclick="setUsRotIndex('SP500',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">S&amp;P 500</button>
+          <button class="filter-btn" id="usrot-idx-dow" onclick="setUsRotIndex('DOW',this)" style="font-size:12px;padding:5px 12px">Dow Jones</button>
+          <button class="filter-btn" id="usrot-idx-ndx" onclick="setUsRotIndex('NDX',this)" style="font-size:12px;padding:5px 12px">Nasdaq 100</button>
+          <button class="filter-btn" id="usrot-idx-all" onclick="setUsRotIndex('ALL',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">ทั้งหมด</button>
+        </div>
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn active" id="usrot-tf-long" onclick="setUsRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
+          <button class="filter-btn" id="usrot-tf-short" onclick="setUsRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+        </div>
+        <select id="usrot-sector" onchange="renderUsRotation()" style="font-size:13px"></select>
+        <div class="filter-row" style="gap:0;margin:0" title="เทียบราคาแต่ละตัวกับค่าเฉลี่ยของทั้งดัชนี หรือเฉพาะ sector ที่เลือก (มีผลเมื่อเลือก sector เจาะจง ไม่ใช่ 'ทุก Sector')">
+          <button class="filter-btn active" id="usrot-bm-index" onclick="setUsRotBenchmark('index',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">เทียบดัชนี</button>
+          <button class="filter-btn" id="usrot-bm-sector" onclick="setUsRotBenchmark('sector',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">เทียบ Sector</button>
+        </div>
+        <span id="usrot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
       </div>
-      <div class="filter-row" style="gap:0;margin:0">
-        <button class="filter-btn active" id="usrot-tf-long" onclick="setUsRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
-        <button class="filter-btn" id="usrot-tf-short" onclick="setUsRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+      <div class="card" style="padding:8px">
+        <canvas id="us-rotation-map" style="width:100%;display:block"></canvas>
       </div>
-      <select id="usrot-sector" onchange="renderUsRotation()" style="font-size:13px"></select>
-      <div class="filter-row" style="gap:0;margin:0" title="เทียบราคาแต่ละตัวกับค่าเฉลี่ยของทั้งดัชนี หรือเฉพาะ sector ที่เลือก (มีผลเมื่อเลือก sector เจาะจง ไม่ใช่ 'ทุก Sector')">
-        <button class="filter-btn active" id="usrot-bm-index" onclick="setUsRotBenchmark('index',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">เทียบดัชนี</button>
-        <button class="filter-btn" id="usrot-bm-sector" onclick="setUsRotBenchmark('sector',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">เทียบ Sector</button>
+      <div id="us-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
+      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
+        🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
+        🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
       </div>
-      <span id="usrot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
-    </div>
-    <div class="card" style="padding:8px">
-      <canvas id="us-rotation-map" style="width:100%;display:block"></canvas>
-    </div>
-    <div id="us-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
-    <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
-      🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
-      🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
     </div>
   </div>
-</div>
 
-<!-- PAGE: HK ROTATION — ก็อปโครงจาก page-us-rotation ทั้งหมด (drawRotationScatter ตัวเดิม 100%
-     ไม่ต้องแตะ) ต่างแค่ prefix usrot->hkrot, ดัชนี HSI/HSTECH/HSCEI/ทั้งหมด, endpoint hk-index-metrics -->
-<div id="page-hk-rotation" class="page">
-  <div class="page-title">🔄 HK Rotation</div>
-  <div class="page-sub" id="hkrot-subtitle">RRG ของหุ้น HK แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
-  <div id="hkrot-gate" class="empty" style="display:none;padding:24px"></div>
-  <div id="hkrot-body" style="display:none">
-    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
-      <div class="filter-row" style="gap:0;margin:0">
-        <button class="filter-btn active" id="hkrot-idx-hsi" onclick="setHkRotIndex('HSI',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">HSI</button>
-        <button class="filter-btn" id="hkrot-idx-hstech" onclick="setHkRotIndex('HSTECH',this)" style="font-size:12px;padding:5px 12px">HSTECH</button>
-        <button class="filter-btn" id="hkrot-idx-hscei" onclick="setHkRotIndex('HSCEI',this)" style="font-size:12px;padding:5px 12px">HSCEI</button>
-        <button class="filter-btn" id="hkrot-idx-all" onclick="setHkRotIndex('ALL',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">ทั้งหมด</button>
+  <div id="sr-mkt-hk" style="display:none">
+    <div class="page-sub" id="hkrot-subtitle">RRG ของหุ้น HK แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
+    <div id="hkrot-gate" class="empty" style="display:none;padding:24px"></div>
+    <div id="hkrot-body" style="display:none">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn active" id="hkrot-idx-hsi" onclick="setHkRotIndex('HSI',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">HSI</button>
+          <button class="filter-btn" id="hkrot-idx-hstech" onclick="setHkRotIndex('HSTECH',this)" style="font-size:12px;padding:5px 12px">HSTECH</button>
+          <button class="filter-btn" id="hkrot-idx-hscei" onclick="setHkRotIndex('HSCEI',this)" style="font-size:12px;padding:5px 12px">HSCEI</button>
+          <button class="filter-btn" id="hkrot-idx-all" onclick="setHkRotIndex('ALL',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">ทั้งหมด</button>
+        </div>
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn active" id="hkrot-tf-long" onclick="setHkRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
+          <button class="filter-btn" id="hkrot-tf-short" onclick="setHkRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+        </div>
+        <select id="hkrot-sector" onchange="renderHkRotation()" style="font-size:13px"></select>
+        <div class="filter-row" style="gap:0;margin:0" title="เทียบราคาแต่ละตัวกับค่าเฉลี่ยของทั้งดัชนี หรือเฉพาะ sector ที่เลือก (มีผลเมื่อเลือก sector เจาะจง ไม่ใช่ 'ทุก Sector')">
+          <button class="filter-btn active" id="hkrot-bm-index" onclick="setHkRotBenchmark('index',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">เทียบดัชนี</button>
+          <button class="filter-btn" id="hkrot-bm-sector" onclick="setHkRotBenchmark('sector',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">เทียบ Sector</button>
+        </div>
+        <span id="hkrot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
       </div>
-      <div class="filter-row" style="gap:0;margin:0">
-        <button class="filter-btn active" id="hkrot-tf-long" onclick="setHkRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
-        <button class="filter-btn" id="hkrot-tf-short" onclick="setHkRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+      <div class="card" style="padding:8px">
+        <canvas id="hk-rotation-map" style="width:100%;display:block"></canvas>
       </div>
-      <select id="hkrot-sector" onchange="renderHkRotation()" style="font-size:13px"></select>
-      <div class="filter-row" style="gap:0;margin:0" title="เทียบราคาแต่ละตัวกับค่าเฉลี่ยของทั้งดัชนี หรือเฉพาะ sector ที่เลือก (มีผลเมื่อเลือก sector เจาะจง ไม่ใช่ 'ทุก Sector')">
-        <button class="filter-btn active" id="hkrot-bm-index" onclick="setHkRotBenchmark('index',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">เทียบดัชนี</button>
-        <button class="filter-btn" id="hkrot-bm-sector" onclick="setHkRotBenchmark('sector',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">เทียบ Sector</button>
+      <div id="hk-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
+      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
+        🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
+        🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
       </div>
-      <span id="hkrot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
-    </div>
-    <div class="card" style="padding:8px">
-      <canvas id="hk-rotation-map" style="width:100%;display:block"></canvas>
-    </div>
-    <div id="hk-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
-    <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
-      🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
-      🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
     </div>
   </div>
-</div>
 
-<!-- PAGE: JP ROTATION — ก็อปโครงจาก page-hk-rotation ต่างแค่ดัชนีเดียว (Nikkei 225 ทั้งหมด)
-     ไม่มีปุ่มสลับดัชนี — reuse drawRotationScatter ตัวเดิม 100% -->
-<div id="page-jp-rotation" class="page">
-  <div class="page-title">🔄 JP Rotation</div>
-  <div class="page-sub" id="jprot-subtitle">RRG ของหุ้น JP แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
-  <div id="jprot-gate" class="empty" style="display:none;padding:24px"></div>
-  <div id="jprot-body" style="display:none">
-    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
-      <div class="filter-row" style="gap:0;margin:0">
-        <button class="filter-btn active" id="jprot-tf-long" onclick="setJpRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
-        <button class="filter-btn" id="jprot-tf-short" onclick="setJpRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+  <div id="sr-mkt-jp" style="display:none">
+    <div class="page-sub" id="jprot-subtitle">RRG ของหุ้น JP แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่มที่เลือก</b> · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
+    <div id="jprot-gate" class="empty" style="display:none;padding:24px"></div>
+    <div id="jprot-body" style="display:none">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn active" id="jprot-tf-long" onclick="setJpRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
+          <button class="filter-btn" id="jprot-tf-short" onclick="setJpRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+        </div>
+        <select id="jprot-sector" onchange="renderJpRotation()" style="font-size:13px"></select>
+        <div class="filter-row" style="gap:0;margin:0" title="เทียบราคาแต่ละตัวกับค่าเฉลี่ยของทั้งดัชนี หรือเฉพาะ sector ที่เลือก (มีผลเมื่อเลือก sector เจาะจง ไม่ใช่ 'ทุก Sector')">
+          <button class="filter-btn active" id="jprot-bm-index" onclick="setJpRotBenchmark('index',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">เทียบดัชนี</button>
+          <button class="filter-btn" id="jprot-bm-sector" onclick="setJpRotBenchmark('sector',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">เทียบ Sector</button>
+        </div>
+        <span id="jprot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
       </div>
-      <select id="jprot-sector" onchange="renderJpRotation()" style="font-size:13px"></select>
-      <div class="filter-row" style="gap:0;margin:0" title="เทียบราคาแต่ละตัวกับค่าเฉลี่ยของทั้งดัชนี หรือเฉพาะ sector ที่เลือก (มีผลเมื่อเลือก sector เจาะจง ไม่ใช่ 'ทุก Sector')">
-        <button class="filter-btn active" id="jprot-bm-index" onclick="setJpRotBenchmark('index',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">เทียบดัชนี</button>
-        <button class="filter-btn" id="jprot-bm-sector" onclick="setJpRotBenchmark('sector',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">เทียบ Sector</button>
+      <div class="card" style="padding:8px">
+        <canvas id="jp-rotation-map" style="width:100%;display:block"></canvas>
       </div>
-      <span id="jprot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
-    </div>
-    <div class="card" style="padding:8px">
-      <canvas id="jp-rotation-map" style="width:100%;display:block"></canvas>
-    </div>
-    <div id="jp-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
-    <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
-      🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
-      🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
+      <div id="jp-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
+      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
+        🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
+        🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
+      </div>
     </div>
   </div>
 </div>
@@ -3254,112 +3359,6 @@
       <tbody id="jp-stocks-tbody"></tbody>
     </table>
   </div>
-</div>
-
-<div id="page-us-heatmap" class="page">
-  <div class="page-title">Heatmap ดัชนี US</div>
-  <div class="page-sub">ทุกหุ้นในดัชนี จัดกลุ่มตาม Sector — เลือกสีตาม metric ได้ 11 แบบ (return หลายช่วง/RS/Volume/52W High/ATH) อ่านจาก us_index_metrics.json (อัพเดทตอน Quick Update หรือ 📈 US Index Max)</div>
-
-  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-    <div class="filter-row" style="gap:0;margin:0">
-      <button class="filter-btn active" id="hm-idx-sp500" onclick="setHeatmapIndex('SP500',this)" style="border-radius:6px 0 0 6px;min-width:100px">S&amp;P 500</button>
-      <button class="filter-btn" id="hm-idx-dow" onclick="setHeatmapIndex('DOW',this)" style="min-width:100px">Dow Jones</button>
-      <button class="filter-btn" id="hm-idx-ndx" onclick="setHeatmapIndex('NDX',this)" style="border-radius:0 6px 6px 0;min-width:100px">Nasdaq 100</button>
-    </div>
-    <input id="hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderHeatmap(_hmData[_hmIndex])">
-    <button class="filter-btn" id="hm-refresh-btn" onclick="usHmLiveUpdate()" title="ดึงราคาล่าสุดจาก Yahoo สด (gap-update เฉพาะดัชนีที่กำลังดูอยู่ เช่น Dow 30 ตัว — ไม่ใช่ทั้ง union US) แล้วคำนวณราคา Live ระหว่างวัน — ปุ่มนี้เท่านั้นที่ไปดึงข้อมูลใหม่จริง กด ทุกครั้งที่ต้องการราคาล่าสุด แล้วดูผลที่ปุ่มเมตริก 👁 Live ด้านล่าง">⚡ อัพเดทราคา</button>
-    <button class="filter-btn" onclick="_hmOpenTradingView()" title="เปิด Heatmap ของดัชนีที่เลือกอยู่บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
-    <span id="hm-note" style="font-size:11px;color:var(--text2)"></span>
-  </div>
-
-  <div class="filter-row" id="hm-period-btns" style="margin-bottom:8px">
-    <button class="filter-btn active" onclick="setHeatmapPeriod('ret_1d',this)" title="สีแสดง % เปลี่ยนแปลงราคาวันนี้">1D%</button>
-    <button class="filter-btn" onclick="setHeatmapPeriod('ret_1w',this)" title="สีแสดง % เปลี่ยนแปลง 1 สัปดาห์">1W%</button>
-    <button class="filter-btn" onclick="setHeatmapPeriod('ret_1m',this)" title="สีแสดง % เปลี่ยนแปลง 1 เดือน">1M%</button>
-    <button class="filter-btn" onclick="setHeatmapPeriod('ret_3m',this)" title="สีแสดง % เปลี่ยนแปลง 3 เดือน">3M%</button>
-    <button class="filter-btn" onclick="setHeatmapPeriod('ret_6m',this)" title="สีแสดง % เปลี่ยนแปลง 6 เดือน">6M%</button>
-    <button class="filter-btn" onclick="setHeatmapPeriod('ret_ytd',this)" title="สีแสดง % เปลี่ยนแปลงตั้งแต่ต้นปี">YTD%</button>
-    <button class="filter-btn" onclick="setHeatmapPeriod('ret_1y',this)" title="สีแสดง % เปลี่ยนแปลง 1 ปี">1Y%</button>
-    <button class="filter-btn" onclick="setHeatmapPeriod('rs_score',this)" title="สีแสดง RS Score (0–99) — เขียว = แข็งแกร่ง / แดง = อ่อนแอ">RS Score</button>
-    <button class="filter-btn" onclick="setHeatmapPeriod('vol_ratio',this)" title="สีแสดง Volume วันนี้ ÷ เฉลี่ย 20 วัน — น้ำเงินเข้ม = ปริมาณซื้อขายสูงผิดปกติ">Vol Ratio</button>
-    <button class="filter-btn" onclick="setHeatmapPeriod('from_52wh',this)" title="สีแสดง % ห่างจาก 52W High — เขียว = ใกล้ High / แดง = ห่าง High มาก">% from 52W High</button>
-    <button class="filter-btn" onclick="setHeatmapPeriod('ath_dist',this)" title="สีแสดง % ห่างจาก All-Time High — เขียว = ใกล้ ATH / แดง = ห่าง ATH มาก">ATH Distance</button>
-    <button class="filter-btn" onclick="setHeatmapPeriod('live_chg',this)" title="แค่เปลี่ยนมุมมองมาโชว์ % Live ที่ดึงไว้ล่าสุด — ปุ่มนี้ไม่ได้ไปดึงข้อมูลใหม่ กดซ้ำจะแค่สลับเรียงมาก↔น้อยเท่านั้น ตัวเลขจะไม่ขยับจนกว่าจะกด ⚡ อัพเดทราคา ด้านบนก่อน">👁 Live</button>
-  </div>
-  <div id="us-hm-hint" style="font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
-
-  <div id="hm-box"></div>
-</div>
-
-<!-- PAGE: HK INDEX HEATMAP — ก็อปโครงจาก page-us-heatmap ทั้งหมด ต่างแค่ prefix hm->hk-hm,
-     endpoint /api/hk-index-heatmap, ปุ่ม "⚡ รีเฟรช" เรียก hkHmLiveUpdate() (ดู usHmLiveUpdate
-     ใน dashboard.js — pattern เดียวกันทั้ง 3 ตลาด) -->
-<div id="page-hk-heatmap" class="page">
-  <div class="page-title">Heatmap ดัชนี HK</div>
-  <div class="page-sub">ทุกหุ้นในดัชนี จัดกลุ่มตาม Sector — เลือกสีตาม metric ได้ 11 แบบ (return หลายช่วง/RS/Volume/52W High/ATH) อ่านจาก hk_index_metrics.json (อัพเดทตอน Quick Update หรือ 📈 HK Index Max)</div>
-
-  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-    <div class="filter-row" style="gap:0;margin:0">
-      <button class="filter-btn active" id="hk-hm-idx-hsi" onclick="setHkHeatmapIndex('HSI',this)" style="border-radius:6px 0 0 6px;min-width:100px">HSI</button>
-      <button class="filter-btn" id="hk-hm-idx-hstech" onclick="setHkHeatmapIndex('HSTECH',this)" style="min-width:100px">HSTECH</button>
-      <button class="filter-btn" id="hk-hm-idx-hscei" onclick="setHkHeatmapIndex('HSCEI',this)" style="border-radius:0 6px 6px 0;min-width:100px">HSCEI</button>
-    </div>
-    <input id="hk-hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderHkHeatmap(_hkHmData[_hkHmIndex])">
-    <button class="filter-btn" id="hk-hm-refresh-btn" onclick="hkHmLiveUpdate()" title="ดึงราคาล่าสุดจาก Yahoo สด (gap-update เฉพาะดัชนีที่กำลังดูอยู่ ไม่ใช่ทั้ง union HK) แล้วคำนวณราคา Live ระหว่างวัน — ปุ่มนี้เท่านั้นที่ไปดึงข้อมูลใหม่จริง กด ทุกครั้งที่ต้องการราคาล่าสุด แล้วดูผลที่ปุ่มเมตริก 👁 Live ด้านล่าง">⚡ รีเฟรช</button>
-    <button class="filter-btn" onclick="_hkHmOpenTradingView()" title="เปิด Heatmap ของดัชนีที่เลือกอยู่บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
-    <span id="hk-hm-note" style="font-size:11px;color:var(--text2)"></span>
-  </div>
-
-  <div class="filter-row" id="hk-hm-period-btns" style="margin-bottom:8px">
-    <button class="filter-btn active" onclick="setHkHeatmapPeriod('ret_1d',this)" title="สีแสดง % เปลี่ยนแปลงราคาวันนี้">1D%</button>
-    <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_1w',this)" title="สีแสดง % เปลี่ยนแปลง 1 สัปดาห์">1W%</button>
-    <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_1m',this)" title="สีแสดง % เปลี่ยนแปลง 1 เดือน">1M%</button>
-    <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_3m',this)" title="สีแสดง % เปลี่ยนแปลง 3 เดือน">3M%</button>
-    <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_6m',this)" title="สีแสดง % เปลี่ยนแปลง 6 เดือน">6M%</button>
-    <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_ytd',this)" title="สีแสดง % เปลี่ยนแปลงตั้งแต่ต้นปี">YTD%</button>
-    <button class="filter-btn" onclick="setHkHeatmapPeriod('ret_1y',this)" title="สีแสดง % เปลี่ยนแปลง 1 ปี">1Y%</button>
-    <button class="filter-btn" onclick="setHkHeatmapPeriod('rs_score',this)" title="สีแสดง RS Score (0–99) — เขียว = แข็งแกร่ง / แดง = อ่อนแอ">RS Score</button>
-    <button class="filter-btn" onclick="setHkHeatmapPeriod('vol_ratio',this)" title="สีแสดง Volume วันนี้ ÷ เฉลี่ย 20 วัน — น้ำเงินเข้ม = ปริมาณซื้อขายสูงผิดปกติ">Vol Ratio</button>
-    <button class="filter-btn" onclick="setHkHeatmapPeriod('from_52wh',this)" title="สีแสดง % ห่างจาก 52W High — เขียว = ใกล้ High / แดง = ห่าง High มาก">% from 52W High</button>
-    <button class="filter-btn" onclick="setHkHeatmapPeriod('ath_dist',this)" title="สีแสดง % ห่างจาก All-Time High — เขียว = ใกล้ ATH / แดง = ห่าง ATH มาก">ATH Distance</button>
-    <button class="filter-btn" onclick="setHkHeatmapPeriod('live_chg',this)" title="แค่เปลี่ยนมุมมองมาโชว์ % Live ที่ดึงไว้ล่าสุด — ปุ่มนี้ไม่ได้ไปดึงข้อมูลใหม่ กดซ้ำจะแค่สลับเรียงมาก↔น้อยเท่านั้น ตัวเลขจะไม่ขยับจนกว่าจะกด ⚡ รีเฟรช ด้านบนก่อน">👁 Live</button>
-  </div>
-  <div id="hk-hm-hint" style="font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
-
-  <div id="hk-hm-box"></div>
-</div>
-
-<!-- PAGE: JP INDEX HEATMAP — ก็อปโครงจาก page-hk-heatmap ทั้งหมด ต่างแค่ดัชนีเดียว (Nikkei 225
-     ทั้งหมด) ไม่มีปุ่มสลับดัชนี, endpoint /api/jp-index-heatmap, popup ใช้ตัวแปร/handler แยก
-     (_jpHmPopupSym) เพราะ popup DOM #hm-popup ใช้ร่วมกันแค่ตัว element ไม่ใช่ state -->
-<div id="page-jp-heatmap" class="page">
-  <div class="page-title">Heatmap Nikkei 225</div>
-  <div class="page-sub">ทุกหุ้นในดัชนี จัดกลุ่มตาม Sector — เลือกสีตาม metric ได้ 11 แบบ (return หลายช่วง/RS/Volume/52W High/ATH) อ่านจาก jp_index_metrics.json (อัพเดทตอน Quick Update หรือ 📈 JP Index Max)</div>
-
-  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-    <input id="jp-hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderJpHeatmap(_jpHmData)">
-    <button class="filter-btn" id="jp-hm-refresh-btn" onclick="jpHmLiveUpdate()" title="ดึงราคาล่าสุดจาก Yahoo สด (gap-update เฉพาะดัชนี JP) แล้วคำนวณราคา Live ระหว่างวัน — ปุ่มนี้เท่านั้นที่ไปดึงข้อมูลใหม่จริง กด ทุกครั้งที่ต้องการราคาล่าสุด แล้วดูผลที่ปุ่มเมตริก 👁 Live ด้านล่าง">⚡ รีเฟรช</button>
-    <button class="filter-btn" onclick="window.open('https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22NI225%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D','_blank','noopener')" title="เปิด Heatmap Nikkei 225 บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
-    <span id="jp-hm-note" style="font-size:11px;color:var(--text2)"></span>
-  </div>
-
-  <div class="filter-row" id="jp-hm-period-btns" style="margin-bottom:8px">
-    <button class="filter-btn active" onclick="setJpHeatmapPeriod('ret_1d',this)" title="สีแสดง % เปลี่ยนแปลงราคาวันนี้">1D%</button>
-    <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_1w',this)" title="สีแสดง % เปลี่ยนแปลง 1 สัปดาห์">1W%</button>
-    <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_1m',this)" title="สีแสดง % เปลี่ยนแปลง 1 เดือน">1M%</button>
-    <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_3m',this)" title="สีแสดง % เปลี่ยนแปลง 3 เดือน">3M%</button>
-    <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_6m',this)" title="สีแสดง % เปลี่ยนแปลง 6 เดือน">6M%</button>
-    <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_ytd',this)" title="สีแสดง % เปลี่ยนแปลงตั้งแต่ต้นปี">YTD%</button>
-    <button class="filter-btn" onclick="setJpHeatmapPeriod('ret_1y',this)" title="สีแสดง % เปลี่ยนแปลง 1 ปี">1Y%</button>
-    <button class="filter-btn" onclick="setJpHeatmapPeriod('rs_score',this)" title="สีแสดง RS Score (0–99) — เขียว = แข็งแกร่ง / แดง = อ่อนแอ">RS Score</button>
-    <button class="filter-btn" onclick="setJpHeatmapPeriod('vol_ratio',this)" title="สีแสดง Volume วันนี้ ÷ เฉลี่ย 20 วัน — น้ำเงินเข้ม = ปริมาณซื้อขายสูงผิดปกติ">Vol Ratio</button>
-    <button class="filter-btn" onclick="setJpHeatmapPeriod('from_52wh',this)" title="สีแสดง % ห่างจาก 52W High — เขียว = ใกล้ High / แดง = ห่าง High มาก">% from 52W High</button>
-    <button class="filter-btn" onclick="setJpHeatmapPeriod('ath_dist',this)" title="สีแสดง % ห่างจาก All-Time High — เขียว = ใกล้ ATH / แดง = ห่าง ATH มาก">ATH Distance</button>
-    <button class="filter-btn" onclick="setJpHeatmapPeriod('live_chg',this)" title="แค่เปลี่ยนมุมมองมาโชว์ % Live ที่ดึงไว้ล่าสุด — ปุ่มนี้ไม่ได้ไปดึงข้อมูลใหม่ กดซ้ำจะแค่สลับเรียงมาก↔น้อยเท่านั้น ตัวเลขจะไม่ขยับจนกว่าจะกด ⚡ รีเฟรช ด้านบนก่อน">👁 Live</button>
-  </div>
-  <div id="jp-hm-hint" style="font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
-
-  <div id="jp-hm-box"></div>
 </div>
 
 <!-- PAGE: STOCK NEWS — ข่าวรายหุ้นรวม 3 แหล่ง (SET.or.th + Yahoo + Google News) -->

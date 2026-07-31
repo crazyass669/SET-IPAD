@@ -340,14 +340,21 @@ async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = nul
         if (_activePage === 'page-insider')   loadInsiderPage();
         if (_activePage === 'page-flow')      loadFlowPage();
         if (_activePage === 'page-us-stocks')   loadUsStocksPage();
-        if (_activePage === 'page-us-heatmap')  loadHeatmapPage();
-        if (_activePage === 'page-us-rotation') loadUsRotation();
         if (_activePage === 'page-hk-stocks')   loadHkStocksPage();
-        if (_activePage === 'page-hk-heatmap')  loadHkHeatmapPage();
-        if (_activePage === 'page-hk-rotation') loadHkRotation();
         if (_activePage === 'page-jp-stocks')   loadJpStocksPage();
-        if (_activePage === 'page-jp-heatmap')  loadJpHeatmapPage();
-        if (_activePage === 'page-jp-rotation') loadJpRotation();
+        // page-heatmap/page-stock-rotation รวม TH/US/HK/JP ไว้หน้าเดียวแล้ว — reload เฉพาะ
+        // แท็บตลาดที่กำลังดูอยู่ (_hmMarket/_srMarket) ไม่ใช่ทุกตลาดพร้อมกัน
+        if (_activePage === 'page-heatmap') {
+          if (_hmMarket === 'US') loadHeatmapPage();
+          if (_hmMarket === 'HK') loadHkHeatmapPage();
+          if (_hmMarket === 'JP') loadJpHeatmapPage();
+        }
+        if (_activePage === 'page-stock-rotation') {
+          if (_srMarket === 'TH') loadDRRotation();
+          if (_srMarket === 'US') loadUsRotation();
+          if (_srMarket === 'HK') loadHkRotation();
+          if (_srMarket === 'JP') loadJpRotation();
+        }
         if (onDone) onDone(s);   // ส่ง state สุดท้าย (มี message ที่มี ok/fail count) ให้ caller ใช้ต่อได้
       }
     }, 800);
@@ -513,7 +520,6 @@ function renderAll() {
   renderEmergingLeaders();
   renderHeatmap();
   renderEMABreadth();
-  renderFundamentals();
   loadNewHighChart();
 }
 
@@ -3379,7 +3385,11 @@ const _STOCKS_PAGE_ALIAS = {
 };
 // id เก่าของหน้าที่ถูกยุบรวมเข้าหน้าอื่นแบบ 1:1 (ไม่มี view/mode ย่อยให้ตั้งเหมือน stocks) —
 // ต้อง alias เหมือนกัน ไม่งั้น tab/bookmark เก่าจะเงียบไปเฉยๆ (page-<id> เดิมไม่มีแล้ว)
-const _PAGE_ID_ALIAS = { fcfyield: 'screener' };
+const _PAGE_ID_ALIAS = { fcfyield: 'screener', fundamentals: 'screener' };
+// id เก่าของ 3 หน้า Heatmap ตลาดต่างประเทศ ที่รวมเข้า page-heatmap (แท็บเลือกตลาด) แล้ว
+const _HM_PAGE_ALIAS = { 'us-heatmap': 'US', 'hk-heatmap': 'HK', 'jp-heatmap': 'JP' };
+// id เก่าของ 4 หน้า Rotation รายหุ้น ที่รวมเข้า page-stock-rotation (แท็บเลือกตลาด) แล้ว
+const _SR_PAGE_ALIAS = { 'dr-rotation': 'TH', 'us-rotation': 'US', 'hk-rotation': 'HK', 'jp-rotation': 'JP' };
 
 function _pageApplyHash() {
   const m = location.hash.match(/^#page\/([\w-]+)$/);
@@ -3391,6 +3401,18 @@ function _pageApplyHash() {
   else if (id in _STOCKS_PAGE_ALIAS) {
     id = 'stocks';
     if (_STOCKS_PAGE_ALIAS[m[1]] === null) stocksMode = 'sectors'; else stocksView = _STOCKS_PAGE_ALIAS[m[1]];
+  }
+  else if (id in _HM_PAGE_ALIAS) {
+    _hmMarket = _HM_PAGE_ALIAS[id]; id = 'heatmap';
+    // แท็บตลาด US/HK/JP ในหน้ารวมถูกซ่อนด้วย CSS .static-mode (ดู dashboard.css) — ถ้า hash
+    // เก่าชี้มาที่ตลาดที่ถูกซ่อนอยู่ ให้เงียบเหมือนตอนก่อนรวมที่ nav-btn ทั้งปุ่มถูกซ่อน
+    const tabBtn = document.getElementById('hm-tab-' + _hmMarket.toLowerCase());
+    if (tabBtn && getComputedStyle(tabBtn).display === 'none') return;
+  }
+  else if (id in _SR_PAGE_ALIAS) {
+    _srMarket = _SR_PAGE_ALIAS[id]; id = 'stock-rotation';
+    const tabBtn = document.getElementById('sr-tab-' + _srMarket.toLowerCase());
+    if (tabBtn && getComputedStyle(tabBtn).display === 'none') return;
   }
   if (!document.getElementById('page-' + id)) return;
   const btn = document.querySelector(`.nav-btn[onclick*="'${id}'"]`);
@@ -3439,37 +3461,31 @@ function showPage(id, btn) {
   document.getElementById("page-"+id).classList.add("active");
   if (btn) btn.classList.add("active");
   // Re-draw canvas charts once the page is visible and has real dimensions
-  if (id === "stocks")       { loadBreadthCharts(); if (_stocksMode === 'sectors') { renderSectors(); renderEMABreadth(); } }
-  if (id === "rotation")     renderRotation();
-  if (id === "fundamentals") renderFundamentals();
-  if (id === "dr")           loadDRPage();
-  if (id === "financials")   initFinPage();
-  if (id === "us-stocks")    loadUsStocksPage();
-  if (id === "hk-stocks")    loadHkStocksPage();
-  if (id === "jp-stocks")    loadJpStocksPage();
-  if (id === "us-heatmap")   loadHeatmapPage();
-  if (id === "stock-news")   initNewsPage();
-  if (id === "filings")      initFilingsPage();
-  if (id === "dr-rotation")  loadDRRotation();
-  if (id === "fscreener")    loadFscreener();
-  if (id === "peer")         initPeerPage();
-  if (id === "tearsheet")    initTearsheetPage();
-  if (id === "calendar")     loadCalendarPage();
-  if (id === "band")         loadBandPage();
-  if (id === "valuation")    loadValuationPage();
-  if (id === "insider")      loadInsiderPage();
-  if (id === "short")        loadShortPage();
-  if (id === "confluence")   loadConfluencePage();
-  if (id === "flow")         loadFlowPage();
-  if (id === "indices")      loadIndicesPage();
-  if (id === "us-rotation")  loadUsRotation();
-  if (id === "hk-rotation")  loadHkRotation();
-  if (id === "hk-heatmap")   loadHkHeatmapPage();
-  if (id === "jp-rotation")  loadJpRotation();
-  if (id === "jp-heatmap")   loadJpHeatmapPage();
-  if (id === "data-health")  loadDataHealth();
-  if (id === "hedge")        loadHedgePage();
-  if (id === "overview")     { setTimeout(() => { if (!_nhLoaded) loadNewHighChart(); }, 100); }
+  if (id === "stocks")         { loadBreadthCharts(); if (_stocksMode === 'sectors') { renderSectors(); renderEMABreadth(); } }
+  if (id === "rotation")       renderRotation();
+  if (id === "heatmap")        setHmMarket(_hmMarket);
+  if (id === "stock-rotation") setSrMarket(_srMarket);
+  if (id === "dr")             loadDRPage();
+  if (id === "financials")     initFinPage();
+  if (id === "us-stocks")      loadUsStocksPage();
+  if (id === "hk-stocks")      loadHkStocksPage();
+  if (id === "jp-stocks")      loadJpStocksPage();
+  if (id === "stock-news")     initNewsPage();
+  if (id === "filings")        initFilingsPage();
+  if (id === "fscreener")      loadFscreener();
+  if (id === "peer")           initPeerPage();
+  if (id === "tearsheet")      initTearsheetPage();
+  if (id === "calendar")       loadCalendarPage();
+  if (id === "band")           loadBandPage();
+  if (id === "valuation")      loadValuationPage();
+  if (id === "insider")        loadInsiderPage();
+  if (id === "short")          loadShortPage();
+  if (id === "confluence")     loadConfluencePage();
+  if (id === "flow")           loadFlowPage();
+  if (id === "indices")        loadIndicesPage();
+  if (id === "data-health")    loadDataHealth();
+  if (id === "hedge")          loadHedgePage();
+  if (id === "overview")       { setTimeout(() => { if (!_nhLoaded) loadNewHighChart(); }, 100); }
 }
 
 
@@ -4680,6 +4696,10 @@ function renderScrTable() {
         <col style="width:60px"><!-- MKT CAP -->
         <col style="width:44px"><!-- EMA50 -->
         <col style="width:44px"><!-- EMA200 -->
+        <col style="width:50px"><!-- Growth -->
+        <col style="width:44px"><!-- PEG -->
+        <col style="width:54px"><!-- FCF Yield% -->
+        <col style="width:56px"><!-- Div Cover -->
       </colgroup>
       <thead><tr>
         ${th('rs_score','RS')}${th('sec_rank','SEC.RANK','r')}${th('symbol','SYMBOL')}${nameThHtml}${th('sector','SECTOR')}
@@ -4688,12 +4708,13 @@ function renderScrTable() {
         ${th('fromHigh','%HIGH','r')}${th('fromLow','%LOW','r')}
         ${th('pe','P/E','r')}${th('pbv','P/BV','r')}${th('div_yield','DIV%','r')}
         ${th('rvol','RVOL','r')}${th('mkt_cap','MKT CAP','r')}${th('above_ema50','EMA50','r')}${th('above_ema200','EMA200','r')}
+        ${th('growth_score','Growth','r')}${th('peg','PEG','r')}${th('fcf_yield','FCF Yield%','r')}${th('dividend_coverage','Div Cover','r')}
       </tr></thead>
       <tbody>${sorted.map(s => `
         <tr>
           <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score ?? '—'}</span></td>
           <td class="r">${secRankHtml(s.sec_rank ? {rank:s.sec_rank,total:s.sec_total} : null)}</td>
-          <td><strong class="sym-link" onclick="${s._isDR ? `openDRChartModal('${s.symbol}')` : `openChartModal('${s.symbol}')`}">${s.symbol}</strong>${s._isDR ? ' 🌏' : tvLink(s.symbol)}</td>
+          <td><strong class="sym-link" onclick="${s._isDR ? `openDRChartModal('${s.symbol}')` : `openChartModal('${s.symbol}')`}">${s.symbol}</strong>${s._isDR ? ' 🌏' : tvLink(s.symbol)}${dqBadge(s)}</td>
           ${nameCellHtml(s)}
           ${sectorCellHtml(s)}
           <td class="r">${s.price?.toFixed(2) ?? '—'}</td>
@@ -4713,6 +4734,10 @@ function renderScrTable() {
           <td class="r" style="font-size:11px">${fmtCap(s.mkt_cap, s.is_reit)}</td>
           <td class="r">${emaBadge(s.above_ema50)}</td>
           <td class="r">${emaBadge(s.above_ema200)}</td>
+          <td class="r">${s.growth_score != null ? `<span class="${s.growth_score >= 0 ? 'green' : 'red'}">${s.growth_score.toFixed(1)}</span>` : '<span class="text2">—</span>'}</td>
+          <td class="r text2">${s.peg != null ? s.peg.toFixed(2) : '—'}</td>
+          <td class="r text2">${s.fcf_yield != null ? s.fcf_yield.toFixed(2) + '%' : '—'}</td>
+          <td class="r">${s.dividend_coverage != null ? `<span class="${s.dividend_coverage < 1 ? 'red' : 'green'}">${s.dividend_coverage.toFixed(2)}x</span>` : '<span class="text2">—</span>'}</td>
         </tr>`).join('')}
       </tbody>
     </table></div>`;
@@ -5445,6 +5470,33 @@ function applyPreset(name) {
     const nh = document.getElementById('scr-new52h'); if (nh) nh.checked = true;
     document.getElementById('scr-rvol').value = '2';
     document.getElementById('scr-profit-yoyq-min').value = '25';
+  }
+  runScreener();
+}
+
+// Preset จากหน้า Fundamentals เดิม (ยุบรวมเข้า Screener แล้ว) — ตั้งค่า filter ที่มีอยู่แล้ว
+// (scr-pe/scr-pbv/scr-dy) ให้เทียบเท่า preset เดิมแล้วค้นหา ไม่ใช่ระบบ filter ใหม่
+function applyFundPreset(name) {
+  _SCR_FIELDS.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  _SCR_CHECKS.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
+  const mk = document.getElementById('scr-market'); if (mk) mk.value = 'ALL';
+  const ind = document.getElementById('scr-industry'); if (ind) ind.value = 'ALL';
+  const yb = document.getElementById('scr-ratio-years-back'); if (yb) yb.value = '1';
+  const rvd = document.getElementById('scr-rvol-days'); if (rvd) rvd.value = '20';
+
+  if (name === 'high_yield') {
+    document.getElementById('scr-dy').value = '3';
+  } else if (name === 'low_pbv') {
+    document.getElementById('scr-pbv').value = '1';
+  } else if (name === 'low_pe') {
+    document.getElementById('scr-pe').value = '15';
+  } else if (name === 'has_data') {
+    // ตั้ง threshold สูง/ต่ำจนไม่กรองอะไรออกจริง — แต่ filter ยัง fail เมื่อ field เป็น null
+    // (ดู runScreener: peMax/pbvMax/dyMin เช็ค s.xxx==null ก่อนเทียบค่าเสมอ) จึงได้ผลเทียบเท่า
+    // preset เดิม "มี P/E, P/BV, Div Yield ครบ" โดยไม่ต้องเขียนเงื่อนไขใหม่
+    document.getElementById('scr-pe').value  = '99999';
+    document.getElementById('scr-pbv').value = '99999';
+    document.getElementById('scr-dy').value  = '0.001';
   }
   runScreener();
 }
@@ -8331,6 +8383,25 @@ function openTearsheetFromModal() {
 // ============================================================
 // HEATMAP
 // ============================================================
+// รวม page-heatmap/page-us-heatmap/page-hk-heatmap/page-jp-heatmap เป็นหน้าเดียว (page-heatmap)
+// พร้อมแท็บเลือกตลาด — ฟังก์ชัน render/load เฉพาะตลาดของเดิมทั้งหมด (renderHeatmap,
+// loadHeatmapPage, loadHkHeatmapPage, loadJpHeatmapPage ฯลฯ) ไม่ถูกแตะ แค่เปลี่ยนจุดเรียกจาก
+// showPage(id) แยกๆ มาเป็น setHmMarket() ตัวเดียว
+let _hmMarket = 'TH';
+function setHmMarket(mkt, btn) {
+  _hmMarket = mkt;
+  document.querySelectorAll('#hm-tab-th,#hm-tab-us,#hm-tab-hk,#hm-tab-jp').forEach(b => b.classList.remove('active'));
+  (btn || document.getElementById('hm-tab-' + mkt.toLowerCase()))?.classList.add('active');
+  document.getElementById('hm-mkt-th').style.display = mkt === 'TH' ? '' : 'none';
+  document.getElementById('hm-mkt-us').style.display = mkt === 'US' ? '' : 'none';
+  document.getElementById('hm-mkt-hk').style.display = mkt === 'HK' ? '' : 'none';
+  document.getElementById('hm-mkt-jp').style.display = mkt === 'JP' ? '' : 'none';
+  if (mkt === 'TH') renderHeatmap();
+  if (mkt === 'US') loadHeatmapPage();
+  if (mkt === 'HK') loadHkHeatmapPage();
+  if (mkt === 'JP') loadJpHeatmapPage();
+}
+
 let hmPeriod = 'ret_1d';
 let hmSortDir = 1;   // 1 = มากไปน้อย (ค่าเริ่มต้น), -1 = น้อยไปมาก — คลิกปุ่ม metric เดิมซ้ำเพื่อสลับทิศ
 
@@ -11785,6 +11856,24 @@ function _rebuildJpRotSectorFilter() { _rotRebuildSectorFilter('jp'); }
 function renderUsRotation() { _rotRender('us'); }
 function renderHkRotation() { _rotRender('hk'); }
 function renderJpRotation() { _rotRender('jp'); }
+
+// รวม page-dr-rotation/page-us-rotation/page-hk-rotation/page-jp-rotation เป็นหน้าเดียว
+// (page-stock-rotation) พร้อมแท็บเลือกตลาด — TH(DR) เป็น special-case เรียก loadDRRotation()
+// เดิมตรงๆ (ไม่ผ่าน _rotLoad/_ROT_CFG เพราะโครงสร้าง data/UI ต่างจาก US/HK/JP มาก)
+let _srMarket = 'TH';
+function setSrMarket(mkt, btn) {
+  _srMarket = mkt;
+  document.querySelectorAll('#sr-tab-th,#sr-tab-us,#sr-tab-hk,#sr-tab-jp').forEach(b => b.classList.remove('active'));
+  (btn || document.getElementById('sr-tab-' + mkt.toLowerCase()))?.classList.add('active');
+  document.getElementById('sr-mkt-th').style.display = mkt === 'TH' ? '' : 'none';
+  document.getElementById('sr-mkt-us').style.display = mkt === 'US' ? '' : 'none';
+  document.getElementById('sr-mkt-hk').style.display = mkt === 'HK' ? '' : 'none';
+  document.getElementById('sr-mkt-jp').style.display = mkt === 'JP' ? '' : 'none';
+  if (mkt === 'TH') loadDRRotation();
+  if (mkt === 'US') loadUsRotation();
+  if (mkt === 'HK') loadHkRotation();
+  if (mkt === 'JP') loadJpRotation();
+}
 
 function loadUsStocksPage() {
   if (_usData) { renderUsTable(); loadUsBreadthChart(); return; }
@@ -15618,112 +15707,6 @@ function _drawBandChart(canvasId, d) {
     const v = minV + (range / 4) * i;
     ctx.fillText(v.toFixed(1), PAD.left - 4, toY(v) + 4);
   }
-}
-
-// ============================================================
-// FUNDAMENTAL VIEW
-// ============================================================
-let _fundView    = 'all';
-let _fundSortCol = 'div_yield';
-let _fundSortDir = 1;
-const _FUND_STR  = new Set(['symbol','name','sector']);
-
-function setFundView(v, btn) {
-  _fundView = v;
-  document.querySelectorAll('#page-fundamentals .filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  renderFundTable();
-}
-
-function fundTh(col, label, cls='') {
-  const active = _fundSortCol === col;
-  const arrow  = active ? (_fundSortDir === 1 ? '↓' : '↑') : '↕';
-  const c = (cls ? cls+' ' : '') + 'sortable';
-  return `<th class="${c}" onclick="setFundSort('${col}')">${label}${colTipIcon(col)}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
-}
-
-function setFundSort(col) {
-  if (_fundSortCol === col) _fundSortDir *= -1;
-  else { _fundSortCol = col; _fundSortDir = 1; }
-  renderFundTable();
-}
-
-function renderFundamentals() {
-  if (!DATA) return;
-  // สร้าง sector dropdown
-  const sectors = ['ALL', ...new Set(DATA.stocks.map(s => s.sector || 'Unknown').sort())];
-  const sel = document.getElementById('fund-sector-filter');
-  if (sel) {
-    const cur = sel.value;
-    sel.innerHTML = sectors.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
-  }
-  // stat cards
-  const stocks = DATA.stocks;
-  const withPE  = stocks.filter(s => s.pe  != null).length;
-  const withPBV = stocks.filter(s => s.pbv != null).length;
-  const withDY  = stocks.filter(s => s.div_yield != null).length;
-  const avgDY   = withDY ? (stocks.filter(s=>s.div_yield!=null).reduce((a,s)=>a+s.div_yield,0)/withDY).toFixed(2) : '—';
-  document.getElementById('fund-stat-cards').innerHTML = `
-    <div class="card"><div class="card-title">มีข้อมูล P/E</div><div class="stat-val">${withPE}</div><div class="stat-label">จาก ${stocks.length} หุ้น</div></div>
-    <div class="card"><div class="card-title">มีข้อมูล P/BV</div><div class="stat-val">${withPBV}</div><div class="stat-label">จาก ${stocks.length} หุ้น</div></div>
-    <div class="card"><div class="card-title">มีข้อมูล Div Yield</div><div class="stat-val">${withDY}</div><div class="stat-label">จาก ${stocks.length} หุ้น</div></div>
-    <div class="card"><div class="card-title">Avg Div Yield</div><div class="stat-val green">${avgDY}%</div><div class="stat-label">เฉลี่ยตลาด</div></div>
-  `;
-  renderFundTable();
-}
-
-function renderFundTable() {
-  if (!DATA) return;
-  const secFilter = document.getElementById('fund-sector-filter')?.value || 'ALL';
-  const q = (document.getElementById('fund-search')?.value || '').trim().toUpperCase();
-  let stocks = DATA.stocks.filter(s => {
-    if (secFilter !== 'ALL' && s.sector !== secFilter) return false;
-    if (q && !s.symbol.toUpperCase().includes(q) && !(s.name || '').toUpperCase().includes(q)) return false;
-    if (_fundView === 'high_yield') return s.div_yield != null && s.div_yield >= 3;
-    if (_fundView === 'low_pbv')    return s.pbv != null && s.pbv < 1;
-    if (_fundView === 'low_pe')     return s.pe  != null && s.pe  < 15;
-    if (_fundView === 'has_data')   return s.pe  != null && s.pbv != null && s.div_yield != null;
-    return true;
-  });
-  stocks = [...stocks].sort((a, b) => {
-    if (_FUND_STR.has(_fundSortCol)) return ((a[_fundSortCol]??'').localeCompare(b[_fundSortCol]??'')) * _fundSortDir;
-    return ((b[_fundSortCol]??-Infinity) - (a[_fundSortCol]??-Infinity)) * _fundSortDir;
-  });
-
-  document.getElementById('fund-count').textContent = `แสดง ${stocks.length} หุ้น`;
-  document.getElementById('fund-thead').innerHTML = `<tr>
-    ${fundTh('rs_score','RS','r')}${fundTh('symbol','Symbol')}${fundTh('name','ชื่อ')}${fundTh('sector','Sector')}
-    ${fundTh('price','ราคา','r')}${fundTh('ret_1d','1D%','r')}${fundTh('ret_1m','1M%','r')}${fundTh('ret_ytd','YTD%','r')}
-    ${fundTh('pe','P/E','r')}${fundTh('pbv','P/BV','r')}${fundTh('div_yield','Div Yield%','r')}
-    ${fundTh('mkt_cap','MKT CAP','r')}${fundTh('above_ema50','EMA50','r')}
-    ${fundTh('growth_score','Growth','r')}${fundTh('peg','PEG','r')}${fundTh('fcf_yield','FCF Yield%','r')}${fundTh('dividend_coverage','Div Cover','r')}
-  </tr>`;
-  document.getElementById('fund-tbody').innerHTML = stocks.map(s => `
-    <tr>
-      <td class="r"><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score ?? '—'}</span></td>
-      <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}${dqBadge(s)}</td>
-      <td style="font-size:11px;color:var(--text2);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
-      <td style="font-size:11px">${s.sector || '—'}</td>
-      <td class="r">${s.price?.toFixed(2) ?? '—'}</td>
-      <td class="r">${pct(s.ret_1d)}</td>
-      <td class="r">${pct(s.ret_1m)}</td>
-      <td class="r">${pct(s.ret_ytd)}</td>
-      <td class="r">${fmtValuation(s.pe, 'pe')}</td>
-      <td class="r">${fmtValuation(s.pbv, 'pbv')}</td>
-      <td class="r">${s.div_yield != null
-        ? `<span class="${s.div_yield >= 6 ? 'green' : s.div_yield >= 3 ? 'yellow' : 'text2'}" style="font-weight:600">${s.div_yield.toFixed(2)}%</span>`
-        : '<span class="text2">—</span>'}</td>
-      <td class="r" style="font-size:11px">${fmtCap(s.mkt_cap, s.is_reit)}</td>
-      <td class="r">${emaBadge(s.above_ema50)}</td>
-      <td class="r">${s.growth_score != null
-        ? `<span class="${s.growth_score >= 0 ? 'green' : 'red'}">${s.growth_score.toFixed(1)}</span>`
-        : '<span class="text2">—</span>'}</td>
-      <td class="r">${s.peg != null ? s.peg.toFixed(2) : '<span class="text2">—</span>'}</td>
-      <td class="r">${s.fcf_yield != null ? s.fcf_yield.toFixed(2) + '%' : '<span class="text2">—</span>'}</td>
-      <td class="r">${s.dividend_coverage != null
-        ? `<span class="${s.dividend_coverage < 1 ? 'red' : 'green'}">${s.dividend_coverage.toFixed(2)}x</span>`
-        : '<span class="text2">—</span>'}</td>
-    </tr>`).join('');
 }
 
 // ============================================================
