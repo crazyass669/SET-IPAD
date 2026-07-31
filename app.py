@@ -4727,6 +4727,7 @@ _UPDATE_STATUS_LABEL = {
     "offsite_backup":  "🛟 สำรองไฟล์สร้างใหม่ไม่ได้นอกเครื่อง (backup_financials_offsite.py)",
     "hedge_refresh":   "🐋 อัพเดท Hedge Holdings (Dataroma)",
     "hedge_fetch_missing": "⬇️ ดึงหุ้น Hedge Holdings ที่ยังไม่มีเข้าคลัง",
+    "static_bake": "🧱 Bake ไฟล์ static ทั้งหมด (run_static_update.py)",
 }
 
 @app.route("/api/update-status")
@@ -5105,6 +5106,85 @@ def build_mirror_names_route():
         _state.update(running=True, done=False, error=None,
                       current=0, total=100, message="กำลังดึงชื่อหุ้น mirror ใหม่...")
     threading.Thread(target=_run_build_mirror_names, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+# จำนวน endpoint ใน SNAPSHOTS ของ run_static_update.py — ใช้แค่ประมาณ % ความคืบหน้า
+# เฟส 2 (bake) คร่าวๆ ถ้าไฟล์นั้นเพิ่ม/ลด endpoint แล้ว progress bar จะคลาดเคลื่อนนิดหน่อย
+# (ไม่กระทบผลลัพธ์จริง แค่ตัวเลข % ระหว่างรอ)
+_STATIC_BAKE_SNAPSHOT_TOTAL = 29
+
+
+def _run_static_bake():
+    """เทียบเท่า `python run_static_update.py` — รันเป็น subprocess แยก process กับ
+    dev server นี้ทุกประการ (เหมือนที่ผู้ใช้รันเองใน terminal / ที่ GitHub Actions รัน)
+    ทำ Quick/Full Refresh ราคา แล้ว bake ทุก /api/* endpoint ที่เว็บ static ใช้ลง
+    data/*.json (รวม financials_analytics_yahoo.json, stock_valuation_stats.json ฯลฯ)
+    แปลง log ของสคริปต์เป็น progress คร่าวๆ ให้ progress bar ในแอป: เฟส 1 (ราคา) อ่าน
+    "[ NN%]" ที่สคริปต์พิมพ์เอง map ไป 0-35%, เฟส 2 (snapshot) นับบรรทัด ✅/⚠️/❌/⏭️
+    เทียบ _STATIC_BAKE_SNAPSHOT_TOTAL map ไป 35-95% — สคริปต์บันทึก run_log ของตัวเอง
+    (key "static_bake") ตอน atexit อยู่แล้วไม่ว่าใครเป็นคนรัน ไม่ต้องบันทึกซ้ำที่นี่
+    ยกเว้นกรณีเปิด process ไม่ได้เลย (สคริปต์เองไม่มีโอกาสรัน atexit)"""
+    script = os.path.join(BASE_DIR, "run_static_update.py")
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, script], cwd=BASE_DIR, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", bufsize=1)
+    except Exception as e:
+        run_log.record_run(BASE_DIR, "static_bake", False, f"เปิด process ไม่ได้: {e}")
+        _update(running=False, done=True, error=str(e), message=f"เปิด process ไม่ได้: {e}")
+        return
+
+    snapshot_mode = False
+    snapshot_done = 0
+    last_line = "กำลังเริ่ม..."
+    try:
+        for raw in proc.stdout:
+            line = raw.strip()
+            if not line:
+                continue
+            last_line = re.sub(r"^\[\d{2}:\d{2}:\d{2}\]\s*", "", line)
+            if "Snapshot API endpoints" in line:
+                snapshot_mode = True
+            if snapshot_mode and line.startswith(("✅", "⚠️", "❌", "⏭️")):
+                snapshot_done += 1
+                pct = 35 + min(snapshot_done / _STATIC_BAKE_SNAPSHOT_TOTAL, 1.0) * 60
+                _update(current=round(pct), total=100, message=last_line)
+            else:
+                m = re.search(r"\[\s*(\d{1,3})%\]", line)
+                if m and not snapshot_mode:
+                    _update(current=round(min(int(m.group(1)), 100) * 0.35), total=100, message=last_line)
+                else:
+                    _update(message=last_line)
+        proc.wait()
+    except Exception as e:
+        proc.kill()
+        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        return
+
+    if proc.returncode == 0:
+        _update(running=False, done=True, error=None, current=100, total=100,
+                message="เสร็จแล้ว! bake ไฟล์ static ทั้งหมดสำเร็จ")
+    else:
+        _update(running=False, done=True, error=last_line,
+                message=f"เกิดข้อผิดพลาด (exit {proc.returncode}): {last_line}")
+
+
+@app.route("/api/run-static-bake", methods=["POST"])
+def run_static_bake_route():
+    """ปุ่ม '🧱 Bake ไฟล์ static ทั้งหมด' (หน้า Data Health) — แทน `python run_static_update.py`
+    ใช้เวลานาน (Quick Update ราคา ~ไม่กี่นาที ถึง Full Refresh ~ครึ่ง-1 ชม. ถ้ายังไม่มี
+    set_prices.db) ปิดแท็บ/ปิดคอมได้ระหว่างรัน — ปกติไม่จำเป็นต้องกดเอง (GitHub Actions
+    รันให้อัตโนมัติแล้วเว็บ static จะได้ของใหม่หลัง git pull) ใช้ตอนอยากได้ไฟล์ data/*.json
+    สดในเครื่องทันทีโดยไม่ต้องรอรอบ Actions"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=100, message="กำลังเริ่ม bake ไฟล์ static (run_static_update.py)...")
+    threading.Thread(target=_run_static_bake, daemon=True).start()
     return jsonify({"ok": True})
 
 

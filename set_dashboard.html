@@ -3624,6 +3624,20 @@
           ⏱ กดมือเป็นครั้งคราว ใช้เวลานาน (เป็นชั่วโมง) — Full Refresh sync ให้เองทีละ 300 ตัวอยู่แล้ว
         </div>
       </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="static-bake-btn" onclick="startStaticBake()">🧱 Bake ไฟล์ static ทั้งหมด</button>
+        <div class="btn-note">
+          <b>🧱 Bake ไฟล์ data/*.json ทั้งหมดที่เว็บ static (GitHub Pages) ใช้</b>
+          <span class="badge badge-blue" style="margin-left:4px">รวม Yahoo Analytics + P/E-P/BV</span><br>
+          รัน Quick/Full Refresh ราคา แล้ว snapshot ทุก endpoint ที่หน้าเว็บ static ใช้ลง data/*.json
+          (รวม financials_analytics_yahoo.json, stock_valuation_stats.json, breadth, market flow ฯลฯ) —
+          <b>ปกติไม่ต้องกดเอง</b> เพราะ GitHub Actions รันให้อัตโนมัติวันละหลายรอบอยู่แล้ว (แค่ git pull มารับไฟล์ใหม่)
+          กดเฉพาะตอนอยากได้ไฟล์สดในเครื่องทันทีโดยไม่รอรอบ Actions<br>
+          📦 แทน <code>python run_static_update.py</code><br>
+          ⏱ ไม่กี่นาที (ถ้ามี set_prices.db แล้ว) ถึง ~ครึ่ง-1 ชั่วโมง (ถ้ายังไม่มี ต้อง Full Refresh ราคาก่อน) —
+          ปิดแท็บ/ปิดคอมได้ระหว่างรัน
+        </div>
+      </div>
     </div>
   </div>
 

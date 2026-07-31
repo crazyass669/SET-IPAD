@@ -468,6 +468,11 @@ function startBuildMirrorNames() {
   _startJob("/api/build-mirror-names", "build-mirror-names-btn", "🏷️ ดึงชื่อหุ้น mirror ใหม่", null, checkDataHealthBadge);
 }
 
+function startStaticBake() {
+  if (!confirm('รัน python run_static_update.py ในเครื่องนี้ (Quick/Full Refresh ราคา + bake ไฟล์ data/*.json ทั้งหมดที่เว็บ static ใช้)?\n\nปกติไม่ต้องกดเอง — GitHub Actions รันให้อัตโนมัติแล้ว กดเฉพาะตอนอยากได้ไฟล์สดทันทีในเครื่อง\n\nอาจใช้เวลานาน (ไม่กี่นาที ถึง ~ชั่วโมง ถ้ายังไม่มี set_prices.db) — ปิดแท็บ/ปิดคอมได้ระหว่างรัน')) return;
+  _startJob("/api/run-static-bake", "static-bake-btn", "🧱 Bake ไฟล์ static ทั้งหมด", null, checkDataHealthBadge);
+}
+
 async function restartServer() {
   if (!confirm('ยืนยันการ Restart Server?\n\nหน้าเว็บจะ reload อัตโนมัติหลัง server พร้อม')) return;
   const btn = document.getElementById('restart-btn');
@@ -15900,9 +15905,9 @@ const DH_SOURCE_MAP = {
   prices:               { text: '⚡ Quick Update (ปุ่มหัวจอ) หรือ ⟳ Full Refresh', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   indices:              { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   dr_cache:             { text: 'หน้า DR/DRx — อัพเดทอัตโนมัติตอนเปิดหน้า หรือปุ่ม "⚡ อัปเดตราคา" ในหน้านั้น', gotoPage: 'dr', gotoLabel: 'ไปหน้า DR/DRx' },
-  market_flow:          { text: 'อัตโนมัติจาก GitHub Actions (3 รอบ/วัน) — เครื่องนี้ต้อง git pull เพื่อรับไฟล์ใหม่ ไม่มีปุ่มกดในแอป' },
-  s50_flow:             { text: 'อัตโนมัติจาก GitHub Actions (3 รอบ/วัน) — เครื่องนี้ต้อง git pull เพื่อรับไฟล์ใหม่ ไม่มีปุ่มกดในแอป' },
-  bond_flow:            { text: 'อัตโนมัติจาก GitHub Actions (3 รอบ/วัน) — เครื่องนี้ต้อง git pull เพื่อรับไฟล์ใหม่ ไม่มีปุ่มกดในแอป' },
+  market_flow:          { text: 'เปิดหน้า Flow จะดึงสดให้อัตโนมัติ (cache 4 ชม.) หรือรอ GitHub Actions (3 รอบ/วัน — เครื่องนี้ต้อง git pull)', gotoPage: 'flow', gotoLabel: 'ไปหน้า Flow' },
+  s50_flow:             { text: 'เปิดหน้า Flow จะดึงสดให้อัตโนมัติ (cache 4 ชม.) หรือรอ GitHub Actions (3 รอบ/วัน — เครื่องนี้ต้อง git pull)', gotoPage: 'flow', gotoLabel: 'ไปหน้า Flow' },
+  bond_flow:            { text: 'เปิดหน้า Flow จะดึงสดให้อัตโนมัติ (cache 4 ชม.) หรือรอ GitHub Actions (3 รอบ/วัน — เครื่องนี้ต้อง git pull)', gotoPage: 'flow', gotoLabel: 'ไปหน้า Flow' },
   short_sales:          { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   nvdr:                 { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   insider:              { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
@@ -15923,17 +15928,17 @@ const DH_SOURCE_MAP = {
   mirror:               { text: 'ปุ่ม "🌐 Sync Mirror US/HK เต็ม" ด้านบนในหน้านี้ (หรือ python mirror_finnomena.py force)', fn: 'startMirrorYahooIndexSync', fnLabel: '🌐 Sync Mirror US/HK เต็ม' },
   market_stats:         { text: 'หน้า Valuation — ปุ่ม "⟳ อัพเดทข้อมูล P/E & P/BV" (ต้องโหลด Table_PE.xls/Table_PBV.xls มาวางทับก่อน)', fn: 'refreshMarketStats', fnLabel: '⟳ อัพเดท P/E & P/BV', gotoPage: 'valuation' },
   offsite_backup:       { text: 'รันเอง: python backup_financials_offsite.py <โฟลเดอร์ปลายทาง> — ไม่มีปุ่มในแอป (เขียนไฟล์นอกเครื่อง)' },
-  static_bake:          { text: 'รัน python run_static_update.py (เครื่องนี้) หรือ GitHub Actions (เว็บ/มือถือ) แล้ว git pull — ไม่มีปุ่มในแอป' },
-  static_bake_run:      { text: 'รัน python run_static_update.py — ไม่มีปุ่มในแอป (ปกติรันบน GitHub Actions)' },
+  static_bake:          { text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py) — ปกติรันอัตโนมัติบน GitHub Actions แล้ว git pull', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
+  static_bake_run:      { text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py) — ปกติรันบน GitHub Actions', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
   set_history:          { text: '⚡ Quick Update หรือ ⟳ Full Refresh', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
-  fin_analytics_yahoo:  { text: 'รัน python run_static_update.py — ไม่มีปุ่มในแอป' },
-  stock_valuation_stats:{ text: 'รัน python run_static_update.py — ไม่มีปุ่มในแอป' },
-  mirror_names:         { text: 'รัน python build_mirror_names.py — ไม่มีปุ่มในแอป (ทำหลัง mirror ได้หุ้นใหม่)' },
+  fin_analytics_yahoo:  { text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py)', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
+  stock_valuation_stats:{ text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py)', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
+  mirror_names:         { text: 'หน้า Data Health — การ์ด "อัพเดทงบไตรมาส" ปุ่ม "🏷️ ดึงชื่อหุ้น mirror ใหม่" (ทำหลัง mirror ได้หุ้นใหม่)', fn: 'startBuildMirrorNames', fnLabel: '🏷️ ดึงชื่อหุ้น mirror ใหม่' },
   dr_universe:          { text: 'อัตโนมัติทุกครั้งที่เปิดหน้า DR/DRx', gotoPage: 'dr', gotoLabel: 'ไปหน้า DR/DRx' },
   dr_descriptions:      { text: 'หน้า DR/DRx — ปุ่ม "📖 ดึงคำอธิบายบริษัท DR"', fn: 'startDRDescriptionSync', fnLabel: '📖 ดึงคำอธิบาย DR', gotoPage: 'dr' },
   q_set_data:           { text: 'ชุดเดียวกับ "ราคา/RS/เทคนิค (หุ้นไทย)" — ⚡ Quick Update / ⟳ Full Refresh', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
-  q_bake_set_data:      { text: 'รัน python run_static_update.py — ไม่มีปุ่มในแอป' },
-  q_breadth:            { text: 'รัน python run_static_update.py — ไม่มีปุ่มในแอป' },
+  q_bake_set_data:      { text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py)', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
+  q_breadth:            { text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py)', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
 };
 
 // พาไปหน้าต้นทาง — หา nav-btn ที่ onclick อ้างถึง pageId นั้นแล้วสั่ง showPage ให้
@@ -16031,6 +16036,7 @@ const _DH_LAST_RUN_GROUPS = [
     { key: 'hk_index_full_refresh', label: '📈 HK Index Max' },
     { key: 'jp_index_full_refresh', label: '📈 JP Index Max' },
     { key: 'mirror_yahoo_index_sync', label: '🌐 Sync Mirror US/HK เต็ม' },
+    { key: 'static_bake', label: '🧱 Bake ไฟล์ static ทั้งหมด' },
   ]},
   { title: '📊 อัพเดทงบไตรมาส (ก.พ. / พ.ค. / ส.ค. / พ.ย.)', rows: [
     { key: 'financials_sync', label: '🔄 อัพเดทงบการเงินทั้งหมด' },
