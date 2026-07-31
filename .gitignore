@@ -45,6 +45,10 @@ listedCompanies_en_US.xlsx
 # Claude Code local settings
 .claude/settings.local.json
 
+# CSRF token ต่อเครื่อง (ดู app.py _load_or_create_token) — ห้ามขึ้น repo ไม่งั้นใครก็
+# ปลอม token ที่ dashboard.js แนบให้เองได้ (แค่ไปคัดลอกจาก GitHub)
+.dashboard_token
+
 # SQLite price store + สำเนาสำรอง (local only)
 set_prices.db
 set_prices.db-wal

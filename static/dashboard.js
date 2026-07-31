@@ -1,4 +1,20 @@
 
+// CSRF guard: แนบ token (ฝัง inline ตอน server serve หน้า index — ดู app.py index())
+// เข้า header ของทุก fetch POST อัตโนมัติ ไม่ต้องแก้ทีละจุดที่ยิง /api/* — เว็บอื่นที่เปิด
+// พร้อมกันยิง POST มาสั่ง restart/refresh/เขียนทับข้อมูลแบบ CSRF ไม่ได้เพราะไม่รู้ token นี้
+(function () {
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const method = ((init && init.method) || 'GET').toUpperCase();
+    if (method === 'POST' && window.__DASH_TOKEN__) {
+      init = Object.assign({}, init, {
+        headers: Object.assign({}, init.headers, { 'X-Dashboard-Token': window.__DASH_TOKEN__ }),
+      });
+    }
+    return _origFetch(input, init);
+  };
+})();
+
 // ============================================================
 // STATE
 // ============================================================
@@ -4414,7 +4430,7 @@ function openStockPopup(sym, evt) {
   popup.style.left = left + 'px';
 
   // Fetch mini financials
-  fetch(`/api/financials/${encodeURIComponent(sym)}`)
+  _fetchTimeout(`/api/financials/${encodeURIComponent(sym)}`)
     .then(r => r.json())
     .then(d => {
       if (_spopSym !== sym) return;
@@ -8105,7 +8121,7 @@ async function _tsLoadNews(sym) {
         <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:10.5px;color:var(--text2);margin-bottom:2px">
           <span>${esc(r.publisher)}</span><span style="margin-left:auto">${_newsRelTime(r.ts)}</span>
         </div>
-        <a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--text);font-size:12.5px;font-weight:600;text-decoration:none">${esc(r.title)}</a>
+        <a href="${esc(_safeHref(r.url))}" target="_blank" rel="noopener" style="color:var(--text);font-size:12.5px;font-weight:600;text-decoration:none">${esc(r.title)}</a>
       </div>`).join('');
   } catch (e) {
     if (_tsData?.symbol !== sym) return;
@@ -9964,7 +9980,7 @@ function _loadFinDescription(sym, market) {
 function _loadFinTVLink(sym, market) {
   const a = document.getElementById('fin-tv-link');
   const q = market ? `?market=${encodeURIComponent(market)}` : '';
-  fetch(`/api/resolve-yf/${encodeURIComponent(sym)}${q}`).then(r => r.json()).then(d => {
+  _fetchTimeout(`/api/resolve-yf/${encodeURIComponent(sym)}${q}`).then(r => r.json()).then(d => {
     if (_finData?.sym !== sym) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
     if (d.error || !d.yf) return;
     const tvSym = yfToTVSym(d.yf);
@@ -10275,7 +10291,7 @@ function _loadPriceAnalytics(symbol, boxId = 'cm-lts',
   const url = yfTicker
     ? `/api/price-analytics-yf/${encodeURIComponent(yfTicker)}`
     : `/api/price-analytics/${encodeURIComponent(symbol)}`;
-  fetch(url).then(r => r.json()).then(d => {
+  _fetchTimeout(url).then(r => r.json()).then(d => {
     if (!stillCurrent()) return;               // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
     if (d.error || !d.drawdown) return;
     box.innerHTML = _priceAnalyticsHtml(d);
@@ -13179,6 +13195,10 @@ function _newsRecentPick(sym, tab) {
 }
 
 // เวลาแบบสัมพัทธ์ไทย — ข่าวเก่ากว่า 7 วันโชว์วันที่จริงแทน (นับ "45 วันที่แล้ว" ไม่ช่วยอะไร)
+function _safeHref(u) {
+  return /^https?:\/\//i.test(u || '') ? u : '#';
+}
+
 function _newsRelTime(iso) {
   if (!iso) return '';
   const t = new Date(iso);
@@ -13242,7 +13262,7 @@ function _renderNewsRows() {
         <span style="color:var(--text2)">${esc(r.publisher)}</span>
         <span style="color:var(--text2);margin-left:auto;white-space:nowrap" title="${esc(r.ts)}">${_newsRelTime(r.ts)}</span>
       </div>
-      <a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--text);font-size:13.5px;font-weight:600;text-decoration:none;line-height:1.45"
+      <a href="${esc(_safeHref(r.url))}" target="_blank" rel="noopener" style="color:var(--text);font-size:13.5px;font-weight:600;text-decoration:none;line-height:1.45"
         onmouseenter="this.style.color='var(--blue)'" onmouseleave="this.style.color='var(--text)'">${esc(r.title)}</a>
       ${r.summary ? `<div style="font-size:12px;color:var(--text2);margin-top:3px;line-height:1.5">${esc(r.summary)}</div>` : ''}
     </div>`;
@@ -21165,7 +21185,7 @@ function searchFilings() {
     <div class="card" style="padding:14px 16px;margin-bottom:12px">
       <div style="font-size:13px;font-weight:600;margin-bottom:10px">${g.group} — ${esc(sym)}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${g.links.map(l => `<a class="filter-btn" href="${esc(l.url)}" target="_blank" rel="noopener"
+        ${g.links.map(l => `<a class="filter-btn" href="${esc(_safeHref(l.url))}" target="_blank" rel="noopener"
           title="${esc(l.tip)}" style="text-decoration:none;font-size:12.5px;padding:7px 14px">${l.label} ↗</a>`).join('')}
       </div>
     </div>`).join('') + `

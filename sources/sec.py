@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """sources/sec.py — SEC (ก.ล.ต.) scraping helpers: แบบ 59 / แบบ 246-2"""
+from core.net import ssl_context
 
 def _sec_viewstate(url, ua):
-    import urllib.request as _ur, ssl as _ssl, re as _re
-    ctx = _ssl._create_unverified_context()
+    import urllib.request as _ur, re as _re
+    ctx = ssl_context()
     req = _ur.Request(url, headers={"User-Agent": ua})
     with _ur.urlopen(req, context=ctx, timeout=20) as r:
         html = r.read().decode("utf-8", errors="ignore")
@@ -15,8 +16,8 @@ def _sec_viewstate(url, ua):
     )
 
 def _sec_post(url, payload, ua):
-    import urllib.request as _ur, urllib.parse as _up, ssl as _ssl, io, pandas as _pd
-    ctx = _ssl._create_unverified_context()
+    import urllib.request as _ur, urllib.parse as _up, io, pandas as _pd
+    ctx = ssl_context()
     data = _up.urlencode(payload, encoding="utf-8").encode("utf-8")
     req = _ur.Request(url, data=data, headers={
         "User-Agent": ua,

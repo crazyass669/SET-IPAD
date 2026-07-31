@@ -8,6 +8,7 @@ import json
 import os
 import random
 import re
+import secrets
 import shutil
 import string
 import subprocess
@@ -30,6 +31,7 @@ except Exception:
 from core.store import _atomic_write_json
 from core import run_log
 from core import delisted_log
+from core.net import ssl_context
 
 
 class _LRUCache(OrderedDict):
@@ -125,12 +127,39 @@ from sources import hk_index_membership
 
 
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 DATA_FILE    = os.path.join(BASE_DIR, "set_data.json")
 BACKUP_FILE  = os.path.join(BASE_DIR, "set_data_backup.json")
 HTML_FILE    = os.path.join(BASE_DIR, "set_dashboard.html")
 HISTORY_FILE = os.path.join(BASE_DIR, "set_history.json")
 DR_CACHE_FILE = os.path.join(BASE_DIR, "dr_cache.json")
 WATCHLIST_FILE = os.path.join(BASE_DIR, "data", "watchlist.json")
+TOKEN_FILE = os.path.join(BASE_DIR, ".dashboard_token")
+
+# ── CSRF token: ทุก endpoint ที่ mutate (POST /api/*) ต้องแนบ header นี้มาด้วย —
+# กัน third-party website ที่เปิดพร้อมกันยิง POST มาสั่ง restart/full-refresh/เขียนทับ
+# ข้อมูลแบบ CSRF (LAN เปิด 0.0.0.0 ให้ iPad/มือถือเข้าได้ ไม่มี auth เดิม) token สุ่ม
+# ต่อเครื่อง เก็บไฟล์ local (gitignored) ฝัง inline เข้าหน้า HTML ตอน serve (ดู index())
+# เว็บอื่นอ่านค่านี้ไม่ได้เพราะไม่ได้โหลดหน้าเราจริง ๆ
+def _load_or_create_token():
+    try:
+        with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+            tok = f.read().strip()
+            if tok:
+                return tok
+    except Exception:
+        pass
+    tok = secrets.token_urlsafe(32)
+    try:
+        with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+            f.write(tok)
+    except Exception:
+        pass
+    return tok
+
+
+DASHBOARD_TOKEN = _load_or_create_token()
 
 # ── Logging: rotating file (5MB × 3) รับทั้ง log แอปและ werkzeug ──
 import logging
@@ -185,6 +214,15 @@ def _static_no_cache(resp):
     return resp
 
 
+@app.before_request
+def _require_dashboard_token():
+    # ทุก POST /api/* (endpoint ที่ mutate สถานะ/ไฟล์/process) ต้องแนบ token ที่ได้จาก
+    # หน้า HTML จริงของเรา — กัน CSRF จากเว็บอื่นที่เปิดพร้อมกันใน browser เดียวกัน
+    if request.method == "POST" and request.path.startswith("/api/"):
+        if request.headers.get("X-Dashboard-Token") != DASHBOARD_TOKEN:
+            return jsonify({"error": "missing/invalid dashboard token"}), 403
+
+
 # โหลด DR cache จากไฟล์ตอน import (ใช้ได้ทั้ง __main__ และ WSGI)
 _load_dr_cache_from_file()
 
@@ -217,9 +255,21 @@ def _snapshot():
 # Routes
 # ============================================================
 
+# cache HTML ที่ inject token แล้วไว้ตาม mtime — กัน อ่าน+replace ไฟล์ทุก request
+# (หน้านี้เอง Cache-Control ก็ no-store อยู่แล้ว นี่คือ cache ฝั่งเซิร์ฟเวอร์ ไม่ใช่ browser)
+_index_html_cache = {"mtime": None, "bytes": None}
+
+
 @app.route("/")
 def index():
-    resp = send_file(HTML_FILE)
+    mtime = os.path.getmtime(HTML_FILE)
+    if _index_html_cache["mtime"] != mtime:
+        with open(HTML_FILE, "rb") as f:
+            raw = f.read()
+        inject = f'<script>window.__DASH_TOKEN__={json.dumps(DASHBOARD_TOKEN)};</script>'.encode("utf-8")
+        raw = raw.replace(b"<!--DASH_TOKEN-->", inject)
+        _index_html_cache.update(mtime=mtime, bytes=raw)
+    resp = Response(_index_html_cache["bytes"], mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     resp.headers["Pragma"] = "no-cache"
     return resp
@@ -4170,7 +4220,8 @@ def indices_quick_update():
                                     if stats["failed"] else None),
                         "updated_at": time.strftime("%Y-%m-%d %H:%M")})
     except Exception as e:
-        return jsonify({"error": str(e), "trace": tb.format_exc()}), 500
+        tb.print_exc()
+        return jsonify({"error": str(e)}), 500
     finally:
         _indices_job_state["running"] = False
 
@@ -4192,7 +4243,8 @@ def indices_refresh():
                         "warning": (f"ดึงไม่สำเร็จ {stats['failed']}/{stats['total']} ดัชนี"
                                     if stats["failed"] else None)})
     except Exception as e:
-        return jsonify({"error": str(e), "trace": tb.format_exc()}), 500
+        tb.print_exc()
+        return jsonify({"error": str(e)}), 500
     finally:
         _indices_job_state["running"] = False
 
@@ -4677,16 +4729,14 @@ def data_health_ping():
     """ยิงทดสอบแหล่งข้อมูลภายนอกทีละ 1 request เบาๆ (timeout สั้น) — ใช้ตอบคำถาม
     'ตอนนี้ดึงจาก SET/Yahoo/Finnomena/TradingView ได้จริงไหม' ไม่ได้ผูกกับ mtime"""
     import urllib.request as _dh_ur
-    import ssl as _dh_ssl
     from concurrent.futures import ThreadPoolExecutor
 
-    def _ping(key, label, url, headers=None, timeout=6, insecure=False):
+    def _ping(key, label, url, headers=None, timeout=6):
         t0 = time.time()
         try:
             req = _dh_ur.Request(url, headers=headers or {"User-Agent": "Mozilla/5.0"})
-            # insecure=True เฉพาะแหล่งที่โค้ดดึงจริงก็ข้าม verify อยู่แล้ว (siamchart) —
-            # ไม่งั้นปิงจะขึ้นแดงเพราะ cert ทั้งที่การดึงจริงยังทำงานได้ปกติ
-            ctx = _dh_ssl._create_unverified_context() if insecure else _dh_ssl.create_default_context()
+            # การดึงจริงทุกแหล่ง (รวม siamchart) verify cert ผ่าน core.net.ssl_context() แล้ว
+            ctx = ssl_context()
             with _dh_ur.urlopen(req, context=ctx, timeout=timeout) as r:
                 code = r.getcode()
                 r.read(256)  # แค่พิสูจน์ว่า body มาจริง ไม่ต้องอ่านทั้งหมด
@@ -4712,7 +4762,7 @@ def data_health_ping():
         ("siamchart", "siamchart (Capital Flow)", "https://siamchart.com/stock-summary/",
          {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                         "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-          "Referer": "https://siamchart.com/"}, 8, True),
+          "Referer": "https://siamchart.com/"}, 8),
     ]
     with ThreadPoolExecutor(max_workers=len(targets)) as ex:
         results = list(ex.map(lambda t: _ping(*t), targets))
@@ -5290,7 +5340,6 @@ def _run_refresh(period="max"):
             pass
 
     try:
-        sys.path.insert(0, BASE_DIR)
         from services import refresh as _refresh_svc
 
         def cb(current, total, msg):
@@ -5810,10 +5859,6 @@ def market_internals():
         return jsonify({"error": str(e)}), 500
 
 
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
-
-
 def _run_quick():
     failed_steps = []
 
@@ -6009,14 +6054,14 @@ def _load_short_data():
 
 def short_sales_daily_update():
     """ดึงข้อมูล short sales วันนี้จาก API แล้ว append ลง short_sales_data.json"""
-    import urllib.request as _ur, ssl as _ssl
+    import urllib.request as _ur
     from datetime import datetime as _dt
 
     if not os.path.exists(_SHORT_DATA_FILE):
         return
 
     try:
-        ctx = _ssl._create_unverified_context()
+        ctx = ssl_context()
         BASE = "https://www.set.or.th"
         main_req = _ur.Request(
             BASE + "/th/market/statistics/short-sales/total-short-sales",
@@ -6212,8 +6257,8 @@ _MARKET_FLOW_FILE = os.path.join(BASE_DIR, "market_flow_data.json")
 
 def _fetch_flow_siamchart():
     """ดึง+parse จาก siamchart.com — คืน list of rows (ไม่คำนวณ chg/ไม่แตะ cache)"""
-    import urllib.request as _ur, ssl as _ssl, re as _re, ast as _ast
-    ctx = _ssl._create_unverified_context()
+    import urllib.request as _ur, re as _re, ast as _ast
+    ctx = ssl_context()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -6350,7 +6395,8 @@ def market_flow():
         return jsonify(_fetch_flow_data())
     except Exception as e:
         import traceback
-        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 
@@ -6366,8 +6412,8 @@ _S50_FLOW_FILE = os.path.join(BASE_DIR, "s50_flow_data.json")
 def _fetch_flow_tfex_today():
     """ดึง+parse หน้า TFEX investor-type — คืน row เดียว {date, fund, foreign, retail}
     (หน่วย: สัญญา ไม่ใช่ล้านบาท) หรือ None ถ้าหาข้อมูลไม่เจอ"""
-    import urllib.request as _ur, ssl as _ssl, re as _re
-    ctx = _ssl._create_unverified_context()
+    import urllib.request as _ur, re as _re
+    ctx = ssl_context()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -6417,8 +6463,8 @@ def _fetch_flow_s50_github_fallback():
     06:00/13:10/18:30 ICT) มาใช้เติมวันที่ขาดบนเครื่อง — TFEX ให้แค่ "วันล่าสุดวันเดียว"
     ถ้าเครื่อง local ไม่ได้เปิดแอป/กด Quick Update พอดีตอน TFEX ยังโชว์วันนั้นอยู่ วันนั้น
     จะหายถาวร แต่ GitHub Actions มีโอกาสจับติดมากกว่าเพราะรันถี่กว่า 3 เท่า"""
-    import urllib.request as _ur, ssl as _ssl
-    ctx = _ssl._create_unverified_context()
+    import urllib.request as _ur
+    ctx = ssl_context()
     req = _ur.Request(_S50_GITHUB_RAW_URL, headers={"User-Agent": "Mozilla/5.0"})
     with _ur.urlopen(req, context=ctx, timeout=15) as r:
         data = json.loads(r.read().decode("utf-8", "ignore"))
@@ -6475,7 +6521,8 @@ def market_flow_s50():
         return jsonify(_fetch_flow_s50_data())
     except Exception as e:
         import traceback
-        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 # ── Thai Bond flow (ThaiBMA) ──────────────────────────────────────────────
@@ -6489,8 +6536,8 @@ def _fetch_flow_bond_data():
     """รวมข้อมูล Thai Bond flow จากไฟล์สะสม + ThaiBMA (merge by date เหมือน SET/S50 flow —
     เดิมเขียนทับไฟล์ทั้งไฟล์ด้วยผลลัพธ์ ThaiBMA ตรงๆ ถ้าวันไหน ThaiBMA ส่งประวัติสั้นลง
     (เช่นเหลือแค่ YTD) ข้อมูลย้อนหลังที่สะสมไว้จะหายถาวร — ตอนนี้ merge เข้าไฟล์เดิมแทน)"""
-    import urllib.request as _ur, ssl as _ssl
-    ctx = _ssl._create_unverified_context()
+    import urllib.request as _ur
+    ctx = ssl_context()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -6544,7 +6591,8 @@ def market_flow_bond():
         return jsonify(_fetch_flow_bond_data())
     except Exception as e:
         import traceback
-        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/short-sales")
@@ -6619,8 +6667,8 @@ def _load_nvdr_data():
 
 def _fetch_nvdr_outstanding():
     """ดึง NVDR Outstanding Share จาก SET API"""
-    import urllib.request as _ur, ssl as _ssl
-    ctx = _ssl._create_unverified_context()
+    import urllib.request as _ur
+    ctx = ssl_context()
     BASE = "https://www.set.or.th"
     UA   = "Mozilla/5.0 Chrome/125.0"
     req  = _ur.Request(BASE + "/th/market/statistics/nvdr/outstanding-share",
@@ -6832,7 +6880,7 @@ def get_watchlist():
 def save_watchlist():
     body = request.get_json(silent=True) or {}
     syms = body.get("symbols")
-    if not isinstance(syms, list):
+    if not isinstance(syms, list) or len(syms) > 500 or not all(isinstance(s, str) for s in syms):
         return jsonify({"error": "invalid symbols"}), 400
     os.makedirs(os.path.dirname(WATCHLIST_FILE), exist_ok=True)
     _atomic_write_json(WATCHLIST_FILE, syms)

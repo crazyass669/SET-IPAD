@@ -56,14 +56,15 @@ from core.metrics import (                       # noqa: E402
 
 def _try_download_xls(path):
     """ดาวน์โหลด XLS ใหม่จาก SET.or.th พร้อม backup/restore ถ้าไม่สำเร็จ"""
-    import urllib.request, ssl, shutil
+    import urllib.request, shutil
+    from core.net import ssl_context
     url = "https://www.set.or.th/dat/eod/listedcompany/static/listedCompanies_en_US.xls"
     backup = path + ".bak"
     # backup ไฟล์เดิม
     if os.path.exists(path):
         shutil.copy2(path, backup)
     try:
-        ctx = ssl._create_unverified_context()
+        ctx = ssl_context()
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Referer":    "https://www.set.or.th/en/market/product/stock/quote/",

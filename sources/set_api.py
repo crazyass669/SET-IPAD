@@ -10,11 +10,12 @@ validation gate: ถ้าผลได้ต่ำกว่าเกณฑ์ใ
 ไปแหล่งอื่นแทนที่จะรับข้อมูลไม่ครบเข้า pipeline เงียบๆ
 """
 import json
-import ssl
 import time
 import urllib.parse
 import urllib.request as ur
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from core.net import ssl_context
 
 BASE = "https://www.set.or.th"
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
@@ -22,7 +23,7 @@ _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
 
 def _bootstrap_headers(referer_path="/th/market/product/stock/quote/PTT/price"):
     """เปิดหน้าเว็บหนึ่งครั้งเพื่อรับ cookie — internal API ตอบ 403 ถ้าไม่มี"""
-    ctx = ssl._create_unverified_context()
+    ctx = ssl_context()
     req = ur.Request(BASE + referer_path, headers={"User-Agent": _UA})
     with ur.urlopen(req, context=ctx, timeout=20) as r:
         cookie = r.getheader("Set-Cookie", "") or ""

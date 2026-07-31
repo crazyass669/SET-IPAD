@@ -158,16 +158,16 @@ def _fetch_and_parse_insider(date_from, date_to):
     รูปแบบ/ลำดับคอลัมน์เหมือนหน้า preview เดิม (0..7) parser ด้านล่างจึงใช้ได้เลย"""
     import re as _re
     import io as _io
-    import ssl as _ssl
     import urllib.request as _ur
     import pandas as _pd
+    from core.net import ssl_context
 
     UA  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
     url = ("https://market.sec.or.th/public/idisc/th/ViewMore/r59-2"
            "?DateType=2"
            f"&DateFrom={date_from.strftime('%Y%m%d')}&DateTo={date_to.strftime('%Y%m%d')}")
 
-    ctx = _ssl._create_unverified_context()
+    ctx = ssl_context()
     req = _ur.Request(url, headers={"User-Agent": UA})
     try:
         with _ur.urlopen(req, context=ctx, timeout=120) as r:
@@ -225,16 +225,16 @@ def _fetch_and_parse_major(date_from, date_to):
     (DateType=2 = วันที่รับข้อมูล ครอบคลุมรายการยื่นช้าที่ transaction อยู่ก่อนช่วง)"""
     import re as _re
     import io as _io
-    import ssl as _ssl
     import urllib.request as _ur
     import pandas as _pd
+    from core.net import ssl_context
 
     UA  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
     url = ("https://market.sec.or.th/public/idisc/th/ViewMore/r246-2"
            "?ListedType=listed&DateType=2"
            f"&DateFrom={date_from.strftime('%Y%m%d')}&DateTo={date_to.strftime('%Y%m%d')}")
 
-    ctx = _ssl._create_unverified_context()
+    ctx = ssl_context()
     req = _ur.Request(url, headers={"User-Agent": UA})
     try:
         with _ur.urlopen(req, context=ctx, timeout=60) as r:

@@ -13,8 +13,9 @@ renovate หน้าเว็บ โค้ดนี้อาจพัง ฟั
 ทำให้หน้าเว็บพังไปด้วย (caller ควร fallback ไปใช้ cache เก่า)
 """
 import re
-import ssl
 import urllib.request as ur
+
+from core.net import ssl_context
 
 URL = "https://www.set.or.th/th/market/product/stock/overview"
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
@@ -40,7 +41,7 @@ def _num(s):
 def fetch():
     """คืน {"SET": {...}, "mai": {...}, "as_of": "13 ก.ค. 2569"} หรือ None ถ้าดึง/parse ไม่ได้"""
     try:
-        ctx = ssl._create_unverified_context()
+        ctx = ssl_context()
         req = ur.Request(URL, headers={"User-Agent": _UA})
         with ur.urlopen(req, context=ctx, timeout=20) as r:
             html = r.read().decode("utf-8", "ignore")
