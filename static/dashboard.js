@@ -2874,6 +2874,12 @@ function removeFromWatchlist(sym) {
   _wlSave();
   renderWatchlist();
 }
+// ปุ่ม ✕ ในตาราง Watchlist เรียกอันนี้ (ถามยืนยันก่อนลบกันกดผิด) ต่างจาก
+// removeFromWatchlist ตรงๆ ที่ยังใช้กับปุ่ม toggle ดาวใน Tearsheet (ไม่ต้องถาม เพราะกดซ้ำเพื่อ add คืนได้ทันที)
+function confirmRemoveFromWatchlist(sym) {
+  if (!confirm(`ลบ ${sym} ออกจาก Watchlist?`)) return;
+  removeFromWatchlist(sym);
+}
 function _wlAlertCell(sym) {
   const alerts = _loadAlerts();
   const active = alerts.filter(a => a.symbol === sym && !a.triggered);
@@ -3014,7 +3020,7 @@ function renderWatchlist() {
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:4px">DR</span>
           </td>
           <td colspan="14" class="text2">ยังไม่โหลดข้อมูล DR — ไปหน้า DR ก่อน</td>
-          <td><button class="wl-del-btn" onclick="removeFromWatchlist('${sym}')">✕</button></td>
+          <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
         </tr>`;
 
       const chgCls = (d.chg ?? 0) >= 0 ? "green" : "red";
@@ -3045,7 +3051,7 @@ function renderWatchlist() {
           <td class="r text2">—</td>
           <td class="r text2">—</td>
           <td class="r" style="white-space:nowrap">${_wlAlertCell(sym)}</td>
-          <td><button class="wl-del-btn" onclick="removeFromWatchlist('${sym}')">✕</button></td>
+          <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
         </tr>`;
     }
 
@@ -3060,7 +3066,7 @@ function renderWatchlist() {
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:4px">US</span>
           </td>
           <td colspan="14" class="text2">ยังไม่โหลดข้อมูล US Index — ไปหน้า "หุ้น US" แล้วกด Quick Update ก่อน</td>
-          <td><button class="wl-del-btn" onclick="removeFromWatchlist('${sym}')">✕</button></td>
+          <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
         </tr>`;
       return `
         <tr data-sym="US:${u.symbol}">
@@ -3084,7 +3090,7 @@ function renderWatchlist() {
           <td class="r">${emaBadge(u.above_ema50)}</td>
           <td class="r">${emaBadge(u.above_ema200)}</td>
           <td class="r" style="white-space:nowrap">${_wlAlertCell(sym)}</td>
-          <td><button class="wl-del-btn" onclick="removeFromWatchlist('${sym}')">✕</button></td>
+          <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
         </tr>`;
     }
 
@@ -3099,7 +3105,7 @@ function renderWatchlist() {
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:4px">HK</span>
           </td>
           <td colspan="14" class="text2">ยังไม่โหลดข้อมูล HK Index — ไปหน้า "หุ้น HK" แล้วกด Quick Update ก่อน</td>
-          <td><button class="wl-del-btn" onclick="removeFromWatchlist('${sym}')">✕</button></td>
+          <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
         </tr>`;
       return `
         <tr data-sym="HK:${h.symbol}">
@@ -3123,7 +3129,7 @@ function renderWatchlist() {
           <td class="r">${emaBadge(h.above_ema50)}</td>
           <td class="r">${emaBadge(h.above_ema200)}</td>
           <td class="r" style="white-space:nowrap">${_wlAlertCell(sym)}</td>
-          <td><button class="wl-del-btn" onclick="removeFromWatchlist('${sym}')">✕</button></td>
+          <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
         </tr>`;
     }
 
@@ -3172,7 +3178,7 @@ function renderWatchlist() {
             <td class="r text2">—</td>
             <td class="r text2">—</td>
             <td class="r" style="white-space:nowrap">${_wlAlertCell(newSym)}</td>
-            <td><button class="wl-del-btn" onclick="removeFromWatchlist('${newSym}')">✕</button></td>
+            <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${newSym}')">✕</button></td>
           </tr>`;
       }
       // ตรวจว่าเป็น US Index ticker ที่ไม่มี prefix (เฉพาะตัวที่ไม่ใช่ DR ด้วย)
@@ -3208,7 +3214,7 @@ function renderWatchlist() {
             <td class="r">${emaBadge(u.above_ema50)}</td>
             <td class="r">${emaBadge(u.above_ema200)}</td>
             <td class="r" style="white-space:nowrap">${_wlAlertCell(newSym)}</td>
-            <td><button class="wl-del-btn" onclick="removeFromWatchlist('${newSym}')">✕</button></td>
+            <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${newSym}')">✕</button></td>
           </tr>`;
       }
       // ตรวจว่าเป็น HK Index ticker ที่ไม่มี prefix (เฉพาะตัวที่ไม่ใช่ DR/US ด้วย)
@@ -3244,14 +3250,14 @@ function renderWatchlist() {
             <td class="r">${emaBadge(h.above_ema50)}</td>
             <td class="r">${emaBadge(h.above_ema200)}</td>
             <td class="r" style="white-space:nowrap">${_wlAlertCell(newSym)}</td>
-            <td><button class="wl-del-btn" onclick="removeFromWatchlist('${newSym}')">✕</button></td>
+            <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${newSym}')">✕</button></td>
           </tr>`;
       }
       return `
         <tr>
           <td class="text2">—</td><td><strong>${sym}</strong></td>
           <td colspan="14" class="text2">ไม่พบข้อมูล</td>
-          <td><button class="wl-del-btn" onclick="removeFromWatchlist('${sym}')">✕</button></td>
+          <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
         </tr>`;
     }
     return `
@@ -3272,7 +3278,7 @@ function renderWatchlist() {
         <td class="r">${emaBadge(s.above_ema50)}</td>
         <td class="r">${emaBadge(s.above_ema200)}</td>
         <td class="r" style="white-space:nowrap">${_wlAlertCell(s.symbol)}</td>
-        <td><button class="wl-del-btn" onclick="removeFromWatchlist('${sym}')">✕</button></td>
+        <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
       </tr>`;
   }).join("");
 
