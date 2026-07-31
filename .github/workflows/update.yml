@@ -101,6 +101,9 @@ jobs:
             exit 0
           fi
           git commit -m "data: auto-update $(date -u '+%Y-%m-%d %H:%M') UTC"
+          echo "--- DEBUG: git status after commit ---"
+          git status --short
+          echo "--- END DEBUG ---"
           if ! git pull --rebase origin main; then
             echo "rebase ล้มเหลว — ยกเลิก rebase กัน repo ค้างสถานะ"
             git rebase --abort
