@@ -52,7 +52,6 @@
   <button class="nav-btn" onclick="showPage('dr',this)">DR/DRx</button>
   <button class="nav-btn" onclick="showPage('dr-rotation',this)" title="DR Rotation — RRG ของหุ้นต่างประเทศ (DR underlying) เทียบกันในกลุ่ม">🔄 DR Rotation</button>
   <button class="nav-btn" onclick="showPage('valuation',this)">Valuation</button>
-  <button class="nav-btn" onclick="showPage('fcfyield',this)" title="FCF Yield &amp; Dividend Coverage — ต้องดึงงบการเงินในเครื่องก่อน (local-only)">FCF Yield</button>
   <button class="nav-btn" onclick="showPage('insider',this)">Insider</button>
   <button class="nav-btn" onclick="showPage('flow',this)" title="Capital Flow — net buy/sell สถาบัน/ต่างชาติ/รายย่อย">Capital Flow</button>
   <button class="nav-btn" onclick="showPage('short',this)" title="Short Sales — ข้อมูลการขายชอร์ตรายหุ้น, Squeeze Radar">Short</button>
@@ -2151,65 +2150,6 @@
   </div>
 </div>
 
-<!-- PAGE: FCF YIELD -->
-<div id="page-fcfyield" class="page">
-  <div class="page-title">FCF Yield &amp; Dividend Coverage</div>
-  <div class="page-sub">
-    Free Cash Flow ÷ Market Cap และเช็คว่าปันผลจ่ายจาก FCF จริงหรือไม่ — คำนวณจากงบการเงินที่ดึงเก็บไว้ในเครื่อง (local-only)
-  </div>
-  <div class="card" style="padding:16px 18px;margin-bottom:12px;font-size:12.5px;line-height:1.7;color:var(--text)">
-    <div style="font-size:13px;font-weight:700;color:var(--blue);margin-bottom:6px">📘 อธิบายค่าที่เห็นในตารางนี้ (สำหรับคนที่ยังไม่คุ้น)</div>
-
-    <div style="margin-bottom:14px">
-      <b>Free Cash Flow (FCF) คืออะไร?</b><br>
-      <span style="color:var(--text2)">เงินสดที่บริษัทเหลือจริงๆ หลังจากหักค่าใช้จ่ายในการดำเนินธุรกิจและลงทุนในสินทรัพย์ (เช่น เครื่องจักร โรงงาน) ไปแล้ว
-      เป็นเงินที่บริษัท "เอาไปทำอะไรก็ได้" — จ่ายปันผล ซื้อหุ้นคืน ใช้หนี้ หรือเก็บสำรองไว้ — ต่างจาก "กำไรสุทธิ" ที่เป็นตัวเลขทางบัญชี อาจไม่ใช่เงินสดจริงในมือ</span>
-    </div>
-
-    <div style="margin-bottom:14px">
-      <b>FCF Yield</b> = FCF ÷ Market Cap × 100<br>
-      <span style="color:var(--text2)">เทียบเงินสดที่บริษัทหาได้ต่อปี กับราคาที่ตลาดตีมูลค่าบริษัทไว้ทั้งหมด — คล้ายอัตราดอกเบี้ยที่จะได้ถ้า "ซื้อบริษัททั้งบริษัท" ยิ่งสูงยิ่งดี (จ่ายราคาถูกเทียบกับเงินสดที่ได้)</span>
-      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
-        <b>ตัวอย่าง:</b> บริษัท A มูลค่าตลาด (Market Cap) 10,000 ล้านบาท ปีที่แล้วสร้าง FCF ได้ 500 ล้านบาท<br>
-        FCF Yield = 500 ÷ 10,000 × 100 = <b class="green">5%</b><br>
-        <span style="color:var(--text2)">แปลว่า ถ้าซื้อบริษัท A ทั้งบริษัทด้วยเงิน 10,000 ล้าน จะได้เงินสดกลับมาปีละ 5% ของเงินที่จ่ายไป — เทียบกับดอกเบี้ยเงินฝาก/พันธบัตรที่ต่ำกว่านี้มาก ถือว่าน่าสนใจ ถ้าธุรกิจยังโตต่อได้</span>
-      </div>
-      <table style="width:100%;margin-top:8px;font-size:11.5px;border-collapse:collapse">
-        <tr><td style="padding:3px 8px;color:var(--text2)">ต่ำกว่า 2%</td><td style="padding:3px 8px" class="red">ต่ำ — แพงเทียบกับเงินสดที่หาได้ หรือกำลังลงทุนหนักช่วงนี้</td></tr>
-        <tr><td style="padding:3px 8px;color:var(--text2)">2 – 5%</td><td style="padding:3px 8px" class="yellow">ปานกลาง — ใกล้เคียงค่าเฉลี่ยตลาด</td></tr>
-        <tr><td style="padding:3px 8px;color:var(--text2)">5 – 10%</td><td style="padding:3px 8px" class="green">ดี — เงินสดคุ้มค่าเมื่อเทียบกับราคา</td></tr>
-        <tr><td style="padding:3px 8px;color:var(--text2)">สูงกว่า 10%</td><td style="padding:3px 8px" class="yellow">สูงผิดปกติ — ควรเช็คว่าเป็น FCF จริงจากธุรกิจ หรือเป็นรายการพิเศษ (เช่น ขายสินทรัพย์) ที่ปีหน้าอาจไม่มีซ้ำ</td></tr>
-      </table>
-    </div>
-
-    <div>
-      <b>Dividend Coverage</b> = FCF ÷ เงินปันผลที่จ่ายทั้งปี<br>
-      <span style="color:var(--text2)">เช็คว่าเงินที่เอาไปจ่ายปันผล "มาจากเงินสดที่หาได้จริง" หรือ "จ่ายเกินตัว" ต้องไปกู้/ถอนเงินสำรองมาจ่ายแทน</span>
-      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
-        <b>ตัวอย่างที่ 1 (ปลอดภัย):</b> บริษัท B สร้าง FCF ได้ 500 ล้านบาท จ่ายปันผลทั้งปี 300 ล้านบาท<br>
-        Coverage = 500 ÷ 300 = <b class="green">1.67x</b><br>
-        <span style="color:var(--text2)">ทุกๆ 1 บาทที่จ่ายปันผล บริษัทหาเงินสดมาได้ 1.67 บาท — จ่ายแล้วยังเหลือเงินสดเก็บไว้ในบริษัทอีก 200 ล้าน ถือว่าปันผลมั่นคง</span><br><br>
-        <b>ตัวอย่างที่ 2 (ต้องระวัง):</b> บริษัท C สร้าง FCF ได้แค่ 200 ล้านบาท แต่จ่ายปันผลทั้งปี 300 ล้านบาท<br>
-        Coverage = 200 ÷ 300 = <b class="red">0.67x</b><br>
-        <span style="color:var(--text2)">จ่ายปันผลมากกว่าเงินสดที่หาได้ 100 ล้านบาท — ส่วนต่างนี้ต้องมาจากการกู้เงิน ถอนเงินสำรองเก่า หรือขายสินทรัพย์ ถ้าเกิดขึ้นต่อเนื่องหลายปี อาจต้องลดปันผลในอนาคต</span>
-      </div>
-      <table style="width:100%;margin-top:8px;font-size:11.5px;border-collapse:collapse">
-        <tr><td style="padding:3px 8px;color:var(--text2)">มากกว่า 1.5x</td><td style="padding:3px 8px" class="green">ปลอดภัย — เงินสดเหลือเฟือ ปันผลมั่นคง</td></tr>
-        <tr><td style="padding:3px 8px;color:var(--text2)">1.0 – 1.5x</td><td style="padding:3px 8px" class="yellow">พอไหว — จ่ายได้แต่ไม่มีกันชนมาก</td></tr>
-        <tr><td style="padding:3px 8px;color:var(--text2)">ต่ำกว่า 1.0x</td><td style="padding:3px 8px" class="red">ควรระวัง — จ่ายปันผลเกินเงินสดที่หาได้จริง</td></tr>
-        <tr><td style="padding:3px 8px;color:var(--text2)">— (ไม่มีค่า)</td><td style="padding:3px 8px;color:var(--text2)">บริษัทไม่ได้จ่ายปันผลปีล่าสุด — ไม่มีอะไรให้เทียบ</td></tr>
-      </table>
-    </div>
-  </div>
-  <div id="fcfyield-count" style="font-size:12px;color:var(--text2);margin-bottom:8px"></div>
-  <div style="overflow-x:auto">
-    <table class="tbl" id="tbl-fcfyield">
-      <thead id="fcfyield-thead"></thead>
-      <tbody id="fcfyield-tbody"></tbody>
-    </table>
-  </div>
-</div>
-
 <!-- PAGE: INSIDER -->
 <div id="page-insider" class="page">
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
@@ -2779,7 +2719,9 @@
   <div class="page-sub">กรองหุ้นด้วยงบการเงินย้อนหลังสูงสุด 16 ปี (Finnomena) + งบละเอียด (Yahoo) + เลขทางการ (SET) — เลือก preset แล้วปรับตัวเลขเองได้ทุกช่อง</div>
   <div style="margin:6px 0 10px">
     <button class="filter-btn" onclick="toggleBtNote('fs-bt-note')" style="font-size:11px">📊 ผลวิจัย backtest ไทย + US + DR — กดอ่านสรุป</button>
+    <button class="filter-btn" onclick="toggleBtNote('fs-fcf-note')" style="font-size:11px">📘 อธิบาย FCF Yield &amp; FCF คุ้มปันผล</button>
     <div id="fs-bt-note" style="display:none;margin-top:8px;padding:12px;background:#0d1117;border:1px solid var(--border);border-radius:8px"></div>
+    <div id="fs-fcf-note" style="display:none;margin-top:8px;padding:12px;background:#0d1117;border:1px solid var(--border);border-radius:8px"></div>
   </div>
   <div id="fs-gate" class="empty" style="display:none;padding:24px"></div>
   <div id="fs-body" style="display:none">

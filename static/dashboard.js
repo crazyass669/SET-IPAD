@@ -3366,6 +3366,9 @@ function openInternalHash(hash, forceNew) {
 const _STOCKS_PAGE_ALIAS = {
   'rs-leaders': 'rs80', stage: 'stage2', breakout: 'breakout', momentum: 'momentum', sectors: null,
 };
+// id เก่าของหน้าที่ถูกยุบรวมเข้าหน้าอื่นแบบ 1:1 (ไม่มี view/mode ย่อยให้ตั้งเหมือน stocks) —
+// ต้อง alias เหมือนกัน ไม่งั้น tab/bookmark เก่าจะเงียบไปเฉยๆ (page-<id> เดิมไม่มีแล้ว)
+const _PAGE_ID_ALIAS = { fcfyield: 'screener' };
 
 function _pageApplyHash() {
   const m = location.hash.match(/^#page\/([\w-]+)$/);
@@ -3373,6 +3376,7 @@ function _pageApplyHash() {
   let id = m[1];
   let stocksView = null, stocksMode = null;
   if (id === 'ema-breadth') { id = 'stocks'; stocksMode = 'sectors'; }
+  else if (id in _PAGE_ID_ALIAS) { id = _PAGE_ID_ALIAS[id]; }
   else if (id in _STOCKS_PAGE_ALIAS) {
     id = 'stocks';
     if (_STOCKS_PAGE_ALIAS[m[1]] === null) stocksMode = 'sectors'; else stocksView = _STOCKS_PAGE_ALIAS[m[1]];
@@ -3452,7 +3456,6 @@ function showPage(id, btn) {
   if (id === "hk-heatmap")   loadHkHeatmapPage();
   if (id === "jp-rotation")  loadJpRotation();
   if (id === "jp-heatmap")   loadJpHeatmapPage();
-  if (id === "fcfyield")     renderFcfYieldTable();
   if (id === "data-health")  loadDataHealth();
   if (id === "hedge")        loadHedgePage();
   if (id === "overview")     { setTimeout(() => { if (!_nhLoaded) loadNewHighChart(); }, 100); }
@@ -4925,10 +4928,6 @@ const _FIN_STATIC_UNAVAILABLE_IDS = ['scr-rev-accel-min', 'scr-profit-accel-min'
 async function loadFinAnalytics() {
   const finInputs = _FIN_DEP_INPUT_IDS.map(id => document.getElementById(id));
   if (IS_STATIC) {
-    // FCF Yield ยังปิดไว้ (ขอบเขตงานนี้ = เฉพาะ Stock Screener) — ที่เหลือไหลต่อไป
-    // fetch ข้างล่างตามปกติ (STATIC_MAP พาไปไฟล์ Yahoo-only ที่ bake ไว้ล่วงหน้า)
-    const fcfBtn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'fcfyield'"));
-    if (fcfBtn) fcfBtn.style.display = 'none';
     // Fundamental Screener (Screener+) ก็ local-only เหมือนกัน (อ่าน financials.db
     // ตรงๆ ไม่มี static fallback) — เดิมโชว์เมนูไว้แล้วค่อยเจอข้อความ "ใช้ได้เฉพาะ
     // เวอร์ชันรันบนเครื่อง" ตอนกดเข้าไป ซ่อนตั้งแต่ nav เลยดีกว่า ไม่ต้องให้กดพลาด
@@ -4972,7 +4971,6 @@ async function loadFinAnalytics() {
     const ybSelect = document.getElementById('scr-ratio-years-back');
     const ybNote = document.getElementById('scr-ratio-years-back-note');
     if (ybNote) ybNote.textContent = `ตอนนี้ข้อมูลรองรับเทียบย้อนหลังได้สูงสุด ${maxBack} ปี (สะสมเพิ่มเรื่อยๆ ทุกครั้งที่ sync)`;
-    if (document.getElementById('page-fcfyield')?.classList.contains('active')) renderFcfYieldTable();
   } catch (e) {
     // เงียบ — ไม่ใช่ฟีเจอร์หลัก, ไม่มี financials.db sync ไว้ก็ใช้แอปได้ปกติ
   }
@@ -5069,74 +5067,6 @@ function _patchFinTooltips() {
       }
     });
   });
-}
-
-// ============================================================
-// FCF YIELD PAGE — จัดอันดับ Free Cash Flow Yield / Dividend Coverage ทั้งตลาด
-// ============================================================
-let fcfSort = { key: 'fcf_yield', dir: -1 };
-
-function sortFcf(key) {
-  if (fcfSort.key === key) fcfSort.dir *= -1;
-  else { fcfSort.key = key; fcfSort.dir = -1; }
-  renderFcfYieldTable();
-}
-
-function _fcfTh(col, label, cls='') {
-  const active = fcfSort.key === col;
-  const arrow  = active ? (fcfSort.dir === 1 ? '↓' : '↑') : '↕';
-  const c = (cls ? cls+' ' : '') + 'sortable';
-  return `<th class="${c}" onclick="sortFcf('${col}')" style="cursor:pointer">${label} <span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
-}
-
-function renderFcfYieldTable() {
-  if (!DATA) return;
-  const thead = document.getElementById('fcfyield-thead');
-  const tbody = document.getElementById('fcfyield-tbody');
-  const countEl = document.getElementById('fcfyield-count');
-  if (!tbody) return;
-
-  if (thead) thead.innerHTML = `<tr>
-    ${_fcfTh('symbol','หุ้น')}
-    <th style="cursor:default">ชื่อ</th>
-    <th style="cursor:default">อุตสาหกรรม</th>
-    ${_fcfTh('mkt_cap','Market Cap','r')}${_fcfTh('fcf','FCF','r')}
-    ${_fcfTh('fcf_yield','FCF Yield %','r')}${_fcfTh('dividend_coverage','Div Coverage','r')}
-  </tr>`;
-
-  if (!_finAnalyticsLoaded) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty">
-      ${IS_STATIC
-        ? 'ฟีเจอร์นี้ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง (Flask)'
-        : 'ยังไม่มีข้อมูล — กดปุ่ม "อัพเดทงบการเงินทั้งหมด" ในหน้า "งบการเงิน" ก่อน'}
-    </td></tr>`;
-    if (countEl) countEl.textContent = '';
-    return;
-  }
-
-  let stocks = DATA.stocks.filter(s => s.fcf_yield != null);
-  stocks.sort((a, b) => {
-    const av = a[fcfSort.key], bv = b[fcfSort.key];
-    if (av == null && bv == null) return 0;
-    if (av == null) return 1; if (bv == null) return -1;
-    if (typeof av === 'string') return av.localeCompare(bv) * fcfSort.dir;
-    return (bv - av) * fcfSort.dir;
-  });
-
-  if (countEl) countEl.textContent = `แสดง ${stocks.length} หุ้นที่มีข้อมูล FCF (จาก ${DATA.total} ตัว)`;
-
-  tbody.innerHTML = stocks.map(s => {
-    const covColor = s.dividend_coverage == null ? '' : s.dividend_coverage < 1 ? 'red' : 'green';
-    return `<tr>
-      <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}${dqBadge(s)}</td>
-      <td style="font-size:11px;color:var(--text2);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
-      <td style="font-size:11px">${s.industry || '—'}</td>
-      <td class="r" style="font-size:11px">${fmtCap(s.mkt_cap, s.is_reit)}</td>
-      <td class="r">${_finFmt(s.fcf)}</td>
-      <td class="r"><strong>${s.fcf_yield.toFixed(2)}%</strong></td>
-      <td class="r ${covColor}">${s.dividend_coverage != null ? s.dividend_coverage.toFixed(2) + 'x' : '—'}</td>
-    </tr>`;
-  }).join('');
 }
 
 // ============================================================
@@ -5914,8 +5844,10 @@ const FS_FILTERS = [
     tip: '<strong>ปันผลเพิ่มต่อเนื่อง (Dividend Growth)</strong><br>จำนวนปีติดกันที่เงินปันผลต่อหุ้น (DPS ≈ yield × ราคา ณ งวด) สูงกว่าปีก่อน — ปีที่งดจ่ายถือว่าตัด streak<br><br>เช่น ใส่ <b>3</b> = ปันผลโตมาแล้ว 3 ปีติด<br><span style="color:var(--text2)">จากประวัติ Finnomena ~16 ปี · ใช้ได้ทุก universe</span>' },
   { k: 'div_cagr_5y',         label: 'ปันผล CAGR 5ปี ≥', unit: '%', cmp: 'gte',
     tip: '<strong>CAGR ปันผล 5 ปี (ทบต้นต่อปี)</strong><br>คำนวณจากประวัติ ex-date/DPS จริง (yfinance ปรับ split ให้แล้ว — ดูหน้า "💵 ปันผล" ในงบการเงิน)<br><br>เช่น ใส่ <b>5</b> = ปันผลต่อหุ้นโตเฉลี่ยทบต้น ≥ 5%/ปี<br><span style="color:var(--text2)">⚠ ต้องเคยเปิดหน้าปันผลของหุ้นนั้นอย่างน้อยครั้งนึงก่อนถึงจะมีค่า (ยังไม่ผูก batch fetch อัตโนมัติ) · ไม่มีค่า = ยังไม่เคย sync หรือประวัติ &lt;5 ปีครบ</span>' },
+  { k: 'fcf_yield',           label: 'FCF Yield ≥', unit: '%', cmp: 'gte',
+    tip: '<strong>FCF Yield</strong><br>Free Cash Flow ÷ Market Cap × 100 — เทียบเงินสดที่บริษัทหาได้ต่อปี กับมูลค่าที่ตลาดตีราคาบริษัทไว้ทั้งหมด คล้ายอัตราดอกเบี้ยถ้า "ซื้อทั้งบริษัท" ยิ่งสูงยิ่งดี (จ่ายราคาถูกเทียบกับเงินสดที่ได้)<br><br>เช่น ใส่ <b>5</b> = FCF Yield ≥ 5% (โซนดี)<br><span style="color:var(--text2)">ต่ำกว่า 2% = แพงเทียบเงินสดที่หาได้ หรือกำลังลงทุนหนัก · สูงกว่า 10% ควรเช็คว่าไม่ใช่รายการพิเศษครั้งเดียว (เช่น ขายสินทรัพย์) · ดูคู่กับ "FCF คุ้มปันผล" ด้านล่าง</span>' },
   { k: 'dividend_coverage',   label: 'FCF คุ้มปันผล ≥', unit: 'เท่า', cmp: 'gte',
-    tip: '<strong>FCF คุ้มปันผล</strong><br>Free Cash Flow ÷ เงินปันผลที่จ่าย (จาก Yahoo)<br><br>เช่น ใส่ <b>1.5</b> = FCF จ่ายปันผลไหวสบายๆ 1.5 เท่า (ปันผลยั่งยืน)' },
+    tip: '<strong>FCF คุ้มปันผล (Dividend Coverage)</strong><br>Free Cash Flow ÷ เงินปันผลที่จ่ายทั้งปี (จาก Yahoo) — เช็คว่าปันผลมาจากเงินสดที่หาได้จริง หรือจ่ายเกินตัวต้องกู้/ถอนสำรองมาจ่าย<br><br>เช่น ใส่ <b>1.5</b> = FCF จ่ายปันผลไหวสบายๆ 1.5 เท่า (ปันผลยั่งยืน)<br><span style="color:var(--text2)">มากกว่า 1.5x = ปลอดภัย · 1.0-1.5x = พอไหวไม่มีกันชนมาก · ต่ำกว่า 1.0x = จ่ายปันผลเกินเงินสดที่หาได้จริง ควรระวัง</span>' },
   { g: 'ฤดูกาล (Seasonality)' },
   { k: 'season_swing',        label: 'ความแรงฤดูกาล ≥', unit: '%', cmp: 'gte',
     tip: '<strong>ความแรงฤดูกาล</strong><br>ส่วนต่างไฮ-โลว์ซีซั่นของรายได้ (จุด%)<br><br>เช่น ใส่ <b>10</b> = ฤดูกาลชัด (ต่ำกว่า 8% = แทบไม่มีฤดูกาล เช่นพลังงาน)' },
@@ -5981,7 +5913,7 @@ const FS_PRESETS = [
 // universe US/HK เมื่อไหร่ ปิดช่องพวกนี้อัตโนมัติกันงง (กรองแล้วได้ศูนย์)
 const FS_YAHOO_ONLY = new Set(['rev_cagr', 'profit_streak', 'rule_of_40', 'growth_percentile',
   'interest_coverage', 'cash_cycle', 'goodwill_ratio', 'ocf_neg_years', 'shares_chg_yoy',
-  'net_cash_positive', 'buyback', 'dividend_coverage',
+  'net_cash_positive', 'buyback', 'dividend_coverage', 'fcf_yield',
   'pe_sector_pctile', 'roe_sector_pctile', 'f_score', 'z_zone']);
 
 // filter สายราคา (rs/ema200/52w high/rvol) — มีข้อมูลจริงเฉพาะหุ้น US ที่อยู่ใน
@@ -6190,7 +6122,57 @@ const _CLI_FIN_NOTE_HTML = `
   ⚠ ถ้าขึ้น error หรือค้างนานผิดปกติ ให้ก็อปข้อความ error มาถามได้ — ข้อมูลชุดนี้อยู่เฉพาะบนเครื่อง (financials.db) ห้ามขึ้น GitHub</div>
 </div>`;
 
-const _BT_NOTE_HTML_BY_ID = { 'dh-cli-note': _CLI_FIN_NOTE_HTML };
+// ============================================================
+// อธิบาย FCF Yield / FCF คุ้มปันผล (ย้ายมาจากหน้า "FCF Yield" เดิมที่ยุบรวมเข้า
+// Screener+ แล้ว — filter fcf_yield / dividend_coverage ทำหน้าที่แทนตารางเดิม)
+// ============================================================
+const _FS_FCF_NOTE_HTML = `
+<div style="font-size:12.5px;line-height:1.7">
+  <div style="font-size:13px;font-weight:700;color:var(--blue);margin-bottom:8px">📘 อธิบาย FCF Yield &amp; FCF คุ้มปันผล (สำหรับคนที่ยังไม่คุ้น)</div>
+
+  <div style="margin-bottom:14px">
+    <b>Free Cash Flow (FCF) คืออะไร?</b><br>
+    <span style="color:var(--text2)">เงินสดที่บริษัทเหลือจริงๆ หลังจากหักค่าใช้จ่ายในการดำเนินธุรกิจและลงทุนในสินทรัพย์ (เช่น เครื่องจักร โรงงาน) ไปแล้ว
+    เป็นเงินที่บริษัท "เอาไปทำอะไรก็ได้" — จ่ายปันผล ซื้อหุ้นคืน ใช้หนี้ หรือเก็บสำรองไว้ — ต่างจาก "กำไรสุทธิ" ที่เป็นตัวเลขทางบัญชี อาจไม่ใช่เงินสดจริงในมือ</span>
+  </div>
+
+  <div style="margin-bottom:14px">
+    <b>FCF Yield</b> = FCF ÷ Market Cap × 100<br>
+    <span style="color:var(--text2)">เทียบเงินสดที่บริษัทหาได้ต่อปี กับราคาที่ตลาดตีมูลค่าบริษัทไว้ทั้งหมด — คล้ายอัตราดอกเบี้ยที่จะได้ถ้า "ซื้อบริษัททั้งบริษัท" ยิ่งสูงยิ่งดี (จ่ายราคาถูกเทียบกับเงินสดที่ได้)</span>
+    <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+      <b>ตัวอย่าง:</b> บริษัท A มูลค่าตลาด (Market Cap) 10,000 ล้านบาท ปีที่แล้วสร้าง FCF ได้ 500 ล้านบาท<br>
+      FCF Yield = 500 ÷ 10,000 × 100 = <b class="green">5%</b><br>
+      <span style="color:var(--text2)">แปลว่า ถ้าซื้อบริษัท A ทั้งบริษัทด้วยเงิน 10,000 ล้าน จะได้เงินสดกลับมาปีละ 5% ของเงินที่จ่ายไป — เทียบกับดอกเบี้ยเงินฝาก/พันธบัตรที่ต่ำกว่านี้มาก ถือว่าน่าสนใจ ถ้าธุรกิจยังโตต่อได้</span>
+    </div>
+    <table style="width:100%;margin-top:8px;font-size:11.5px;border-collapse:collapse">
+      <tr><td style="padding:3px 8px;color:var(--text2)">ต่ำกว่า 2%</td><td style="padding:3px 8px" class="red">ต่ำ — แพงเทียบกับเงินสดที่หาได้ หรือกำลังลงทุนหนักช่วงนี้</td></tr>
+      <tr><td style="padding:3px 8px;color:var(--text2)">2 – 5%</td><td style="padding:3px 8px" class="yellow">ปานกลาง — ใกล้เคียงค่าเฉลี่ยตลาด</td></tr>
+      <tr><td style="padding:3px 8px;color:var(--text2)">5 – 10%</td><td style="padding:3px 8px" class="green">ดี — เงินสดคุ้มค่าเมื่อเทียบกับราคา</td></tr>
+      <tr><td style="padding:3px 8px;color:var(--text2)">สูงกว่า 10%</td><td style="padding:3px 8px" class="yellow">สูงผิดปกติ — ควรเช็คว่าเป็น FCF จริงจากธุรกิจ หรือเป็นรายการพิเศษ (เช่น ขายสินทรัพย์) ที่ปีหน้าอาจไม่มีซ้ำ</td></tr>
+    </table>
+  </div>
+
+  <div>
+    <b>Dividend Coverage (FCF คุ้มปันผล)</b> = FCF ÷ เงินปันผลที่จ่ายทั้งปี<br>
+    <span style="color:var(--text2)">เช็คว่าเงินที่เอาไปจ่ายปันผล "มาจากเงินสดที่หาได้จริง" หรือ "จ่ายเกินตัว" ต้องไปกู้/ถอนเงินสำรองมาจ่ายแทน</span>
+    <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+      <b>ตัวอย่างที่ 1 (ปลอดภัย):</b> บริษัท B สร้าง FCF ได้ 500 ล้านบาท จ่ายปันผลทั้งปี 300 ล้านบาท<br>
+      Coverage = 500 ÷ 300 = <b class="green">1.67x</b><br>
+      <span style="color:var(--text2)">ทุกๆ 1 บาทที่จ่ายปันผล บริษัทหาเงินสดมาได้ 1.67 บาท — จ่ายแล้วยังเหลือเงินสดเก็บไว้ในบริษัทอีก 200 ล้าน ถือว่าปันผลมั่นคง</span><br><br>
+      <b>ตัวอย่างที่ 2 (ต้องระวัง):</b> บริษัท C สร้าง FCF ได้แค่ 200 ล้านบาท แต่จ่ายปันผลทั้งปี 300 ล้านบาท<br>
+      Coverage = 200 ÷ 300 = <b class="red">0.67x</b><br>
+      <span style="color:var(--text2)">จ่ายปันผลมากกว่าเงินสดที่หาได้ 100 ล้านบาท — ส่วนต่างนี้ต้องมาจากการกู้เงิน ถอนเงินสำรองเก่า หรือขายสินทรัพย์ ถ้าเกิดขึ้นต่อเนื่องหลายปี อาจต้องลดปันผลในอนาคต</span>
+    </div>
+    <table style="width:100%;margin-top:8px;font-size:11.5px;border-collapse:collapse">
+      <tr><td style="padding:3px 8px;color:var(--text2)">มากกว่า 1.5x</td><td style="padding:3px 8px" class="green">ปลอดภัย — เงินสดเหลือเฟือ ปันผลมั่นคง</td></tr>
+      <tr><td style="padding:3px 8px;color:var(--text2)">1.0 – 1.5x</td><td style="padding:3px 8px" class="yellow">พอไหว — จ่ายได้แต่ไม่มีกันชนมาก</td></tr>
+      <tr><td style="padding:3px 8px;color:var(--text2)">ต่ำกว่า 1.0x</td><td style="padding:3px 8px" class="red">ควรระวัง — จ่ายปันผลเกินเงินสดที่หาได้จริง</td></tr>
+      <tr><td style="padding:3px 8px;color:var(--text2)">— (ไม่มีค่า)</td><td style="padding:3px 8px;color:var(--text2)">บริษัทไม่ได้จ่ายปันผลปีล่าสุด — ไม่มีอะไรให้เทียบ</td></tr>
+    </table>
+  </div>
+</div>`;
+
+const _BT_NOTE_HTML_BY_ID = { 'dh-cli-note': _CLI_FIN_NOTE_HTML, 'fs-fcf-note': _FS_FCF_NOTE_HTML };
 
 function toggleBtNote(boxId) {
   const el = document.getElementById(boxId);
@@ -6223,6 +6205,8 @@ const FS_COLS = [
   { k: 'pbv_value', label: 'PBV' },
   { k: 'div_yield', label: 'ปันผล%', tip: 'อัตราปันผลต่อปี — เขียว ≥3%' },
   { k: 'div_cagr_5y', label: 'ปันผลCAGR5ปี%', tip: 'CAGR ปันผล 5 ปี จากประวัติ ex-date จริง — เขียว ≥5% · แดง <0% (ปันผลหด) · ต้องเคยเปิดหน้า "💵 ปันผล" ของหุ้นนั้นมาก่อนถึงจะมีค่า' },
+  { k: 'fcf_yield', label: 'FCFYield%', tip: 'Free Cash Flow ÷ Market Cap × 100 — เขียว ≥5% (ดี) · แดง <0% (เผาเงินสด) · กด "📘 อธิบาย FCF Yield" เหนือตารางกรองเพื่ออ่านวิธีอ่านค่าเต็มๆ' },
+  { k: 'dividend_coverage', label: 'FCFคุ้มปันผล(x)', tip: 'FCF ÷ เงินปันผลที่จ่ายทั้งปี — เขียว ≥1 เท่า (FCF พอจ่ายปันผล) · แดง <1 เท่า (จ่ายเกินตัว)' },
   { k: 'ps_percentile', label: 'P/S%ile', tip: 'P/S เทียบอดีตตัวเอง — เขียว ≤25 · แดง ≥75' },
   { k: 'high_season_q', label: 'ไฮซีซั่น', sep: true, tip: 'ไตรมาสที่รายได้สูงสุดตามฤดูกาล (จากประวัติ ~16 ปี)' },
   { k: 'quarters_available', label: 'งบ(Q)', tip: 'จำนวนงบไตรมาสที่มีในระบบ (มาก = ประวัติยาว น่าเชื่อถือกว่า)' },
@@ -6248,6 +6232,8 @@ const FS_COL_CLR = {
   peg:                 v => v <= 1 ? 'var(--green)' : (v > 2 ? 'var(--red)' : ''),
   div_yield:           v => v >= 3 ? 'var(--green)' : '',
   div_cagr_5y:         v => v >= 5 ? 'var(--green)' : (v < 0 ? 'var(--red)' : ''),
+  fcf_yield:           v => v >= 5 ? 'var(--green)' : (v < 0 ? 'var(--red)' : ''),
+  dividend_coverage:   v => v >= 1 ? 'var(--green)' : (v < 1 ? 'var(--red)' : ''),
 };
 const FS_MKT_BADGE = { TH: '#58a6ff', US: '#3fb950', HK: '#e3b341', DR: '#3fb950' };
 
