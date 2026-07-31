@@ -44,6 +44,11 @@ test_syms.py
 
 # Local only
 start.bat
+# นามสกุลจริงคือ .xls (ดาวน์โหลดสดจาก SET.or.th ใน set_data_fetcher.py) — เดิม
+# gitignore พิมพ์ผิดเป็น .xlsx เลยไม่เคยกันได้จริง ทำให้ไฟล์นี้ยัง track อยู่และ
+# CI เขียนทับใหม่ทุกรอบแต่ไม่ได้ถูก git add จนบล็อก git pull --rebase (unstaged
+# changes) — 2026-08 แก้นามสกุล + git rm --cached
+listedCompanies_en_US.xls
 listedCompanies_en_US.xlsx
 
 # Claude Code local settings
