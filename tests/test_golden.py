@@ -34,6 +34,11 @@ def _diff(path, a, b, out):
             out.append(f"{path}: ความยาว {len(a)} != {len(b)}")
         for i, (x, y) in enumerate(zip(a, b)):
             _diff(f"{path}[{i}]", x, y, out)
+    elif isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        # ปัดเศษ floating-point ต่างกันเล็กน้อยข้าม numpy/pandas version (local vs CI
+        # ubuntu ใช้คนละเวอร์ชัน) ไม่ใช่ regression จริง — ยอมรับส่วนต่าง <= 0.01
+        if abs(a - b) > 0.01:
+            out.append(f"{path}: {a!r} != {b!r}")
     elif a != b:
         out.append(f"{path}: {a!r} != {b!r}")
 
