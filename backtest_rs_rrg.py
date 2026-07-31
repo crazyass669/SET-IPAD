@@ -90,7 +90,7 @@ def breadth_pct200(close):
 
 
 def run(close, close_raw, vol, sec_of, use_rrg=True, regime=None, regime_min=None):
-    """คืน (dates, equity_curve, stats_dict)
+    """คืน (equity_curve, stats_dict)
     close = Adj Close (signal RS + ผลตอบแทน total return รวมปันผล)
     close_raw = ราคาจริง (filter ราคา >=1 บาท + สภาพคล่อง close×vol)
     regime/regime_min: ถ้า breadth ณ วัน rebalance < regime_min -> ถือเงินสดงวดนั้น"""

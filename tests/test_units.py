@@ -224,7 +224,7 @@ close = pd.DataFrame(data, index=idx).astype("float32")
 vol = pd.DataFrame(vols, index=idx).astype("float32")
 sec = {t: "S1" for t in close.columns}
 
-eq, stt = bt.run(close, vol, sec)
+eq, stt = bt.run(close, close, vol, sec)
 check("ขาขึ้นทุกตัว -> equity โต, ถือหุ้นทุกงวด",
       eq.iloc[-1] > 1.0 and stt["avg_n"] >= 1, f"eq={eq.iloc[-1]:.3f}")
 
@@ -232,7 +232,7 @@ check("ขาขึ้นทุกตัว -> equity โต, ถือหุ้
 close_dn = pd.DataFrame(
     {f"T{i}.BK": [100.0 * (1 - 0.001) ** d for d in range(n_days)] for i in range(12)},
     index=idx).astype("float32")
-eq_dn, stt_dn = bt.run(close_dn, vol, sec)
+eq_dn, stt_dn = bt.run(close_dn, close_dn, vol, sec)
 check("RRG filter กันหมด -> ถือเงินสด equity = 1.0 เป๊ะ (regression: "
       "ห้ามหัก cost ตอนไม่มีการซื้อขาย)",
       abs(eq_dn.iloc[-1] - 1.0) < 1e-12 and stt_dn["avg_n"] == 0,
@@ -240,7 +240,7 @@ check("RRG filter กันหมด -> ถือเงินสด equity = 1.0
 
 # regime ต่ำกว่าเกณฑ์ตลอด -> เงินสดทุกงวด
 regime = pd.Series(10.0, index=idx)
-eq_rg, stt_rg = bt.run(close, vol, sec, regime=regime, regime_min=30)
+eq_rg, stt_rg = bt.run(close, close, vol, sec, regime=regime, regime_min=30)
 check("regime < เกณฑ์ตลอด -> เงินสดทุกงวด equity = 1.0",
       abs(eq_rg.iloc[-1] - 1.0) < 1e-12 and stt_rg["n_cash"] == stt_rg["periods"])
 

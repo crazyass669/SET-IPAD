@@ -16,6 +16,7 @@ import time
 import traceback
 import sys
 import socket
+from collections import OrderedDict
 
 # log ภาษาไทยต้องไม่ทำ thread ตาย ไม่ว่า stdout จะเป็น console/ไฟล์/cp1252
 try:
@@ -30,8 +31,26 @@ from core.store import _atomic_write_json
 from core import run_log
 from core import delisted_log
 
+
+class _LRUCache(OrderedDict):
+    """dict จำกัดขนาด — ใช้กับ cache ที่ key มาจาก URL/symbol ตรงๆ (ผู้ใช้ยิงคำขอ
+    symbol แปลกๆ ซ้ำได้ไม่จำกัด) กันโตไม่มีเพดานจนกิน memory ยาว ๆ เกิน TTL ไม่ช่วย
+    เพราะ entry ใหม่มาเรื่อย ๆ เร็วกว่าของเก่าหมดอายุ"""
+
+    def __init__(self, maxsize):
+        super().__init__()
+        self.maxsize = maxsize
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        if len(self) > self.maxsize:
+            self.popitem(last=False)
+
+
 # Band cache — เก็บผล mrlikestock.com ไว้ 6 ชั่วโมง เพื่อลด latency ค้นซ้ำ
-_band_cache: dict = {}
+_band_cache = _LRUCache(2000)
 _BAND_CACHE_TTL = 6 * 3600
 
 # DR cache — เก็บราคา underlying foreign stocks ไว้ 4 ชั่วโมง
@@ -60,11 +79,11 @@ _JP_INDEX_DIFF_CACHE_TTL = 6 * 3600
 
 # ข่าวรายหุ้น (รวม SET.or.th + Yahoo + Google News) — cache ต่อ (symbol, is_dr) 15 นาที
 # ข่าวไม่ต้องสดวินาทีต่อวินาที แต่ก็ไม่ควรยิง 3 แหล่งซ้ำทุกครั้งที่พิมพ์ค้นหา
-_stock_news_cache: dict = {}
+_stock_news_cache = _LRUCache(2000)
 _STOCK_NEWS_CACHE_TTL = 15 * 60
 
 # Financials cache — งบการเงิน cache 24 ชั่วโมง (ข้อมูลไม่เปลี่ยนบ่อย)
-_fin_cache: dict = {}
+_fin_cache = _LRUCache(2000)
 _FIN_CACHE_TTL = 24 * 3600
 
 # P/E-P/BV รายวันของตลาด (scrape จากหน้า overview ของ SET.or.th) — cache 3 ชม.
@@ -83,9 +102,11 @@ _FIN_ANALYTICS_CACHE_TTL = 24 * 3600
 # เดียวกับ _dr_rebuild_lock ของ /api/dr: แท็บแรกคำนวณ แท็บอื่นรอเฉยๆ แล้วได้ผลจาก cache
 _fin_analytics_lock = threading.Lock()
 
-# Indices cache — ดัชนีราคากลุ่ม SET/MAI cache 4 ชั่วโมง
+# Indices cache — ดัชนีราคากลุ่ม SET/MAI (invalidate แบบ event-driven ตอน refresh เขียนทับ ไม่ใช่ TTL)
 _indices_cache: dict = {}
-_INDICES_CACHE_TTL = 4 * 3600
+# กันกด Quick Update / Full Refresh ซ้อนกัน (เดิมไม่มี lock ต่างจาก endpoint งานหนักอื่นๆ)
+_indices_job_lock = threading.Lock()
+_indices_job_state = {"running": False}
 
 from flask import Flask, jsonify, send_file, Response, request
 
@@ -307,7 +328,7 @@ def get_history(symbol):
     return jsonify(data)
 
 
-_price_analytics_cache: dict = {}   # symbol -> (ts, result)
+_price_analytics_cache = _LRUCache(2000)   # symbol -> (ts, result)
 _PRICE_ANALYTICS_TTL = 6 * 3600     # ราคาไม่เปลี่ยนระหว่างวันมากพอจะต้องคำนวณใหม่ถี่
 
 
@@ -1050,11 +1071,13 @@ def _run_us_index_full_refresh():
         msg = f"เสร็จแล้ว! ดึงราคา US Index ย้อนหลังสูงสุด {len(data)}/{len(tickers)} ตัว"
         if missing:
             msg += f" (ขาด {missing} ตัว)"
-        _update(running=False, done=True, message=msg)
+        _update(done=True, message=msg)
         run_log.record_run(BASE_DIR, "us_index_full_refresh", True, msg)
     except Exception as e:
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
         run_log.record_run(BASE_DIR, "us_index_full_refresh", False, str(e))
+    finally:
+        _update(running=False)
 
     # คำนวณ RS/EMA/Stage/52W ใหม่จากราคาที่เพิ่งดึง — ทำนอก try/except หลักเพื่อให้รันแม้
     # ราคาบางตัวพลาด (best-effort, ไม่ทำให้ job หลักถูกมองว่า error)
@@ -1166,7 +1189,7 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
                         data[t][k] = s.iloc[:-1]
                 if len(data[t]["close"]) == 0:
                     del data[t]
-    elif is_latest_bar_stable(region):
+    else:
         # ตลาดปิดไปแล้วจริง (พ้นช่วง buffer) แต่บางครั้ง Yahoo ยังไม่เติมช่อง Close ของแท่ง
         # รายวันล่าสุดให้ (เจอจริง 28 ก.ค. 2026 — หุ้นญี่ปุ่นทั้งกระดาน 225 ตัว มี Open/High/
         # Low/Volume ครบ แต่ Close เป็น NaN ทั้งวันแม้ผ่านมา 10+ ชม. — fetch_gap_batch/
@@ -1181,8 +1204,8 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
             while expected.weekday() >= 5:   # เสาร์=5, อาทิตย์=6 — ย้อนหาวันทำการล่าสุด
                 expected -= timedelta(days=1)
             stale = []
-            for t in tickers:
-                close = data.get(t, {}).get("close")
+            for t in data:
+                close = data[t].get("close")
                 last_date = close.index[-1].date() if close is not None and len(close) else None
                 if last_date is None or last_date < expected:
                     stale.append(t)
@@ -1300,11 +1323,13 @@ def _run_hk_index_full_refresh():
         msg = f"เสร็จแล้ว! ดึงราคา HK Index ย้อนหลังสูงสุด {len(data)}/{len(tickers)} ตัว"
         if missing:
             msg += f" (ขาด {missing} ตัว)"
-        _update(running=False, done=True, message=msg)
+        _update(done=True, message=msg)
         run_log.record_run(BASE_DIR, "hk_index_full_refresh", True, msg)
     except Exception as e:
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
         run_log.record_run(BASE_DIR, "hk_index_full_refresh", False, str(e))
+    finally:
+        _update(running=False)
 
     # คำนวณ RS/EMA/Stage/52W ใหม่จากราคาที่เพิ่งดึง — ทำนอก try/except หลักเพื่อให้รันแม้
     # ราคาบางตัวพลาด (best-effort, ไม่ทำให้ job หลักถูกมองว่า error)
@@ -1394,11 +1419,13 @@ def _run_jp_index_full_refresh():
         msg = f"เสร็จแล้ว! ดึงราคา JP Index ย้อนหลังสูงสุด {len(data)}/{len(tickers)} ตัว"
         if missing:
             msg += f" (ขาด {missing} ตัว)"
-        _update(running=False, done=True, message=msg)
+        _update(done=True, message=msg)
         run_log.record_run(BASE_DIR, "jp_index_full_refresh", True, msg)
     except Exception as e:
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
         run_log.record_run(BASE_DIR, "jp_index_full_refresh", False, str(e))
+    finally:
+        _update(running=False)
 
     try:
         from sources import jp_index_metrics
@@ -1483,11 +1510,13 @@ def _run_hedge_refresh():
 
         payload = dataroma.refresh_all(BASE_DIR, callback=cb)
         msg = f"เสร็จแล้ว! ดึง Hedge Holdings {payload['manager_count']} กอง"
-        _update(running=False, done=True, message=msg)
+        _update(done=True, message=msg)
         run_log.record_run(BASE_DIR, "hedge_refresh", True, msg)
     except Exception as e:  # noqa: BLE001
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
         run_log.record_run(BASE_DIR, "hedge_refresh", False, str(e))
+    finally:
+        _update(running=False)
 
 
 def _hedge_norm(sym):
@@ -1562,7 +1591,7 @@ def _run_hedge_fetch_missing(syms):
         todo = [s for s in dict.fromkeys(syms) if s not in covered]  # ไม่ซ้ำ + ตัดที่มีแล้ว
         total = len(todo)
         if not total:
-            _update(running=False, done=True, current=0, total=0,
+            _update(done=True, current=0, total=0,
                     message="หุ้นในรายการมีในคลังครบแล้ว ไม่มีอะไรต้องดึง")
             return
         ok = fail = 0
@@ -1580,11 +1609,13 @@ def _run_hedge_fetch_missing(syms):
         msg = f"เสร็จแล้ว! ดึงเข้าคลังสำเร็จ {ok}/{total} ตัว"
         if fail:
             msg += f" · ไม่สำเร็จ {fail} (เช่น {', '.join(failed[:8])}{'...' if len(failed) > 8 else ''})"
-        _update(running=False, done=True, message=msg)
+        _update(done=True, message=msg)
         run_log.record_run(BASE_DIR, "hedge_fetch_missing", True, msg)
     except Exception as e:  # noqa: BLE001
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
         run_log.record_run(BASE_DIR, "hedge_fetch_missing", False, str(e))
+    finally:
+        _update(running=False)
 
 
 @app.route("/api/dr-history/<symbol>")
@@ -1705,11 +1736,13 @@ def start_dr_description_sync():
             def cb(current, total, msg):
                 _update(current=current, total=total, message=msg)
             result = dr_descriptions.sync_all(BASE_DIR, force=force, callback=cb)
-            _update(running=False, done=True,
+            _update(done=True,
                     message=f"เสร็จแล้ว! ดึงใหม่ {result['ok']} · ข้าม {result['skipped']} (มีอยู่แล้ว ไม่เก่า)"
                             + (f" · ล้มเหลว {result['fail']}" if result["fail"] else ""))
         except Exception as e:
-            _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+            _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        finally:
+            _update(running=False)
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"ok": True})
@@ -2310,13 +2343,15 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, min_age_days=N
                                            is_dr=is_dr, min_age_days=min_age_days)
         _fin_analytics_cache.clear()   # ข้อมูลเปลี่ยน — บังคับคำนวณ growth/PEG/FCF ใหม่รอบถัดไป
         skipped = result.get("skipped", 0)
-        _update(running=False, done=True,
+        _update(done=True,
                 message=f"เสร็จแล้ว! สำเร็จ {result['ok']}/{result['total']}"
                         + (f" · ข้าม {skipped} คู่ (ดึงไปแล้วไม่เกิน {min_age_days} วัน)" if skipped else "")
                         + (f" (ล้มเหลว {result['fail']} — อาจโดนบล็อคชั่วคราวหรือแหล่งข้อมูลไม่มีจริง ลองอีกครั้งได้)" if result["fail"] else ""))
     except Exception as e:
-        _update(running=False, done=True, error=str(e),
+        _update(done=True, error=str(e),
                 message=f"เกิดข้อผิดพลาด: {e}")
+    finally:
+        _update(running=False)
 
 
 @app.route("/api/financials/sync-all", methods=["POST"])
@@ -2460,7 +2495,7 @@ def financials_analytics():
     cache แยกจากโหมดปกติ (คนละผลลัพธ์กัน)"""
     yahoo_only = request.args.get("source") == "yahoo"
     cache_key = "yahoo" if yahoo_only else "default"
-    slot = _fin_analytics_cache.setdefault(cache_key, {})
+    slot = _fin_analytics_cache.get(cache_key, {})
     cached = slot.get("result")
     if cached and (time.time() - slot.get("ts", 0) < _FIN_ANALYTICS_CACHE_TTL):
         return jsonify(cached)
@@ -2468,7 +2503,10 @@ def financials_analytics():
     # lock กันหลายแท็บ/request ที่มาชนตอน cache หมดอายุพร้อมกันคำนวณซ้ำซ้อนกัน (ดูคอมเมนต์
     # ที่ _fin_analytics_lock) — request ที่มาทีหลังรอเฉยๆ แล้วเช็ค cache ซ้ำหลังได้ lock
     # ถ้า request แรกคำนวณเสร็จไปแล้วระหว่างรอ ก็ได้ผลจาก cache ทันทีไม่ต้องคำนวณซ้ำ
+    # setdefault ต้องอยู่ใน lock — ถ้า .clear() แทรกระหว่างบรรทัดนี้กับก่อนหน้า slot
+    # ที่ได้จะเป็น dict เก่าที่หลุดจาก _fin_analytics_cache แล้ว เขียนผลไปก็สูญเปล่า
     with _fin_analytics_lock:
+        slot = _fin_analytics_cache.setdefault(cache_key, {})
         cached = slot.get("result")
         if cached and (time.time() - slot.get("ts", 0) < _FIN_ANALYTICS_CACHE_TTL):
             return jsonify(cached)
@@ -3255,12 +3293,14 @@ def _run_us_index_sync(min_age_days=None):
         us_index_membership.save_local(BASE_DIR, local)
 
         skipped = result.get("skipped", 0)
-        _update(running=False, done=True,
+        _update(done=True,
                 message=f"เสร็จแล้ว! ดัชนีอัพเดท +{added_n}/-{removed_n} · งบการเงิน {result['ok']}/{result['total']} สำเร็จ"
                         + (f" · ข้าม {skipped} คู่ (ดึงไปแล้วไม่เกิน {min_age_days} วัน)" if skipped else "")
                         + (f" (ล้มเหลว {result['fail']})" if result["fail"] else ""))
     except Exception as e:
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+    finally:
+        _update(running=False)
 
 
 @app.route("/api/hk-index-membership")
@@ -3379,12 +3419,14 @@ def _run_hk_index_sync(min_age_days=None):
         hk_index_membership.save_local(BASE_DIR, local)
 
         skipped = result.get("skipped", 0)
-        _update(running=False, done=True,
+        _update(done=True,
                 message=f"เสร็จแล้ว! ดัชนีอัพเดท +{added_n}/-{removed_n} · งบการเงิน {result['ok']}/{result['total']} สำเร็จ"
                         + (f" · ข้าม {skipped} คู่ (ดึงไปแล้วไม่เกิน {min_age_days} วัน)" if skipped else "")
                         + (f" (ล้มเหลว {result['fail']})" if result["fail"] else ""))
     except Exception as e:
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+    finally:
+        _update(running=False)
 
 
 @app.route("/api/jp-index-membership")
@@ -3463,13 +3505,15 @@ def _run_jp_index_sync():
             BASE_DIR, "JP", tickers, price_by_ticker=price_by_ticker)
         _fin_analytics_cache.clear()
 
-        _update(running=False, done=True,
+        _update(done=True,
                 message=f"เสร็จแล้ว! ดัชนี Nikkei 225 อัพเดท +{added_n}/-{removed_n} · "
                         f"งบการเงิน {result['ok']} ตัว (ข้าม {result['skipped']} ที่มีอยู่แล้ว"
                         + (f", ล้มเหลว {result['fail']}" if result["fail"] else "") + f") · "
                         f"factor snapshot: {n_mirror} ตัว")
     except Exception as e:
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+    finally:
+        _update(running=False)
 
 
 @app.route("/api/hk-index-heatmap")
@@ -3828,7 +3872,7 @@ def financials_dq_check(symbol):
     return jsonify(financials_store.compare_sources(payload_yahoo, payload_set))
 
 
-INDICES_FILE = "indices_cache.json"
+INDICES_FILE = os.path.join(BASE_DIR, "indices_cache.json")
 
 def _compute_idx_rs(result: dict):
     """คำนวณ rs_set + rs_history สำหรับดัชนีทุกตัว เทียบกับ universe หุ้น SET"""
@@ -4048,6 +4092,24 @@ def _fetch_indices_tv(existing: dict, full_refresh: bool = False) -> dict:
     return result, stats
 
 
+# payload ~4.5MB ไม่บีบอัด (เต็มไปด้วย dates/closes รายวันของทุกดัชนี ซึ่ง frontend ใช้ทำกราฟ
+# ใน openIdxChartModal จริง ตัดทิ้งแบบ _dr_light ไม่ได้) — cache gzip ไว้ต่อ id(data) ก้อนเดียว
+# กัน compress ซ้ำทุก request (data ถูก reassign เป็น dict ใหม่ทุกครั้งที่เนื้อหาเปลี่ยนจริง)
+_indices_gz_cache = {"id": None, "raw": None, "gz": None}
+
+
+def _indices_response(data):
+    import gzip as _gzip
+    key = id(data)
+    if _indices_gz_cache["id"] != key:
+        raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        _indices_gz_cache.update(id=key, raw=raw, gz=_gzip.compress(raw, compresslevel=6))
+    if "gzip" in request.headers.get("Accept-Encoding", "").lower():
+        return Response(_indices_gz_cache["gz"], mimetype="application/json",
+                        headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+    return Response(_indices_gz_cache["raw"], mimetype="application/json")
+
+
 @app.route("/api/indices")
 def get_indices():
     """เสิร์ฟข้อมูลดัชนีจากไฟล์ หรือดึงใหม่ถ้าไม่มีไฟล์"""
@@ -4056,7 +4118,7 @@ def get_indices():
     first = next(iter(data.values()), {}) if data else {}
     # ส่งจาก memory cache ถ้ามี rs_set และ rs_history ครบแล้ว
     if data and first.get("rs_set") is not None and len(first.get("rs_history", [])) >= 4:
-        return jsonify(data)
+        return _indices_response(data)
     # โหลดจากไฟล์ (หรือ recompute ถ้า rs_history ยังน้อย)
     if os.path.exists(INDICES_FILE):
         try:
@@ -4071,7 +4133,7 @@ def get_indices():
                 _atomic_write_json(INDICES_FILE,
                                    {"updated_at": saved.get("updated_at", ""), "data": data})
             _indices_cache["data"] = data
-            return jsonify(data)
+            return _indices_response(data)
         except Exception:
             pass
     # ไม่มีไฟล์ — แจ้งให้ refresh
@@ -4095,6 +4157,10 @@ def indices_quick_update():
     """Quick Update — ดึง 30 bars ล่าสุดจาก TradingView แล้ว append"""
     import traceback as tb
     global _indices_cache
+    with _indices_job_lock:
+        if _indices_job_state["running"]:
+            return jsonify({"error": "กำลังอัปเดตดัชนีอยู่แล้ว โปรดรอสักครู่"}), 409
+        _indices_job_state["running"] = True
     try:
         existing = _load_indices_existing()
         result, stats = _fetch_indices_tv(existing, full_refresh=False)
@@ -4105,6 +4171,8 @@ def indices_quick_update():
                         "updated_at": time.strftime("%Y-%m-%d %H:%M")})
     except Exception as e:
         return jsonify({"error": str(e), "trace": tb.format_exc()}), 500
+    finally:
+        _indices_job_state["running"] = False
 
 
 @app.route("/api/indices-refresh", methods=["POST"])
@@ -4112,6 +4180,10 @@ def indices_refresh():
     """Full Refresh — ดึง 5000 bars (~20 ปี) จาก TradingView"""
     import traceback as tb
     global _indices_cache
+    with _indices_job_lock:
+        if _indices_job_state["running"]:
+            return jsonify({"error": "กำลังอัปเดตดัชนีอยู่แล้ว โปรดรอสักครู่"}), 409
+        _indices_job_state["running"] = True
     try:
         existing = _load_indices_existing()
         result, stats = _fetch_indices_tv(existing, full_refresh=True)
@@ -4121,6 +4193,8 @@ def indices_refresh():
                                     if stats["failed"] else None)})
     except Exception as e:
         return jsonify({"error": str(e), "trace": tb.format_exc()}), 500
+    finally:
+        _indices_job_state["running"] = False
 
 
 @app.route("/api/restart", methods=["POST"])
@@ -4826,11 +4900,13 @@ def _run_mirror_sync_new():
         result = financials_store.mirror_finnomena(BASE_DIR, exchanges=exs, callback=cb, force=False)
         _mirror_diff_cache.clear()   # ตัวใหม่ถูกดึงแล้ว — เช็คครั้งหน้าต้องได้ผลใหม่
         _fin_analytics_cache.clear()
-        _update(running=False, done=True,
+        _update(done=True,
                 message=f"เสร็จแล้ว! ดึงงบได้ {result['ok']} ตัว · ไม่มีงบ {result['empty']} ตัว"
                         + (f" (ล้มเหลว {result['fail']} — ลองอีกครั้งได้)" if result["fail"] else ""))
     except Exception as e:
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+    finally:
+        _update(running=False)
 
 
 @app.route("/api/mirror-sync-new", methods=["POST"])
@@ -4878,11 +4954,13 @@ def _run_mirror_yahoo_index_sync(limit=None):
                    f"(ข้าม {result['skipped']} ที่มีอยู่แล้ว"
                    + (f", ล้มเหลว {result['fail']}" if result["fail"] else "") + ") · "
                    f"rebuild mirror snapshot: US {mirror_counts.get('US', 0)} / HK {mirror_counts.get('HK', 0)} ตัว")
-        _update(running=False, done=True, message=summary)
+        _update(done=True, message=summary)
         run_log.record_run(BASE_DIR, "mirror_yahoo_index_sync", True, summary)
     except Exception as e:
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
         run_log.record_run(BASE_DIR, "mirror_yahoo_index_sync", False, str(e))
+    finally:
+        _update(running=False)
 
 
 @app.route("/api/mirror-yahoo-index-sync", methods=["POST"])
@@ -4995,11 +5073,13 @@ def _run_financials_update_all():
                    f"ดัชนีหลัก US/HK/JP {r_idx['ok']}/{r_idx['total']} (ข้าม {r_idx['skipped']} ที่มีแล้ว)"
                    + (f" · mirror ค้นบ่อย {refreshed_mirror}/{len(searched)}" if searched else "")
                    + f" · ใช้เวลา {elapsed_min:.0f} นาที")
-        _update(running=False, done=True, message=summary)
+        _update(done=True, message=summary)
         run_log.record_run(BASE_DIR, "financials_sync", True, summary)
     except Exception as e:
         run_log.record_run(BASE_DIR, "financials_sync", False, str(e))
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+    finally:
+        _update(running=False)
 
 
 @app.route("/api/financials-update-all", methods=["POST"])
@@ -5040,11 +5120,13 @@ def _run_mirror_finnomena_force_full():
         summary = (f"เสร็จแล้ว! มีงบ {result['ok']} · ไม่มีงบ {result['empty']}"
                    + (f" · พลาด {result['fail']}" if result["fail"] else "")
                    + f" · ใช้เวลา {elapsed_min:.0f} นาที")
-        _update(running=False, done=True, message=summary)
+        _update(done=True, message=summary)
         run_log.record_run(BASE_DIR, "mirror_finnomena", True, summary)
     except Exception as e:
         run_log.record_run(BASE_DIR, "mirror_finnomena", False, str(e))
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+    finally:
+        _update(running=False)
 
 
 @app.route("/api/mirror-finnomena-force-full", methods=["POST"])
@@ -5089,11 +5171,13 @@ def _run_build_mirror_names():
 
         elapsed_s = time.time() - t0
         summary = f"เสร็จแล้ว! US {len(out['US'])} + HK {len(out['HK'])} ชื่อ ({elapsed_s:.0f} วิ)"
-        _update(running=False, done=True, message=summary)
+        _update(done=True, message=summary)
         run_log.record_run(BASE_DIR, "build_mirror_names", True, summary)
     except Exception as e:
         run_log.record_run(BASE_DIR, "build_mirror_names", False, str(e))
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+    finally:
+        _update(running=False)
 
 
 @app.route("/api/build-mirror-names", methods=["POST"])
@@ -5128,48 +5212,51 @@ def _run_static_bake():
     script = os.path.join(BASE_DIR, "run_static_update.py")
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     try:
-        proc = subprocess.Popen(
-            [sys.executable, script], cwd=BASE_DIR, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace", bufsize=1)
-    except Exception as e:
-        run_log.record_run(BASE_DIR, "static_bake", False, f"เปิด process ไม่ได้: {e}")
-        _update(running=False, done=True, error=str(e), message=f"เปิด process ไม่ได้: {e}")
-        return
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, script], cwd=BASE_DIR, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1)
+        except Exception as e:
+            run_log.record_run(BASE_DIR, "static_bake", False, f"เปิด process ไม่ได้: {e}")
+            _update(done=True, error=str(e), message=f"เปิด process ไม่ได้: {e}")
+            return
 
-    snapshot_mode = False
-    snapshot_done = 0
-    last_line = "กำลังเริ่ม..."
-    try:
-        for raw in proc.stdout:
-            line = raw.strip()
-            if not line:
-                continue
-            last_line = re.sub(r"^\[\d{2}:\d{2}:\d{2}\]\s*", "", line)
-            if "Snapshot API endpoints" in line:
-                snapshot_mode = True
-            if snapshot_mode and line.startswith(("✅", "⚠️", "❌", "⏭️")):
-                snapshot_done += 1
-                pct = 35 + min(snapshot_done / _STATIC_BAKE_SNAPSHOT_TOTAL, 1.0) * 60
-                _update(current=round(pct), total=100, message=last_line)
-            else:
-                m = re.search(r"\[\s*(\d{1,3})%\]", line)
-                if m and not snapshot_mode:
-                    _update(current=round(min(int(m.group(1)), 100) * 0.35), total=100, message=last_line)
+        snapshot_mode = False
+        snapshot_done = 0
+        last_line = "กำลังเริ่ม..."
+        try:
+            for raw in proc.stdout:
+                line = raw.strip()
+                if not line:
+                    continue
+                last_line = re.sub(r"^\[\d{2}:\d{2}:\d{2}\]\s*", "", line)
+                if "Snapshot API endpoints" in line:
+                    snapshot_mode = True
+                if snapshot_mode and line.startswith(("✅", "⚠️", "❌", "⏭️")):
+                    snapshot_done += 1
+                    pct = 35 + min(snapshot_done / _STATIC_BAKE_SNAPSHOT_TOTAL, 1.0) * 60
+                    _update(current=round(pct), total=100, message=last_line)
                 else:
-                    _update(message=last_line)
-        proc.wait()
-    except Exception as e:
-        proc.kill()
-        _update(running=False, done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
-        return
+                    m = re.search(r"\[\s*(\d{1,3})%\]", line)
+                    if m and not snapshot_mode:
+                        _update(current=round(min(int(m.group(1)), 100) * 0.35), total=100, message=last_line)
+                    else:
+                        _update(message=last_line)
+            proc.wait()
+        except Exception as e:
+            proc.kill()
+            _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+            return
 
-    if proc.returncode == 0:
-        _update(running=False, done=True, error=None, current=100, total=100,
-                message="เสร็จแล้ว! bake ไฟล์ static ทั้งหมดสำเร็จ")
-    else:
-        _update(running=False, done=True, error=last_line,
-                message=f"เกิดข้อผิดพลาด (exit {proc.returncode}): {last_line}")
+        if proc.returncode == 0:
+            _update(done=True, error=None, current=100, total=100,
+                    message="เสร็จแล้ว! bake ไฟล์ static ทั้งหมดสำเร็จ")
+        else:
+            _update(done=True, error=last_line,
+                    message=f"เกิดข้อผิดพลาด (exit {proc.returncode}): {last_line}")
+    finally:
+        _update(running=False)
 
 
 @app.route("/api/run-static-bake", methods=["POST"])
@@ -5203,10 +5290,8 @@ def _run_refresh(period="max"):
             pass
 
     try:
-        import importlib
         sys.path.insert(0, BASE_DIR)
         from services import refresh as _refresh_svc
-        importlib.reload(_refresh_svc)
 
         def cb(current, total, msg):
             _update(current=current, total=total, message=msg)
@@ -5277,7 +5362,7 @@ def _run_refresh(period="max"):
             warnings.append(f"Batch fetch ปันผลล้มเหลว: {e}")
 
         final_msg = "เสร็จแล้ว!" if not warnings else "เสร็จแล้ว (มีบางส่วนล้มเหลว: " + "; ".join(warnings) + ")"
-        _update(running=False, done=True, message=final_msg)
+        _update(done=True, message=final_msg)
         run_log.record_run(BASE_DIR, "full_refresh", True, final_msg)
 
     except Exception as e:
@@ -5286,15 +5371,17 @@ def _run_refresh(period="max"):
         if has_backup and os.path.exists(BACKUP_FILE):
             try:
                 shutil.copy2(BACKUP_FILE, DATA_FILE)
-                _update(running=False, done=True,
+                _update(done=True,
                         error=str(e),
                         message="ดึงข้อมูลใหม่ไม่สำเร็จ — ใช้ข้อมูลล่าสุดแทน")
             except Exception:
-                _update(running=False, done=True, error=str(e),
+                _update(done=True, error=str(e),
                         message=f"เกิดข้อผิดพลาด: {e}")
         else:
-            _update(running=False, done=True, error=str(e),
+            _update(done=True, error=str(e),
                     message=f"เกิดข้อผิดพลาด: {e}")
+    finally:
+        _update(running=False)
 
 
 _MARKET_STATS_FILE = os.path.join(BASE_DIR, "set_market_stats.json")
@@ -5741,9 +5828,7 @@ def _run_quick():
             failed_steps.append(name)
 
     try:
-        import importlib
         from services import refresh as _refresh_svc
-        importlib.reload(_refresh_svc)
 
         # run_quick_update ใช้ตั้งแต่ 0-90% ของ progress bar เอง — ขั้นตอนเสริม
         # ด้านล่างไล่ 90-99% ต่อ ไม่งั้นแถบวิ่งถอยหลัง (99% -> 93% -> ...)
@@ -5820,13 +5905,15 @@ def _run_quick():
             summary = "Quick Update เสร็จแล้ว (⚠️ ล้มเหลว: " + ", ".join(failed_steps) + ")"
         else:
             summary = "Quick Update เสร็จแล้ว!"
-        _update(running=False, done=True, message=summary)
+        _update(done=True, message=summary)
         run_log.record_run(BASE_DIR, "quick_update", not failed_steps, summary)
 
     except Exception as e:
-        _update(running=False, done=True, error=str(e),
+        _update(done=True, error=str(e),
                 message=f"เกิดข้อผิดพลาด: {e}")
         run_log.record_run(BASE_DIR, "quick_update", False, str(e))
+    finally:
+        _update(running=False)
 
 
 # ============================================================
@@ -6748,8 +6835,7 @@ def save_watchlist():
     if not isinstance(syms, list):
         return jsonify({"error": "invalid symbols"}), 400
     os.makedirs(os.path.dirname(WATCHLIST_FILE), exist_ok=True)
-    with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
-        json.dump(syms, f, ensure_ascii=False, indent=2)
+    _atomic_write_json(WATCHLIST_FILE, syms)
     return jsonify({"ok": True, "count": len(syms)})
 
 

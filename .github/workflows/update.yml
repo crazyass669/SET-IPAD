@@ -64,6 +64,11 @@ jobs:
           echo "full_refresh = true -> ลบ set_prices.db เพื่อบังคับ Full Refresh"
           rm -f set_prices.db
 
+      - name: Run unit + golden tests
+        run: |
+          python tests/test_units.py
+          python tests/test_golden.py
+
       - name: Run static update
         run: python run_static_update.py
 
@@ -84,5 +89,9 @@ jobs:
             exit 0
           fi
           git commit -m "data: auto-update $(date -u '+%Y-%m-%d %H:%M') UTC"
-          git pull --rebase origin main || true
+          if ! git pull --rebase origin main; then
+            echo "rebase ล้มเหลว — ยกเลิก rebase กัน repo ค้างสถานะ"
+            git rebase --abort
+            exit 1
+          fi
           git push origin HEAD:main
