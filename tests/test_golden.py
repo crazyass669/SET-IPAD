@@ -37,7 +37,10 @@ def _diff(path, a, b, out):
     elif isinstance(a, (int, float)) and isinstance(b, (int, float)):
         # ปัดเศษ floating-point ต่างกันเล็กน้อยข้าม numpy/pandas version (local vs CI
         # ubuntu ใช้คนละเวอร์ชัน) ไม่ใช่ regression จริง — ยอมรับส่วนต่าง <= 0.01
-        if abs(a - b) > 0.01:
+        # (ใช้ 0.011 ไม่ใช่ 0.01 เป๊ะ เพราะ float subtraction เอง (เช่น -21.34 -
+        # (-21.35)) ได้ 0.010000000000001563 ไม่ใช่ 0.01 พอดี — เกณฑ์ 0.01 เป๊ะ
+        # จะหลุดกรณีตัวอย่างที่ตั้งใจจะกันไว้)
+        if abs(a - b) > 0.011:
             out.append(f"{path}: {a!r} != {b!r}")
     elif a != b:
         out.append(f"{path}: {a!r} != {b!r}")
