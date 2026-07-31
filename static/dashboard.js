@@ -4957,7 +4957,8 @@ function _mergeFinAnalyticsInto(stocks, keyFn, universe = 'set') {
 
 const _FIN_DEP_INPUT_IDS = [
   'scr-ps',
-  'scr-growth-min', 'scr-peg-max', 'scr-rev-streak-min', 'scr-profit-streak-min',
+  'scr-growth-min', 'scr-peg-max', 'scr-fcf-yield-min', 'scr-div-cover-min',
+  'scr-rev-streak-min', 'scr-profit-streak-min',
   'scr-rev-qoq-min', 'scr-profit-qoq-min', 'scr-rev-yoyq-min', 'scr-profit-yoyq-min',
   'scr-rev-qstreak-min', 'scr-profit-qstreak-min', 'scr-margin-qstreak-min',
   'scr-rev-posstreak-min', 'scr-profit-posstreak-min', 'scr-ebitda-posstreak-min', 'scr-ocf-posstreak-min', 'scr-ocf-gt-ni',
@@ -5595,6 +5596,8 @@ async function runScreener() {
   const dyMin       = parseFloat(document.getElementById('scr-dy').value);
   const growthMin   = parseFloat(document.getElementById('scr-growth-min').value);
   const pegMax      = parseFloat(document.getElementById('scr-peg-max').value);
+  const fcfYieldMin = parseFloat(document.getElementById('scr-fcf-yield-min').value);
+  const divCoverMin = parseFloat(document.getElementById('scr-div-cover-min').value);
   const revStreakMin    = parseFloat(document.getElementById('scr-rev-streak-min').value);
   const profitStreakMin = parseFloat(document.getElementById('scr-profit-streak-min').value);
   const revQoqMin       = parseFloat(document.getElementById('scr-rev-qoq-min').value);
@@ -5702,6 +5705,8 @@ async function runScreener() {
     if (!isNaN(dyMin)  && dyMin  > 0 && (s.div_yield == null || s.div_yield < dyMin)) return false;
     if (!isNaN(growthMin) && (s.growth_score == null || s.growth_score < growthMin)) return false;
     if (!isNaN(pegMax) && pegMax > 0 && (s.peg == null || s.peg > pegMax)) return false;
+    if (!isNaN(fcfYieldMin) && (s.fcf_yield == null || s.fcf_yield < fcfYieldMin)) return false;
+    if (!isNaN(divCoverMin) && (s.dividend_coverage == null || s.dividend_coverage < divCoverMin)) return false;
     if (!isNaN(revStreakMin)    && (s.revenue_streak ?? -1) < revStreakMin)    return false;
     if (!isNaN(profitStreakMin) && (s.profit_streak  ?? -1) < profitStreakMin) return false;
     // การเติบโตรายไตรมาส — null (ยังไม่ sync งบไตรมาส/ฐานติดลบ) ถูกตัดออกเมื่อเปิดกรอง
@@ -6251,7 +6256,7 @@ const _FS_FCF_NOTE_HTML = `
   </div>
 </div>`;
 
-const _BT_NOTE_HTML_BY_ID = { 'dh-cli-note': _CLI_FIN_NOTE_HTML, 'fs-fcf-note': _FS_FCF_NOTE_HTML };
+const _BT_NOTE_HTML_BY_ID = { 'dh-cli-note': _CLI_FIN_NOTE_HTML, 'fs-fcf-note': _FS_FCF_NOTE_HTML, 'scr-fcf-note': _FS_FCF_NOTE_HTML };
 
 function toggleBtNote(boxId) {
   const el = document.getElementById(boxId);
@@ -9188,7 +9193,7 @@ const _SCR_LS = 'set_scr_v1';
 const _SCR_FIELDS = ['scr-rs-min','scr-1m','scr-3m','scr-1d','scr-ytd','scr-cap',
                      'scr-price-min','scr-price-max','scr-from-high','scr-ath-dist','scr-from-low',
                      'scr-pe','scr-pbv','scr-ps','scr-dy','scr-rvol','scr-atr-max','scr-seas-min','scr-1w','scr-6m','scr-1y',
-                     'scr-growth-min','scr-peg-max','scr-rev-streak-min','scr-profit-streak-min',
+                     'scr-growth-min','scr-peg-max','scr-fcf-yield-min','scr-div-cover-min','scr-rev-streak-min','scr-profit-streak-min',
                      'scr-rev-qoq-min','scr-profit-qoq-min','scr-rev-yoyq-min','scr-profit-yoyq-min',
                      'scr-rev-qstreak-min','scr-profit-qstreak-min','scr-margin-qstreak-min',
                      'scr-rev-posstreak-min','scr-profit-posstreak-min','scr-ebitda-posstreak-min','scr-ocf-posstreak-min',

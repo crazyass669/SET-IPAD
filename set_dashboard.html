@@ -857,10 +857,15 @@
     <span onclick="toggleBtNote('scr-bt-note')" style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid #39c5cf;background:#39c5cf22;color:#39c5cf;cursor:pointer;font-weight:600">
       📊 ผลวิจัย backtest ไทย + US + DR
     </span>
+    <span onclick="toggleBtNote('scr-fcf-note')" style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid #58a6ff;background:#58a6ff22;color:#58a6ff;cursor:pointer;font-weight:600">
+      📘 อธิบาย FCF Yield &amp; FCF คุ้มปันผล
+    </span>
   </div>
 
   <!-- กล่องสรุปผลวิจัย backtest (เปิด/ปิดจากปุ่ม 📊 ด้านบน) -->
   <div id="scr-bt-note" style="display:none;margin:10px 0 12px;padding:14px 16px;background:#161b22;border:1px solid #39c5cf55;border-radius:10px"></div>
+  <!-- กล่องอธิบาย FCF Yield/Div Coverage (เปิด/ปิดจากปุ่ม 📘 ด้านบน — เนื้อหาเดียวกับ Screener+) -->
+  <div id="scr-fcf-note" style="display:none;margin:10px 0 12px;padding:14px 16px;background:#161b22;border:1px solid #58a6ff55;border-radius:10px"></div>
 
   <!-- GUIDE BOX -->
   <div id="scr-guide-box" style="display:none;margin:10px 0 12px;padding:16px 18px;background:#161b22;border:1px solid #1f6feb55;border-radius:10px;font-size:12px;line-height:1.8;color:var(--fg)">
@@ -1168,6 +1173,28 @@
           </div></span>
         </div>
         <input class="scr-input" id="scr-dy" type="number" placeholder="เช่น 3" min="0">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">FCF Yield ≥ (%)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>FCF Yield</strong><br>
+            Free Cash Flow ÷ Market Cap × 100 (คำนวณจากงบ Yahoo — ใช้ได้ทั้งเวอร์ชันเครื่องและเว็บมือถือ)<br><br>
+            เช่น ใส่ 5 = FCF Yield ≥ 5% (โซนดี)<br>
+            <span style="color:var(--text2)">ต่ำกว่า 2% = แพงเทียบเงินสดที่หาได้ · สูงกว่า 10% ควรเช็คว่าไม่ใช่รายการพิเศษครั้งเดียว · กดปุ่ม "📘 อธิบาย FCF Yield" ด้านบนอ่านฉบับเต็ม</span>
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-fcf-yield-min" type="number" placeholder="เช่น 5">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">FCF คุ้มปันผล ≥ (เท่า)
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>Dividend Coverage (FCF คุ้มปันผล)</strong><br>
+            FCF ÷ เงินปันผลที่จ่ายทั้งปี (คำนวณจากงบ Yahoo — ใช้ได้ทั้งเวอร์ชันเครื่องและเว็บมือถือ)<br><br>
+            เช่น ใส่ 1.5 = FCF จ่ายปันผลไหวสบายๆ 1.5 เท่า (ปันผลยั่งยืน)<br>
+            <span style="color:var(--text2)">ต่ำกว่า 1.0x = จ่ายปันผลเกินเงินสดที่หาได้จริง ควรระวัง</span>
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-div-cover-min" type="number" placeholder="เช่น 1.5">
       </div>
       <div class="scr-group">
         <div class="scr-label">Growth Score ≥
