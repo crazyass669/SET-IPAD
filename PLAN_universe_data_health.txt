@@ -1,0 +1,287 @@
+========================================================================
+ แผนระยะยาว: หุ้นเข้าใหม่/ถูกถอด + ฐานข้อมูล + แจ้งเตือนแหล่งข้อมูลพัง
+ อัพเดท: 2026-07-18
+========================================================================
+
+########################################################################
+ ส่วนที่ 1 — สถานะปัจจุบัน: หุ้นเข้าใหม่/ออกจากตลาด แต่ละ universe
+########################################################################
+
+┌─ 1.1 หุ้นไทย (SET) ────────────────────────────────────────────────
+  หุ้นเข้าใหม่: อัตโนมัติ — ทุกครั้งที่ Full Refresh (หรือ Auto บน GitHub
+    Actions) ระบบดาวน์โหลด listedCompanies_en_US.xls จาก SET.or.th ใหม่
+    (set_data_fetcher.py:_try_download_xls) หุ้น IPO ใหม่จึงเข้ามาเอง
+    ถ้าดาวน์โหลดพัง → restore ไฟล์ backup เดิมอัตโนมัติ (ไม่พัง แค่ไม่ได้ของใหม่)
+  หุ้นถูกถอด: ไม่ลบจาก set_prices.db (เก็บไว้กัน survivorship bias สำหรับ
+    backtest) แต่ฝั่งงบการเงิน/Screener+ มีตัวกรอง "ราคาไม่ขยับเกิน 180 วัน
+    = แขวน SP/เพิกถอน" (_FIN_UNIVERSE_STALE_DAYS ใน app.py) ตัดออกให้เอง
+  ปุ่มเช็คแยก: ❌ ยังไม่มี — เกิดเงียบๆ ใน Full Refresh ไม่มีรายงาน diff
+    ว่าตัวไหนเพิ่งเข้า/เพิ่งหาย   ← งาน 2 ในแผน
+
+┌─ 1.2 หุ้น DR / DRx ─────────────────────────────────────────────────
+  ปุ่มเช็ค: ✅ มีแล้ว — หน้า DR/DRx ปุ่ม "🔍 เช็คหุ้นใหม่/ถูกถอดจาก SET.or.th"
+    + เช็คอัตโนมัติตอนเปิดหน้า DR + ขั้นที่ 1 ของ update_financials.py
+    (sync_dr_universe: derive yf ticker + ตรวจกับ Yahoo แล้วเพิ่มเข้า universe)
+  จุดอ่อนเดียว: DR ที่ derive ticker ไม่ได้ ต้องเพิ่มมือใน _DR_STATIC
+    (sources/dr_universe.py) — ปุ่มเช็คแยกให้แล้วว่าตัวไหน "ต้องเพิ่มจริง"
+
+┌─ 1.3 หุ้น US/HK ทั้งตลาด (mirror Finnomena — ใช้ใน Screener+/หน้างบ) ──
+  หุ้นเข้าใหม่: กึ่งอัตโนมัติ — mirror_finnomena.py ดึงรายชื่อสดจาก
+    Finnomena /stock/list ทุกครั้งที่รัน หุ้น IPO ใหม่จึงเข้าเมื่อรันรอบถัดไป
+    (โหมดธรรมดา = เติมเฉพาะตัวใหม่/ช่องว่าง เร็ว · force = refresh ทั้งตลาด)
+  หุ้นถูกถอด: heuristic ฝั่งเรา — build_snapshot ตัดตัวที่ไม่มีงวด valuation
+    หรือรายได้/กำไรใหม่ภายใน 400 วัน (เคส SBNY พิสูจน์แล้วว่าทำงาน)
+  ปุ่มเช็ค: ❌ ไม่มีใน UI — ต้องรันคำสั่งเอง (python mirror_finnomena.py)
+    ← งาน 2 ในแผน
+
+┌─ 1.4 สมาชิกดัชนี US (S&P500 / DOW / NDX — ใช้ใน heatmap US) ─────────
+  sources/us_index_membership.py (ใหม่) ดึง constituents สดจาก Wikipedia
+  เทียบ/อัพเดท data/us_index_membership.json — แนวเดียวกับปุ่มเช็ค DR
+  (ยังไม่มีปุ่มใน UI เช่นกัน ← รวมใน งาน 2)
+
+########################################################################
+ ส่วนที่ 2 — เงื่อนไข "เข้า/ออก" ของงบการเงิน อยู่ที่ Finnomena หรือไม่?
+########################################################################
+
+คำตอบสั้น: เงื่อนไข "เข้า" อยู่ที่ Finnomena · เงื่อนไข "ออก" อยู่ฝั่งเรา
+
+  เข้า (มีงบให้ดึง):
+    - หุ้นไทย/US/HK ต้องอยู่ใน /stock/list ของ Finnomena → ได้งบไตรมาส 16 ปี
+    - Yahoo เป็นแหล่งคู่ขนาน (ทุกตลาด รวมญี่ปุ่น/ยุโรปที่ Finnomena ไม่มี ~5 ปี)
+    - SET.or.th เฉพาะหุ้นไทย (งบทางการ ใช้ cross-check)
+  ออก (delist): Finnomena "ไม่แจ้ง" ว่าหุ้นถูกถอด (บางตัวยังปล่อยราคา OTC ต่อ
+    เช่น SBNY) → ระบบเราตัดสินเองด้วย 2 กติกา:
+    - mirror US/HK: ไม่มีงบ/valuation ใหม่ใน 400 วัน = ถือว่า delisted
+    - หุ้นไทย: ราคาไม่ขยับ 180 วัน = แขวน SP/เพิกถอน ตัดจาก universe งบ
+  ข้อมูลเก่าไม่หาย: ทุกการ sync เป็นการ merge — หุ้นที่ถูกถอดยังมีงบเก่าใน
+    financials.db ให้ backtest ใช้ต่อ (ตั้งใจให้เป็นแบบนี้)
+
+########################################################################
+ ส่วนที่ 3 — รอบอัพเดทงบการเงินทั้งหมด (สรุปจากคู่มือ ส่วนที่ 5)
+########################################################################
+
+  หลังงบไตรมาส (ก.พ./พ.ค./ส.ค./พ.ย.):
+      python update_financials.py     ← ครบสุดในคำสั่งเดียว:
+      เช็ค DR ใหม่ → ไทย ~930 ตัว → DR ~283 ตัว → US/HK ที่ค้นบ่อย → snapshot
+  ไตรมาสละครั้ง (กลางคืน): python mirror_finnomena.py force + build_snapshot.py
+  รายเดือน: วาง Table_PE/PBV.xls + ปุ่มอัพเดทหน้า Valuation (มีเตือนวันที่ 10)
+  ทุกวัน: Quick Update / GitHub Actions 3 รอบ (ราคา RS flow short NVDR insider)
+
+########################################################################
+ ส่วนที่ 4 — ฐานข้อมูล/ไฟล์ที่ SET Dashboard ต้องใช้ (inventory)
+########################################################################
+
+  SQLite (3 ตัว):
+    set_prices.db     ราคาย้อนหลัง 10 ปี + หุ้น delisted (backtest) · มี backups/
+    financials.db     งบการเงิน 3 แหล่ง + mirror FINN: ~630MB · LOCAL-ONLY
+                      สำรองอัตโนมัติ financials_backups/ (เก็บ 3 ชุดล่าสุด)
+    sec_filings.db    insider / ผู้ถือหุ้นใหญ่ (แบบ 59 / major changes)
+
+  JSON หลัก (โฟลเดอร์ราก — server ใช้):
+    set_data.json (+ set_data_backup.json fallback อัตโนมัติ), dr_cache.json,
+    dr_universe_auto.json, indices_cache.json, market_flow_data.json,
+    bond_flow_data.json, s50_flow_data.json, short_sales_data.json,
+    nvdr_data.json, set_market_stats.json, mirror_names.json,
+    dr_descriptions.json, rotation_state.json, set_history.json
+
+  data/ (bake สำหรับเว็บมือถือ GitHub Pages):
+    set_data.json, dr_data.json, dr_descriptions.json, breadth_*.json,
+    insider_trades_*.json, major_changes_*.json, market_flow.json,
+    short_sales.json, nvdr_data.json, indices_data.json, market_stats.json,
+    stock_valuation_stats.json, financials_analytics_yahoo.json,
+    us_index_membership.json, us_heatmap_mktcap_cache.json, flow_signals.json
+
+  ไฟล์ input มือ: Table_PE.xls + Table_PBV.xls (SET), listedCompanies_en_US.xls
+    (โหลดอัตโนมัติ), S50 Futures Data.xlsx
+
+########################################################################
+ ส่วนที่ 5 — แหล่งข้อมูลภายนอก × ความเสี่ยง × ที่มีอยู่แล้ว
+########################################################################
+
+  แหล่ง          ใช้ทำอะไร                  เสี่ยง   fallback ปัจจุบัน
+  ------------- -------------------------- ------ ---------------------------
+  SET.or.th     รายชื่อหุ้น/ราคา/short/NVDR  กลาง   backup xls + restore อัตโนมัติ
+  Yahoo         ราคา DR + งบละเอียด + desc  กลาง   retry/batch มีอยู่
+  Finnomena ★   งบไตรมาส 16 ปี TH/US/HK    สูงสุด  ข้อมูลเก่าอยู่ใน DB ถาวร (merge)
+                (API ไม่ทางการ)                    แต่ "ไม่มีแหล่งทดแทน" ถ้าปิด
+  TradingView   ดัชนีกลุ่ม (indices)         กลาง   retry รอบสองทีละตัว
+  siamchart     capital flow                กลาง   fallback → SET API ทางการ ✅
+  Wikipedia     สมาชิกดัชนี US              ต่ำ    ไฟล์ local เดิมใช้ต่อได้
+  Google Trans. แปลคำอธิบายบริษัท           ต่ำ    cache 180 วัน / โชว์ EN แทน
+
+  ที่มีอยู่แล้ว (ดีอยู่): merge-ไม่ลบข้อมูลเก่า · backup อัตโนมัติ 3 ชั้น
+    (xls / set_data_backup / financials_backups) · /healthz endpoint ·
+    stale-flag (PE/DY ค้าง >190 วัน = ไม่โชว์เลขหลอก) · พักสุ่มกันแบน mirror
+  ที่ยังขาด: ❌ ไม่มีแจ้งเตือน proactive เวลาแหล่งไหนดึงไม่ได้/ข้อมูลค้าง —
+    ตอนนี้รู้ก็ต่อเมื่อเปิดดูแล้วสังเกตเองว่าเลขเก่า
+
+########################################################################
+ ส่วนที่ 6 — แผนงาน (เรียงตามความคุ้ม ทำทีละงานได้)
+########################################################################
+
+[งาน 1] 🩺 หน้า/ปุ่ม "Data Health" กลาง   ★ แนะนำทำก่อนสุด   [เสร็จ 2026-07-18]
+  ทำแล้ว: เมนู "🩺 Data Health" ใหม่ (nav button + page-data-health) —
+    /api/data-health (mtime/meta 12 แหล่ง จัดกลุ่ม 5 หมวด เขียว/เหลือง/แดง)
+    + /api/data-health-ping (ยิงทดสอบ SET.or.th/Yahoo/Finnomena/TradingView จริง)
+    + badge แดงบนปุ่ม nav (จำนวนรายการสถานะแดง) โหลดตอนเปิดแอป
+    ทดสอบผ่าน browser จริงแล้ว (Playwright, server แยกพอร์ตทดสอบ) — เจอ 1 red
+    จริง (Mirror Finnomena ยังไม่เคยรันผ่าน meta key นี้) ไม่มี JS error
+  ยังไม่ทำ: งาน 3 (แจ้งเตือนเชิงรุกเมื่อสคริปต์ล้ม),
+    งาน 4 (แผนสำรอง Finnomena), งาน 5 (delisted log ถาวร)
+  แก้บั๊กระหว่างทำงาน 2: finnomena_mirror_last meta เก็บเป็น JSON string
+    {"at":"YYYY-MM-DD HH:MM",...} ไม่ใช่ plain datetime — _dh_parse เดิมอ่านไม่ออก
+    ทำให้ mirror ขึ้นแดงผิดๆ ทั้งที่รันจริงเมื่อ 6 วันก่อน แก้แล้ว (แกะ JSON ก่อน parse)
+
+  เมนูเดียวเห็นทุกแหล่ง: ไฟล์/DB แต่ละตัวอัพเดทล่าสุดเมื่อไร + เกณฑ์ความสด
+  (เขียว/เหลือง/แดง เช่น set_data ≤1 วัน, short/NVDR ≤3 วัน, indices ≤1 วัน,
+  งบ ≤100 วันหลังฤดูงบ, mirror ≤120 วัน, PE ตลาด ≤40 วัน)
+  + ปุ่ม "ping แหล่งข้อมูล" ยิงทดสอบ SET/Yahoo/Finnomena/TradingView ทีละ 1
+  request แล้วรายงานว่าตัวไหนตอบ/ตาย
+  + badge แดงบน header ของแอปเมื่อมีอะไรเกินเกณฑ์ (แบบเดียวกับเตือน P/E วันที่ 10)
+  Endpoint ใหม่ /api/data-health ใน app.py — ข้อมูล mtime + last date ใน DB
+  มีครบอยู่แล้ว งานส่วนใหญ่คือรวมให้อยู่จอเดียว
+
+[งาน 2] 🔍 ปุ่ม "เช็คหุ้นเข้า/ออก" แบบรวมทุก universe   [เสร็จ 2026-07-18]
+  ทำแล้ว: การ์ด "🔍 เช็คหุ้นเข้าใหม่/ถูกถอด (รวมทุก universe)" ในหน้า Data Health
+  (ก) หุ้นไทย — /api/set-universe-check-updates: โหลด listedCompanies_en_US.xls
+      สดเทียบ _financials_universe() (กรอง DW/DR series/ดัชนีกลุ่ม/หุ้นแขวนถาวร
+      ออกแล้ว) → รายงานเข้าใหม่/หายไปพร้อมชื่อ+ตลาด ทดสอบจริงเจอ BANPUU/WELL
+      ใหม่ + BANPU หายไป (คาดว่าเปลี่ยนสัญลักษณ์ — ต้องรีวิวด้วยตา ไม่แก้อัตโนมัติ)
+  (ข) mirror US/HK — /api/mirror-check-updates (เทียบ mirror_candidates() สดกับ
+      symbol ใน financials.db namespace FINN:) + /api/mirror-sync-new (ปุ่ม
+      "📥 ดึงเฉพาะตัวใหม่" โผล่เมื่อเจอตัวใหม่ — เรียก mirror_finnomena() แบบไม่ force
+      จำกัดเฉพาะตลาดที่มีตัวใหม่) ทดสอบจริงเจอ US 46 + HK 1 ตัวใหม่ ไม่ error
+  (ค) ดัชนี US — มีอยู่แล้วจริง (checkUSIndexUpdates ในหน้า Heatmap US ก่อนงาน
+      นี้เริ่ม) แค่ใส่ลิงก์จาก Data Health ไปหาแทนการสร้างซ้ำ
+  ยังไม่ทำ: delisted_log.json บันทึกประวัติเข้า/ออกถาวร (ยกไปงาน 5 — ตอนนี้
+    แค่รายงานสด ไม่มี log สะสม)
+
+[งาน 3] 🔔 แจ้งเตือนอัตโนมัติเมื่อดึงพัง/ข้อมูลค้าง   [ระดับ 1 เสร็จ 2026-07-18]
+  ทำแล้ว: core/run_log.py (record_run/read_status — เขียน/อ่าน logs/update_status.json
+  เก็บผลล่าสุดต่อกลไก ไม่ใช่ log สะสมยาว) เรียกจาก 4 จุด:
+    - _run_quick / _run_refresh ใน app.py (Quick Update / Full Refresh ปุ่มในแอป)
+    - update_financials.py (ครอบทั้งสคริปต์ด้วย try/except, บันทึกแล้ว re-raise
+      กัน exit code เพี้ยนสำหรับคนที่เช็คผ่าน $?/scheduler)
+    - mirror_finnomena.py (เหมือนกัน)
+  /api/update-status ให้ {all, failed} — banner ใหม่ #run-fail-banner (แดง,
+  ปิดได้แบบ dq-banner เดิม) โผล่ตอนเปิดแอปถ้ารอบล่าสุดของกลไกไหน ok=false
+  ทดสอบจริงผ่าน Playwright แล้ว (จำลอง failure record → banner ขึ้นถูกต้อง
+  พร้อม label+เวลา+ข้อความ error, ปิด/เปิดใหม่ได้, ไม่มี JS error)
+  จงใจไม่ครอบ GitHub Actions (run_static_update.py) เพราะ logs/ เป็น local-only
+  (.gitignore) ไม่ตามไปที่ CI runner — ใช้ GitHub email แจ้งเตือน workflow ล้มแทน
+  (มีในตัวอยู่แล้ว) ผู้ใช้ควรเช็คเอง: GitHub.com -> รูปโปรไฟล์ -> Settings ->
+  Notifications -> Actions -> ต้องติ๊ก "Send notifications for failed workflows only"
+  (หรือทุก workflow) และอีเมลที่ผูกกับบัญชี GitHub ต้องเป็น joekingzy@gmail.com
+  หรือเมลที่เช็คอยู่จริง — ยังไม่ได้ตรวจสอบให้ (ต้องล็อกอิน GitHub เอง)
+  ระดับ 2 (ยังไม่ทำ — ถ้าอยากได้ถึงมือถือ): ยิง ntfy.sh หรือ LINE Messaging API
+    หนึ่ง request ตอนสคริปต์ล้ม — เพิ่มใน core/run_log.record_run() ได้เลยตอนนี้
+    มีจุดเดียวที่ทุกกลไกเรียกร่วมกันแล้ว (เพิ่มทีเดียวครอบคลุมทุกจุด)
+
+[งาน 4] 🛟 แผนสำรอง Finnomena (ความเสี่ยงใหญ่สุดของระบบ)   [เสร็จ 2026-07-18]
+  หลักคิด: ข้อมูล 16 ปีที่ mirror มาแล้ว "เป็นของเราแล้ว" อยู่ใน financials.db
+  ถาวร — ถ้า Finnomena ปิด API วันพรุ่งนี้ ประวัติไม่หาย แค่ไม่มีงวดใหม่เติม
+  (ก) [เสร็จ] backup_financials_offsite.py + .bat — คัดลอก financials.db ไป
+      ปลายทางที่ระบุ (external drive/cloud sync folder) เก็บ 3 ชุดล่าสุด
+      อัตโนมัติ + เช็ค write permission ก่อนเริ่มคัดลอก (กัน error กลางทางหลัง
+      รอนาน) + บันทึกผลผ่าน core/run_log.py (ใช้กลไกเดียวกับงาน 3 — ถ้าสำรอง
+      ล้มเหลวก็ขึ้น banner แดงเหมือนกัน) ทดสอบ logic แล้วด้วยไฟล์ปลอม (ไม่คัดลอก
+      DB จริง 630MB ในการทดสอบ — logic ตรงไปตรงมา ตรวจโค้ดแล้วมั่นใจ)
+      เพิ่ม item ใหม่ในหน้า Data Health: "สำรอง financials.db นอกเครื่อง"
+      (warn 35 วัน / red 60 วัน) ตอนนี้ขึ้นแดงจริง เพราะยังไม่เคยรัน — ผู้ใช้ต้อง
+      รันเองครั้งแรก (ระบุปลายทางเอง — ไม่มีข้อมูลว่า external drive อยู่ที่ไหน)
+  (ข) [เสร็จ] เพิ่ม "ส่วนที่ 11" ในคู่มือ-อัพเดทข้อมูล.txt — degrade matrix เต็ม
+      (งบรายไตรมาส/รายปี/กราฟเทรนด์/Screener+/Cash Cycle/DR ทุกตลาด/mirror
+      นอกพอร์ต) สรุป: ไม่มีจุดไหนพังจนใช้งานไม่ได้ ระบบ fallback อัตโนมัติอยู่แล้ว
+      เกือบทุกจุด ยกเว้นป้าย "ข้อมูลถึง Qx" ใน Screener+ ที่ยังไม่ได้ทำ (ทำต่อได้)
+  (ค) [เสร็จ] detector ใน /api/data-health: mirror_finnomena() ตอนนี้บันทึก
+      total+force เพิ่มใน meta — ถ้ารอบ force ล่าสุด ok=0 ทั้งที่ total>50 ตัว
+      = บังคับ status แดงพร้อมข้อความเจาะจง "Finnomena อาจเปลี่ยน/ปิด API"
+      (ต่างจากไม่มีงวดใหม่ตามฤดูกาลปกติ) ง่ายกว่าแผนเดิม (ที่ต้องการเช็ค "0 งวด
+      ใหม่ติดกัน 2 รอบ") แต่ตรวจจับสัญญาณเดียวกันได้จากรัน force ครั้งเดียว
+
+[งาน 5] 📜 delisted log ถาวร (เสริม backtest)   [เสร็จ 2026-07-18]
+  ทำแล้ว: core/delisted_log.py (record_delisted/read_log — upsert ตาม (market,
+  symbol), เก็บ detected_at ของ "ครั้งแรกที่เจอ" ไว้ถาวร ไม่ทับซ้ำทุกรอบที่ตัว
+  เดิมยังถูกกรองอยู่ — แค่อัพเดต last_seen/reason) เก็บที่ delisted_log.json
+  (root, gitignore แล้วเหมือน rotation_state.json/dr_universe_auto.json)
+
+  เรียกจาก 2 จุดที่เดิม "กรองเงียบๆ" อยู่แล้ว:
+    - app.py:_financials_universe() — หุ้นไทยที่ราคาไม่ขยับเกิน 180 วัน
+    - sources/factor_snapshot.py:build_mirror_snapshot() — mirror US/HK ที่ไม่มี
+      งวด valuation/งบใหม่เกิน 400 วัน (เคส SBNY-style)
+  ทั้งคู่บันทึก reason + last_seen (วันที่ราคา/งบล่าสุดก่อนหยุด) ไปด้วย ไม่ใช่
+  แค่วันที่ตรวจพบเฉยๆ — ให้ backtest รู้ทั้ง "ตายเมื่อไหร่" และ "ตรวจพบเมื่อไหร่"
+
+  ทดสอบจริงผ่าน /api/set-universe-check-updates (เรียก _financials_universe()
+  จริง) — ได้ 276 รายการหุ้นไทยที่ถูกบันทึกถูกต้อง (มี reason+last_seen ครบ,
+  upsert idempotent ยืนยันแล้วว่า detected_at ไม่เปลี่ยนเมื่อเรียกซ้ำ)
+  เพิ่ม tracked_delisted_count ใน response ให้ UI โชว์ "บันทึกไว้แล้ว N ตัว" ใน
+  การ์ดเช็คหุ้นเข้าใหม่/ถูกถอดของหน้า Data Health ด้วย (ปิด loop ให้เห็นผลใน UI)
+
+  ยังไม่ทำ: ยังไม่ได้ผูกเข้ากับ backtest_screener.py จริง (ตอนนี้เป็นแค่ log
+  เก็บไว้ — การใช้งานจริงในสูตร backtest เป็นงานแยกที่ยังไม่ได้ทำ ถ้าต้องการ
+  ให้บอกได้ ขอบเขตคือ point-in-time membership filter ในสคริปต์ backtest)
+
+[งาน 6] 🩺 อุดช่องโหว่ Data Health รอบสอง   [เสร็จ 2026-07-21]
+  ตรวจพบว่า /api/data-health เดิมเช็ค 18 รายการ แต่ยังไม่ครบเทียบ inventory ส่วนที่ 4
+  ตอนนี้เป็น 31 รายการ — ที่เพิ่ม:
+  (1) เว็บมือถือ (bake data/*.json) — เดิมไม่มีการเช็คเลยสักไฟล์ ถ้า Actions ตาย
+      เงียบๆ หน้านี้จะเขียวหมดทั้งที่มือถือเสิร์ฟข้อมูลค้าง · item "static_bake" ใช้
+      mtime ที่ "เก่าที่สุด" ใน 8 ไฟล์หลัก (_dh_oldest_mtime) ไม่ใช่ไฟล์ใหม่สุด —
+      ไฟล์ตัวเดียวตกรอบจะไม่ถูกกลบ + โชว์ชื่อไฟล์ที่เก่าสุดเสมอ
+  (2) s50_flow + bond_flow (30/96 ชม. เท่า market_flow) — เดิมใช้จริงแต่ไม่มีใครเฝ้า
+  (3) run_static_update.py เรียก run_log.record_run("static_bake") แล้ว ผ่าน atexit
+      (สคริปต์เป็น top-level ยาว ไม่มี main() — atexit จับได้ทั้ง exception และ
+      sys.exit(1)) → ขึ้น banner แดงเหมือนกลไกอื่น + item "static_bake_run"
+      ยังคงไม่ครอบฝั่ง CI (logs/ เป็น local-only) ตามเหตุผลเดิมในงาน 3
+  (4) set_history, financials_analytics_yahoo, stock_valuation_stats, mirror_names,
+      dr_universe_auto, dr_descriptions
+  (5) หมวดใหม่ "คุณภาพข้อมูล" — เปิดไฟล์อ่านจริง ไม่ใช่แค่ mtime (ไฟล์ที่ถูกเขียนทับ
+      ด้วย payload ว่างเดิมขึ้นเขียวสนิท): จำนวนหุ้นใน set_data.json (<800 warn,
+      <500 red) · ขนาด+จำนวนหุ้นใน data/set_data.json · วันล่าสุดในไฟล์ breadth
+  (6) ping เพิ่ม siamchart (แหล่งหลัก Capital Flow) — ต้องส่ง Referer + ข้าม cert
+      verify ให้ตรงกับ _fetch_flow_siamchart ไม่งั้นขึ้นแดงหลอกทั้งที่ดึงได้จริง
+
+  ทดสอบแล้ว: /api/data-health คืน 31 items (30 ok + 1 na) ไม่ error ·
+  /api/data-health-ping ทั้ง 5 แหล่งตอบ 200 (siamchart 224ms) ·
+  จำลอง record static_bake ล้มเหลว → item เป็นแดง + โผล่ใน /api/update-status
+  failed (banner) ถูกต้อง แล้วคืนค่า logs/update_status.json เดิม
+  ไม่ต้องแก้ dashboard.js ฝั่งตาราง — render ตาม category แบบ generic อยู่แล้ว
+
+[งาน 7] 🇭🇰 ปุ่มเช็ค/sync ดัชนี HK ใน UI (ให้สมมาตรกับ US)   [เสร็จ 2026-07-21]
+  เจอตอนไล่ตรวจว่าโน้ต "ลำดับการกดอัพเดท" ตกหล่นปุ่มไหนบ้าง: /api/hk-index-check-updates
+  + /api/hk-index-sync มีครบใน app.py ตั้งแต่แรก (response shape เหมือน US ทุก field)
+  แต่ไม่เคยมีปุ่มเรียกใน UI — ฝั่ง US มีทั้ง 2 ปุ่ม
+  ทำแล้ว: แถว #fin-hk-idx-actions (🔍 เช็ค + 🔄 ดึงเฉพาะที่ขาด/เก่า) ในหน้างบการเงิน
+    แท็บต่างประเทศ · checkHKIndexUpdates() + startHKIndexSync() ใน dashboard.js
+  รวมโค้ดที่ซ้ำ: _renderUSIndexDiff เดิม -> _renderIndexDiff(boxId, keys, labels, d)
+    ใช้ร่วมกันทั้ง 2 ตลาด (US เรียกผ่าน wrapper เดิม ไม่กระทบผู้เรียกอื่น)
+
+  แก้บั๊กที่เจอระหว่างทาง 3 จุด (มีอยู่เดิม ไม่ได้เกิดจากงานนี้):
+  (ก) แถวปุ่มเช็ค/sync ดัชนี US โผล่ค้างตอนสลับไปแท็บ HK (ไม่มี logic ซ่อน) — ตอนนี้
+      _finMirBrowse() สลับ #fin-us-idx-actions/#fin-hk-idx-actions ให้ตามตลาด
+      + เคลียร์ผลเช็คของตลาดเดิมไม่ให้ค้างสับสน
+  (ข) idxRow.style.display = '' (เซ็ตค่าว่าง = ลบ inline display ทิ้ง) ทำให้แถวกรอง
+      ดัชนีตกกลับเป็น block ตาม default ของ <div> ปุ่มเรียงตกบรรทัดหลังสลับ HK->US
+      แก้เป็น 'flex' ตรงๆ (ยืนยันด้วย Playwright: สูง 26px -> 26px เท่าเดิม)
+  (ค) 3 จุดที่เซ็ต _finMirMarket + toggle class เองซ้ำๆ (_hkHmGoFin, _tsGoFin,
+      _tsGoDividends) ไม่ได้อัพเดทแถวปุ่มที่เพิ่มมาทีหลัง — รวมเป็น
+      _finMirSelectMarket(mk) เรียก _finMirBrowse ทางเดียว จะไม่หลุดอีกเวลาเพิ่มของใหม่
+
+  ทดสอบจริงผ่าน Playwright: สลับแท็บ US<->HK แถวปุ่มถูกต้องทุกทิศทาง · กด 🔍 เช็ค HK
+  ยิง Wikipedia สดสำเร็จ (ตอบ "ไฟล์ local ตรงกับ Wikipedia อยู่แล้ว") ปุ่มกลับมากดได้
+  · _finMirSelectMarket('HK') สลับ UI ครบ · ไม่มี JS error
+
+  หมายเหตุ: ยังไม่ได้ทำปุ่มกรองดัชนี HSI/HSCEI/HSTECH ในรายการ browse (ฝั่ง US มี
+  S&P500/Dow/NDX) — คนละงานกับที่ตกลงไว้ ทำต่อได้ถ้าต้องการ
+
+  ทุกงานในแผนนี้เสร็จครบแล้ว (งาน 1-7) — เหลือแค่ 2 action ที่ต้องทำเอง ↓
+
+  *** Action ที่ต้องทำเอง (ไม่ใช่โค้ด) ***
+  1. รัน python backup_financials_offsite.py <ปลายทางจริงของคุณ> ครั้งแรก
+     (เช่น external drive หรือโฟลเดอร์ Google Drive/OneDrive ที่ sync อยู่แล้ว)
+     — หน้า Data Health จะขึ้นแดงเตือนจนกว่าจะรันครั้งแรก
+  2. เช็ค GitHub.com -> โปรไฟล์ -> Settings -> Notifications -> Actions
+     ติ๊ก "Send notifications for failed workflows" และยืนยันอีเมลที่ผูกบัญชี
+     เป็น joekingzy@gmail.com (หรือเมลที่เช็คจริง) — ดูรายละเอียดในงาน 3
+========================================================================

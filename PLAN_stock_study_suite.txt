@@ -1,0 +1,357 @@
+================================================================================
+PLAN: Stock Study Suite — 6 เมนูใหม่สำหรับ "อ่านงบ + ศึกษาหุ้นรายตัว"
+สร้าง: 2026-07-20
+สถานะ: ร่าง (ยังไม่เริ่มลงมือ)
+================================================================================
+
+ที่มา: รีวิวเมนูทั้งหมด 34 เมนูแล้ว ฝั่งเทคนิคอล/market structure ครบมาก
+ฝั่งอ่านงบมีข้อมูลลึก (Finnomena 16 ปี + Yahoo + SET) แต่ยังขาดมุมมอง
+"หุ้นรายตัว" และ "คุณภาพงบเชิงสกอร์" — แผนนี้เติม 6 ชิ้นที่ขาด
+
+ลำดับแนะนำ (ตามต้นทุน/ผลตอบแทน + dependency):
+  #2 F-Score/Z-Score  →  #3 Peer Compare  →  #1 Tearsheet เฟส A-B
+  →  #5 Dividend History  →  #4 Calendar  →  #1 เฟส C  →  #6 DCF (optional)
+
+เหตุผลเรียงแบบนี้:
+- #2 ต้นทุนต่ำสุด (ข้อมูลครบแล้ว แค่เพิ่มสูตรใน factor pipeline)
+- #3 เกือบเป็นงาน frontend ล้วน (factor_snapshot มีทุกอย่างแล้ว)
+- #1 Tearsheet ควรมาหลัง #2/#3 เพื่อฝัง card F-Score + ปุ่มเทียบเพื่อนได้เลย
+- #5 ต้องทำก่อน #4 เพราะใช้ dividend events ชุดเดียวกัน (fetch ครั้งเดียว)
+- #6 ทำท้ายสุด เพราะพึ่ง FCF/factors ที่นิ่งแล้ว และเป็น optional
+
+ข้อมูลที่ยืนยันแล้วจากการสำรวจ (2026-07-20):
+- financials.db: sources = finnomena_q (32,567), set (1,108), yahoo (1,185), yahoo_q (774)
+- payload มี income/balance/cashflow เป็น dict {field: {date: value}}
+- Finnomena_q มี: Total Revenue, Gross Profit, Net Income, SG&A, Basic EPS /
+  Stockholders Equity, Cash, Total Assets, Total Debt / OCF, Financing CF, D&A
+  → ไม่มี Current Assets/Liabilities, ไม่มี Dividends Paid, ไม่มี shares
+- Yahoo annual มีครบกว่ามาก: Current Assets, Current Liabilities, Retained
+  Earnings, EBIT, EBITDA, Working Capital, Total Liabilities Net Minority
+  Interest, Ordinary Shares Number, Basic Average Shares, Long Term Debt,
+  Cash Dividends Paid, Free Cash Flow, Capital Expenditure (ย้อน ~4 ปี)
+- factor_snapshot.factors มี 60+ ตัวแล้ว รวม: roa, roe, gross_margin,
+  net_margin, de_ratio, ocf_gt_ni_latest, ocf_ni_ratio, shares_chg_yoy,
+  div_yield, div_growth_streak_y, dividend_coverage, fcf, net_cash,
+  pe/pbv/ps_percentile, growth_score, interest_coverage, cash_cycle ฯลฯ
+- ตาราง: financials, factor_snapshot (TH), factor_snapshot_mirror +
+  factor_mirror (US/HK), meta, search_log
+
+กติกาที่ต้องยึดทุกงาน:
+- financials.db + ของที่ derive จากมัน = local-only ห้ามขึ้น GitHub
+  (.gitignore กันไว้แล้ว — ไฟล์/DB ใหม่ที่เก็บข้อมูลงบ/ปันผล ต้องเข้า
+  .gitignore ด้วยเสมอ)
+- namespace: หุ้นไทย = symbol ตรง, US/HK ต้องส่ง market กำกับเสมอ
+  (บทเรียนจาก FINN: namespace ใน PLAN_screener_financials.txt)
+- หน้า static (GitHub Pages) ต้อง degrade สวย ๆ เมื่อไม่มี local DB
+
+
+================================================================================
+งาน #1: 📋 Tearsheet — หุ้น 1 ตัว ครบในหน้าเดียว
+================================================================================
+(ร่างละเอียดคุยไว้แล้ว สรุปย่อ + จุดผูกกับงานอื่น)
+
+แนวคิด: เมนูใหม่ 📋 Tearsheet + ปุ่ม "📋 ดูสรุปเต็ม" ใน stock popup ทุกหน้า
+ทุก section โหลด async แยกกัน — ไม่มีข้อมูลก็ยุบ section ไม่ block ทั้งหน้า
+
+Layout:
+  1. Header Card — ชื่อ/sector/คำอธิบายธุรกิจ, ราคา + %วัน/สัปดาห์/เดือน/ปี,
+     badge แถบ: RS · Stage · %จาก 52W High · Momentum · EMA50/200 · ATR%,
+     sparkline 1 ปี + ปุ่มเปิด chart modal เต็ม
+     แหล่ง: set_data.json / us,hk-index-metrics / api/history / live-price
+  2. Valuation Snapshot — PE/PBV/PS/DivYield เทียบ band ตัวเอง (percentile
+     5 ปี) → ป้าย ถูกกว่าปกติ/ปกติ/แพงกว่าปกติ + แถว median ของ sector
+     แหล่ง: /api/band/<sym> + /api/stock-valuation-stats (มีแล้ว)
+  3. งบย่อ 30 วินาที — ตาราง 8 ไตรมาส (รายได้/กำไร/margin/EPS + สี YoY),
+     มินิบาร์รายปี 10 ปี, ROE / D-E / Gross Margin / FCF Yield / Div Coverage
+     + [จองที่] card F-Score / Z-Score จากงาน #2
+     แหล่ง: /api/financials(-full) + factor_snapshot — local-only
+  4. เงินทุน & คนวงใน (ไทยเท่านั้น) — insider 90 วัน / NVDR 20 วัน /
+     short trend + badge 🎯 ถ้าติด Confluence
+     แหล่ง: /api/insider-trades (เช็คว่ามี filter symbol ไหม — ถ้าไม่มีให้เพิ่ม),
+     /api/nvdr/<sym>, /api/short-sales/<sym>
+  5. ฤดูกาล & สถิติ — reuse กล่อง "📊 สถิติระยะยาว" จาก chart modal
+     แหล่ง: /api/price-analytics/<sym>
+  6. ข่าว & เอกสาร — ข่าว 5 หัวข้อ (/api/stock-news) + ลิงก์ 56-1/10-K/HKEX
+     (reuse ตัวสร้างลิงก์หน้า 📑 รายงานทางการ) + ปุ่มคัดลอก prompt 13 ข้อ
+     ที่เติมชื่อหุ้นให้อัตโนมัติ
+  7. Action Bar — ⭐ Watchlist · 📈 กราฟเต็ม · 📰 ข่าว · 📑 เอกสาร ·
+     🆚 เทียบเพื่อน (→ งาน #3) · 💵 ปันผล (→ งาน #5) · 🎯 มูลค่า (→ งาน #6)
+
+Backend ใหม่: endpoint เดียว /api/tearsheet/<market>/<symbol> รวมของเบา
+(header + badges + valuation) ใน call เดียว — ส่วนหนักให้หน้า async เอง
+
+เฟส: A โครงหน้า+Header+Valuation+ปุ่มจาก popup / B งบย่อ+เงินทุน+ฤดูกาล /
+C ข่าว+เอกสาร+ActionBar+responsive
+
+
+================================================================================
+งาน #2: 🩺 Piotroski F-Score + Altman Z-Score
+================================================================================
+เป้าหมาย: สกอร์คุณภาพงบ (0-9) + สกอร์ความเสี่ยงล้มละลาย ให้ทุกหุ้นที่มีงบ
+แสดงเป็น (ก) คอลัมน์+ตัวกรองใน Screener+ (ข) card ใน Tearsheet
+(ค) แถวใน Peer Compare (ง) กล่องในหน้างบการเงิน
+
+--- แหล่งข้อมูล ---
+ใช้ Yahoo annual เป็นหลัก (source='yahoo' ใน financials.db) เพราะมีฟิลด์ครบ
+และ F-Score ต้องการแค่ 2 ปีล่าสุด (Yahoo มี ~4 ปี — พอ)
+Finnomena ใช้ไม่ได้เดี่ยว ๆ: ไม่มี Current Assets/Liabilities และ shares
+fallback: องค์ประกอบไหน Yahoo ไม่มีสำหรับหุ้นนั้น → ข้อนั้น = null และ
+แสดงสกอร์แบบ "x/9 จาก n ข้อที่เช็คได้" (อย่าเงียบ ๆ นับเป็น 0)
+
+--- Piotroski F-Score (9 ข้อ, ปีล่าสุด vs ปีก่อน) ---
+Profitability:
+  F1 ROA > 0                    = Net Income / Total Assets
+  F2 CFO > 0                    = Operating Cash Flow
+  F3 ΔROA > 0                   = ROA ปีนี้ > ปีก่อน
+  F4 CFO > Net Income (accrual) — factor ocf_gt_ni_latest มีแล้ว ใช้ cross-check
+Leverage/Liquidity:
+  F5 ΔLeverage ลง               = LT Debt / Total Assets ปีนี้ < ปีก่อน
+                                  (Long Term Debt; ถ้า null ใช้ Total Debt)
+  F6 ΔCurrent Ratio ขึ้น         = Current Assets / Current Liabilities
+  F7 ไม่เพิ่มทุน                 = Ordinary Shares Number ปีนี้ <= ปีก่อน
+                                  (×1.005 กัน rounding; shares_chg_yoy มีแล้ว
+                                  แต่เป็นรายไตรมาส — ใช้ยืนยันกันได้)
+Efficiency:
+  F8 ΔGross Margin ขึ้น          = Gross Profit / Total Revenue
+  F9 ΔAsset Turnover ขึ้น        = Total Revenue / Total Assets
+สี: 8-9 เขียวเข้ม / 6-7 เขียว / 4-5 เหลือง / 0-3 แดง
+
+--- Altman Z-Score ---
+สองสูตรตามประเภทกิจการ:
+  Z (original, บริษัททั่วไปมี market cap):
+    Z = 1.2·WC/TA + 1.4·RE/TA + 3.3·EBIT/TA + 0.6·MktCap/TL + 1.0·Rev/TA
+    เขียว > 2.99 / เทา 1.81-2.99 / แดง < 1.81
+  Z'' (Emerging Market — เหมาะกับ SET/mai และบริการ):
+    Z'' = 6.56·WC/TA + 3.26·RE/TA + 6.72·EBIT/TA + 1.05·BVE/TL
+    เขียว > 2.6 / เทา 1.1-2.6 / แดง < 1.1
+    → default ใช้ Z'' สำหรับหุ้นไทย, Z สำหรับ US; แสดง toggle ทั้งคู่ได้
+ฟิลด์: Working Capital, Retained Earnings, EBIT, Total Assets,
+  Total Liabilities Net Minority Interest — Yahoo annual มีครบ (ยืนยันแล้ว)
+  MktCap จาก set_data.json / metrics ปัจจุบัน, BVE = Stockholders Equity
+
+!! ข้อห้ามสำคัญ: Z-Score ใช้กับกลุ่มการเงินไม่ได้ (ธนาคาร/เงินทุน/ประกัน/
+ลีสซิ่ง เช่น THANI) — เช็ค sector จาก set_data.json → แสดง "—" พร้อม tooltip
+"สูตร Altman ไม่ valid กับสถาบันการเงิน" / F-Score ใช้ได้แต่ F6 (current
+ratio) มักไม่มีข้อมูลของธนาคาร → นับแบบ n ข้อที่เช็คได้
+
+--- Implementation ---
+1. เพิ่มฟังก์ชัน compute_fscore(payload_y_now, payload_y_prev) และ
+   compute_zscore(payload_y, mktcap, sector) ใน services/ (ตามโครงเดิม
+   ของ factor computation)
+2. เก็บผลลง factor_snapshot.factors เพิ่ม key: f_score, f_score_max
+   (จำนวนข้อที่เช็คได้), f_score_detail (bitmap/array 9 ช่อง สำหรับ
+   แสดง breakdown ว่าผ่าน/ตกข้อไหน), z_score, z_variant ('Z'|'Z2'|null)
+   → recompute พร้อมรอบ sync-all เดิม ไม่ต้องมี job ใหม่
+3. Screener+: เพิ่มตัวกรอง "F-Score >= (0-9)" + "Z-Score โซน (เขียว/เทา/แดง)"
+   + คอลัมน์ในตารางผล (มี tooltip breakdown 9 ข้อ)
+4. UI breakdown: กล่อง 9 แถว ✓/✗ พร้อมคำอธิบายภาษาไทยต่อข้อ (ทำครั้งเดียว
+   reuse ทั้ง Screener+ tooltip, Tearsheet card, หน้างบการเงิน)
+5. US/HK: ทำผ่าน factor_mirror ด้วยข้อมูล Yahoo ชุดเดียวกัน (โค้ดเดียว
+   ต่างแค่ mktcap source)
+
+ทดสอบ: เทียบ F-Score ที่คำนวณได้กับเว็บอ้างอิง (เช่น stockanalysis.com)
+สัก 5 หุ้น US ที่มีเฉลย + sanity หุ้นไทยใหญ่ 5 ตัว (PTT, CPALL, ...)
+ระวัง: งบปีของ Yahoo บางตัวมี null เป็นหย่อม ๆ — ข้อไหนขาดข้อมูลต้อง
+รายงานเป็น "เช็คไม่ได้" ไม่ใช่ "ตก"
+
+
+================================================================================
+งาน #3: 🆚 Peer Comparison — เทียบทั้ง sector ในตารางเดียว
+================================================================================
+เป้าหมาย: เลือกหุ้น 1 ตัว (หรือเลือก sector ตรง ๆ) → เห็นเพื่อนร่วมกลุ่ม
+ทุกตัววางเทียบกัน ด้าน valuation / margin / growth / คุณภาพ → ตอบคำถาม
+"ถูกหรือแพงเทียบเพื่อน" ใน 10 วินาที
+
+--- ข้อเท็จจริงที่ทำให้ง่าย ---
+factor_snapshot (TH) + factor_mirror (US/HK) มี factors ครบทุกตัวแล้ว
+sector/industry: หุ้นไทยมีใน set_data.json, US/HK มีใน sector ranks
+→ งานหลักคือ endpoint group-by + หน้าตาราง ไม่มีการคำนวณใหม่
+
+--- Backend ---
+endpoint ใหม่: /api/peer-compare?market=TH&symbol=CPALL
+  หรือ ?market=TH&sector=COMM (เลือก sector ตรง ๆ ไม่ต้องมีหุ้นตั้งต้น)
+ตอบ: [{symbol, name, mktcap, factors...}] ของทุกหุ้นใน sector เดียวกัน
+  + แถว median/mean ของกลุ่ม + count
+ระดับกลุ่ม: หุ้นไทยมี 2 ชั้น sector และ industry → ให้เลือกสลับได้
+  (default: sector; ถ้ากลุ่มเล็กกว่า 4 ตัว auto ขยับขึ้นชั้น industry)
+US/HK: กลุ่มตาม GICS sector ที่มีใน metrics
+
+--- Frontend (หน้าใหม่ 🆚 เทียบเพื่อน หรือ tab ในหน้างบการเงิน) ---
+- ช่องค้นหุ้น + ป้ายตลาด (reuse autocomplete เดิม) หรือ dropdown sector
+- ตาราง: แถว = หุ้น (หุ้นตั้งต้น highlight + pin บนสุด, แถว MEDIAN ถัดมา)
+  คอลัมน์ (สลับชุดได้ 3 preset):
+    [Valuation]  PE · PBV · PS · Div Yield · PEG · pe_percentile ของตัวเอง
+    [คุณภาพ]     ROE · ROA · Gross/Net Margin · D/E · Interest Cov ·
+                 F-Score · Z-Score (จากงาน #2) · OCF/NI
+    [Growth]     rev_cagr · profit_cagr · rev/profit_ttm_yoy · streak ·
+                 growth_score · rule_of_40
+- สีต่อเซลล์แบบ percentile ภายในกลุ่ม (เขียว = ดีสุดในกลุ่ม ไล่ไปแดง)
+  ระวังทิศ: PE/PBV/DE ต่ำ=ดี, ROE/margin สูง=ดี — กำหนดทิศต่อคอลัมน์
+- คลิกหัวคอลัมน์เรียงได้, คลิกหุ้น → stock popup เดิม (+ ปุ่มไป Tearsheet)
+- มุมขวา: scatter mini-chart แกน PE × ROE (หรือเลือกแกนได้) จุด = หุ้น
+  ในกลุ่ม เห็น outlier ทันที — อันนี้ nice-to-have ทำท้าย ๆ ได้
+
+--- จุดผูก ---
+- ปุ่ม "🆚 เทียบเพื่อน" ใน stock popup + Tearsheet Action Bar
+- แถว median sector ใน Tearsheet section 2 ลิงก์มาหน้านี้
+
+ระวัง: กลุ่มการเงิน margin/FCF ตีความต่างจากกลุ่มอื่น — ใส่หมายเหตุ
+ใต้ตารางเมื่อ sector เป็นการเงิน / หุ้นที่ข้อมูลงบไม่ครบ (quarters_available
+ต่ำ) ให้จางลง + tooltip บอกเหตุ
+
+
+================================================================================
+งาน #5: 💵 Dividend History — ประวัติปันผล + ความสม่ำเสมอ
+================================================================================
+(เอา #5 ขึ้นก่อน #4 เพราะ #4 ใช้ข้อมูล dividend events ชุดเดียวกัน)
+
+เป้าหมาย: หน้า/tab ที่ตอบ "หุ้นนี้จ่ายปันผลสม่ำเสมอแค่ไหน โตไหม
+จ่ายไหวไหม" — ตอนนี้ div yield เป็นแค่ตัวกรอง ไม่มีมิติประวัติ
+
+--- แหล่งข้อมูล (ใหม่ 1 อย่าง) ---
+1. yfinance Ticker.dividends → series {ex-date: DPS} ย้อน 20+ ปี
+   ใช้ได้ทั้ง 3 ตลาด (SYM.BK / SYM / XXXX.HK) — ต้อง fetch ใหม่ เก็บลง
+   ตารางใหม่ dividends(symbol, market, ex_date, dps) ใน financials.db
+   (local-only ตามกติกา — เข้า .gitignore อยู่แล้วเพราะอยู่ใน db เดิม)
+2. Cash Dividends Paid (Yahoo annual, มีแล้ว) → ยอดจ่ายรวมรายปี ~4 ปี
+   ใช้ cross-check และคำนวณ coverage (มี dividend_coverage แล้ว)
+3. Basic EPS จาก Finnomena_q (16 ปี, มีแล้ว) → payout ratio ระยะยาว
+   = DPS รายปี (จากข้อ 1) ÷ EPS รายปี (รวม 4 ไตรมาส Finnomena)
+   → ได้ payout trend ยาวกว่า Yahoo มาก
+
+--- การคำนวณ (services ใหม่: dividend_stats) ---
+- DPS รายปีปฏิทิน (รวม events ในปี) + จำนวนครั้ง/ปี (จ่ายปีละ 1-2-4 ครั้ง)
+- YoY การเติบโต DPS + CAGR 5/10 ปี
+- streak: จ่ายต่อเนื่องกี่ปี (ไม่เว้น) / เพิ่มหรือคงที่ต่อเนื่องกี่ปี /
+  เพิ่มแท้ ๆ ต่อเนื่องกี่ปี — cross-check กับ div_growth_streak_y ที่มีแล้ว
+- payout ratio รายปี + เส้นแนวโน้ม (เตือนเมื่อ >100% หรือไต่ขึ้นเร็ว)
+- yield แต่ละปี = DPS ปีนั้น ÷ ราคาปิดสิ้นปี (ราคามีใน set_prices.db /
+  us_prices.db / hk_prices.db แล้ว) → เห็น band ของ yield ในอดีต
+- ระวังหุ้นแตกพาร์/split: yfinance dividends ปรับ split แล้ว แต่ EPS
+  Finnomena อาจไม่ปรับ → ใช้ split log ที่มีอยู่ (delisted_log/corporate
+  action detection จากงาน Full Refresh) ปรับ EPS ให้ตรงก่อนหาร payout
+  ** จุดนี้เสี่ยงผิดสุดในงานนี้ ต้องทดสอบหุ้นที่เคย split จริง **
+
+--- Fetch strategy ---
+- ปุ่มดึงรายตัวในหน้า (ครั้งแรกที่เปิดหุ้นนั้น) + batch ใน Full Refresh /
+  sync-all สำหรับ universe ที่มีงบอยู่แล้ว — throttle เหมือน fetch อื่น
+- เก็บ synced_at ต่อ symbol, ถือว่า stale ถ้าเกิน 30 วัน
+
+--- UI (หน้าใหม่ 💵 ปันผล หรือ tab ในหน้างบการเงิน — แนะนำ tab) ---
+- กราฟแท่ง DPS รายปี 20 ปี + เส้น payout ratio ทับ (แกนขวา)
+- แถบสรุป: จ่ายต่อเนื่อง X ปี · เพิ่มต่อเนื่อง Y ปี · CAGR 5 ปี Z% ·
+  payout ล่าสุด W% · coverage จาก FCF (มีแล้ว)
+- ตาราง events: ex-date, DPS, yield ณ วันนั้น
+- card ย่อใน Tearsheet + คอลัมน์ Screener+ (div CAGR 5 ปี เพิ่มเป็น
+  ตัวกรองใหม่ได้ทันทีเพราะเข้า factor_snapshot)
+
+
+================================================================================
+งาน #4: 📅 ปฏิทินประกาศงบ + XD/จ่ายปันผล
+================================================================================
+เป้าหมาย: มุมมองเดือน + list "7/30 วันข้างหน้า" ว่าหุ้นไหน (โฟกัส
+watchlist) จะประกาศงบ / ขึ้น XD / จ่ายปันผล — ไว้วางแผนถือ/หลบ event
+
+--- แหล่งข้อมูล (forward-looking = ส่วนที่ยากสุดของงานนี้) ---
+1. Earnings date: yfinance Ticker.calendar / get_earnings_dates
+   ใช้ได้ทั้ง 3 ตลาด แต่หุ้นไทยตัวเล็กข้อมูลอาจไม่มี/คลาดเคลื่อน
+   → เก็บพร้อม confidence: 'confirmed' (มีวันที่ชัด) / 'estimated'
+2. XD ที่ประกาศแล้ว (ไทย): หน้า corporate action / X-Calendar ของ
+   SET.or.th — โปรเจกต์นี้ scrape SET อยู่แล้ว (insider/short/NVDR)
+   มี pattern ให้ตาม ** ตอนลงมือค่อยหา endpoint จริง — อย่า assume,
+   ถ้าไม่มี JSON API ให้ประเมิน effort scrape ก่อนตัดสินใจ **
+3. XD ในอดีต: dividends table จากงาน #5 (ex-date ทั้งหมด) →
+   ใช้ "คาดการณ์" event ถัดไปแบบ heuristic: บริษัทที่จ่ายสม่ำเสมอ
+   มักขึ้น XD เดือนเดิมทุกปี → แสดงเป็น 'คาดการณ์จากรอบปีก่อน'
+   (ป้ายสีจางต่างจาก confirmed ชัดเจน)
+4. งบไทยมี deadline ตามกฎ ก.ล.ต. (45 วันหลังจบไตรมาส / 60 วันงบปี
+   สอบทาน) → ใช้เป็นกรอบ "ช่วงประกาศ" เมื่อไม่มีวันที่จริง
+
+--- เก็บข้อมูล ---
+ตารางใหม่ calendar_events(symbol, market, type[earnings|xd|pay],
+  date, confidence[confirmed|estimated|guessed], source, synced_at)
+ใน financials.db (local-only)
+
+--- Fetch strategy ---
+- โฟกัสก่อน: watchlist + หุ้นที่ค้นบ่อย (search_log มีอยู่แล้ว! ใช้จัด
+  ลำดับ) — อย่า fetch ทั้ง universe ตั้งแต่แรก จะโดน rate limit
+- refresh: ปุ่มในหน้า + ผูกกับ Quick Update (เฉพาะ watchlist, เบา)
+
+--- UI (หน้าใหม่ 📅 ปฏิทิน) ---
+- Toggle: เดือนนี้ (grid ปฏิทิน) / 7 วัน / 30 วัน (list)
+- Filter: watchlist-only (default ON) / ทั้งหมดที่มีข้อมูล / ตลาด
+- แต่ละ event: badge ประเภท (📊 งบ / 💵 XD / 💰 จ่าย) + confidence
+- แถว "สัปดาห์นี้" โผล่เป็น card เล็กใน Tearsheet ด้วย (ถ้าหุ้นนั้นมี event)
+- ใต้ปฏิทิน: หมายเหตุความน่าเชื่อถือข้อมูล + วันที่ sync ล่าสุด
+
+ระวัง: ข้อมูล forward จาก Yahoo เลื่อน/ผิดได้บ่อย — อย่าให้ผู้ใช้เข้าใจว่า
+เป็นวันทางการ ทุก event ต้องโชว์ source + confidence เสมอ
+
+
+================================================================================
+งาน #6: 🎯 มูลค่าเหมาะสม — Reverse DCF เป็นหลัก + DCF 3 ฉาก (optional)
+================================================================================
+หลักคิด: DCF ตรง ๆ อันตราย (สมมติฐานเล็กเปลี่ยน มูลค่าเหวี่ยงแรง)
+→ นำเสนอ Reverse DCF ก่อน: "ราคาปัจจุบัน imply ว่าตลาดคาด FCF โตกี่ %"
+แล้วให้ผู้ใช้ตัดสินเองว่า realistic ไหม เทียบกับ growth จริงในอดีต
+(rev_cagr/profit_cagr มีใน factors แล้ว) — สอนวิธีคิด ไม่ใช่ป้อนคำตอบ
+
+--- Input อัตโนมัติ (มีครบแล้วใน factors/DB) ---
+- FCF TTM: factors.fcf / Yahoo Free Cash Flow
+- Net debt: factors.net_cash (กลับเครื่องหมาย)
+- Shares: Ordinary Shares Number (Yahoo)
+- ราคาปัจจุบัน + MktCap: set_data / live-price
+- FCF growth ในอดีต 5-10 ปี: คำนวณจาก Yahoo/Finnomena → โชว์เทียบ
+
+--- Reverse DCF ---
+แก้สมการหา g ที่ทำให้ PV(FCF โต g% 10 ปี + terminal) = Enterprise Value
+พารามิเตอร์ผู้ใช้ปรับได้ (มี default):
+  discount rate: TH 9% / US 8.5% / HK 9.5% (ปรับได้ 6-15%)
+  terminal growth: 2.5% (ปรับได้ 0-4%)
+ผลลัพธ์: "ตลาดกำลังคาดว่า FCF ต้องโต X%/ปี ไป 10 ปี" + เทียบ:
+  - FCF/กำไร CAGR จริง 5 ปีหลัง = Y%
+  - ป้าย: X < Y-3% = ตลาดคาดต่ำ (อาจถูก) / ใกล้กัน = สมเหตุผล /
+    X > Y+3% = ตลาดคาดสูง (ต้องเชื่อว่าธุรกิจเร่งตัว)
+
+--- Forward DCF 3 ฉาก ---
+bear/base/bull: ผู้ใช้ใส่ growth ปี 1-5 (default = bear: 0.5×CAGR อดีต,
+base: 1×, bull: 1.5× — cap ที่ 25%), ปี 6-10 fade เข้า terminal
+ผลลัพธ์ต่อฉาก: fair value/หุ้น + upside% + ตาราง sensitivity
+(growth × discount rate, 5×5) — ทำให้เห็นว่ามูลค่าไวต่อสมมติฐานแค่ไหน
+
+--- ข้อจำกัดที่ต้องแสดงชัด ---
+- กลุ่มการเงิน: FCF ไม่มีความหมาย → เฟสแรก "ไม่รองรับ" พร้อมเหตุผล
+  (อนาคตถ้าอยากทำ: Excess Return / DDM — ไม่อยู่ในแผนนี้)
+- หุ้น FCF ติดลบ/เหวี่ยงแรง (quarters น้อย, วัฏจักร): เตือน + แนะนำ
+  ใช้ average FCF 3 ปีแทน TTM (มีปุ่มสลับ)
+- คำนวณฝั่ง client ทั้งหมดได้ (สูตรเบา) → ใช้บนหน้า static ได้ด้วย
+  ถ้า input (FCF/shares) มากับ tearsheet payload
+
+--- UI ---
+- panel ในหน้า Tearsheet (section ใหม่ใต้ Valuation) + เข้าจาก Action Bar
+- ไม่ทำเมนูหลักแยก (ลดความเสี่ยงคนใช้เป็น "เครื่องบอกราคาเป้าหมาย")
+- มีกล่องคำอธิบาย/คำเตือนแบบเดียวกับ tooltip ยาว ๆ ที่ทำทั่ว dashboard
+
+
+================================================================================
+สรุป dependency + สิ่งที่ต้อง verify ตอนลงมือ
+================================================================================
+dependency:
+  #2 → ป้อน F/Z ให้ #1(card), #3(คอลัมน์), Screener+
+  #3 → ปุ่มเทียบเพื่อนใน #1
+  #5 → dividends table เป็น input ของ #4 (คาดการณ์ XD) และ card ใน #1
+  #6 → ใช้ factors + tearsheet payload จาก #1
+
+ต้อง verify ตอนลงมือ (อย่าเชื่อแผนนี้แบบตาบอด):
+  [ ] /api/insider-trades รับ filter symbol ได้ไหม (งาน #1)
+  [ ] โครง services/ ปัจจุบัน — วางฟังก์ชัน F/Z + dividend_stats ตรงไหน
+      ให้เข้า pattern เดิมของ factor computation
+  [ ] ฟิลด์ Yahoo annual ของหุ้นไทยตัวเล็ก null เยอะแค่ไหน (sample 20 ตัว)
+      → กำหนด n ขั้นต่ำของ "x/n ข้อที่เช็คได้" ใน F-Score
+  [ ] SET.or.th มีช่องทางดึง X-Calendar แบบไหน (งาน #4)
+  [ ] หุ้นที่เคย split: EPS Finnomena ปรับ split ให้หรือไม่ (งาน #5 payout)
+  [ ] sector 2 ชั้น (sector/industry) ใน set_data.json ครบทุกตัวไหม (งาน #3)
+
+กติกา git: db/ตารางใหม่ทั้งหมดอยู่ใน financials.db → local-only อยู่แล้ว
+ห้ามเพิ่ม json ใหม่ที่มีข้อมูลงบ/ปันผลนอก .gitignore
+================================================================================

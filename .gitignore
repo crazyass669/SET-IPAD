@@ -1,0 +1,148 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+env/
+
+# Data files (สร้างโดย Actions)
+set_data.json
+set_dr_data.json
+set_history.json
+dr_cache.json
+set_market_stats.json
+*.json.tmp
+
+# indices_cache.json, short_sales_data.json, nvdr_data.json: ไฟล์สถานะสะสมข้ามรอบ
+# ของ CI เท่านั้น (ไม่ใช่ไฟล์ที่เว็บ/iPad อ่าน — เว็บอ่าน data/indices_data.json,
+# data/short_sales.json, data/nvdr_data.json ต่างหาก ซึ่ง commit ปกติ ไม่ ignore)
+# เดิม commit ตรงๆ เข้า repo ทำให้ history บวมหลักร้อย MiB โดยไม่มีใครอ่านเวอร์ชัน
+# ที่ commit นั้นนอกจาก CI เอง — 2026-08 ย้ายไปใช้ actions/cache แทนแล้ว (ดู
+# update.yml, ยืนยัน cache primed สำเร็จก่อนแล้ว) จึงเลิก commit ไฟล์นี้ได้จริง
+#
+# *** ต่างจากบั๊ก 2026-07-17 (ตอนนั้น ignore ไว้แล้วไม่มี cache สำรอง เลย CI
+# เริ่มจากไฟล์ว่างทุกรอบ ทำให้ /api/indices, /api/short-sales 404 และ NVDR
+# history ไม่สะสม) — รอบนี้มี actions/cache รับหน้าที่แทนแล้ว ห้ามลบ cache step
+# ใน update.yml ออกโดยไม่เพิ่มอย่างอื่นมาแทน ไม่งั้นบั๊กเดิมจะกลับมา ***
+indices_cache.json
+short_sales_data.json
+nvdr_data.json
+
+# ไฟล์ข้อมูลดิบต้นทาง (local-only) — ดึงเข้า set_prices.db/s50_flow_data.json ไปแล้วผ่าน
+# import_delisted_stocks.py / import_s50_futures_xlsx.py — ตัว zip ใหญ่เกิน GitHub limit อยู่แล้ว
+set-archive_EOD_1970-LAST.zip
+set-archive_EOD_1970-LAST/
+S50 Futures Data.xlsx
+
+# Backup / test
+*.bak
+set_data_backup.json
+response.txt
+server_out.txt
+server_err.txt
+ttm_test_results.json
+test_batch.py
+test_syms.py
+
+# Local only
+start.bat
+# นามสกุลจริงคือ .xls (ดาวน์โหลดสดจาก SET.or.th ใน set_data_fetcher.py) — เดิม
+# gitignore พิมพ์ผิดเป็น .xlsx เลยไม่เคยกันได้จริง ทำให้ไฟล์นี้ยัง track อยู่และ
+# CI เขียนทับใหม่ทุกรอบแต่ไม่ได้ถูก git add จนบล็อก git pull --rebase (unstaged
+# changes) — 2026-08 แก้นามสกุล + git rm --cached
+listedCompanies_en_US.xls
+listedCompanies_en_US.xlsx
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# CSRF token ต่อเครื่อง (ดู app.py _load_or_create_token) — ห้ามขึ้น repo ไม่งั้นใครก็
+# ปลอม token ที่ dashboard.js แนบให้เองได้ (แค่ไปคัดลอกจาก GitHub)
+.dashboard_token
+
+# SQLite price store + สำเนาสำรอง (local only)
+set_prices.db
+set_prices.db-wal
+set_prices.db-shm
+set_prices.db.bak*
+backups/
+
+# SQLite ราคาสมาชิกดัชนี US (S&P500/Dow/NDX) — local only, regenerate ได้ด้วยปุ่ม
+# "US Index Max" หรือ backfill_us_index_prices.py (330MB เกิน limit GitHub อยู่ดี)
+us_prices.db
+us_prices.db-wal
+us_prices.db-shm
+
+# SQLite ราคาสมาชิกดัชนี HK (HSI/HSCEI/HSTECH) — local only, regenerate ได้ด้วย
+# backfill_hk_index_prices.py
+hk_prices.db
+hk_prices.db-wal
+hk_prices.db-shm
+
+# SQLite ราคาสมาชิกดัชนี JP (Nikkei 225) — local only, regenerate ได้ด้วย
+# backfill_jp_index_prices.py
+jp_prices.db
+jp_prices.db-wal
+jp_prices.db-shm
+
+# SQLite SEC filings store (insider trades / major shareholder changes)
+sec_filings.db
+sec_filings.db-wal
+sec_filings.db-shm
+
+# SQLite financials store + ชุดสำรองอัตโนมัติ (local only — ใหญ่และ regenerate ได้)
+financials.db
+financials.db-wal
+financials.db-shm
+financials_backups/
+
+# Rotation quadrant alert state
+rotation_state.json
+
+# Log หุ้นที่ตรวจพบว่า delisted/แขวนถาวร (core/delisted_log.py) — local-only
+# เหมือน rotation_state.json/dr_universe_auto.json ด้านล่าง, regenerate ได้จาก
+# universe filter เดิมถ้าไฟล์หาย (แค่เสียประวัติวันที่ตรวจพบครั้งแรก)
+delisted_log.json
+
+# DR universe auto-sync overlay (สร้างใหม่ได้เสมอจาก SET API)
+dr_universe_auto.json
+
+# คำอธิบายบริษัท DR ดิบ (local cache ก่อน bake, EN+TH) — เวอร์ชัน bake สำหรับเว็บ
+# อยู่ที่ data/dr_descriptions.json (ไม่ ignore เพราะ !data/** ด้านล่าง — pattern
+# เดียวกับ nvdr_data.json/dr_cache.json ด้านบน)
+dr_descriptions.json
+
+# Logs
+logs/
+
+# static web data (สร้าง+commit โดย GitHub Actions — ห้าม ignore)
+!data/
+!data/**
+
+# data/us_index_metrics.json, jp_, hk_index_metrics.json: ไฟล์ local-only แท้ๆ —
+# เช็คแล้ว run_static_update.py/update.yml ไม่แตะไฟล์พวกนี้เลย และเว็บ/iPad
+# (STATIC_MAP ใน dashboard.js) ก็ไม่ fetch เลย ไม่มีใครใช้เวอร์ชันที่เคย commit
+# มาก่อนเลย (2026-08: เลิก commit, เดิมเป็นตัวการหลักบวม repo history ~220 MiB
+# รวมกัน) regenerate ได้เสมอด้วยปุ่ม US/JP/HK Index Max ในเครื่อง — ต้องอยู่ "หลัง"
+# !data/** ด้านบน ไม่งั้นการ negate จะทับกฎ ignore นี้ (gitignore ใช้ pattern
+# ล่าสุดที่ match เป็นหลัก)
+data/us_index_metrics.json
+data/jp_index_metrics.json
+data/hk_index_metrics.json
+
+# Backtest results (local-only เหมือน financials.db)
+backtest_screener_results_*.json
+
+# Log จากการรัน server/mirror ในเครื่อง
+mirror.log
+mirror_run.log
+server_run.log
+server_5011.log
+
+# โฟลเดอร์เก็บไฟล์ที่ตรวจสอบแล้วว่าไม่มีโค้ดไหนเรียกใช้ (สคริปต์ one-time ที่ทำ
+# เสร็จแล้ว, log ชั่วคราว, backup เก่า) — .py ที่ track อยู่แล้วก่อนกฎนี้ยังอยู่ปกติ
+# (gitignore ไม่ถอด track ของเดิม) กันแค่ของใหม่ที่ทิ้งเข้ามาไม่ให้หลุดเข้า commit
+ไฟล์ไม่ได้ใช้/*.db
+ไฟล์ไม่ได้ใช้/*.log
+ไฟล์ไม่ได้ใช้/*.zip

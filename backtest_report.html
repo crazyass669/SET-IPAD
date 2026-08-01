@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Backtest Report — RS Score + RRG + Market Regime</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🧪</text></svg>">
+<style>
+  :root { --bg:#0d1117; --bg2:#161b22; --bg3:#21262d; --border:#30363d;
+          --text:#e6edf3; --text2:#8b949e; --green:#3fb950; --red:#f85149;
+          --yellow:#e3b341; --blue:#58a6ff; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text);
+         font-family:'Segoe UI',system-ui,sans-serif; font-size:14px; line-height:1.7;
+         max-width:880px; margin:0 auto; padding:28px 20px 80px; }
+  h1 { font-size:22px; margin-bottom:4px; }
+  h2 { font-size:16px; margin:34px 0 10px; padding-bottom:6px;
+       border-bottom:1px solid var(--border); }
+  .sub { color:var(--text2); font-size:12px; margin-bottom:22px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin:10px 0; }
+  th, td { padding:6px 10px; border-bottom:1px solid var(--border); text-align:right; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--text2); font-weight:600; font-size:12px; }
+  .g { color:var(--green); } .r { color:var(--red); } .y { color:var(--yellow); }
+  .b { color:var(--blue); } .t2 { color:var(--text2); }
+  .card { background:var(--bg2); border:1px solid var(--border); border-radius:8px;
+          padding:14px 18px; margin:12px 0; }
+  .warn { border-left:3px solid var(--yellow); }
+  .danger { border-left:3px solid var(--red); }
+  .ok { border-left:3px solid var(--green); }
+  code { background:var(--bg3); padding:2px 7px; border-radius:4px; font-size:12px; }
+  ul, ol { padding-left:22px; }
+  li { margin:5px 0; }
+  a { color:var(--blue); }
+  .zone { display:inline-block; padding:2px 10px; border-radius:12px;
+          font-weight:700; font-size:12px; margin-right:6px; }
+  .back { display:inline-block; margin-bottom:18px; color:var(--blue);
+          text-decoration:none; font-size:13px; }
+</style>
+</head>
+<body>
+
+<a class="back" href="/">← กลับ Dashboard</a>
+<h1>🧪 Backtest Report: RS Score + RRG + Market Regime</h1>
+<div class="sub">ข้อมูล ณ 2026-07-14 · universe 913 หุ้น SET/mai · ผลตอบแทน = Adj Close (รวมปันผล) · ช่วงทดสอบ ม.ค. 2016 → มิ.ย. 2026 (10.5 ปี, 121 งวด)
+· รันซ้ำได้ด้วย <code>python backtest_rs_rrg.py 2016</code></div>
+
+<div class="card danger">
+  <b>⚠️ อ่านก่อนเชื่อตัวเลข:</b> ผลทั้งหมดมี <b>survivorship bias</b> —
+  universe คือหุ้นที่ยังจดทะเบียนอยู่วันนี้เท่านั้น หุ้นที่ถูกเพิกถอน/ล้มละลายระหว่างทางไม่อยู่ในข้อมูล
+  ผลจริงจะแย่กว่าที่แสดง ดูหัวข้อ "ข้อจำกัด" ท้ายรายงาน
+</div>
+
+<h2>1. กฎของ Strategy (กำหนดตายตัวก่อนรัน — ไม่ได้ optimize ย้อนหลัง)</h2>
+<table>
+  <tr><th style="width:180px">หมวด</th><th style="text-align:left">กฎ</th></tr>
+  <tr><td>Universe</td><td style="text-align:left">มีข้อมูล ≥ 250 แท่ง · ราคา ≥ 1 บาท · มูลค่าซื้อขายเฉลี่ย 20 วัน ≥ 5 ล้านบาท/วัน</td></tr>
+  <tr><td>Entry</td><td style="text-align:left">RS Score ≥ 90 (percentile ณ วันนั้น จากสูตร 2×1M + 3M + 6M + 1Y) <b>และ</b> sector อยู่ quadrant Leading/Improving (momentum 1M เฉลี่ยของ sector &gt; 0 — ตรรกะเดียวกับ RRG map)</td></tr>
+  <tr><td>Portfolio</td><td style="text-align:left">Top 10 ตาม rs_raw · น้ำหนักเท่ากัน</td></tr>
+  <tr><td>Rebalance / Exit</td><td style="text-align:left">ทุก 21 วันทำการ — ตัวที่หลุดเงื่อนไขถูกขายออก</td></tr>
+  <tr><td>Market Regime</td><td style="text-align:left">ถือเงินสดทั้งงวดเมื่อ % หุ้นเหนือ EMA200 ของทั้งตลาด &lt; 30</td></tr>
+  <tr><td>ต้นทุน</td><td style="text-align:left">0.25% ต่อข้าง เฉพาะสัดส่วนที่เปลี่ยนตัว</td></tr>
+  <tr><td>กัน look-ahead</td><td style="text-align:left">สัญญาณจาก close วัน t → เข้า/ออกที่ close วัน t+1</td></tr>
+</table>
+
+<h2>2. ผลหลัก (2016 → มิ.ย. 2026)</h2>
+<div class="card warn" style="font-size:12px">
+  📝 <b>อัปเดต 2026-07-14:</b> เปลี่ยนมาใช้ <b>Adj Close (ราคาปรับ split+เงินปันผล)</b> คำนวณ
+  ผลตอบแทนและสัญญาณ RS แทนราคาปิดดิบ — ตัวเลขทุก variant สูงขึ้นเพราะเดิม<b>ไม่นับปันผล</b>
+  (ทุกวัน XD ราคาร่วงถูกมองเป็นขาดทุนทั้งที่ผู้ถือได้ปันผล) · ราคา/สภาพคล่องยังใช้ราคาจริง
+  · Universe EW ก็ปรับเป็น Adj แล้วเพื่อเทียบอย่างเป็นธรรม<br>
+  <span class="t2">(อัปเดตก่อนหน้า 2026-07-05: แก้บั๊ก cost งวดถือเงินสดถูกหัก 0.5% ฟรี)</span>
+</div>
+<table>
+  <tr><th style="text-align:left">Variant</th><th>ผลรวม</th><th>CAGR</th><th>MaxDD</th><th>Win rate</th><th>หมายเหตุ</th></tr>
+  <tr><td><b>RS+RRG + Regime&lt;30</b></td><td class="g"><b>+284%</b></td><td class="g"><b>+13.7%</b></td><td class="r">−54.9%</td><td>30%</td><td class="t2">ถือเงินสด 59/121 งวด</td></tr>
+  <tr><td>RS≥90 + RRG</td><td class="g">+157%</td><td class="g">+9.5%</td><td class="r">−69.3%</td><td>50%</td><td class="t2">—</td></tr>
+  <tr><td>RS≥90 อย่างเดียว</td><td class="g">+224%</td><td class="g">+11.9%</td><td class="r">−51.2%</td><td>53%</td><td class="t2">—</td></tr>
+  <tr><td>SET Index</td><td class="g">+24%</td><td class="g">+2.1%</td><td class="r">−39.3%</td><td>—</td><td class="t2">price index ไม่รวมปันผล (ไม่มี TRI)</td></tr>
+  <tr><td>Universe equal-weight</td><td class="g">+24%</td><td class="g">+2.1%</td><td class="r">−47.5%</td><td>—</td><td class="t2">ค่าเฉลี่ยตลาด (Adj รวมปันผล)</td></tr>
+</table>
+
+<h2>3. ผลตอบแทนรายปี (%)</h2>
+<table>
+  <tr><th>ปี</th><th>RS+RRG+Regime</th><th>RS+RRG</th><th>RS-only</th><th>SET</th><th>Universe EW</th></tr>
+  <tr><td>2016</td><td class="g">+13.0</td><td class="g">+22.8</td><td class="g">+28.0</td><td class="g">+20.3</td><td class="g">+22.6</td></tr>
+  <tr><td>2017</td><td class="g">+19.8</td><td class="g">+19.8</td><td class="g">+10.8</td><td class="g">+14.7</td><td class="g">+6.2</td></tr>
+  <tr><td>2018</td><td class="g"><b>+7.5</b></td><td class="r">−41.8</td><td class="r">−10.5</td><td class="r">−5.1</td><td class="r">−14.0</td></tr>
+  <tr><td>2019</td><td class="g"><b>+7.7</b></td><td class="r">−13.2</td><td class="r">−16.6</td><td class="r">−4.9</td><td class="r">−13.2</td></tr>
+  <tr><td>2020</td><td class="g">+12.2</td><td class="r">−4.1</td><td class="g">+10.1</td><td class="r">−10.5</td><td class="g">+12.5</td></tr>
+  <tr><td>2021</td><td class="g">+156.9</td><td class="g">+156.9</td><td class="g">+149.3</td><td class="g">+14.7</td><td class="g">+70.9</td></tr>
+  <tr><td>2022</td><td class="r">−15.4</td><td class="r">−12.5</td><td class="g">+14.8</td><td class="g">+1.6</td><td class="r">−1.1</td></tr>
+  <tr><td>2023</td><td class="r">−3.4</td><td class="g">+4.3</td><td class="r">−4.0</td><td class="r">−15.3</td><td class="r">−19.9</td></tr>
+  <tr><td>2024</td><td class="r">−9.6</td><td class="g">+15.5</td><td class="g">+6.1</td><td class="g">+0.7</td><td class="r">−10.3</td></tr>
+  <tr><td>2025</td><td class="r">−14.4</td><td class="r">−10.6</td><td class="r">−32.0</td><td class="r">−9.1</td><td class="r">−15.0</td></tr>
+  <tr><td>2026 (ครึ่งปี)</td><td class="g">+34.3</td><td class="g">+48.8</td><td class="g">+40.2</td><td class="g">+23.5</td><td class="g">+9.9</td></tr>
+</table>
+
+<h2>4. Sensitivity ของ Regime threshold</h2>
+<p class="t2">ทดสอบหลายค่าเพื่อดู "ความทนทาน" ไม่ใช่หาค่าสวยสุด — ถือเงินสดเมื่อ %&gt;EMA200 &lt; X:</p>
+<table>
+  <tr><th>X</th><th>ผลรวม</th><th>CAGR</th><th>MaxDD</th><th>งวดถือเงินสด</th></tr>
+  <tr><td>25</td><td>+131%</td><td>+8.3%</td><td>−59.3%</td><td>41/121</td></tr>
+  <tr><td><b>30</b></td><td><b>+284%</b></td><td><b>+13.7%</b></td><td>−54.9%</td><td>59/121</td></tr>
+  <tr><td>35</td><td>+271%</td><td>+13.3%</td><td>−44.6%</td><td>70/121</td></tr>
+  <tr><td>40</td><td>+198%</td><td>+11.0%</td><td>−28.9%</td><td>82/121</td></tr>
+  <tr><td>50</td><td>+186%</td><td>+10.6%</td><td>−14.6%</td><td>95/121</td></tr>
+</table>
+
+<div class="card ok">
+  <b>สิ่งที่ robust (เห็นตรงกันทุก threshold):</b>
+  <ul>
+    <li>Regime filter <b>ฆ่าหายนะตลาดหมียาว 2018–2019 ได้จริง</b> (จาก −41.8%/−13.2% เป็น +7.5%/+7.7%)</li>
+    <li>MaxDD ลดลงเป็นขั้นบันไดตาม threshold (−59% → −15%) — X=40–50 ให้ CAGR ~11% ที่ MaxDD ต่ำกว่า SET Index — เป็น trade-off ที่เลือกได้ ไม่ใช่ magic number</li>
+    <li>ทุก variant ชนะ Universe EW ขาด = การเลือกหุ้นด้วย RS มี edge จริงในตลาดไทย</li>
+  </ul>
+</div>
+<div class="card warn">
+  <b>สิ่งที่เปราะ (อย่าเชื่อ):</b>
+  <ul>
+    <li>ตัวเลขสูงสุดเกาะที่ X=30 (+284%) — X=25 ให้ +131% แปลว่า CAGR peak มีส่วนของโชคเชิง parameter</li>
+    <li>ปี 2024 regime version แพ้ของเดิมหนัก (−9.6% vs +15.5%) — ตลาด whipsaw ที่ breadth แกว่งรอบเส้น ทำให้เข้าออกผิดจังหวะ</li>
+    <li>Win rate ต่ำ (14–53%) — ชนะด้วยปีใหญ่ไม่กี่ปี (2021 คนเดียวแบกผลรวม +157%) ต้องทนแพ้บ่อยได้</li>
+  </ul>
+</div>
+
+<h2>5. ที่มาของ Market Regime Light บน Dashboard</h2>
+<p>จากผลข้างบน dashboard แสดงไฟ 3 โซนจาก % หุ้นเหนือ EMA200 ของทั้งตลาด (คำนวณสดจาก
+<code>/api/breadth</code>) — ใช้ "โซน" แทนเส้นเดียวเพราะ sensitivity บอกว่าตัวเลขเป๊ะๆ ไม่ robust
+แต่ทิศทางของโซน robust:</p>
+<div class="card">
+  <span class="zone" style="background:rgba(63,185,80,.15);color:var(--green)">🟢 Risk-On ≥ 50</span>
+  ช่วงที่ signal RS สูงทำงานได้ดีตามประวัติศาสตร์<br><br>
+  <span class="zone" style="background:rgba(227,179,65,.15);color:var(--yellow)">🟡 Caution 30–50</span>
+  โซน whipsaw (แบบปี 2024) — ระวังการเข้าออกถี่ พิจารณาลดขนาด position<br><br>
+  <span class="zone" style="background:rgba(248,81,73,.15);color:var(--red)">🔴 Risk-Off &lt; 30</span>
+  ทุก threshold ที่ทดสอบเห็นตรงกันว่าช่วงนี้ออกจากตลาดคุ้ม (คือช่วงแบบ 2018–2019)
+</div>
+<p class="t2">ไฟนี้คือ "บริบทของตลาด" ไม่ใช่คำสัญญาผลตอบแทน และไม่ใช่คำแนะนำการลงทุน</p>
+
+<h2>6. ข้อจำกัดของผลลัพธ์ (สำคัญไม่แพ้ตัวเลข)</h2>
+<ol>
+  <li><b>Survivorship bias — ใหญ่ที่สุด:</b> universe คือ 913 ตัวที่รอดถึงวันนี้ หุ้นที่ถูกเพิกถอนหายไปจากข้อมูล
+      และกลยุทธ์แนว momentum มีโอกาสเคยถือหุ้นเหล่านั้น (หุ้นร้อนแรง RS 99 ก่อนพัง) → ผลจริงแย่กว่านี้</li>
+  <li><b>Sector ปัจจุบันถูกใช้ย้อนหลัง:</b> บริษัทที่เคยย้ายหมวดจะถูกจัดผิดในอดีต กระทบ RRG filter โดยตรง</li>
+  <li><b>เงินปันผล:</b> strategy + Universe EW <b>รวมปันผลแล้ว</b> (Adj Close) แต่ SET Index ยังเป็น price index
+      (Yahoo ไม่มี SET TRI) → ตัวเลข SET จึงต่ำกว่าจริง ~3%/ปี เทียบกับ strategy อาจดูเหนือกว่าเล็กน้อยเกินจริงในแกนนี้</li>
+  <li><b>สภาพคล่องจำลองหยาบ:</b> ไม่มี ceiling/floor, หุ้นติด SP ใช้ราคา ffill แทน (ขายไม่ได้จริง), slippage หุ้นเล็กต่ำกว่าจริง</li>
+  <li><b>ไม่มี robustness ของ parameter อื่น:</b> RS≥90 / top 10 / 21 วัน เลือกครั้งเดียว —
+      ข้อดีคือไม่ overfit ข้อเสียคือไม่รู้ความไวต่อการขยับ</li>
+  <li><b>ไม่มี stop loss / ถืองวดตายตัว 21 วัน</b> — ไม่ตรงพฤติกรรมเทรดจริงของคนส่วนใหญ่</li>
+</ol>
+
+<h2>7. รันซ้ำ / ต่อยอดเอง</h2>
+<ul>
+  <li>สคริปต์: <code>backtest_rs_rrg.py</code> ในโฟลเดอร์โปรแกรม — <code>python backtest_rs_rrg.py 2016</code> (เปลี่ยนปีเริ่มได้)</li>
+  <li>ปรับกฎ: แก้ค่าคงที่หัวไฟล์ (<code>RS_MIN, TOP_N, REB_BARS, VALUE_MIN, COST_SIDE</code>)</li>
+  <li>ข้อมูล: SQLite <code>set_prices.db</code> (อัปเดตอัตโนมัติเมื่อกด Quick Update) — ผลจะขยับตามข้อมูลใหม่</li>
+</ul>
+
+<p class="t2" style="margin-top:30px">รายงานนี้สร้างจากการรันจริงเมื่อ 2026-07-14 (เปลี่ยนมาใช้ Adj Close รวมปันผล) · ตัวเลขคงที่ ณ วันรัน ไม่อัปเดตอัตโนมัติ</p>
+
+</body>
+</html>

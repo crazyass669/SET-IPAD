@@ -1,0 +1,1031 @@
+/* ================= block 1 (จาก <head>) ================= */
+
+  :root {
+    --bg:       #0d1117;
+    --bg2:      #161b22;
+    --bg3:      #21262d;
+    --border:   #30363d;
+    --text:     #e6edf3;
+    --text2:    #8b949e;
+    --green:    #3fb950;
+    --green2:   #1a4a23;
+    --red:      #f85149;
+    --red2:     #4a1a1a;
+    --yellow:   #d29922;
+    --blue:     #58a6ff;
+    --purple:   #bc8cff;
+    --accent:   #1f6feb;
+    --font:     'Segoe UI', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; }
+
+  /* NAV */
+  nav {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    padding: 4px 20px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    row-gap: 3px;
+    min-height: 34px;
+    position: sticky; top: 0; z-index: 100;
+    overflow-x: visible;
+    overflow-y: visible;
+  }
+  .nav-brand, .nav-btn { white-space: nowrap; flex-shrink: 0; }
+  .nav-brand { font-weight: 700; font-size: 14px; color: var(--text); margin-right: 16px; letter-spacing: .5px; }
+  .nav-brand span { color: var(--blue); }
+  .nav-btn {
+    background: none; border: none; color: var(--text2); cursor: pointer;
+    padding: 4px 10px; border-radius: 6px; font-size: 12px; font-family: var(--font);
+    transition: all .15s;
+  }
+  .nav-btn:hover { background: var(--bg3); color: var(--text); }
+  .nav-btn.active { background: var(--accent); color: #fff; }
+  /* เมนูที่ใช้บ่อยแต่จมไปกับปุ่มเทาๆ อีก 30 กว่าปุ่ม (เช่น Watchlist) — ย้อมสีเหลืองให้
+     เด่นแยกจากปุ่มอื่นตลอดเวลา ไม่ต้องรอ hover/active ถึงจะสังเกตเห็น */
+  .nav-btn-highlight { background: color-mix(in srgb, var(--yellow) 16%, transparent); color: var(--yellow); font-weight: 600; }
+  .nav-btn-highlight:hover { background: color-mix(in srgb, var(--yellow) 26%, transparent); color: var(--yellow); }
+  .nav-btn-highlight.active { background: var(--accent); color: #fff; }
+  /* Windows ไม่มีฟอนต์ธงอีโมจิ (regional-indicator) ให้เรนเดอร์เป็นธงจริง — ใช้ SVG inline แทน
+     ที่เมนู US/HK/JP กันปัญหาขึ้นเป็นตัวอักษร 2 ตัวแทนธง */
+  .nav-flag {
+    display: inline-block; width: 14px; height: 10px; margin-right: 4px;
+    vertical-align: -1px; border-radius: 2px; background-size: cover; background-position: center;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.12);
+  }
+  .nav-flag-us { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'%3E%3Crect width='20' height='14' fill='%23fff'/%3E%3Cg fill='%23B22234'%3E%3Crect y='0' width='20' height='1.08'/%3E%3Crect y='2.15' width='20' height='1.08'/%3E%3Crect y='4.31' width='20' height='1.08'/%3E%3Crect y='6.46' width='20' height='1.08'/%3E%3Crect y='8.62' width='20' height='1.08'/%3E%3Crect y='10.77' width='20' height='1.08'/%3E%3Crect y='12.92' width='20' height='1.08'/%3E%3C/g%3E%3Crect width='8' height='7.54' fill='%233C3B6E'/%3E%3C/svg%3E"); }
+  .nav-flag-hk { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'%3E%3Crect width='20' height='14' fill='%23DE2910'/%3E%3Cg transform='translate(10,7)' fill='%23fff'%3E%3Cellipse cx='0' cy='-3.2' rx='1.6' ry='3.2'/%3E%3Cellipse cx='0' cy='-3.2' rx='1.6' ry='3.2' transform='rotate(72)'/%3E%3Cellipse cx='0' cy='-3.2' rx='1.6' ry='3.2' transform='rotate(144)'/%3E%3Cellipse cx='0' cy='-3.2' rx='1.6' ry='3.2' transform='rotate(216)'/%3E%3Cellipse cx='0' cy='-3.2' rx='1.6' ry='3.2' transform='rotate(288)'/%3E%3C/g%3E%3C/svg%3E"); }
+  .nav-flag-jp { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'%3E%3Crect width='20' height='14' fill='%23fff'/%3E%3Ccircle cx='10' cy='7' r='4.2' fill='%23BC002D'/%3E%3C/svg%3E"); }
+  .nav-toggle-btn {
+    background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
+    cursor: pointer; padding: 4px 10px; border-radius: 6px; font-size: 11px;
+    font-family: var(--font); white-space: nowrap; flex-shrink: 0; margin-right: 8px;
+  }
+  .nav-toggle-btn:hover { color: var(--text); }
+  /* ปุ่มสลับ "เปิดหน้าเดิม / เปิดแท็บใหม่" เวลากดเมนูหรือปุ่มดูหุ้น (ดู navOpenMode ใน dashboard.js)
+     โหมดแท็บใหม่ย้อมสีฟ้าให้เห็นชัดว่าตอนนี้กดอะไรก็เด้งแท็บใหม่หมด */
+  #nav-openmode-btn.mode-new {
+    border-color: var(--blue); color: var(--blue);
+    background: color-mix(in srgb, var(--blue) 14%, transparent);
+  }
+  /* ย่อเมนู: โชว์เฉพาะปุ่มที่ active (หน้าปัจจุบัน) เหลือแถวเดียว ปุ่มอื่นซ่อนไว้
+     กดปุ่มเดิมซ้ำเพื่อขยายกลับ — ไม่กระทบการสลับหน้า (showPage ทำงานปกติ) */
+  nav.nav-collapsed .nav-btn:not(.active) { display: none; }
+  .nav-right { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  #updated-at { font-size: 11px; color: var(--text2); white-space: nowrap; }
+  .refresh-btn {
+    background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
+    padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 11px;
+    font-family: var(--font); white-space: nowrap; flex-shrink: 0;
+  }
+  .refresh-btn:hover { color: var(--text); }
+
+  /* dark, thin scrollbar for the nav bar (and reused wherever .dark-scroll is applied) */
+  nav {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) var(--bg2);
+  }
+  nav::-webkit-scrollbar { height: 6px; }
+  nav::-webkit-scrollbar-track { background: var(--bg2); }
+  nav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  nav::-webkit-scrollbar-thumb:hover { background: var(--text2); }
+  .btn-wrap { position: relative; display: inline-block; }
+  /* position: fixed (ไม่ใช่ absolute) — ปุ่มพวกนี้อยู่ใน <nav> ที่มี overflow-x:auto +
+     overflow-y:hidden กล่อง note แบบ absolute จึงถูก clip เหลือแค่ในความสูง nav 44px
+     (อ่านได้แค่บรรทัดแรก) fixed อ้างอิง viewport เลยไม่โดน clip · ตำแหน่ง top/left
+     คำนวณด้วย JS (_positionBtnNote) แนวเดียวกับ .scr-tip-box ในตารางที่ overflow-x */
+  .btn-wrap .btn-note {
+    display: none; position: fixed;
+    background: #1e2330; border: 1px solid var(--border); border-radius: 7px;
+    padding: 8px 12px; font-size: 11px; color: var(--text2); white-space: nowrap;
+    z-index: 999; line-height: 1.7; pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
+  }
+  /* ลูกศรชี้ปุ่มเสมอ — JS ตั้ง --btn-note-arrow เป็นระยะจากขอบซ้ายกล่องถึงกึ่งกลางปุ่ม
+     (กล่องอาจถูกหนีบไม่ให้ล้นจอจนไม่ตรงกับปุ่ม ลูกศรตายตัวจะชี้ผิดที่) */
+  .btn-wrap .btn-note::after {
+    content: ''; position: absolute; bottom: 100%;
+    left: var(--btn-note-arrow, 14px); margin-left: -5px;
+    border: 5px solid transparent; border-bottom-color: var(--border);
+  }
+  .btn-wrap:hover .btn-note, .btn-wrap.tt-open .btn-note { display: block; }
+
+  /* PAGES */
+  .page { display: none; padding: 20px; max-width: 1400px; margin: 0 auto; }
+  #page-screener { max-width: 100%; }
+  #page-dr { max-width: 1800px; }
+  #screener-results .tbl th { padding: 5px 5px; font-size: 9px; }
+  #screener-results .tbl td { padding: 5px 5px; font-size: 11px; }
+  .page.active { display: block; }
+
+  /* GRID HELPERS */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+
+  /* CARD */
+  .card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px;
+  }
+  .card-title {
+    font-size: 11px; font-weight: 600; color: var(--text2);
+    text-transform: uppercase; letter-spacing: .06em; margin-bottom: 12px;
+  }
+
+  /* STAT BOX */
+  .stat-val { font-size: 28px; font-weight: 700; line-height: 1; }
+  .stat-label { font-size: 11px; color: var(--text2); margin-top: 4px; }
+  .stat-sub { font-size: 12px; color: var(--text2); margin-top: 6px; }
+
+  /* COLORS */
+  .green { color: var(--green); }
+  .red   { color: var(--red); }
+  .yellow{ color: var(--yellow); }
+  .blue  { color: var(--blue); }
+  .text2 { color: var(--text2); }
+
+  /* BADGE */
+  .badge {
+    display: inline-block; font-size: 10px; font-weight: 600;
+    padding: 2px 7px; border-radius: 4px; letter-spacing: .03em;
+  }
+  .badge-green  { background: var(--green2); color: var(--green); }
+  .badge-red    { background: var(--red2);   color: var(--red); }
+  .badge-yellow { background: #3d2e00; color: var(--yellow); }
+  .badge-blue   { background: #0d2847; color: var(--blue); }
+
+  /* BREADTH BAR */
+  .breadth-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .breadth-label { width: 70px; font-size: 12px; color: var(--text2); }
+  .breadth-track { flex: 1; height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; }
+  .breadth-fill  { height: 100%; border-radius: 3px; transition: width .4s; }
+  .breadth-pct   { width: 40px; text-align: right; font-size: 12px; font-weight: 600; }
+
+  /* TABLE */
+  .tbl { width: 100%; border-collapse: collapse; }
+  .tbl th {
+    font-size: 10px; font-weight: 600; color: var(--text2);
+    text-transform: uppercase; letter-spacing: .05em;
+    padding: 6px 8px; border-bottom: 1px solid var(--border);
+    text-align: left; white-space: nowrap;
+  }
+  .tbl th.r, .tbl td.r { text-align: right; }
+  .tbl td { padding: 6px 8px; border-bottom: 1px solid #1c2128; font-size: 12px; }
+  .tbl tr:hover td { background: var(--bg3); }
+  .tbl tr:last-child td { border-bottom: none; }
+
+  /* กล่อง Top Gainers/Losers: โชว์ ~10 แถวแรก ที่เหลือเลื่อนดู โดยขนาดการ์ดเท่าเดิม */
+  .mini-tbl-scroll { max-height: 296px; overflow-y: auto; }
+  .mini-tbl-scroll .tbl thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+
+  /* ตารางงบการเงิน (หน้างบ) — ตรึงคอลัมน์ "รายการ" ไว้เวลาเลื่อนดูตัวเลขไปทางขวา
+     คอลัมน์แรกต้องมีพื้นหลังทึบ (var(--bg2) = สีการ์ด) กันตัวเลขที่เลื่อนทะลุขึ้นมา */
+  #fin-result .tbl th:first-child,
+  #fin-result .tbl td:first-child {
+    position: sticky; left: 0; z-index: 1;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+  }
+  #fin-result .tbl thead th:first-child { z-index: 3; }        /* หัวคอลัมน์รายการอยู่บนสุด */
+  /* ตอน hover ยกทั้ง 'แถว' ให้ z-index สูง — เพราะคอลัมน์ sticky แต่ละเซลล์เป็น
+     stacking context แยก ทำให้ tooltip (.scr-tip-box) ของแถวบนโดนแถวล่างทับ
+     พอ hover ยก z-index แถวนั้นขึ้น tooltip เลยลอยเหนือแถวอื่นได้ */
+  #fin-result .tbl tr:hover td:first-child { background: var(--bg3); z-index: 20; }
+  #fin-result .tbl td:first-child:hover { z-index: 20; }
+
+  /* SECTOR BAR */
+  .sec-bar-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid #1c2128; }
+  .sec-bar-row:last-child { border-bottom: none; }
+  .sec-name { width: 220px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sec-track { flex: 1; height: 5px; background: var(--bg3); border-radius: 3px; overflow: hidden; position: relative; }
+  .sec-fill-pos { height: 100%; background: var(--green); border-radius: 3px; }
+  .sec-fill-neg { height: 100%; background: var(--red);   border-radius: 3px; }
+  .sec-val { width: 60px; text-align: right; font-size: 12px; font-weight: 600; }
+  .sec-rs  { width: 36px; text-align: right; font-size: 11px; color: var(--text2); }
+
+  /* RS DISTRIBUTION */
+  .rs-dist { display: flex; gap: 3px; align-items: flex-end; height: 60px; margin-bottom: 8px; }
+  .rs-bar { flex: 1; border-radius: 3px 3px 0 0; transition: height .4s; min-height: 4px; }
+  .rs-labels { display: flex; gap: 3px; }
+  .rs-lbl { flex: 1; font-size: 9px; color: var(--text2); text-align: center; }
+
+  /* SEARCH */
+  .search-box {
+    width: 100%; background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 13px;
+    font-family: var(--font); outline: none; margin-bottom: 12px;
+  }
+  .search-box:focus { border-color: var(--accent); }
+
+  /* FILTER ROW */
+  .filter-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .filter-btn {
+    background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
+    padding: 4px 10px; border-radius: 5px; cursor: pointer; font-size: 11px;
+    font-family: var(--font); transition: all .15s;
+  }
+  .filter-btn:hover, .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .dr-region-count-badge { opacity: .65; font-size: 10px; }
+  .dr-region-count-badge:empty { display: none; }
+
+  /* STATIC MODE (GitHub Pages) — ซ่อนปุ่ม/ฟีเจอร์ที่ต้องมี Flask server */
+  .static-mode #quick-update-btn,
+  .static-mode #refresh-btn,
+  .static-mode #restart-btn,
+  .static-mode #val-refresh-btn,
+  .static-mode #dr-quick-btn,
+  .static-mode #cm-mode-fin,
+  .static-mode #cm-fullfin-link,
+  .static-mode #spop-btn-fin,
+  .static-mode #cm-tf-5y,
+  .static-mode .nav-btn[onclick*="'financials'"],
+  .static-mode .nav-btn[onclick*="'band'"],
+  .static-mode .nav-btn[onclick*="'data-health'"],
+  .static-mode .nav-btn[onclick*="'hedge'"],
+  /* หุ้น US·HK·JP เรียก /api/{us,hk,jp}-index-metrics ตรงๆ ซึ่งไม่ได้ bake ไว้ใน STATIC_MAP
+     (ดู dashboard.js) — เปิดบน GitHub Pages แล้วขึ้น error เสมอ
+     (ข่าวหุ้น/รายงานทางการ ซ่อนตามคำขอผู้ใช้ ไม่ได้พังจริงทุกฟีเจอร์) */
+  .static-mode .nav-btn[onclick*="'us-stocks'"],
+  .static-mode .nav-btn[onclick*="'hk-stocks'"],
+  .static-mode .nav-btn[onclick*="'jp-stocks'"],
+  .static-mode .nav-btn[onclick*="'stock-news'"],
+  .static-mode .nav-btn[onclick*="'filings'"],
+  /* เทียบเพื่อน/Tearsheet/ปฏิทิน เรียก /api/peer-compare, /api/tearsheet/*, /api/calendar-events*
+     ตรงๆ ทุกตลาด (รวม TH) ไม่ได้ bake ไว้ใน STATIC_MAP เลย — พังบน GitHub Pages เสมอ */
+  .static-mode .nav-btn[onclick*="'peer'"],
+  .static-mode .nav-btn[onclick*="'tearsheet'"],
+  .static-mode .nav-btn[onclick*="'calendar'"],
+  .static-mode #pe-reminder-modal { display: none !important; }
+
+  /* page-heatmap/page-stock-rotation รวม TH/US/HK/JP ไว้หน้าเดียวด้วยแท็บเลือกตลาด — แท็บ TH
+     (heatmap ใช้ DATA.stocks, rotation DR ใช้ /api/dr ที่ bake ไว้ใน STATIC_MAP) ใช้ได้ปกติบน
+     GitHub Pages แต่แท็บ US/HK/JP เรียก /api/{us,hk,jp}-index-heatmap และ
+     /api/{us,hk,jp}-index-metrics ตรงๆ ซึ่งไม่ได้ bake ไว้ — ซ่อนเฉพาะแท็บเหล่านี้ (ไม่ซ่อนทั้ง
+     nav-btn เหมือนก่อนรวม เพราะแท็บ TH ยังต้องใช้งานได้) */
+  .static-mode #hm-tab-us, .static-mode #hm-tab-hk, .static-mode #hm-tab-jp,
+  .static-mode #sr-tab-us, .static-mode #sr-tab-hk, .static-mode #sr-tab-jp { display: none !important; }
+
+  /* HEDGE HOLDINGS (13F) */
+  .hedge-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .hedge-table thead th {
+    position: sticky; top: 0; background: var(--bg3); color: var(--text2);
+    text-align: left; font-weight: 600; padding: 8px 12px; white-space: nowrap;
+    border-bottom: 1px solid var(--border); z-index: 1;
+  }
+  .hedge-table tbody td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .hedge-table tbody tr:hover { background: var(--bg3); }
+  .hedge-chip {
+    display: inline-flex; align-items: center; gap: 3px; margin: 2px 3px 2px 0;
+    padding: 1px 6px; border-radius: 4px; background: var(--bg3);
+    border: 1px solid var(--border); font-size: 10.5px; cursor: pointer; color: var(--fg);
+  }
+  .hedge-chip b { color: var(--blue); font-size: 9.5px; }
+  .hedge-chip:hover { border-color: var(--blue); }
+  .hedge-fund-chip {
+    display: inline-block; margin: 2px 3px 2px 0; padding: 1px 6px; border-radius: 4px;
+    background: var(--bg3); border: 1px solid var(--border); font-size: 10px;
+    cursor: pointer; color: var(--text2); white-space: nowrap;
+  }
+  .hedge-fund-chip:hover { color: var(--fg); }
+
+  /* DATA HEALTH — badge สีแดงบนปุ่ม nav เมื่อมีรายการค้าง/red */
+  .dh-nav-badge {
+    display: inline-block; margin-left: 4px; background: var(--red); color: #fff;
+    font-size: 9px; font-weight: 700; border-radius: 8px; padding: 1px 5px;
+    min-width: 14px; text-align: center; vertical-align: middle;
+  }
+
+  /* SORT HEADER */
+  .tbl th.sortable { cursor: pointer; user-select: none; }
+  .tbl th.sortable:hover { color: var(--text); }
+
+  /* ROTATION MAP */
+  .rotation-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 2px;
+    border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  }
+  .rot-quad {
+    padding: 14px; min-height: 200px; position: relative;
+  }
+  .rot-quad.leading    { background: #0d2015; }
+  .rot-quad.improving  { background: #0d1a2a; }
+  .rot-quad.weakening  { background: #2a1a0d; }
+  .rot-quad.lagging    { background: #1a0d0d; }
+  .rot-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .08em; margin-bottom: 10px; opacity: .6;
+  }
+  .rot-item {
+    display: inline-block; padding: 3px 8px; border-radius: 4px;
+    font-size: 11px; margin: 2px; cursor: default;
+  }
+  .rot-axis-x { text-align: center; font-size: 10px; color: var(--text2); margin-top: 6px; }
+  .rot-axis-y { writing-mode: vertical-rl; text-align: center; font-size: 10px; color: var(--text2); margin-right: 6px; }
+  .rot-chip { display:inline-flex; align-items:center; gap:5px; padding:3px 8px 3px 5px; border-radius:5px; font-size:11px; cursor:pointer; border:1px solid transparent; transition:opacity .15s,border-color .15s; user-select:none; }
+  .rot-chip:hover { opacity:1 !important; border-color:rgba(255,255,255,0.25); }
+  .rot-chip.pinned { border-color:rgba(255,255,255,0.55); background:rgba(255,255,255,0.07); }
+  .rot-chip-sq { width:9px; height:9px; border-radius:2px; flex-shrink:0; }
+  .rot-tab-btn { background:none; border:none; border-bottom:2px solid transparent; color:var(--text2); padding:6px 14px; cursor:pointer; font-size:12px; font-weight:600; margin-bottom:-1px; transition:color .15s,border-color .15s; }
+  .rot-tab-btn:hover { color:var(--fg); }
+  .rot-tab-btn.active { color:var(--fg); border-bottom-color:#58a6ff; }
+  .idx-card { background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;cursor:pointer;transition:border-color .15s; }
+  .idx-card:hover { border-color:rgba(88,166,255,0.5); }
+  .idx-card-sym { font-size:10px;color:var(--text2);margin-bottom:2px; }
+  .idx-card-name { font-size:13px;font-weight:700;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+  .idx-card-val { font-size:16px;font-weight:700;margin-bottom:8px; }
+  .idx-spark { display:block;width:100%;height:48px;margin-bottom:8px; }
+  .idx-rets { display:grid;grid-template-columns:repeat(3,1fr);gap:4px;font-size:11px; }
+  .idx-ret-cell { text-align:center; }
+  .idx-rs-cell  { text-align:center; }
+  .idx-ret-lbl { color:var(--text2);font-size:10px; }
+  .idx-ret-val { font-weight:600; }
+  .heat-cell { display:inline-block; padding:3px 6px; border-radius:4px; font-size:11px; font-weight:600; text-align:center; min-width:52px; }
+  .heat-row td { padding:4px 6px; border-bottom:1px solid #1c2128; font-size:12px; }
+  .heat-row:last-child td { border-bottom:none; }
+
+  /* MINI SPARKLINE */
+  .spark { display: inline-block; width: 60px; height: 24px; vertical-align: middle; }
+  .spark-canvas { display: block; }
+
+  /* NVDR RANKING — ตาราง 30 แถวใน scroll container หัวตาราง sticky */
+  .nvdr-scroll { max-height: 480px; overflow-y: auto; }
+  .nvdr-scroll thead th {
+    position: sticky; top: 0; background: var(--bg2); z-index: 2;
+  }
+
+  /* MARKET REGIME LIGHT (nav) */
+  .regime-wrap { position: relative; display: inline-block; margin-right: 8px; }
+  #regime-light {
+    display: inline-block; padding: 3px 10px; border-radius: 12px;
+    font-size: 11px; font-weight: 700; cursor: pointer;
+    border: 1px solid transparent; vertical-align: middle;
+  }
+  .regime-on  { background: rgba(63,185,80,.15);  color: #3fb950; border-color: rgba(63,185,80,.4); }
+  .regime-mid { background: rgba(227,179,65,.15); color: #e3b341; border-color: rgba(227,179,65,.4); }
+  .regime-off { background: rgba(248,81,73,.15);  color: #f85149; border-color: rgba(248,81,73,.4); }
+  .regime-tip {
+    display: none; position: absolute; right: 0; top: calc(100% + 8px);
+    width: 330px; background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; font-size: 12px; line-height: 1.6;
+    z-index: 300; box-shadow: 0 8px 24px rgba(0,0,0,.5); text-align: left;
+    font-weight: 400; color: var(--text);
+  }
+  .regime-wrap:hover .regime-tip { display: block; }
+  .regime-wrap.tt-open .regime-tip { display: block; } /* จอสัมผัส: ไม่มี hover -> แตะเปิดแทน */
+  .regime-tip a { color: var(--blue); }
+
+  /* DATA QUALITY badges + banner */
+  .dq-badge {
+    display: inline-block; margin-left: 4px; padding: 0 4px;
+    border-radius: 4px; font-size: 9px; font-weight: 700;
+    vertical-align: middle; cursor: help; line-height: 14px;
+  }
+  .dq-red    { background: rgba(248,81,73,.15);  color: #f85149; border: 1px solid rgba(248,81,73,.4); }
+  .dq-yellow { background: rgba(210,153,34,.15); color: #d29922; border: 1px solid rgba(210,153,34,.4); }
+  .dq-gray   { background: rgba(139,148,158,.12); color: var(--text2); border: 1px solid var(--border); }
+  #dq-banner {
+    margin: 8px 16px 0; padding: 8px 14px; border-radius: 8px;
+    font-size: 12px; line-height: 1.5;
+    background: rgba(210,153,34,.1); border: 1px solid rgba(210,153,34,.35); color: #d29922;
+  }
+  #run-fail-banner {
+    margin: 8px 16px 0; padding: 8px 14px; border-radius: 8px;
+    font-size: 12px; line-height: 1.5;
+    background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.35); color: #f85149;
+  }
+
+  /* PAGE TITLE */
+  .page-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .page-sub   { font-size: 12px; color: var(--text2); margin-bottom: 20px; }
+
+  /* SECTION TITLE */
+  .sec-title { font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; margin: 20px 0 10px; }
+
+  /* WATCHLIST INPUT */
+  .wl-input-row { display: flex; gap: 8px; margin-bottom: 12px; }
+  .wl-input { flex: 1; background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 13px; font-family: var(--font); outline: none; }
+  .wl-input:focus { border-color: var(--accent); }
+  .wl-add-btn { background: var(--accent); border: none; color: #fff; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-family: var(--font); font-size: 13px; }
+  .wl-del-btn { background: none; border: none; color: var(--red); cursor: pointer; font-size: 14px; padding: 0 4px; }
+
+  /* EMPTY STATE */
+  .empty { text-align: center; color: var(--text2); padding: 40px; font-size: 13px; }
+
+  /* SECTOR DETAIL MODAL */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.75); z-index: 200;
+    align-items: flex-start; justify-content: center; padding-top: 60px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; width: 92%; max-width: 920px;
+    max-height: 82vh; display: flex; flex-direction: column;
+  }
+  .modal-header {
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .modal-title { font-size: 15px; font-weight: 700; flex: 1; }
+  .modal-abbr { font-size: 11px; font-weight: 700; color: var(--blue); background: #0d2847; padding: 3px 8px; border-radius: 4px; }
+  .modal-close { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 20px; line-height: 1; padding: 0 4px; }
+  .modal-close:hover { color: var(--text); }
+  .modal-stats { display: flex; gap: 20px; padding: 10px 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .modal-stat { text-align: center; min-width: 65px; }
+  .modal-stat-val { font-size: 14px; font-weight: 700; }
+  .modal-stat-lbl { font-size: 10px; color: var(--text2); margin-top: 2px; }
+  .modal-body { overflow-y: auto; }
+  .tbl-clickable tbody tr { cursor: default; }
+
+  /* RESPONSIVE */
+  @media (max-width: 900px) {
+    .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+  }
+
+  /* SCREENER */
+  .tbl th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+  .tbl th.sortable:hover { color:#fff; background:rgba(255,255,255,0.04); }
+  .sort-ind { margin-left:3px; font-size:9px; opacity:0.35; }
+  .sort-ind.on { opacity:1; color:#58a6ff; }
+  .scr-input {
+    width: 100%; background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 10px; border-radius: 6px; font-size: 12px;
+    font-family: var(--font); outline: none;
+  }
+  .scr-input:focus { border-color: var(--accent); }
+  .scr-label { font-size: 10px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 5px; display: flex; align-items: center; gap: 4px; }
+  .scr-group { display: flex; flex-direction: column; gap: 4px; }
+  .scr-tip-icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--border); color: var(--text2); font-size: 9px; font-weight: 700; cursor: default; flex-shrink: 0; position: relative; }
+  .scr-tip-icon:hover .scr-tip-box { display: block; }
+  .scr-tip-icon.tt-open .scr-tip-box { display: block; } /* จอสัมผัส: ไม่มี hover -> แตะเปิดแทน */
+  /* position: fixed (ไม่ใช่ absolute) — กัน tipbox โดน clip เวลาไอคอนอยู่ในตารางที่มี
+     overflow-x:auto (เช่นตารางงบการเงิน) ตำแหน่ง top/left จริงคำนวณด้วย JS (_tipIconPosition)
+     ตอน hover/tap เพราะ position:fixed ใช้ viewport อ้างอิง ไม่ใช่ตัวไอคอน */
+  .scr-tip-box { display: none; position: fixed; background: #1c2333; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; width: 220px; font-size: 11px; color: var(--text); line-height: 1.5; z-index: 9999; white-space: normal; text-transform: none; letter-spacing: 0; font-weight: 400; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
+  .scr-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .scr-check-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+  .scr-check { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+  .scr-actions { display: flex; gap: 8px; }
+  .btn-primary { background: var(--accent); border: none; color: #fff; padding: 7px 20px; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: var(--font); }
+  .btn-secondary { background: var(--bg3); border: 1px solid var(--border); color: var(--text2); padding: 7px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: var(--font); }
+
+  /* SYMBOL LINK */
+  .sym-link { cursor: pointer; color: var(--blue); }
+  .sym-link:hover { text-decoration: underline; }
+  .tv-link { font-size:10px; color:var(--text2); opacity:0.55; text-decoration:none; margin-left:3px; vertical-align:middle; }
+  .tv-link:hover { opacity:1; color:#2962ff; }
+
+  /* BAND PAGE */
+  .band-search-row { display:flex; gap:8px; margin-bottom:20px; }
+  .band-input { flex:1; max-width:360px; background:var(--bg3); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:10px 14px; font-size:14px; font-family:var(--font); }
+  .band-input:focus { outline:none; border-color:var(--accent); }
+  .band-metrics-row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
+  .band-metric { text-align:center; min-width:56px; }
+  .band-metric-val { font-size:17px; font-weight:700; }
+  .band-metric-lbl { font-size:10px; color:var(--text2); margin-top:2px; }
+  .band-zone-badge { padding:5px 14px; border-radius:20px; font-size:12px; font-weight:600; background:var(--bg3); margin-left:auto; }
+  .band-card-label { font-size:11px; font-weight:600; color:var(--text2); text-transform:uppercase; letter-spacing:.6px; margin-bottom:10px; }
+
+  /* REFRESH PERIOD DIALOG */
+  .period-opt-btn { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:14px 10px; cursor:pointer; text-align:center; color:var(--text); transition:border-color .15s, background .15s; width:100%; }
+  .period-opt-btn:hover { border-color:var(--accent); background:var(--bg2); }
+  .period-opt-btn.recommended { border-color:var(--accent); }
+
+  /* SAVED PRESET */
+  .preset-saved-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); padding: 3px 8px 3px 10px; border-radius: 5px;
+    font-size: 11px; cursor: pointer;
+  }
+  .preset-saved-btn:hover { border-color: var(--accent); }
+  .preset-del { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 12px; padding: 0 2px; line-height: 1; }
+  .preset-del:hover { color: var(--red); }
+  .preset-save-input { background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 4px 8px; border-radius: 5px; font-size: 11px; font-family: var(--font); outline: none; width: 140px; }
+  .preset-save-input:focus { border-color: var(--accent); }
+
+  /* PRICE CHART MODAL */
+  .cm-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.8); z-index: 300;
+    align-items: center; justify-content: center;
+  }
+  .cm-overlay.open { display: flex; }
+  .cm-box {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; width: min(900px, 96vw);
+    max-height: 90vh; overflow-y: auto; padding: 20px;
+  }
+  .cm-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .cm-header > div:first-child { min-width: 0; overflow: hidden; }
+  .cm-header > div:last-child  { flex-shrink: 0; }
+  .cm-header button, .cm-header a { white-space: nowrap; }
+  .cm-title  { font-size: 17px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cm-sub    { font-size: 12px; color: var(--text2); margin-top: 3px; }
+  .cm-close  { background: none; border: none; color: var(--text2); font-size: 20px; cursor: pointer; padding: 0 4px; }
+  .cm-metrics { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+  .cm-metric-val { font-size: 15px; font-weight: 700; }
+  .cm-metric-lbl { font-size: 10px; color: var(--text2); margin-top: 2px; }
+  .cm-legend { display: flex; gap: 14px; margin-top: 8px; font-size: 11px; color: var(--text2); flex-wrap: wrap; }
+  .cm-legend-item { display: flex; align-items: center; gap: 5px; }
+  .cm-legend-line { width: 22px; height: 2px; border-radius: 1px; }
+
+  /* HEATMAP */
+  .hm-cell {
+    width: 76px; height: 48px; border-radius: 4px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 1px;
+    font-size: 9px; font-weight: 600; cursor: pointer;
+    overflow: hidden; white-space: nowrap;
+    transition: opacity .15s, outline .1s;
+  }
+  .hm-cell:hover { opacity: .8; outline: 1px solid rgba(255,255,255,.4); }
+
+  /* 52W RANGE BAR */
+  .range-bar-wrap { min-width: 90px; }
+  .range-bar-track { background: var(--bg3); height: 5px; border-radius: 3px; overflow: hidden; }
+  .range-bar-fill  { height: 100%; background: var(--blue); border-radius: 3px; }
+
+  /* DR PAGE */
+  .dr-logo {
+    width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: #fff; letter-spacing: 0;
+  }
+  .dr-logo-img {
+    width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0;
+    object-fit: contain; background: #fff; padding: 2px;
+  }
+
+  /* DR CARD VIEW */
+  .dr-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+    padding: 4px 0;
+  }
+  .dr-card {
+    background: var(--bg2); border-radius: 10px; padding: 10px 12px 8px;
+    border: 1px solid var(--border); cursor: default;
+    transition: border-color .15s;
+  }
+  .dr-card:hover { border-color: var(--blue); }
+  .dr-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .dr-card-logo-img {
+    width: 32px; height: 32px; border-radius: 7px; object-fit: contain;
+    background: #fff; padding: 2px; flex-shrink: 0;
+  }
+  .dr-card-logo {
+    width: 32px; height: 32px; border-radius: 7px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: #fff;
+  }
+  .dr-card-sym { font-size: 14px; font-weight: 700; color: var(--text1); }
+  .dr-card-exch {
+    font-size: 9px; font-weight: 600; padding: 2px 5px; border-radius: 4px;
+    background: var(--bg3); color: var(--text2); white-space: nowrap;
+  }
+  .dr-card-name {
+    font-size: 10px; color: var(--text2); margin-bottom: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .dr-card-price-row {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px;
+  }
+  .dr-card-price { font-size: 12px; font-weight: 600; color: var(--text1); }
+  .dr-card-chg { font-size: 12px; font-weight: 700; }
+  .dr-card-chart { width: 100%; height: 52px; display: block; }
+  .dr-card-badges { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
+  .dr-view-toggle { display: flex; gap: 4px; margin-left: auto; }
+  .dr-view-btn {
+    background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
+    border-radius: 5px; padding: 3px 10px; font-size: 12px; cursor: pointer;
+  }
+  .dr-view-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .dr-region-hdr-card {
+    grid-column: 1 / -1; font-size: 12px; font-weight: 700;
+    color: var(--text2); padding: 4px 0; border-bottom: 1px solid var(--border);
+    margin-bottom: 2px;
+  }
+  .dr-sym-cell { display: flex; align-items: center; gap: 7px; }
+  .dr-sym-text { font-weight: 700; font-size: 13px; white-space: nowrap; }
+  .dr-badge {
+    display: inline-block; background: #0d2847; color: #58a6ff;
+    border: 1px solid #1a3d6e; border-radius: 3px;
+    padding: 1px 5px; font-size: 9px; font-weight: 600;
+    white-space: nowrap; margin: 1px 1px 1px 0; line-height: 1.5;
+    text-decoration: none; cursor: pointer;
+  }
+  .dr-badge:hover { background: #1a3d6e; border-color: #58a6ff; }
+  .dr-badge-x { background: #0d2230; color: #79c0ff; border-color: #1a3550; }
+  .dr-badge-x:hover { background: #1a3050; border-color: #79c0ff; }
+  .dr-region-hdr {
+    background: var(--bg3); border-bottom: 1px solid var(--border);
+    padding: 8px 10px; font-size: 12px; font-weight: 700;
+    color: var(--text); display: flex; align-items: center; gap: 8px;
+  }
+  .dr-region-hdr .dr-region-count {
+    font-size: 10px; color: var(--text2); font-weight: 400;
+  }
+  .dr-tbl td { padding: 5px 8px; vertical-align: middle; }
+  .dr-tbl thead th { padding: 6px 8px; }
+  .dr-loading {
+    text-align: center; padding: 60px 20px; color: var(--text2); font-size: 13px;
+  }
+  .dr-load-spin {
+    display: inline-block; width: 20px; height: 20px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite;
+    margin-right: 8px; vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .dr-refresh-btn {
+    background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
+    padding: 4px 12px; border-radius: 5px; cursor: pointer; font-size: 11px;
+    font-family: var(--font); margin-left: 8px;
+  }
+  .dr-refresh-btn:hover { color: var(--text); }
+
+  /* WATCHLIST ALERT CELL */
+  .wl-alert-btn {
+    background: none; border: 1px dashed var(--border); color: var(--text2);
+    border-radius: 4px; cursor: pointer; font-size: 12px; padding: 1px 7px;
+    font-family: var(--font);
+  }
+  .wl-alert-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .wl-alert-tag {
+    display: inline-block; font-size: 11px; font-weight: 600; border-radius: 4px;
+    padding: 2px 6px; cursor: pointer;
+  }
+  .wl-alert-tag.above { background: rgba(63,185,80,.15); color: var(--green); }
+  .wl-alert-tag.below { background: rgba(248,81,73,.15); color: var(--red); }
+  .wl-alert-tag:hover { filter: brightness(1.3); }
+
+  /* WATCHLIST ALERT MODAL */
+  #wl-alert-modal {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7);
+    z-index: 2000; align-items: center; justify-content: center;
+  }
+  #wl-alert-modal.open { display: flex; }
+  #wl-alert-modal-box {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; width: 340px; max-width: 95vw;
+    box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  }
+  #wl-alert-modal-box h3 { font-size: 15px; margin-bottom: 14px; }
+  #wl-alert-modal-box label { display: block; font-size: 11px; color: var(--text2); margin-bottom: 4px; margin-top: 10px; }
+  #wl-alert-modal-box input, #wl-alert-modal-box select {
+    width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg3); color: var(--text); font-size: 12px; font-family: var(--font);
+  }
+  #wl-alert-modal-box input:focus, #wl-alert-modal-box select:focus { outline: none; border-color: var(--accent); }
+  .wl-alert-modal-btns { display: flex; gap: 8px; margin-top: 14px; }
+  .wl-alert-modal-btns button { flex: 1; padding: 8px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: var(--font); font-weight: 600; }
+  #wl-alert-modal-save { background: var(--accent); color: #fff; border: none; }
+  #wl-alert-modal-save:hover { background: #1a7fe8; }
+  #wl-alert-modal-cancel { background: transparent; color: var(--text2); border: 1px solid var(--border); }
+  #wl-alert-modal-cancel:hover { color: var(--text); }
+  #wl-alert-existing { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+  #wl-alert-existing h4 { font-size: 11px; color: var(--text2); margin-bottom: 6px; }
+  .wl-alert-ex-item {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px;
+  }
+  .wl-alert-ex-del {
+    background: none; border: none; color: var(--text2); cursor: pointer; font-size: 14px;
+    padding: 0 4px; line-height: 1; border-radius: 3px;
+  }
+  .wl-alert-ex-del:hover { color: var(--red); }
+
+  /* PRICE ALERT BELL */
+  #alert-bell-btn {
+    background: none; border: none; cursor: pointer; color: var(--text2);
+    font-size: 18px; padding: 4px 8px; border-radius: 6px; position: relative;
+    transition: color .15s; line-height: 1;
+  }
+  #alert-bell-btn:hover { color: var(--yellow); }
+  #alert-badge {
+    display: none; position: absolute; top: 0; right: 2px;
+    background: var(--red); color: #fff; font-size: 9px; font-weight: 700;
+    border-radius: 8px; padding: 1px 4px; min-width: 14px; text-align: center;
+    pointer-events: none;
+  }
+
+  /* ALERT PANEL (slide-in from right) */
+  #alert-panel {
+    display: none; position: fixed; top: var(--nav-h, 44px); right: 0; bottom: 0;
+    width: 380px; background: var(--bg2); border-left: 1px solid var(--border);
+    z-index: 500; overflow-y: auto; flex-direction: column;
+  }
+  #alert-panel.open { display: flex; }
+  .alert-panel-hdr {
+    padding: 14px 16px 10px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; background: var(--bg2); z-index: 1;
+  }
+  .alert-panel-hdr h3 { font-size: 14px; font-weight: 600; }
+  .alert-close-btn {
+    background: none; border: none; color: var(--text2); cursor: pointer; font-size: 18px;
+    padding: 0 4px; border-radius: 4px; line-height: 1;
+  }
+  .alert-close-btn:hover { color: var(--text); }
+  .alert-add-form {
+    padding: 14px 16px; border-bottom: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .alert-add-form label { font-size: 11px; color: var(--text2); }
+  .alert-add-form input, .alert-add-form select {
+    width: 100%; padding: 6px 9px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg3);
+    color: var(--text); font-size: 12px; font-family: var(--font);
+  }
+  .alert-add-form input:focus, .alert-add-form select:focus {
+    outline: none; border-color: var(--accent);
+  }
+  .alert-row { display: flex; gap: 8px; }
+  .alert-row > * { flex: 1; }
+  .alert-add-btn {
+    width: 100%; padding: 7px; border-radius: 6px; border: none;
+    background: var(--accent); color: #fff; cursor: pointer; font-size: 12px;
+    font-family: var(--font); font-weight: 600;
+  }
+  .alert-add-btn:hover { background: #1a7fe8; }
+  .alert-section-title {
+    font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase;
+    letter-spacing: .5px; padding: 12px 16px 6px;
+  }
+  .alert-item {
+    margin: 0 12px 8px; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg3);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .alert-item.triggered { border-color: #d2992244; background: #2a200a; }
+  .alert-item-body { flex: 1; min-width: 0; }
+  .alert-sym { font-size: 13px; font-weight: 700; color: var(--text); }
+  .alert-cond { font-size: 11px; color: var(--text2); margin-top: 2px; }
+  .alert-note { font-size: 10px; color: var(--text2); margin-top: 3px; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .alert-del-btn {
+    background: none; border: none; color: var(--text2); cursor: pointer;
+    font-size: 16px; padding: 2px 4px; border-radius: 4px; line-height: 1; flex-shrink: 0;
+  }
+  .alert-del-btn:hover { color: var(--red); }
+  .alert-empty { font-size: 12px; color: var(--text2); padding: 12px 16px; font-style: italic; }
+
+  /* PRICE HIT POPUP */
+  #alert-popup {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.75);
+    z-index: 9990; align-items: center; justify-content: center;
+  }
+  #alert-popup.open { display: flex; }
+  #alert-popup-box {
+    background: var(--bg2); border-radius: 14px; padding: 28px 28px 20px;
+    width: 380px; max-width: 95vw; box-shadow: 0 8px 40px rgba(0,0,0,.7);
+    text-align: center; animation: popupIn .3s ease;
+  }
+  #alert-popup-box.up { border: 2px solid var(--green); }
+  #alert-popup-box.down { border: 2px solid var(--red); }
+  #alert-popup-icon { font-size: 48px; margin-bottom: 8px; }
+  #alert-popup-sym { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+  #alert-popup-msg { font-size: 14px; color: var(--text2); margin-bottom: 6px; }
+  #alert-popup-note { font-size: 12px; color: var(--text2); font-style: italic; margin-bottom: 18px; min-height: 16px; }
+  #alert-popup-close {
+    padding: 9px 28px; border-radius: 8px; border: none; background: var(--accent);
+    color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; font-family: var(--font);
+  }
+  #alert-popup-close:hover { background: #1a7fe8; }
+  /* queue indicator */
+  #alert-popup-queue { font-size: 11px; color: var(--text2); margin-top: 10px; }
+  @keyframes popupIn {
+    from { opacity:0; transform: scale(.92) translateY(16px); }
+    to   { opacity:1; transform: none; }
+  }
+
+  /* PROGRESS OVERLAY */
+  #progress-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.8); z-index: 999;
+    align-items: center; justify-content: center;
+  }
+  #progress-modal {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 32px 40px; width: 460px; max-width: 92vw;
+    text-align: center;
+  }
+  #progress-title { font-size: 16px; font-weight: 700; margin-bottom: 24px; }
+  #progress-bar-track {
+    background: var(--bg3); border-radius: 6px; height: 10px;
+    overflow: hidden; margin-bottom: 10px;
+  }
+  #progress-bar-fill {
+    height: 100%; width: 0%; background: var(--accent);
+    border-radius: 6px; transition: width .4s ease;
+  }
+  #progress-pct { font-size: 13px; font-weight: 600; color: var(--blue); margin-bottom: 8px; }
+  #progress-msg { font-size: 12px; color: var(--text2); min-height: 18px; }
+  #progress-eta { font-size: 11px; color: var(--text2); margin-top: 6px; opacity: .7; }
+
+
+/* ================= block 2 ================= */
+
+.val-tip {
+  display:inline-flex;align-items:center;justify-content:center;
+  width:15px;height:15px;border-radius:50%;
+  background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.2);
+  color:rgba(255,255,255,0.5);font-size:9px;cursor:help;
+  margin-left:5px;vertical-align:middle;flex-shrink:0;
+  transition:background .15s;user-select:none;
+}
+.val-tip:hover { background:rgba(90,180,255,0.2);color:#5ab4ff;border-color:#5ab4ff; }
+#_vtip-popup {
+  position:fixed;z-index:9999;max-width:300px;
+  background:#1a2030;border:1px solid #3a4a5a;border-radius:8px;
+  padding:10px 13px;font-size:12px;line-height:1.6;
+  box-shadow:0 4px 20px rgba(0,0,0,0.6);pointer-events:none;
+  display:none;color:#c8d0dc;
+}
+#_vtip-popup b { color:#e8eef5; }
+#_vtip-popup .tip-head { font-size:13px;font-weight:700;color:#5ab4ff;margin-bottom:6px; }
+#_vtip-popup .tip-row { display:flex;gap:6px;margin:2px 0; }
+#_vtip-popup .tip-label { color:rgba(255,255,255,0.4);min-width:70px; }
+#_vtip-popup .tip-val { color:#e8eef5;font-weight:600; }
+#_vtip-popup .tip-zone-cheap { color:#3ab464; }
+#_vtip-popup .tip-zone-fair  { color:#96c850; }
+#_vtip-popup .tip-zone-high  { color:#dca032; }
+#_vtip-popup .tip-zone-exp   { color:#dc503c; }
+#_vtip-popup hr { border:none;border-top:1px solid #2a3a4a;margin:7px 0; }
+
+/* ============================================================
+   MOBILE / TABLET (iPad, iPhone) — จอแคบ ≤1024px (ครอบคลุมไอแพดทุกรุ่น
+   รวม iPad Pro 12.9" แนวตั้งที่กว้างถึง 1024px — เดิมใช้ 768px ทำให้
+   ไอแพดรุ่นที่กว้างกว่านั้น (810/820/834/1024px) ไม่ได้รับ fix กลุ่มนี้เลย)
+   ทุกกฎในนี้ override เฉพาะตอนจอแคบ ไม่แตะ layout desktop เลย
+   ============================================================ */
+@media (max-width: 1024px) {
+  /* Nav bar: 21 ปุ่มล้นจอ -> ให้เลื่อนแนวนอนได้แบบ tab bar
+     (ปุ่มเดิม ข้อความเดิม ตำแหน่งเดิม แค่เพิ่ม scroll แทนการ wrap/ล้น) */
+  nav {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;         /* Firefox */
+
+    /* scroll-shadow technique (Lea Verou): เงาจางที่ขอบซ้าย/ขวา
+       โผล่เฉพาะตอนยังเลื่อนต่อได้ฝั่งนั้น — หายไปเองเมื่อเลื่อนสุดขอบ
+       ให้ผู้ใช้รู้ว่า "ยังมีเมนูซ่อนอยู่อีก" โดยไม่ต้องใช้ JS */
+    background:
+      linear-gradient(to right, var(--bg2) 50%, transparent) left,
+      linear-gradient(to left,  var(--bg2) 50%, transparent) right,
+      linear-gradient(to right, rgba(0,0,0,.5), transparent 70%) left,
+      linear-gradient(to left,  rgba(0,0,0,.5), transparent 70%) right;
+    background-repeat: no-repeat;
+    background-color: var(--bg2);
+    background-size: 24px 100%, 24px 100%, 12px 100%, 12px 100%;
+    background-attachment: local, local, scroll, scroll;
+  }
+  nav::-webkit-scrollbar { display: none; }  /* Chrome/Safari */
+  .nav-brand, .nav-btn { flex-shrink: 0; white-space: nowrap; }
+  .nav-right { flex-shrink: 0; }
+
+  /* Touch target: ปุ่ม nav ยืดเต็มความสูงแถบ (44px ตามเกณฑ์ Apple/Google)
+     แทนที่จะเป็นกล่องข้อความเล็กๆ ลอยอยู่กลางแถบ — พื้นที่แตะโดนได้
+     กว้างขึ้นทั้งแท่ง โดยไม่เปลี่ยนขนาดตัวหนังสือ/หน้าตาเดิมเลย */
+  nav { align-items: stretch; }
+  .nav-btn { display: flex; align-items: center; }
+
+  /* filter chip ต่างๆ (Screener, Rotation ฯลฯ): เพิ่ม padding + ระยะห่าง
+     พอประมาณให้แตะแม่นขึ้น — ไม่ดัน min-height ถึง 44px เต็มรูปแบบ
+     เพราะบาง filter-row มี 8-10 chip ในแถวเดียว จะบวมเทอะทะกว่าจะช่วย
+     (ให้ประโยชน์เชิงพื้นที่แตะแบบพอเหมาะ + เว้นช่องไฟกันแตะโดนชิดกัน) */
+  .filter-btn { padding: 8px 13px; }
+  .filter-row { gap: 10px; }
+
+}
+
+/* ตารางข้อมูล (Screener, หุ้นทั้งหมด, Fundamentals ฯลฯ) กว้างเกินจอแคบ
+   เดิมลองใช้ display:block บนตัว <table> เอง แต่ชนกับตารางที่มี <canvas>
+   (sparkline ในหน้า "หุ้นทั้งหมด"/Watchlist) — Safari/WebKit บนไอแพดมีบั๊ก
+   ทำให้ canvas หลุดตำแหน่งเมื่อ table ถูกบังคับ display:block เลยต้อง
+   ยกเว้นตารางกลุ่มนั้นไว้ก่อน แต่ผลคือตารางกลุ่มที่มี canvas ไม่มี wrapper
+   ให้เลื่อนเลย ดันทั้งการ์ด/หน้าล้นซ้ายขวาแทน (ปัญหาที่เจอจริง)
+
+   แก้ใหม่: ให้ .card (ตัวห่อ) เป็นตัวเลื่อนแทน ไม่ไปแตะ display ของ
+   <table> เองเลย — ปลอดภัยกับ canvas ทุกกรณี เพราะบั๊ก Safari เกิดจาก
+   การเปลี่ยน display ของ table ไม่ใช่จาก overflow ของ parent
+
+   ตัด -webkit-overflow-scrolling:touch ออก — property เก่านี้บังคับให้
+   Safari สร้าง compositing layer แยกสำหรับ scroll ซึ่งมีบั๊กเก่าแก่ที่
+   เนื้อหาที่เลื่อน "หลุด" ออกนอกขอบ border-radius/พื้นหลังของ .card ระหว่าง
+   momentum scroll (ตรงกับอาการที่เจอ) — iOS 13+ มี momentum scroll ให้
+   overflow-x:auto เฉยๆ อยู่แล้วโดยไม่ต้องพึ่ง property นี้
+
+   เจอสาเหตุจริงที่ยังล้นอยู่ (หุ้นทั้งหมด, DR/DRx): base rule ".tbl{width:
+   100%}" บังคับตารางให้กว้างแค่เท่า parent เสมอ (auto table-layout เลย
+   บีบทุกคอลัมน์ให้พอดี แทนที่จะกว้างเกินแล้ว scroll) — ต้องคืน width
+   เป็น auto (ปล่อยกว้างตามเนื้อหาจริง) ให้ overflow-x:auto ทำงานได้จริง
+
+   ทำเป็น blanket rule ให้ .tbl ทุกตัว ไม่ผูกกับ .card อย่างเดียว เพราะ
+   หลายตาราง (Insider, Short Sales, NVDR, Capital Flow, Valuation) ห่อ
+   ด้วย <div style="overflow-x:auto"> ของตัวเองอยู่แล้ว ไม่ใช่ .card —
+   ถ้าไม่แก้ตรงนี้ให้ครอบคลุมด้วย จะโดนบั๊กเดียวกันทันทีที่คอลัมน์เยอะขึ้น
+
+   แยกเป็น media query กว้างกว่าบล็อคทัชข้างบน (1366px แทน 1024px) เพราะ
+   ไอแพดแนวนอน (landscape) กว้างเกิน 1024px ได้ (เช่น 12.9" Pro = 1366px)
+   หลุด breakpoint เดิมไปเลย ตารางเลยกลับไปล้นแบบไม่มี wrapper อีกครั้ง
+   ทั้งที่แนวตั้งใช้ได้ปกติ — ใช้ breakpoint แยกเฉพาะจุดนี้แทนที่จะขยาย
+   บล็อคทัชทั้งก้อน กัน nav-bar/touch-target ไปกระทบโน้ตบุ๊กจอเล็กโดยไม่ตั้งใจ */
+@media (max-width: 1366px) {
+  .tbl {
+    width: auto;
+    min-width: 100%;
+  }
+  .card:has(table.tbl) {
+    overflow-x: auto;
+  }
+
+  /* ซ่อนปุ่ม "เทียบเพื่อน"/"ดูสรุปเต็ม" ใน popup กราฟหุ้นรายตัว บนมือถือ/
+     ไอแพด — สองหน้านี้ (Peer Compare, Tearsheet) เป็นตาราง/เลย์เอาต์กว้าง
+     ที่ยังใช้งานไม่ได้จริงบนจอสัมผัส เลยซ่อนทางเข้าจาก popup ไว้ก่อน
+     (หน้าเดิมยังเข้าได้ปกติผ่านเมนู nav บนจอกว้าง) */
+  #cm-peer-btn, #cm-tearsheet-btn {
+    display: none !important;
+  }
+}
+
+/* ซ่อนถาวรทุกขนาดจอ (ไม่มีเงื่อนไขจอแคบ) — คอลัมน์ที่ซ้ำซ้อน/สำคัญน้อยสุด
+   ตามที่ผู้ใช้เลือกไว้: "หุ้นทั้งหมด" ตัด Industry (ซ้ำกับ Sector คอลัมน์
+   ถัดไป), "52W High/Low & Breakout" ตัด 3M% */
+#tbl-stocks    th:nth-child(4),  #tbl-stocks    td:nth-child(4),
+#tbl-breakout  th:nth-child(11), #tbl-breakout  td:nth-child(11) {
+  display: none;
+}
+
+/* ซ่อนคอลัมน์ "ชื่อ" (ชื่อเต็มบริษัท เช่น "MIDA LEASING PUBLIC CO., LTD.")
+   เฉพาะเวอร์ชันเว็บที่ deploy บน GitHub Pages (body.static-mode) — ไม่ว่า
+   จอขนาดไหนก็ซ่อน เพราะข้อมูลซ้ำกับ Symbol อยู่แล้ว (คลิก Symbol เปิดกราฟ
+   เห็นชื่อเต็มได้เหมือนเดิม) ส่วนเวอร์ชัน local (Flask บนเครื่อง) ยังโชว์
+   ชื่อเต็มตามปกติทุกขนาดจอ — ทำทุกตารางที่มีคอลัมน์นี้: RS Leaders &
+   Emerging, หุ้นทั้งหมด, Stage Analysis, Watchlist, 52W High/Low &
+   Breakout, Momentum Alignment
+   (Stock Screener แยกจัดการใน JS เพราะใช้ colgroup กำหนดความกว้างตรงๆ —
+   Fundamental View ถูกยุบเข้า Screener แล้ว ไม่มี #tbl-fundamentals อีกต่อไป) */
+body.static-mode #tbl-rs-leaders th:nth-child(3),  body.static-mode #tbl-rs-leaders td:nth-child(3),
+body.static-mode #tbl-emerging   th:nth-child(3),  body.static-mode #tbl-emerging   td:nth-child(3),
+body.static-mode #tbl-stocks     th:nth-child(3),  body.static-mode #tbl-stocks     td:nth-child(3),
+body.static-mode #tbl-watchlist  th:nth-child(3),  body.static-mode #tbl-watchlist  td:nth-child(3),
+body.static-mode #tbl-stage      th:nth-child(4),  body.static-mode #tbl-stage      td:nth-child(4),
+body.static-mode #tbl-breakout   th:nth-child(4),  body.static-mode #tbl-breakout   td:nth-child(4),
+body.static-mode #tbl-momentum   th:nth-child(4),  body.static-mode #tbl-momentum   td:nth-child(4) {
+  display: none;
+}
+
+/* ============================================================
+   Mobile/touch enhancements (2026-07-13)
+   ============================================================ */
+
+/* จอสัมผัส: คอลัมน์แรก (ชื่อหุ้น) ค้างไว้ตอนเลื่อนตารางแนวนอน — เลื่อนขวาแล้ว
+   ยังรู้ว่าแถวไหนคือหุ้นอะไร · ใช้กับตารางหลักที่กว้างเกินจอ (pointer:coarse =
+   มือถือ/แท็บเล็ตเท่านั้น ไม่กระทบหน้าตาบนเดสก์ท็อป) */
+@media (pointer: coarse) {
+  .tbl th:first-child, .tbl td:first-child,
+  .data-table th:first-child, .data-table td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--bg2);
+    z-index: 2;
+    box-shadow: 2px 0 4px rgba(0,0,0,.35);
+  }
+  /* มุมซ้ายบนของตารางที่ header ก็ sticky (เช่นตารางผล Screener+) ต้องลอยเหนือทุกชั้น */
+  .tbl thead th:first-child, .data-table thead th:first-child { z-index: 4; }
+
+  /* มือถือ/แท็บเล็ต: ปุ่มสลับ "เปิดหน้าเดิม/เปิดแท็บใหม่" ไม่ค่อยมีประโยชน์
+     (แตะเมนูบนจอสัมผัสมักเปิดแท็บใหม่อยู่แล้วตามพฤติกรรม browser เอง) แถม
+     กินที่แถบ nav ที่แคบอยู่แล้ว — ซ่อนเฉพาะจอสัมผัส ส่วนเดสก์ท็อปยังโชว์ปกติ */
+  #nav-openmode-btn { display: none; }
+}
+
+/* ── การ์ดคู่มือลำดับการกดอัพเดท (หน้า Data Health) ────────────────────
+   ใช้ <details> เพื่อให้ย่อเก็บได้เมื่ออ่านจนจำได้แล้ว — ซ่อน marker เริ่มต้น
+   ของเบราว์เซอร์ (list-style:none เอาไม่อยู่บน WebKit ต้องใช้ pseudo แยก)
+   แล้วใส่ ▾/▸ ของเราเองที่หมุนตามสถานะเปิด/ปิด */
+#dh-order-guide > summary::-webkit-details-marker { display: none; }
+#dh-order-guide > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--text2);
+  transition: transform .15s ease;
+}
+#dh-order-guide[open] > summary::before { transform: rotate(90deg); }
+#dh-order-guide code {
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 11px;
+  white-space: nowrap;
+}

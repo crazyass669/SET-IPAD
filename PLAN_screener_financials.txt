@@ -1,0 +1,403 @@
+========================================================================
+ แผนงาน: เมนูงบการเงิน + Screener (SET Dashboard)
+ อัพเดท: 2026-07-11
+ ข้อมูลบนมือ: Yahoo (ละเอียด) + Finnomena (ยาว 16 ปี) + SET (ทางการ)
+========================================================================
+
+------------------------------------------------------------------------
+ สถานะปัจจุบัน (อัพเดท 2026-07-11 บ่าย)
+------------------------------------------------------------------------
+- กำลังโหลด mirror งบไตรมาส Finnomena ทั้งตลาด (~29,600 ตัว) ลง financials.db
+- เก็บใต้ namespace FINN:{ตลาด}:{ชื่อ}  เช่น FINN:TH:PTT, FINN:US:AMD
+- เพิ่ม field แล้ว: ratios (GPM/NPM/ROA/ROE/DE/SGA%/CashCycle)
+  + valuation (Close/MktCap/PE/PBV/EV-EBITDA/DivYield/BVPS) + D&A
+- เช็คสถานะ: ดับเบิลคลิก check_mirror.bat  (หรือ python check_mirror.py)
+
+>>> ความคืบหน้า:
+  [เสร็จ] งาน 0 — สะพาน namespace (screener อ่าน mirror ได้แล้ว 65 ไตรมาส)
+  [เสร็จ] งาน 1 — factor snapshot (ตาราง factor_snapshot ~1,129 แถว, รัน ~22 วิ)
+  [เสร็จ] งาน 2 — หน้า Screener+ ใหม่ (เมนูแยก, preset + ช่องแก้ค่าเอง,
+          endpoint /api/factor-screener, ใช้ 3 แหล่งรวม Finnomena+Yahoo+SET)
+          ไฟล์: page-fscreener ใน set_dashboard.html, ฟังก์ชัน loadFscreener/
+          runFscreener/applyFsPreset ใน dashboard.js, endpoint ใน app.py
+          *** ยังไม่ได้เทสต์คลิกจริงใน browser — เปิด http://localhost:5001
+              เมนู "🔬 Screener+" ลองกด preset + ปรับช่อง ***
+  [เสร็จ] งาน 3 — หน้างบการเงิน เพิ่ม "แนวโน้มระยะยาว" (กราฟ SVG: รายได้/
+          กำไรสุทธิ/net margin 16 ปี + PE/PBV band เทียบอดีตตัวเอง)
+          แสดงเมื่อดูงบ "รายไตรมาส" (source finnomena_q) — ไฟล์ dashboard.js
+          ฟังก์ชัน _finTrendSection/_svgArea/_svgBars/_svgBand
+          *** ยังไม่เทสต์ browser: เปิดหน้า "งบการเงิน" ค้นหุ้น -> กดรายไตรมาส ***
+
+  [เสร็จ] เพิ่ม — หุ้น US/HK ทั้งตลาด (mirror นอกพอร์ต) เข้า Screener+ และหน้างบ
+          - Screener+ universe เพิ่ม "US ทั้งหมด (~4.4k)" / "HK ทั้งหมด (~1.2k)"
+            กรองฝั่ง server (/api/factor-screener?universe=us&filters=...) ส่ง ≤500
+          - ตาราง factor_snapshot_mirror (factor จาก Finnomena ล้วน) รันใน
+            build_snapshot.py อัตโนมัติ (ข้ามด้วย `python build_snapshot.py nomirror`)
+          - หน้างบ: ค้นหุ้น mirror ได้ทุกตัว (bridge fallback FINN:US/HK) เช่น TSLA
+          - คัดคุณภาพ: ตัด OTC (5 ตัวลงท้าย F/Y), ต้องมี PE>=4 งวด, cap growth ±3000%
+          - หมายเหตุ: หุ้น mirror ไม่มี factor ที่ใช้ Yahoo (net cash/cash cycle/
+            goodwill/buyback/FCF/CAGR) และ ratio บางตัวของ Finnomena ยังเพี้ยนได้
+
+>>> เหลือทดสอบใน browser จริง (server รันที่ localhost:5001):
+    - เมนู "🔬 Screener+": กด preset, ปรับช่อง, sort, export + เลือก universe US/HK
+    - หน้า "งบการเงิน": ค้นหุ้น -> รายไตรมาส -> ดูกราฟแนวโน้ม + PE/PBV band + ตาราง
+      ratios/valuation (กด "ทุก field" เห็น 67 งวด) + ค้นหุ้น US/HK นอกพอร์ต (TSLA)
+
+*** สำคัญ: mirror ยังโหลดไม่จบ (valuation ของบาง US/HK ยังไม่ครบ)
+    เมื่อ mirror จบต้องรัน `python build_snapshot.py` อีกรอบ (แค่ 12 วิ)
+    เพื่อให้ PE percentile + ไตรมาสลึกสุดครบทั้ง universe ***
+
+
+------------------------------------------------------------------------
+ ผลรีวิวระบบ + บั๊กที่แก้แล้ว (2026-07-12)
+------------------------------------------------------------------------
+ตรวจสูตรทั้งหมดเทียบคำนวณมือ (PTT/CPALL/AMD/NVDA/หุ้น HK) — แกนหลักถูกต้อง:
+PE percentile, P/S, CCC (AMD 170.7 ตรง Jitta), OCF/NI, ทิศทาง filter, FS_YAHOO_ONLY
+
+[แก้แล้ว] P/S หุ้น HK รายงานครึ่งปี ต่ำกว่าจริง ~2 เท่า (compute_ps รวม 4 งวด
+          ตายตัว = รายได้ 2 ปี) -> ตรวจรอบรายงานจาก median gap (Q=4/ครึ่งปี=2/ปี=1)
+          + ข้ามจุดที่งวดขาดหาย + กันจับคู่ mc สดกับรายได้เก่าเกิน 400 วัน
+          ยืนยัน: FINN:HK:0046 ps 0.74 -> 1.53
+[แก้แล้ว] PE/DivYield ค้างค่าตกยุค (จุดบวกสุดท้ายจากหลายปีก่อนโชว์เป็นปัจจุบัน —
+          หุ้นไทย stale PE 230 ตัว, stale DY 288 ตัว เช่นหุ้น A โชว์ DY 0.6 จากปี 2021)
+          -> compute_valuation_percentile เทียบกับงวด Close ล่าสุด เก่ากว่า >190 วัน
+          = คืน None + flag stale
+[แก้แล้ว] ratio Finnomena เพี้ยนใน mirror snapshot (net_margin>100% 358 ตัว,
+          ROE>300% 106 ตัว ดันขยะขึ้นหัวตารางตอน sort ROE) -> winsorize (_sane):
+          ROE ±300, NM ±200, GM ±100, ROA ±100, D/E 0-50
+[แก้แล้ว] sort คอลัมน์ string (หุ้น/ตลาด) ฝั่ง server universe US/HK ไม่ทำงาน
+[แก้แล้ว] net_cash ใช้ Cash เพียวๆ ก่อน -> สลับให้ตัวรวม ST investments มาก่อน
+          (ตรง tooltip; หุ้นเทคที่พักเงินใน ST inv ไม่โดนมองว่า net cash ติดลบ)
+*** แก้ compute แล้วต้องรัน python build_snapshot.py เสมอ (ทำแล้วรอบนี้) ***
+
+จุดอ่อนที่ "ยังไม่แก้" (รับรู้ไว้):
+- valuation US mirror โหว่: 44% ไม่มี pe_percentile (Finnomena ให้ PE/MC ประวัติสั้น
+  หลายตัว เช่น AMD PE 14 งวด, NVDA MC 4 งวด) + mirror โครงเก่า ~2,500 ตัวรอ re-fetch
+  -> รัน mirror_finnomena.py ต่อจนจบ แล้ว build_snapshot.py ซ้ำ · UI ควรโชว์ n
+- D/E คนละนิยามข้าม universe (TH/DR=Yahoo TotalDebt/Eq, mirror=Finnomena DE —
+  CPALL วัดได้ 3.20 vs 1.91) -> ควรหมายเหตุใน tooltip
+- entering_high_season อิง "งวดล่าสุดที่รายงาน" ไม่ใช่ไตรมาสปฏิทินปัจจุบัน (งบออกช้า
+  จะชี้ไตรมาสที่ผ่านไปแล้ว) · rule_of_40 ใช้ CAGR 4-5 ปีแทน growth ล่าสุด
+- หุ้นไทยไม่มีงบ Yahoo หลุดจาก snapshot หลักทั้งตัว (ควร fallback _factors_from_finn)
+- financials-analytics (screener เดิม) ยังคำนวณสดจาก payload — ควรย้ายไปอ่าน snapshot
+
+------------------------------------------------------------------------
+ ต่อยอดรอบ 2 (2026-07-12 บ่าย) — ทำแล้ว 3 อันดับแรก
+------------------------------------------------------------------------
+[เสร็จ] 1. Quality streaks — compute_quality_streaks() ใน financials_store:
+        roe15_streak_q (ROE>=15% ติดกันกี่ไตรมาส จาก Finnomena 65 งวด, จุดเพี้ยน
+        |ROE|>300 ตัด streak) + nm_hold_streak_q (NM ไม่ลดกี่ก้าว) — อยู่ทั้ง
+        snapshot หลักและ mirror · preset Quality Compounder เปลี่ยนมาใช้
+        roe15_streak_q: 8 แทน roe ค่าเดียว
+        ยืนยัน: CPALL 13Q, NVDA 14Q, MSFT 33Q, PTT 0 · US screen ROE>=15
+        ต่อเนื่อง >=12Q ได้ FIZZ/FAST/TSM/JKHY/TPL (ตรง textbook compounder)
+[เสร็จ] 2. Risk filter ชุด E เป็น default — filter ที่มี def เติมค่าอัตโนมัติทุกครั้ง
+        ที่ reset/เลือก preset (ลบทิ้งเพื่อปิดได้): D/E<=2, IC>=1.5,
+        OCF ติดลบ<=1 ปี, จำนวนหุ้นเพิ่ม<=10%/ปี (filter ใหม่ shares_chg_yoy)
+        + semantics ใหม่ nullOk: ไม่มีข้อมูล = "ไม่ตัด" (ตัดเฉพาะตัวที่รู้ว่าแย่)
+        รองรับทั้ง client (runFscreener) และ server (_keep ใน app.py)
+[เสร็จ] 3. B1 CANSLIM ครบสูตร — /api/factor-screener overlay technical สด:
+        rs (rs_score), pct_vs_ema200, pct_off_high52, rvol จาก set_data.json
+        (หุ้นไทย) + rs/pct_off_high52 จาก dr_cache.json (DR — ไม่มี ema/rvol)
+        filter กลุ่มใหม่ "เทคนิค / ราคานำตลาด" + preset "🚀 CANSLIM ครบสูตร"
+        (กำไรเร่ง + RS>=80 + เหนือ EMA200 + ห่าง high <=15%) · ทดสอบได้ 11 ตัว
+        · ปิดอัตโนมัติใน universe US/HK (เพิ่มใน FS_YAHOO_ONLY)
+หมายเหตุ: mirror โหลด "ครบแล้ว" (candidate 32,207 ข้ามหมด) — valuation US ที่โหว่
+(44% ไม่มี pe_percentile, AMD PE 14 งวด) คือข้อจำกัดข้อมูลฝั่ง Finnomena เอง
+ไม่ใช่โหลดไม่จบ · แถว "โครงเก่า" 2,537 ตัวคือ empty marker รุ่นแรก (ไม่มีงบจริง)
+
+------------------------------------------------------------------------
+ ต่อยอดรอบ 3 (2026-07-12 เย็น) — ทำข้อ 4-6 แล้ว
+------------------------------------------------------------------------
+[เสร็จ] 4. PEG ทุก universe — compute_ttm_growth() (rev/profit_ttm_yoy, TTM ปีหลัง
+        เทียบ TTM ปีก่อน ผ่าน _ttm_by_date ที่รองรับครึ่งปี/งวดขาด) + _calc_peg
+        (PE ÷ growth, มีค่าเฉพาะ growth 1-200% — เกินนั้น base effect หลอกตา)
+        หุ้นไทยใช้ pe_live สด, mirror ใช้ PE Finnomena · preset "⚖️ GARP (PEG<=1)"
+        ยืนยัน: NVDA 0.28, MSFT 0.77, AAPL 1.47, ADVANC 0.6
+[เสร็จ] 5. Dividend growth streak — compute_dividend_growth() DPS = yield x close
+        ต่องวด -> นับปีติดกันที่ DPS โต (ปีขาด/หยุดจ่าย = ตัด streak, stale = None)
+        + preset "📈 Dividend Growth" · MSFT/V streak 16 ปี, CPALL/ADVANC 5 ปี
+        ข้อจำกัด: US ส่วนใหญ่ streak สั้นเพราะ Finnomena ให้ประวัติ valuation US สั้น
+[เสร็จ] 6. Sector percentile หุ้นไทย — pe_sector_pctile / roe_sector_pctile คำนวณ
+        ตอน overlay ใน /api/factor-screener (sector จาก set_data.json, ต้องมีเพื่อน
+        กลุ่ม >=5 ตัว) — แก้จุดอ่อน PE/ROE เทียบข้ามอุตสาหกรรมไม่ได้
+[เสร็จ] แถม: ตัด "หุ้นตาย" ออกจาก mirror snapshot — ไม่มีงวด valuation หรือ
+        Total Revenue/Net Income ใหม่ภายใน 400 วัน = delisted (เคส SBNY ธนาคารล้ม
+        2023 แต่ Finnomena ยังปล่อยราคา OTC + Basic EPS ต่อ — ต้องเช็คงบหลักเท่านั้น)
+        mirror เหลือ US 3,930 + HK 1,178 (ตัดซาก ~460 ตัว) บิ๊กแคปอยู่ครบ
+
+------------------------------------------------------------------------
+ ต่อยอดรอบ 4 (2026-07-12 ค่ำ) — ข้อ 7 backtest + ทดสอบ browser จริง = ครบทุกข้อ
+------------------------------------------------------------------------
+[เสร็จ] 7. Backtest preset — สคริปต์ backtest_screener.py (CLI, local-only):
+        วัด "กรอง ณ สิ้นไตรมาส -> ถือ 1 ไตรมาส" เทียบค่าเฉลี่ยตลาด equal-weight
+        - กัน look-ahead: ซื้อสิ้นไตรมาส 'ถัดจาก' งบ (งบประกาศแล้วแน่นอน)
+        - clip return ±80%/Q กัน outlier · ใช้หุ้นทั้ง mirror รวมตัวที่ delist แล้ว
+        - ข้อจำกัด: price return ไม่รวมปันผล (screen สายปันผลถูกกดต่ำกว่าจริง)
+        ใช้: python backtest_screener.py [TH|US|HK] [ปีเริ่ม]
+        ผล 57 ไตรมาส (2012-2026):
+                                ไทย excess/Q (ชนะ%)   US excess/Q (ชนะ%)
+          CANSLIM พื้นฐาน           +2.94% (74%)         +2.91% (88%)
+          Turnaround                +2.22% (77%)         +2.77% (89%)
+          คุณภาพกำไร OCF/NI>=0.8    +1.84% (88%)         +2.31% (84%)
+          GARP PEG<=1               +1.92% (72%)         +2.99% (89%)*
+          Value PE%<=25             +1.15% (64%)         +6.35% (79%)*
+          Quality Compounder        +0.07% (51%)         +2.33% (77%)
+          Dividend >=4%             +0.45% (65%)         +1.26% (62%)*
+        (* US วัดได้แค่ 13-18 ไตรมาส เพราะประวัติ valuation US สั้น — อ่านด้วยความระวัง)
+        insight: ฝั่งไทย earnings momentum (CANSLIM/Turnaround/คุณภาพกำไร) ผลดีสุด
+        ส่วน Quality แทบไม่ชนะตลาดใน price return (หุ้นกลุ่มนี้คืนผ่านปันผลเยอะ)
+        ไฟล์ผลรายไตรมาส: backtest_screener_results_{EX}.json (gitignore แล้ว)
+[เสร็จ] ทดสอบ browser จริง — ขับ Edge headless ผ่าน CDP (สคริปต์ใน scratchpad):
+        เปิดหน้า Screener+, ค่า default risk filter เติมครบ (2/1.5/1/10),
+        preset 11 ปุ่ม, กด CANSLIM ครบสูตร -> 11 หุ้น RS 86-98 render ถูก,
+        กด GARP -> 54 หุ้น, สลับ universe US -> 233 หุ้น + ช่อง Yahoo/technical
+        ถูก disable, ไม่มี JS error — จบข้อค้าง "ยังไม่เทสต์ browser" ทุกงาน
+        (server ทดสอบรันพอร์ต 5011 แยก — server หลักของผู้ใช้ที่พอร์ต 5001
+        เป็นโค้ดเก่า ต้อง restart ถึงจะได้ overlay ใหม่: rs/sector percentile)
+
+------------------------------------------------------------------------
+ รอบ 5 (2026-07-12) — preset "หาหุ้นดี US/HK" + filter แบบช่วง (min-max)
+------------------------------------------------------------------------
+[เสร็จ] FS_FILTERS รองรับช่วง: เพิ่ม range:true ให้ roe / net_margin / pe_value /
+        pbv_value — ช่องซ้าย=ขั้นต่ำ ช่องขวา=ไม่เกิน · id หลัก fsin-{k} คงเป็นฝั่ง
+        ทิศทางเดิม (backward-compatible, preset เก่าไม่ต้องแก้) อีกฝั่ง = fsin-{k}-alt
+        ส่งเป็น 2 เงื่อนไขบน key เดียวกัน (client filter + _keep server AND กันเองอยู่แล้ว)
+[เสร็จ] preset ผูกตลาด (field universe ใหม่ใน FS_PRESETS — applyFsPreset สลับ
+        dropdown fs-universe ให้เองก่อนกรอง):
+        - 🇺🇸 US หุ้นดีราคาถูก: ROE>=15 NM>=10 OCF/NI>=0.8 กำไรโต>=15+เร่งตัว
+          PE percentile<=50, >=20 ไตรมาส -> ได้ 76 ตัว (NVO/NFLX/V/GOOGL/ASML/CF)
+        - 🇭🇰 HK หุ้นดีราคาถูก (GARP 2 ชั้น): PE 3-12 + PBV 0.3-1.5 คู่กัน +
+          ROE 15-80 + NM 5-60 (cap สองขอบกันค่าเพี้ยน) + OCF/NI>=1 + กำไรโต>=10
+          -> ได้ 44 ตัว (Cathay Pacific, Prinx Chengshan, Xin Point, ...)
+        เหตุที่ HK ใช้ค่าสัมบูรณ์: Finnomena ให้ประวัติ PE หุ้น HK สั้น <12 งวด
+        -> pe/pbv percentile ของ HK = 0 ตัวทั้งตลาด ใช้กรองไม่ได้ (ยืนยันแล้ว)
+        จำนวนต่ำกว่าค่าอ้างอิงตอนสำรวจ (~135/~75) เพราะรอบนี้มี D/E<=2 default
+        + ตัดหุ้นตาย/PE ค้างแล้ว
+[เสร็จ] ทดสอบ: จำลอง filter Python = ผล browser จริงเป๊ะ (76/44) · regression
+        preset เก่า (CANSLIM 11, Quality 23, GARP 54) · ไม่มี JS error
+        · bump cache dashboard.js?v=20260712v
+
+ต่อยอดที่เหลือ (เรียง impact/effort):
+5. Dividend growth streak 16 ปี จาก DPS = DivYield x Close รายงวด
+6. sector-relative percentile หุ้นไทย (sector มีใน set_data.json)
+7. backtest preset รายไตรมาสจาก Close 65 งวดทั้งตลาด (price return เท่านั้น,
+   ระวัง survivorship bias)
+
+========================================================================
+ ส่วนที่ 1 — งานหลัก (ทำเรียงตามลำดับ)
+========================================================================
+
+[งาน 0] สะพานเชื่อม mirror -> screener   *** BLOCKER ทำก่อนสุด ***
+   ปัญหา: mirror เก็บ key = FINN:TH:PTT / FINN:US:AMD
+          แต่ screener อ่าน key = PTT / DR:AMD  -> มองไม่เห็น mirror เลย
+   ทำ: เพิ่ม resolver ใน financials_store ให้ get() fallback ไปอ่าน FINN: keys
+        - หุ้นไทย PTT       -> FINN:TH:PTT
+        - DR AMD            -> FINN:US:AMD  (ใช้ _finn_resolve ที่มีอยู่แล้ว)
+   ผล: screener ได้งบไตรมาส 16 ปีทั้งตลาดทันที (ปลดล็อกทุกงานที่เหลือ)
+
+[งาน 1] Factor Snapshot (precompute)
+   ทำสคริปต์คำนวณล่วงหน้า หุ้นละ 1 แถว เก็บลงตาราง SQLite แยก
+   (หรือ JSON เดียว) รันซ้ำหลัง mirror จบทุกรอบ
+   แต่ละแถวเก็บ: growth streaks, accel_streak, ROE ล่าสุด, margin trend,
+   OCF/NI, PE percentile, FCF, net cash, ฯลฯ
+   *** สำคัญ: รวม factor พื้นฐาน + technical/flow ต่อหุ้นในแถวเดียว ***
+   (RS, RVOL, %EMA200, insider, NVDR, short) เพื่อกรองข้ามหมวดได้เร็ว
+   เหตุผล: อย่าคำนวณสดจาก JSON blob ~19,500 ตัวทุกครั้งที่กดค้นหา
+
+[งาน 2] หน้า Screener — เพิ่ม filter ใหม่ (ดูส่วนที่ 2)
+   *** ทุก screen ใช้แบบ preset + ช่องแก้ค่าเองได้ (ดูส่วนที่ 2.5) ***
+
+[งาน 3] หน้างบการเงิน — แบ่งบทบาท 3 แหล่งให้ชัด
+   - งบ 3 ตารางละเอียด (5 ปี)      -> Yahoo (54/76/61 field)
+   - กราฟเทรนด์ยาว 16 ปี           -> Finnomena
+   - กราฟ PE/PBV band ย้อนหลัง      -> Finnomena (valuation)
+   - ratio ทางการ + ธง restatement -> SET (หุ้นไทย)
+   - ป้ายเตือนข้อมูลไม่ตรง          -> compare_sources (มีอยู่แล้ว)
+   ทำ badge บอกที่มาแต่ละบล็อก + toggle สลับแหล่งได้
+
+
+========================================================================
+ ส่วนที่ 2 — SCREENER ที่ต้องมี
+========================================================================
+
+--- ชุดหลัก (วางไว้แล้ว ต้องมีแน่ๆ) ---
+
+[1] CANSLIM / Earnings Acceleration
+    กำไร YoY-Q > 25% + เร่งตัวขึ้นติดกัน >= 2 ไตรมาส + รายได้โตด้วย
+    (ฟังก์ชัน accel_streak มีแล้วใน financials_store.py:455)
+
+[2] Quality Compounder
+    ROE > 15% ต่อเนื่อง >= 8 ไตรมาส + NPM ไม่ลดลง + D/E < 1
+    + OCF เป็นบวกสม่ำเสมอ
+
+[3] คุณภาพกำไร (จับหุ้นแต่งบัญชี)
+    OCF สะสม 4 ไตรมาส / กำไรสุทธิสะสม 4 ไตรมาส > 0.8
+    (กำไรโตแต่เงินสดไม่เข้า = red flag ตัดทิ้ง)
+
+[4] Value in Own History
+    PE ปัจจุบัน < percentile 25 ของตัวเองย้อน 10 ปี + กำไรยังไม่ถดถอย
+    (ใช้ field valuation ที่เพิ่งเก็บเพิ่ม)
+
+[5] Turnaround
+    ขาดทุน -> กำไร 2 ไตรมาสติด + GPM กำลังฟื้น
+    + Financing CF ไม่ใช่การกู้เพิ่มหนักๆ
+
+
+--- กลุ่ม A: พื้นฐานล้วน ที่ควรเพิ่ม ---
+
+[A1] FCF Machine
+     FCF บวก >= 4 ปีติด + FCF margin โต + FCF/Net Income > 0.8
+     (Yahoo: Free Cash Flow, Capital Expenditure)
+
+[A2] Net Cash / งบแกร่ง
+     เงินสด > หนี้รวม (net cash บวก) + Interest Coverage > 5 เท่า
+     (Yahoo: Cash, Total Debt, EBIT/Interest Expense)
+
+[A3] Buyback + ไม่เพิ่มทุน
+     จำนวนหุ้นลดลง YoY + มี Repurchase Of Capital Stock
+     (Yahoo: Share Issued / Ordinary Shares Number)
+
+[A4] Margin Expansion
+     Gross margin และ Net margin ขยายติดกัน >= 3 ไตรมาส (ราคายังไม่วิ่ง)
+     (Finnomena ratios 16 ปี — margin_qoq_streak มีแล้ว)
+
+[A5] Rule of 40
+     (Rev growth % + Net margin %) > 40
+
+
+--- กลุ่ม B: พื้นฐาน x เทคนิค (จุดแข็งเฉพาะ dashboard นี้) ---
+
+[B1] CANSLIM ครบสูตร   *** แนะนำทำก่อน ***
+     CANSLIM (พื้นฐาน) + RS สูง + ราคาเหนือ EMA200 + ใกล้ high 52wk
+     (CANSLIM จริงต้องมีขา "ราคานำตลาด" ซึ่งเรามีข้อมูลพร้อม)
+
+[B2] โตแต่ราคายังหลับ
+     กำไรเร่งตัว (accel >= 2) แต่ RS ยังต่ำ / ราคายังไม่ทะลุ
+     (จับก่อนตลาดรู้ตัว)
+
+[B3] Value + เริ่มกลับตัว
+     PE < percentile 25 ตัวเอง + ราคาเพิ่งตัด EMA200 ขึ้น
+     (value trap filter — รอราคายืนยัน)
+
+[B4] Breakout มีของจริง
+     ราคาทำ new high + RVOL สูง + กำไร YoY-Q บวก
+     (กรอง breakout ที่ไม่มีพื้นฐานรองรับทิ้ง)
+
+
+--- กลุ่ม C: พื้นฐาน x Flow/เจ้าของ (หุ้นไทยเท่านั้น) ---
+
+[C1] ผู้บริหารซื้อ + พื้นฐานดี
+     insider ซื้อสุทธิ 30-90 วัน + ROE > 12% + กำไรโต
+
+[C2] NVDR/ต่างชาติเข้า + งบดี
+     NVDR ซื้อสะสม + margin ขยาย
+
+[C3] หลบแรงกดดัน short
+     short sales ต่ำ/ลดลง + งบไม่มี red flag
+
+
+--- กลุ่ม D: ปันผล/รายได้ ---
+
+[D1] Dividend Safety
+     Div Yield > 3% + FCF จ่ายปันผลไหว (dividend_coverage > 1.5, มีแล้ว)
+     + ปันผลไม่ลด
+
+[D2] Dividend Growth
+     ปันผลเพิ่มติดต่อกันหลายปี + payout ratio <= 70%
+
+
+--- กลุ่ม E: Filter "ตัดทิ้ง" (เปิดเป็น default checkbox ทับทุก screen) ---
+
+[E1] หนี้อันตราย     -> D/E > 2 หรือ Interest Coverage < 1.5  = ตัด
+[E2] เผางบ           -> OCF ติดลบ 2 ปีติด                     = ตัด
+[E3] เจือจางหุ้น      -> จำนวนหุ้นเพิ่ม > 10%/ปี                  = ตัด
+[E4] Goodwill บวม    -> Goodwill > 50% ของสินทรัพย์            = เตือน
+[E5] ข้อมูลไม่ตรง     -> compare_sources ต่าง > 5% (มีแล้ว)      = เตือน
+
+
+========================================================================
+ ส่วนที่ 2.5 — หลักการออกแบบ UI: preset + ช่องแก้ค่าเองได้
+========================================================================
+แนวคิด: ทุก screen (ข้อ 1 ถึง D) ไม่ใช่ค่าตายตัว แต่เป็น "ค่าเริ่มต้น"
+        ที่เติมลงช่องกรอกให้อัตโนมัติ ผู้ใช้แก้ตัวเลข/ปี/ไตรมาสเองได้
+        -> ยืดหยุ่นกว่ามาก เลือก preset -> ช่องเติมค่า -> ปรับ -> กดค้นหา
+
+แต่ละเงื่อนไข ควรมี 3 ส่วน (ไม่ใช่แค่ช่องตัวเลขเดียว):
+  [x] checkbox เปิด/ปิดเงื่อนไขทั้งข้อ (บางทีอยากตัดทิ้งทั้งเงื่อนไข)
+  [__] ช่องกรอกตัวเลข + หน่วยกำกับข้างช่อง (% / เท่า / ไตรมาส / ปี)
+  [__] ช่อง lookback (ย้อนกี่ไตรมาส/ปี) สำหรับเงื่อนไข streak/trend
+
+ตัวอย่างหน้าตา (Quality Compounder):
+  [x] ROE > [15] %  ต่อเนื่อง >= [8] ไตรมาส
+  [x] Net Margin ไม่ลดลง ย้อน [4] ไตรมาส
+  [x] D/E < [1.0] เท่า
+  [x] OCF เป็นบวก
+  [ปุ่ม: รีเซ็ตกลับค่า preset]
+
+3 จุดที่ต้องระวัง (ไม่งั้นช่องกรอกจะหลอกผู้ใช้):
+  1. โชว์เพดานข้อมูลข้างช่อง lookback
+     - field พื้นฐาน (Finnomena) ย้อนได้ ~65 ไตรมาส / 16 ปี
+     - field ที่ต้องใช้ Yahoo (CCC, turnover) ย้อนได้แค่ ~5 ปี
+     - ถ้าผู้ใช้ใส่เกินเพดาน field นั้น -> ได้ผลว่าง ต้องเตือน/cap ให้
+  2. ปุ่ม "รีเซ็ตกลับค่า preset" ต่อ screen
+  3. validation ขอบเขต: ไตรมาส/ปี ติดลบไม่ได้, % เกินช่วงสมเหตุผลเตือน
+
+nice-to-have: บันทึก custom preset ของผู้ใช้ (localStorage)
+
+หมายเหตุ: กลุ่ม E (filter ตัดทิ้ง) ใช้เป็น checkbox + ช่องกรอก threshold
+เช่นกัน แต่เปิดเป็น default ทับทุก screen
+
+
+========================================================================
+ ส่วนที่ 3 — 3 อันแนะนำทำก่อน (คุ้มสุด)
+========================================================================
+1. B1 CANSLIM ครบสูตร  — เติมขา "ราคานำตลาด" ให้สัญญาณคมขึ้นมาก
+2. กลุ่ม E ทั้งชุด (risk filters) — ทำครั้งเดียว ยกคุณภาพทุก screen
+3. A2 Net Cash + A1 FCF Machine — จับหุ้นงบแกร่งสาย VI คนละสไตล์ CANSLIM
+
+
+========================================================================
+ ส่วนที่ 4 — ข้อควรระวัง (จากการตรวจข้อมูลจริง)
+========================================================================
+1. Cash Cycle ของ Finnomena ผิดเพี้ยน (AMD 570 วัน เทียบ Jitta 157)
+   -> ห้ามใช้ raw. ให้คำนวณเองจาก Yahoo (DIO+DSO-DPO):
+      Yahoo มี Inventory, COGS, ลูกหนี้, เจ้าหนี้ ครบ
+      ทดสอบแล้ว AMD 2025 = 171 วัน (ใกล้ Jitta 157) ถูกต้อง
+   -> หลักทั่วไป: ratio ที่ใช้งบดุลละเอียด (CCC, turnover) = คำนวณเองจาก Yahoo
+      ratio พื้นฐาน (Gross/Net Margin, ROE, ROA, D/E) = Finnomena ใช้ได้ (ยาว 16 ปี)
+
+2. หน่วยเงินต่างตลาด THB/HKD/USD
+   -> กรองข้ามตลาดใช้เฉพาะ % และอัตราส่วน ห้ามใช้ค่า absolute
+
+3. หุ้น HK รายงานครึ่งปีเป็นหลัก -> บาง field รายไตรมาสจะโหว่ ต้อง handle
+
+4. flow filters (NVDR/short/insider ไทย) ใช้ได้เฉพาะหุ้นไทย
+   -> disable filter กลุ่ม C อัตโนมัติเมื่อ universe = DR
+
+5. ข้อมูลงบทั้งหมด LOCAL-ONLY (ตามกฎ .gitignore)
+   -> หน้า screener/งบ ต้องเป็นหน้า Flask (app.py) รันในเครื่อง
+   -> ห้าม push financials.db / financials_backups ขึ้น GitHub
+
+
+========================================================================
+ อ้างอิงไฟล์/ฟังก์ชันที่มีอยู่แล้ว
+========================================================================
+- sources/financials_store.py
+    _finn_map_rows()            แปลงข้อมูล Finnomena -> payload
+    _finn_resolve()            แมป symbol -> exchange/name (ใช้ทำงาน 0)
+    compute_quarterly_growth()  QoQ/YoY-Q/streak/accel (บรรทัด ~377)
+    accel_streak()             กำไรเร่งตัว (บรรทัด ~455)
+    compute_growth_streaks()   รายได้/กำไรโตต่อเนื่องกี่ปี
+    compute_ratio_trends()     GM/ROE/NM/DE/Interest Coverage + เทรนด์
+    compute_fcf_metrics()      FCF + FCF Yield + dividend_coverage
+    compare_sources()          เทียบ Yahoo vs SET เตือนถ้าต่าง >5%
+    mirror_finnomena()         โหลดทั้งตลาด (บรรทัด ~722)
+- app.py
+    /api/financials-analytics   คำนวณ analytics ทั้งตลาด (บรรทัด ~1113)
+    _compute_fin_analytics_for  คำนวณต่อ universe (บรรทัด ~1079)
+    หน้า screener อ่าน finnomena_q ที่บรรทัด ~1097 (จุดที่งาน 0 ต้องแก้)
+- set_dashboard.html
+    page-screener (บรรทัด ~773), page-financials (บรรทัด ~2274)
+- check_mirror.py / check_mirror.bat   เช็คสถานะ mirror
+========================================================================

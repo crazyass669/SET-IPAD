@@ -1,0 +1,54 @@
+สรุปความสัมพันธ์ Thai Bond + S50 Futures + SET Index
+
+1.  Thai Bond Market
+
+-   Bond Yield ลด → บวกต่อตลาดหุ้น
+-   Bond Yield เพิ่ม → กดดันตลาดหุ้น
+-   ต่างชาติซื้อพันธบัตร → เงินเริ่มไหลเข้าไทย
+-   ต่างชาติขายพันธบัตร → เงินเริ่มไหลออก
+
+ลำดับ Fund Flow โดยทั่วไป FX → Bond → หุ้นใหญ่ → SET50 → SET Index →
+หุ้นกลาง/เล็ก
+
+2.  SET50 Futures
+
+-   ตลาดตอบสนองข่าวเร็วกว่า SET
+-   ใช้เก็งกำไรและ Hedge
+-   มักเป็น Price Discovery ระยะสั้น
+
+3.  นักลงทุนใน TFEX
+
+-   Foreign: มีอิทธิพลต่อ SET มากที่สุด
+-   Institution: มัก Hedge พอร์ต
+-   Retail: ส่วนใหญ่เป็นผู้เก็งกำไร
+
+4.  การอ่าน Net Position
+
+-   Net Long = มุมมองเชิงบวก
+-   Net Short = มุมมองเชิงลบ (ต้องแยกว่า Hedge หรือ Speculation)
+
+5.  ความสัมพันธ์หลัก Bull: Foreign ซื้อ Bond → บาทแข็ง → ซื้อหุ้น → Long Futures →
+    SET ขึ้น
+
+Bear: Foreign ขาย Bond → บาทอ่อน → ขายหุ้น → Short Futures → SET ลง
+
+6.  Open Interest (OI)
+
+-   ราคาขึ้น + OI เพิ่ม = แนวโน้มแข็งแรง
+-   ราคาขึ้น + OI ลด = Short Covering
+-   ราคาลง + OI เพิ่ม = เปิด Short ใหม่
+-   ราคาลง + OI ลด = Long Liquidation
+
+7.  Dashboard ที่ควรติดตาม
+
+-   Bond Yield (2Y/5Y/10Y)
+-   Foreign Bond Flow
+-   Foreign Stock Flow
+-   Foreign Futures Net Position
+-   Open Interest
+-   SET50 Basis
+-   USD/THB
+-   Market Breadth
+
+สรุป: Bond Market ชี้ทิศทาง Fund Flow, S50 Futures สะท้อนความคาดหวังระยะสั้น,
+SET Index เป็นผลลัพธ์ของกระแสเงินทุนและมุมมองของนักลงทุนรวมกัน.

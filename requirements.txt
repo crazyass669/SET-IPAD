@@ -1,0 +1,12 @@
+flask==3.1.3
+yfinance==1.5.1
+pandas==3.0.3
+openpyxl==3.1.5
+xlrd==2.0.2
+tqdm==4.68.4
+waitress==3.0.2
+requests==2.34.2
+websocket-client==1.9.0
+lxml==6.1.1
+deep-translator==1.11.4
+certifi==2026.6.17

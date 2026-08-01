@@ -1,0 +1,184 @@
+====================================================
+  SET Dashboard — ไฟล์ที่ต้องก็อปไปด้วยเวลาย้ายเครื่อง
+  (อัปเดต 2026-07-24 — หลังเพิ่ม US/HK/JP Index pipeline, Hedge Holdings (13F),
+   Delisted Log, S50 Flow, Bond Flow, folder data/ แยกไฟล์ตลาดต่างประเทศ)
+====================================================
+
+[ จำเป็นต้องมี — โค้ด ก็อปทุกไฟล์/โฟลเดอร์นี้ ]
+
+  start.bat                    ← ดับเบิ้ลคลิกเปิดโปรแกรม
+  app.py                       ← Flask Web Server (หัวใจหลัก)
+  set_data_fetcher.py          ← โค้ดดาวน์โหลดข้อมูลจาก Yahoo Finance
+  set_dashboard.html           ← โครง HTML ของหน้าเว็บ
+  requirements.txt             ← รายการ Library ที่ต้องติดตั้ง
+  index.html                   ← redirect เข้า set_dashboard.html
+  manifest.json, sw.js         ← PWA manifest + service worker
+  listedCompanies_en_US.xls    ← รายชื่อหุ้น SET (ดาวน์โหลดจาก set.or.th — นามสกุล .xls
+                                  จริงๆ ไม่ใช่ .xlsx ดึงตรงจาก set.or.th แบบนี้เสมอ)
+
+  core/                        ← metrics.py (สูตร RS/EMA), store.py/store_factory.py (persistence),
+                                  hk_store.py/jp_store.py/us_store.py (store ตลาดต่างประเทศ),
+                                  delisted_log.py, run_log.py
+  sources/                     ← yahoo.py, tradingview.py, sec.py, sec_store.py, set_api.py,
+                                  dr_universe.py, dr_descriptions.py, financials_store.py,
+                                  factor_snapshot.py, flow_signals.py, dividend_stats.py,
+                                  set_daily_valuation.py, mirror_ondemand.py, price_analytics.py,
+                                  index_metrics_common.py, dataroma.py (Hedge Holdings 13F scraper),
+                                  hk_index_membership.py, hk_index_metrics.py,
+                                  jp_index_membership.py, jp_index_metrics.py,
+                                  us_index_membership.py, us_index_metrics.py
+  services/                    ← refresh.py (orchestration), breadth.py (market breadth),
+                                  rotation.py (rotation alert state)
+  static/                      ← dashboard.css, dashboard.js, fin_translations.js, icons/
+
+----------------------------------------------------
+
+[ ข้อมูลที่ดาวน์โหลดแล้ว (root) — ก็อปด้วยถ้าไม่อยากรอ Full Refresh ใหม่ (~1-2 ชม.) ]
+
+  set_prices.db          ← ราคาย้อนหลังหุ้นไทยทุกตัว (SQLite) — แหล่งหลักของ Breadth/Market
+                            Internals/สถิติระยะยาว/Backtest ~320 MB
+  set_history.json       ← ประวัติราคาย้อนหลัง (ใช้กราฟ 5Y/Max + EMA200) ~95 MB
+  set_data.json          ← ข้อมูลหุ้นทุกตัว (ราคา, RS, EMA, Fundamentals) ~12 MB
+  set_data_backup.json   ← backup อัตโนมัติของ set_data.json — app.py fallback มาอ่านไฟล์นี้
+                            เองถ้าไฟล์หลักเสียหาย (ดู app.py: BACKUP_FILE) ไม่บังคับต้องก็อป
+                            (จะสร้างใหม่เองรอบถัดไปที่ระบบเซฟข้อมูล) แต่ถ้าก็อปไปด้วยจะกัน
+                            เคส "ไฟล์หลักพังทันทีที่เปิดเครื่องใหม่แล้วยังไม่มี backup"
+  dr_cache.json          ← ข้อมูล DR/DRx ต่างประเทศ ~40 MB
+  dr_descriptions.json   ← คำอธิบายบริษัท (EN+แปลไทย) หุ้นไทย+DR ~4 MB (อนุญาต push GitHub ได้)
+  indices_cache.json     ← ข้อมูลดัชนีกลุ่ม 30+ ดัชนี ~5 MB
+  nvdr_data.json         ← ข้อมูล NVDR (ต่างชาติถือครอง)
+  short_sales_data.json  ← ข้อมูล Short Sales
+  set_market_stats.json  ← สถิติ PE/PBV ตลาดรวม
+  market_flow_data.json  ← ข้อมูล flow signals (Confluence page)
+  s50_flow_data.json     ← ข้อมูล flow S50 Futures
+  bond_flow_data.json    ← ข้อมูล flow ตลาดพันธบัตรไทย
+  delisted_log.json      ← ประวัติหุ้นที่ถูกเพิกถอน (กันตกหล่นตอนคำนวณ Breadth ย้อนหลัง)
+  rotation_state.json    ← state ของ Rotation alert (กลุ่มไหนแจ้งเตือนไปแล้ว)
+  mirror_names.json      ← ชื่อ mirror (ชื่อไทย/อังกฤษ) สำหรับหุ้นต่างประเทศที่มี DR
+  dr_universe_auto.json  ← universe DR/DRx ที่ระบบ auto-detect
+  backtest_screener_results_TH.json, backtest_screener_results_US.json ← ผล backtest cache
+  Table_PE.xls           ← ข้อมูล valuation อ้างอิงราย sector (manual — ดูข้อ 15 ในคู่มือติดตั้ง.md)
+  Table_PBV.xls          ← ข้อมูล valuation อ้างอิงราย sector (manual)
+
+  ** ถ้าไม่ก็อปไฟล์ข้อมูล → ต้อง Full Refresh ใหม่ในเครื่องใหม่ (~1-2 ชั่วโมง)
+
+----------------------------------------------------
+
+[ Index pipeline หุ้นต่างประเทศ (US/HK/JP) — local-only, ก็อปด้วยถ้าไม่อยากรัน Backfill ใหม่ ]
+
+  us_prices.db            ← ราคา+metrics หุ้นดัชนี US (S&P500 ฯลฯ) ~330 MB
+  hk_prices.db            ← ราคา+metrics หุ้นดัชนี HK (Hang Seng ฯลฯ) ~35 MB
+  jp_prices.db            ← ราคา+metrics+งบการเงิน หุ้นดัชนี JP (Nikkei 225) ~7 MB
+
+  หน้า "🇺🇸 หุ้น US" / "🇭🇰 หุ้น HK" / "🇯🇵 หุ้น JP" ต้องมีไฟล์เหล่านี้ถึงจะมีข้อมูล
+  ถ้าไม่ก็อป → รัน backfill_us_index_prices.py / backfill_hk_index_prices.py /
+  backfill_jp_index_prices.py ใหม่ (ใช้เวลานาน ดึงทีละตัวจาก Yahoo Finance)
+
+----------------------------------------------------
+
+[ โฟลเดอร์ data/ — cache/analytics ของหน้าต่างๆ (US/HK/JP + งบการเงิน) ~35 MB รวม ]
+
+  ก็อปทั้งโฟลเดอร์ data/ ไปด้วย ไม่งั้นหน้า US/HK/JP, Insider, Flow Confluence,
+  Hedge Holdings (13F) จะว่างเปล่าจนกว่าจะกด Refresh ใหม่ในเครื่องใหม่
+  (ไฟล์หลักในนี้: financials_analytics_yahoo.json, hedge_holdings.json,
+   us_index_metrics.json, hk_index_metrics.json, jp_index_metrics.json,
+   insider_trades_*.json, major_changes_*.json, market_flow*.json ฯลฯ)
+
+----------------------------------------------------
+
+[ ข้อมูลงบการเงิน — local-only ห้าม push ขึ้น GitHub (ดู .gitignore) แต่ก็อปย้ายเครื่องได้ปกติ ]
+
+  financials.db           ← งบการเงินเต็ม (Yahoo/Finnomena/SET) + factor_snapshot ที่ Screener+
+                             ใช้ ~670 MB (ใหญ่สุดในโปรเจกต์ — ถ้าไม่ก็อป Screener+/หน้างบการเงิน
+                             จะว่างเปล่า ต้องอัพเดทงบการเงินใหม่ทั้งหมดในเครื่องใหม่)
+  financials_backups/     ← สำรอง financials.db รายวัน (~630 MB/ไฟล์ × 3 = ~1.85 GB)
+                             ไม่จำเป็นต้องก็อป ถ้ามี financials.db ตัวหลักอยู่แล้ว
+                             (สร้างสำรองใหม่เองทุกวันผ่าน task_backup_offsite.bat)
+  sec_filings.db          ← SEC filings สะสม (แบบ 59/246-2) สำหรับหน้า Insider ~3 MB
+
+----------------------------------------------------
+
+[ คู่มือ / เอกสารอ้างอิง — ก็อปไว้อ่านที่เครื่องใหม่ (ไม่จำเป็นสำหรับการรันโปรแกรม) ]
+
+  คู่มือการใช้งาน.html         ← เปิดด้วย Browser อ่านได้เลย ไม่ต้องรัน Server
+  คู่มือติดตั้ง.md             ← วิธีติดตั้งตั้งแต่ต้น (Markdown)
+  คู่มือ-อัพเดทข้อมูล.txt      ← วิธีอัปเดตข้อมูลแต่ละประเภท
+  คู่มือ-สำรองข้อมูล.txt       ← วิธีสำรอง/กู้คืนข้อมูล
+  สรุป_ปุ่มอัพเดทข้อมูล.txt    ← สรุปปุ่มอัพเดทข้อมูลแต่ละหน้า
+  BACKTEST_SUMMARY.txt / BACKTEST_SUMMARY_v2_survivorship_fixed.txt ← สรุปผล backtest
+  PLAN_screener_financials.txt, PLAN_stock_study_suite.txt,
+  PLAN_universe_data_health.txt, PLAN_hk_pipeline.txt ← แผนงาน/log ที่ทำไปแล้ว
+  Intermarket_Relationship_Summary.txt, ThaiBond_S50Futures_SET_Summary.txt
+  PROMPT_fable_us_hk_preset.txt← โน้ตงานเกี่ยวกับ preset หุ้น US/HK
+  SESSION_SUMMARY_2026-07-15.txt ← สรุปงานเซสชันล่าสุด
+
+----------------------------------------------------
+
+[ Backtest research scripts — ไม่จำเป็นต้องรันแอปหลัก แต่เก็บไว้ทดสอบกลยุทธ์เพิ่มได้ ]
+
+  bt_lib.py                        ← เครื่องมือกลาง (โหลดข้อมูล/indicator/engine เดินพอร์ต)
+  backtest_rs_rrg.py                ← strategy หลักเดิม (RS Score + RRG)
+  analyze_ohlc_backtest.py          ← enhancement (ATR sizing, near-52wk-high, stop-loss)
+  backtest_trend_following.py       ← SMA/EMA Cross, MACD, ADX, SuperTrend, Ichimoku
+  backtest_mean_reversion.py        ← RSI, Close<SMA20-10%
+  backtest_bollinger_stochastic.py  ← Bollinger Bands, Stochastic
+  backtest_breakout.py              ← Donchian Breakout, ATR Breakout
+  backtest_pure_momentum.py         ← 12-Month Momentum เดี่ยว
+  backtest_seasonal.py              ← Sell in May, January Effect
+  backtest_money_management.py      ← DCA vs Grid, Pyramiding proxy
+  backtest_screener.py              ← Backtest เงื่อนไข Screener+ ย้อนหลัง (fundamentals)
+  backtest_report.html              ← หน้ารายงานผล (เปิดผ่าน app.py serve)
+
+----------------------------------------------------
+
+[ สคริปต์บำรุงรักษา/backfill/sync ที่ไม่จำเป็นต้องรันแอปหลัก แต่เก็บไว้เผื่อใช้ ]
+
+  backfill_us_index_prices.py, backfill_hk_index_prices.py, backfill_jp_index_prices.py
+                                     ← ดึงราคาย้อนหลังหุ้นดัชนี US/HK/JP ครั้งแรก
+  build_mirror_names.py, mirror_finnomena.py, check_mirror.py + check_mirror.bat
+                                     ← จับคู่ชื่อหุ้นไทย ↔ Finnomena
+  update_financials.py + update_financials.bat, task_update_financials_quarterly.bat
+                                     ← อัปเดตงบการเงินแบบ batch/scheduled
+  backup_financials_offsite.py + .bat, task_backup_offsite.bat
+                                     ← สำรอง financials.db ออกนอกเครื่อง
+  sync_th_descriptions.py           ← sync คำอธิบายบริษัทหุ้นไทย (แปลไทย)
+  import_market_stats.py            ← import Table_PE.xls/Table_PBV.xls (ใช้ตอน manual update)
+  build_snapshot.py                 ← สร้าง snapshot ข้อมูล
+  run_static_update.py              ← รัน static update แบบ standalone (ไม่ผ่าน UI)
+  ci_sanity_check.py                ← เช็คความสมบูรณ์ข้อมูลก่อน commit/deploy
+
+----------------------------------------------------
+
+[ ไม่ต้องก็อป — สร้างเองอัตโนมัติ / เป็นของขยะ ]
+
+  __pycache__/             ← Python cache (สร้างใหม่เองตอนรัน)
+  logs/                    ← log ของ waitress (สร้างใหม่เอง)
+  tests/                   ← test scripts (ไม่จำเป็นต้องรันแอปหลัก)
+  ไฟล์ไม่ได้ใช้/            ← โฟลเดอร์รวมไฟล์ที่ตรวจสอบแล้วว่าไม่มีโค้ดไหนเรียกใช้เลย
+                             (สคริปต์ one-time ที่ทำเสร็จแล้ว, log ชั่วคราว, ไฟล์ test/backup
+                             เก่า) เก็บไว้เผื่ออยากดูย้อนหลัง แต่ไม่ต้องก็อปไปเครื่องใหม่ก็ได้
+  import_eod_archive.py, migrate_history.py ← สคริปต์ one-time ทำเสร็จแล้ว ไม่จำเป็นต้องก็อป
+
+====================================================
+
+[ ขั้นตอนหลังก็อปไปเครื่องใหม่ ]
+
+  1. วางทั้งโฟลเดอร์ไว้ที่ไหนก็ได้ในเครื่องใหม่ (ต้องก็อป core/ sources/ services/ static/ data/
+     ไปพร้อมกันด้วย ไม่งั้น app.py จะ import ไม่เจอ หรือหน้า US/HK/JP/Hedge Holdings ว่างเปล่า)
+  2. ตรวจสอบว่าติดตั้ง Python 3.10+ แล้ว
+     → โหลดที่ python.org (ติ๊ก "Add to PATH" ตอนติดตั้ง)
+  3. ดับเบิ้ลคลิก start.bat
+     → จะติดตั้ง Library อัตโนมัติครั้งแรกจาก requirements.txt
+       (flask, yfinance, pandas, openpyxl, xlrd, tqdm, waitress, requests,
+        websocket-client, lxml, deep-translator)
+  4. Browser เปิดขึ้นเองที่ http://localhost:5001
+  5. ถ้าไม่ได้ก็อปไฟล์ข้อมูล (root) → กด Full Refresh เพื่อดาวน์โหลดใหม่
+  6. ถ้าไม่ได้ก็อป financials.db → หน้า Screener+/งบการเงินจะว่าง ต้องกด
+     "🔄 อัพเดทงบการเงินทั้งหมด" ในหน้างบการเงินใหม่ (ใช้เวลานาน — เป็นชั่วโมง)
+  7. ถ้าไม่ได้ก็อป us_prices.db/hk_prices.db/jp_prices.db → หน้าหุ้น US/HK/JP จะว่าง
+     ต้องรัน backfill_us_index_prices.py / backfill_hk_index_prices.py /
+     backfill_jp_index_prices.py ใหม่ (ใช้เวลานาน)
+  8. ถ้าไม่ได้ก็อปโฟลเดอร์ data/ → หน้า US/HK/JP, Insider, Hedge Holdings (13F) จะว่าง
+     จนกว่าจะกด Refresh ที่หน้านั้นๆ ใหม่
+
+====================================================
