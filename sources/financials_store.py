@@ -1899,14 +1899,20 @@ def compute_ratio_trends(payload_yahoo, max_years_back=MAX_RATIO_YEARS_BACK):
             return None
         return round(num / den, 2)
 
+    def _sane(v, lo, hi):
+        # winsorize กันสมการหาร equity/asset ใกล้ศูนย์ (ปีขาดทุนหนักจนทุนแทบหมด) ระเบิดเป็น
+        # ค่าพันเปอร์เซ็นต์ — bound เดียวกับที่ใช้ winsorize ratio ดิบฝั่ง mirror (ดู _sane ใน
+        # factor_snapshot.py) เพื่อให้ TH/DR path ปลอดภัยเท่าฝั่ง mirror ที่กันไว้อยู่แล้ว
+        return v if (v is not None and lo <= v <= hi) else None
+
     def _ratios_at(y):
         v = series[y]
         equity = v.get("equity")
         return {
-            "gross_margin": _pct(v.get("gross_profit"), v.get("revenue")),
-            "roe": _pct(v.get("net_income"), equity) if equity and equity > 0 else None,
-            "net_margin": _pct(v.get("net_income"), v.get("revenue")),
-            "de_ratio": _ratio(v.get("total_debt"), equity) if equity and equity > 0 else None,
+            "gross_margin": _sane(_pct(v.get("gross_profit"), v.get("revenue")), -100, 100),
+            "roe": _sane(_pct(v.get("net_income"), equity) if equity and equity > 0 else None, -300, 300),
+            "net_margin": _sane(_pct(v.get("net_income"), v.get("revenue")), -200, 200),
+            "de_ratio": _sane(_ratio(v.get("total_debt"), equity) if equity and equity > 0 else None, 0, 50),
             "interest_coverage": _ratio(v.get("ebit"), v.get("interest_expense")),
         }
 
@@ -2566,6 +2572,39 @@ def compute_valuation_percentile(payload_finn_q, min_points=12):
         except Exception:
             return False
 
+    def _drop_spikes(pts, mult=20):
+        """กรอง data point เดี่ยวที่เพี้ยนกะทันหัน (ห่างจาก median ทั้ง series เกิน mult เท่า)
+        — field ดิบของ Finnomena เพี้ยนเป็นครั้งคราว (พบจริง: ADVANC EV/EBITDA นิ่ง 8-10x
+        มา 65 ไตรมาส กระโดดเป็น ~1043x งวดเดียว) ใช้ threshold สัมพัทธ์กับประวัติตัวเอง ไม่ใช้
+        absolute cap ตายตัว เพราะ PE/PBV/EV-EBITDA แต่ละหุ้น/เซคเตอร์มีช่วงปกติต่างกันมาก
+        (หุ้นโตเร็วบางตัว เช่น DDOG EV/EBITDA ~350x ต่อเนื่องหลายไตรมาส คือของจริง ไม่ใช่ขยะ)"""
+        if len(pts) < 5:
+            return pts
+        vs = sorted(v for _, v in pts)
+        m = len(vs)
+        med = vs[m // 2] if m % 2 else (vs[m // 2 - 1] + vs[m // 2]) / 2
+        if med <= 0:
+            return pts
+        lo, hi = med / mult, med * mult
+        return [(d, v) for d, v in pts if lo <= v <= hi]
+
+    def _drop_stuck_tail(pts, min_repeat=4):
+        """ตัดหางที่ค่าเดิมซ้ำกันเป๊ะติดกัน >= min_repeat งวด — เกิดจาก provider ไม่ได้คำนวณ
+        ใหม่ (ค้างค่าล่าสุดที่เคยคำนวณได้ไว้) ไม่ใช่ธุรกิจนิ่งจริง เพราะ EV มาจาก mkt_cap ที่
+        เปลี่ยนทุกวันซื้อขาย โอกาสค่า (float) ตรงกันเป๊ะหลายไตรมาสติดโดยบังเอิญแทบเป็นศูนย์
+        (พบจริง: KASET EV/EBITDA ค่า 567.7013 ซ้ำกันเป๊ะ 7 ไตรมาสติด 2024Q3-2026Q1)
+        ตัดทั้ง run ทิ้ง (ไม่ใช่แค่ตัวสุดท้าย) เพราะ median/percentile จะเพี้ยนถ้าเหลือค้างไว้"""
+        if len(pts) < min_repeat:
+            return pts
+        tail_val = pts[-1][1]
+        run = 1
+        for i in range(len(pts) - 2, -1, -1):
+            if pts[i][1] == tail_val:
+                run += 1
+            else:
+                break
+        return pts[: len(pts) - run] if run >= min_repeat else pts
+
     field_map = {"pe": "PE", "pbv": "PBV", "ev_ebitda": "EV To EBITDA", "div_yield": "Dividend Yield"}
     ttm_pe = None   # lazy: คำนวณครั้งเดียวถ้ามีการเรียกถึง short == "pe"
     out = {}
@@ -2582,6 +2621,9 @@ def compute_valuation_percentile(payload_finn_q, min_points=12):
         else:
             series = val.get(name, {})
             pts = sorted((d, v) for d, v in series.items() if v is not None and v > 0)
+        if short != "div_yield":   # div_yield: median มักใกล้ 0 อยู่แล้ว filter สัมพัทธ์ไม่เสถียร
+            pts = _drop_stuck_tail(pts)
+            pts = _drop_spikes(pts)
         if pts and _stale(pts[-1][0]):
             out[short] = {"value": None, "percentile": None, "median": None, "mean": None,
                           "n": len(pts), "stale": True}

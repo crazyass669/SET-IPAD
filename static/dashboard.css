@@ -118,8 +118,8 @@
   .page { display: none; padding: 20px; max-width: 1400px; margin: 0 auto; }
   #page-screener { max-width: 100%; }
   #page-dr { max-width: 1800px; }
-  #screener-results .tbl th { padding: 5px 5px; font-size: 9px; }
-  #screener-results .tbl td { padding: 5px 5px; font-size: 11px; }
+  #screener-results .tbl th { padding: 5px 6px; font-size: 9px; }
+  #screener-results .tbl td { padding: 5px 6px; font-size: 11px; }
   .page.active { display: block; }
 
   /* GRID HELPERS */

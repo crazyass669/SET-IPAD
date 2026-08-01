@@ -4688,7 +4688,7 @@ function renderScrTable() {
   }
 
   document.getElementById('screener-results').innerHTML = `
-    <div class="card"><table class="tbl" style="table-layout:fixed;width:100%">
+    <div class="card" style="overflow-x:auto"><table class="tbl" style="table-layout:fixed;width:auto">
       <colgroup>
         <col style="width:36px"><!-- RS -->
         <col style="width:60px"><!-- SEC.RANK -->
