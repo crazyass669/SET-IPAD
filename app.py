@@ -2639,6 +2639,14 @@ def factor_screener():
                 if mc is None and s and s.get("price") and r.get("shares_out"):
                     mc = s["price"] * r["shares_out"]
                 r["fcf_yield"] = (r["fcf"] / mc * 100) if (r.get("fcf") is not None and mc) else None
+                # ซ่อน Z-Score ของกลุ่มการเงิน (แบงก์/ประกัน) เหมือนที่ /api/tearsheet และ
+                # /api/peer-compare ทำไว้แล้ว (เจอตอนรีวิว 2026-08-01 ว่า Screener+ ยังไม่ซ่อน
+                # ทำให้ JPM/BAC ฯลฯ ที่มีงบ Yahoo sync แล้วโชว์ Z-Score หลอกตาในตาราง ทั้งที่
+                # สูตร Altman ใช้ไม่ได้กับงบดุลสถาบันการเงิน) — เช็คได้เฉพาะสมาชิกดัชนีหลักที่มี
+                # sector จาก us_index_metrics.json เท่านั้น (ตัวนอกดัชนีไม่มี sector ให้เช็ค)
+                if s and s.get("sector") in factor_snapshot.FINANCIAL_SECTOR_NAMES:
+                    r["z_score"], r["z_zone"] = None, None
+                    r["z_excluded_reason"] = "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"
         elif uni == "hk":
             from sources import hk_index_metrics
             # symbol ในชุด mirror เป็นรหัสดิบ (เช่น "0700") ส่วน hk_index_metrics ใช้
@@ -2658,6 +2666,12 @@ def factor_screener():
                 if mc is None and s and s.get("price") and r.get("shares_out"):
                     mc = s["price"] * r["shares_out"]
                 r["fcf_yield"] = (r["fcf"] / mc * 100) if (r.get("fcf") is not None and mc) else None
+                # ซ่อน Z-Score ของกลุ่มการเงิน — เหตุผลเดียวกับ branch US ด้านบน (HK มีทั้ง
+                # "Financials"/"Finance" แยกกัน ดู FINANCIAL_SECTOR_NAMES — ครอบ HSBC/HKEX/
+                # AIA/BOCHK ด้วย ไม่ใช่แค่แบงก์จีน)
+                if s and s.get("sector") in factor_snapshot.FINANCIAL_SECTOR_NAMES:
+                    r["z_score"], r["z_zone"] = None, None
+                    r["z_excluded_reason"] = "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"
         try:
             filters = json.loads(request.args.get("filters") or "[]")
         except Exception:
@@ -2762,6 +2776,14 @@ def factor_screener():
             r["pct_off_high52"] = _pct_vs(e.get("price"), e.get("high_52w"))
             r["pct_vs_ema200"] = None     # dr_cache ไม่เก็บ EMA200/volume เฉลี่ย
             r["rvol"] = None
+            # fcf_yield ของ DR หายไปเงียบๆ มาตลอด (เจอตอนรีวิว 2026-08-01) — mkt_cap ของ DR
+            # ไม่ได้อยู่ใน r ตั้งแต่ factor_snapshot (นั่นมีแต่หุ้นไทย/mirror) ต้องอ่านจาก
+            # dr_cache.json (คีย์ 'mkt_cap') เหมือน /api/fin-analytics ทำไว้แล้ว (ดูคอมเมนต์
+            # "mkt_cap หุ้น DR ไม่ได้อยู่ใน set_data.json" ด้านบน) ไม่งั้น filter FCF Yield ≥
+            # จะตัดหุ้น DR ทิ้งหมดทุกตัว (ไม่มีค่า = ไม่ผ่าน filter ปกติ)
+            mc = e.get("mkt_cap")
+            r["mkt_cap"] = mc
+            r["fcf_yield"] = (r["fcf"] / mc * 100) if (r.get("fcf") is not None and mc) else None
 
     # percentile ภายใน sector (หุ้นไทย — sector จาก set_data.json): PE ต่ำ=ถูกกว่าเพื่อน
     # ในกลุ่ม, ROE สูง=เด่นกว่ากลุ่ม — แก้จุดอ่อน "PE/ROE เทียบข้ามอุตสาหกรรมไม่ได้"

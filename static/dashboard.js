@@ -5859,7 +5859,7 @@ const FS_FILTERS = [
     tip: '<strong>รายได้โตแบบ TTM</strong><br>รายได้รวม 4 ไตรมาสล่าสุด เทียบ TTM ของหนึ่งปีก่อน<br><br>เช่น ใส่ <b>10</b> = รายได้ทั้งปีหลังโต ≥ 10%' },
   { g: 'การเติบโตรายปี' },
   { k: 'rev_cagr',            label: 'CAGR รายได้ ≥', unit: '%', cmp: 'gte',
-    tip: '<strong>CAGR รายได้ (ทบต้นต่อปี)</strong><br>อัตราเติบโตรายได้เฉลี่ยทบต้น ปีแรกสุด → ปีล่าสุด (จากงบ Yahoo)<br><br>เช่น ใส่ <b>10</b> = โตเฉลี่ย ≥ 10%/ปี<br><span style="color:var(--text2)">หุ้น US/HK นอกพอร์ตไม่มี (ใช้ Finnomena ล้วน)</span>' },
+    tip: '<strong>CAGR รายได้ (ทบต้นต่อปี)</strong><br>อัตราเติบโตรายได้เฉลี่ยทบต้น ปีแรกสุด → ปีล่าสุด (จากงบ Yahoo)<br><br>เช่น ใส่ <b>10</b> = โตเฉลี่ย ≥ 10%/ปี<br><span style="color:var(--text2)">หุ้น US/HK นอกพอร์ตมีเฉพาะตัวที่เคย sync งบ Yahoo annual แล้ว (สมาชิกดัชนีหลักส่วนใหญ่ + ตัวที่เคยเปิดดู) ตัวอื่นยังไม่มีค่า</span>' },
   { k: 'profit_streak',       label: 'กำไรโตติดกัน ≥', unit: 'ปี', cmp: 'gte',
     tip: '<strong>กำไรโตต่อเนื่อง (รายปี)</strong><br>จำนวนปีติดกันที่กำไรสุทธิโตกว่าปีก่อน<br><br>เช่น ใส่ <b>3</b> = กำไรโต 3 ปีติด' },
   { k: 'rule_of_40',          label: 'Rule of 40 ≥', unit: '', cmp: 'gte',
@@ -5892,22 +5892,22 @@ const FS_FILTERS = [
   { k: 'de_ratio',            label: 'D/E ≤', unit: 'เท่า', cmp: 'lte', def: 2, nullOk: true,
     tip: '<strong>D/E (หนี้สินต่อทุน)</strong><br>หนี้สินรวมที่มีดอกเบี้ย ÷ ส่วนผู้ถือหุ้น<br><br>เช่น ใส่ <b>1</b> = หนี้ไม่เกินทุน (ยิ่งต่ำยิ่งปลอดภัย)<br><span style="color:var(--text2)">🛡 risk filter — ช่องว่างเปล่า = ไม่กรอง (เลข <b>2</b> จางๆ ในช่องเป็นแค่ค่าแนะนำ พิมพ์เองถึงจะเปิดใช้) · ไม่มีข้อมูล = ไม่ตัด<br>หมายเหตุ: ไทย/DR ใช้ Yahoo (หนี้มีดอกเบี้ย) แต่ US/HK นอกพอร์ตใช้ Finnomena ซึ่งนิยามต่างกัน — ตัวเลขเทียบข้าม universe ตรงๆ ไม่ได้</span>' },
   { k: 'interest_coverage',   label: 'Interest coverage ≥', unit: 'เท่า', cmp: 'gte', def: 1.5, nullOk: true,
-    tip: '<strong>Interest Coverage</strong><br>EBIT ÷ ดอกเบี้ยจ่าย (จ่ายดอกเบี้ยได้กี่เท่า)<br><br>เช่น ใส่ <b>5</b> = กำไรครอบดอกเบี้ยได้ 5 เท่า<br><span style="color:var(--text2)">🛡 risk filter — ช่องว่างเปล่า = ไม่กรอง (เลข <b>1.5</b> จางๆ เป็นแค่ค่าแนะนำ — ต่ำกว่านี้ = จ่ายดอกเบี้ยแทบไม่ไหว พิมพ์เองถึงจะเปิดใช้) · ไม่มีข้อมูล = ไม่ตัด · คำนวณจาก Yahoo — US/HK นอกพอร์ตไม่มี</span>' },
+    tip: '<strong>Interest Coverage</strong><br>EBIT ÷ ดอกเบี้ยจ่าย (จ่ายดอกเบี้ยได้กี่เท่า)<br><br>เช่น ใส่ <b>5</b> = กำไรครอบดอกเบี้ยได้ 5 เท่า<br><span style="color:var(--text2)">🛡 risk filter — ช่องว่างเปล่า = ไม่กรอง (เลข <b>1.5</b> จางๆ เป็นแค่ค่าแนะนำ — ต่ำกว่านี้ = จ่ายดอกเบี้ยแทบไม่ไหว พิมพ์เองถึงจะเปิดใช้) · ไม่มีข้อมูล = ไม่ตัด · คำนวณจาก Yahoo — US/HK นอกพอร์ตมีเฉพาะตัวที่เคย sync งบ Yahoo annual แล้ว</span>' },
   { k: 'cash_cycle',          label: 'Cash cycle ≤', unit: 'วัน', cmp: 'lte',
-    tip: '<strong>วงจรเงินสด (Cash Cycle)</strong><br>DIO + DSO − DPO (วัน) คำนวณเองจาก Yahoo<br><br>เช่น ใส่ <b>60</b> = วงจรเงินสด ≤ 60 วัน (ยิ่งต่ำ/ติดลบยิ่งดี = เก็บเงินไว ขายเร็ว)<br><span style="color:var(--text2)">US/HK นอกพอร์ตไม่มี · ธนาคาร/ประกันไม่มีค่า</span>' },
+    tip: '<strong>วงจรเงินสด (Cash Cycle)</strong><br>DIO + DSO − DPO (วัน) คำนวณเองจาก Yahoo<br><br>เช่น ใส่ <b>60</b> = วงจรเงินสด ≤ 60 วัน (ยิ่งต่ำ/ติดลบยิ่งดี = เก็บเงินไว ขายเร็ว)<br><span style="color:var(--text2)">US/HK นอกพอร์ตมีเฉพาะตัวที่เคย sync งบ Yahoo annual แล้ว · ธนาคาร/ประกันไม่มีค่า</span>' },
   { k: 'goodwill_ratio',      label: 'Goodwill/สินทรัพย์ ≤', unit: '%', cmp: 'lte',
     tip: '<strong>Goodwill ต่อสินทรัพย์</strong><br>goodwill + สินทรัพย์ไม่มีตัวตน ÷ สินทรัพย์รวม<br><br>เช่น ใส่ <b>50</b> = goodwill ≤ 50% ของสินทรัพย์<br><span style="color:var(--text2)">สูง = เสี่ยง write-off (มักจากการซื้อกิจการแพง)</span>' },
   { k: 'ocf_neg_years',       label: 'OCF ติดลบไม่เกิน', unit: 'ปี', cmp: 'lte', def: 1, nullOk: true,
     tip: '<strong>ปีที่ OCF ติดลบ</strong><br>จำนวนปีที่กระแสเงินสดดำเนินงานติดลบติดกัน (นับจากล่าสุด)<br><br>เช่น ใส่ <b>0</b> = ต้องไม่มีปีที่ OCF ติดลบเลย<br><span style="color:var(--text2)">🛡 risk filter — ช่องว่างเปล่า = ไม่กรอง (เลข <b>1</b> จางๆ เป็นแค่ค่าแนะนำ — ติดลบ 2 ปีติด = เผางบ พิมพ์เองถึงจะเปิดใช้) · ไม่มีข้อมูล = ไม่ตัด</span>' },
   { k: 'shares_chg_yoy',      label: 'จำนวนหุ้นเพิ่มไม่เกิน', unit: '%/ปี', cmp: 'lte', def: 10, nullOk: true,
-    tip: '<strong>การเจือจางหุ้น (dilution)</strong><br>%เปลี่ยนของจำนวนหุ้นเทียบปีก่อน — บวกมาก = เพิ่มทุน/แจก ESOP เจือจางผู้ถือหุ้นเดิม, ติดลบ = ซื้อหุ้นคืน<br><br>เช่น ใส่ <b>10</b> = ตัดหุ้นที่เพิ่มจำนวนหุ้นเกิน 10%/ปี<br><span style="color:var(--text2)">🛡 risk filter — ช่องว่างเปล่า = ไม่กรอง (เลข <b>10</b> จางๆ เป็นแค่ค่าแนะนำ พิมพ์เองถึงจะเปิดใช้) · ไม่มีข้อมูล = ไม่ตัด · จาก Yahoo — US/HK นอกพอร์ตไม่มี</span>' },
+    tip: '<strong>การเจือจางหุ้น (dilution)</strong><br>%เปลี่ยนของจำนวนหุ้นเทียบปีก่อน — บวกมาก = เพิ่มทุน/แจก ESOP เจือจางผู้ถือหุ้นเดิม, ติดลบ = ซื้อหุ้นคืน<br><br>เช่น ใส่ <b>10</b> = ตัดหุ้นที่เพิ่มจำนวนหุ้นเกิน 10%/ปี<br><span style="color:var(--text2)">🛡 risk filter — ช่องว่างเปล่า = ไม่กรอง (เลข <b>10</b> จางๆ เป็นแค่ค่าแนะนำ พิมพ์เองถึงจะเปิดใช้) · ไม่มีข้อมูล = ไม่ตัด · จาก Yahoo — US/HK นอกพอร์ตมีเฉพาะตัวที่เคย sync งบ Yahoo annual แล้ว</span>' },
   { k: 'net_cash_positive',   label: 'เงินสด > หนี้ (net cash)', cmp: 'bool',
     tip: '<strong>Net Cash เป็นบวก</strong><br>เงินสด (+เงินลงทุนระยะสั้น) มากกว่าหนี้รวม = งบดุลแกร่ง ไม่มีความเสี่ยงหนี้' },
   { k: 'buyback',             label: 'ซื้อหุ้นคืน (หุ้นลด YoY)', cmp: 'bool',
     tip: '<strong>ซื้อหุ้นคืน</strong><br>จำนวนหุ้นลดลงเทียบปีก่อน = บริษัทซื้อหุ้นคืนจริง (คืนทุนผู้ถือหุ้น, ไม่เพิ่มทุนเจือจาง)' },
   { g: 'มูลค่า (Valuation)' },
   { k: 'pe_value',            label: 'PE ≤', unit: 'เท่า', cmp: 'lte', range: true,
-    tip: '<strong>P/E (ราคาต่อกำไร)</strong><br>เช่น ใส่ <b>15</b> = P/E ≤ 15 เท่า<br><span style="color:var(--text2)">ใช้ไม่ได้กับหุ้นขาดทุน (ลองใช้ P/S แทน) · ช่องซ้าย (ขั้นต่ำ) ใส่พื้นได้ เช่น 3 — PE ต่ำผิดปกติมักเป็นกำไรพิเศษ/กำลังจะถูกลดประมาณการ</span>' },
+    tip: '<strong>P/E (ราคาต่อกำไร)</strong><br>เช่น ใส่ <b>15</b> = P/E ≤ 15 เท่า<br><span style="color:var(--text2)">ใช้ไม่ได้กับหุ้นขาดทุน (ลองใช้ P/S แทน) · ช่องซ้าย (ขั้นต่ำ) ใส่พื้นได้ เช่น 3 — PE ต่ำผิดปกติมักเป็นกำไรพิเศษ/กำลังจะถูกลดประมาณการ<br><br>⚠ คอลัมน์/filter นี้คือ PE งวดล่าสุดของ <b>Finnomena</b> (คนละค่ากับ PE สดที่ใช้คำนวณคอลัมน์ PEG ข้างๆ — PEG ใช้ PE สดจาก set_data.json ถ้ามี) หุ้นไทยที่ราคาขยับมาก PE สองตัวนี้อาจต่างกันได้ ไม่ตรงกับ P/E ในเมนู Stock Screener ปกติที่ใช้ราคาสดเสมอ</span>' },
   { k: 'pe_percentile',       label: 'PE percentile ≤', unit: '', cmp: 'lte',
     tip: '<strong>P/E เทียบอดีตตัวเอง (percentile 0–100)</strong><br>บอกว่า P/E วันนี้อยู่ตรงไหนของประวัติตัวเอง (สูงสุด ~16 ปี) · <b>0 = ถูกสุดที่เคยเป็น · 100 = แพงสุด</b><br><br><b>วิธีใช้ —</b> ใส่ "เพดาน" เอาเฉพาะที่ถูกเทียบอดีต:<br>• <b>50</b> = ถูกกว่าค่ากลางตัวเอง<br>• <b>25</b> = โซนถูก (ถูกกว่า 75% ของเวลา)<br>• <b>10</b> = ถูกพิเศษ (ยิ่งต่ำยิ่งเข้ม)<br><span style="color:var(--text2)">เทียบข้ามหุ้นไม่ได้ · ความยาวประวัติต่างกันต่อหุ้น — หุ้นไทยส่วนใหญ่ครบ 16 ปี แต่ US บางตัว Finnomena ให้ PE ย้อนสั้น (เช่น AMD ~3 ปี) percentile จะเทียบแค่ช่วงนั้น · ต้องมี ≥12 งวดถึงจะมีค่า · หุ้นที่พลิกขาดทุนจน PE หายเกิน ~2 ไตรมาส = ไม่มีค่า (กันค่าตกยุค)</span>' },
   { k: 'pbv_value',           label: 'PBV ≤', unit: 'เท่า', cmp: 'lte', range: true,
@@ -5961,7 +5961,7 @@ const FS_PRESETS = [
     set: { roe15_streak_q: 8, net_margin: 10, de_ratio: 1, ocf_ni_ratio: 0.8, quarters_available: 8 } },
   { name: '🔍 คุณภาพกำไร', color: '#58a6ff', desc: 'OCF เข้าจริง (จับหุ้นแต่งบัญชี)',
     set: { ocf_ni_ratio: 0.8, profit_yoy_q: 0, quarters_available: 8 } },
-  { name: '💰 Value ในอดีตตัวเอง', color: '#a371f7', desc: 'PE ถูกกว่าค่ากลาง 10 ปี',
+  { name: '💰 Value ในอดีตตัวเอง', color: '#a371f7', desc: 'PE ถูกกว่า 75% ของประวัติตัวเอง (ย้อนสูงสุด ~16 ปี)',
     set: { pe_percentile: 25, profit_yoy_q: 0, quarters_available: 12 } },
   { name: '🏦 Net Cash งบแกร่ง', color: '#3fb950', desc: 'เงินสด > หนี้ + จ่ายดอกเบี้ยสบาย',
     set: { interest_coverage: 5, quarters_available: 8 }, bool: ['net_cash_positive'] },
@@ -5993,12 +5993,20 @@ const FS_PRESETS = [
            ocf_ni_ratio: 1, profit_yoy_q: 10, quarters_available: 16 } },
 ];
 
-// filter ที่หุ้น US/HK ทั้งตลาด (mirror) ไม่มีงบ Yahoo เลย (Finnomena ล้วน) — เลือก
-// universe US/HK เมื่อไหร่ ปิดช่องพวกนี้อัตโนมัติกันงง (กรองแล้วได้ศูนย์)
-const FS_YAHOO_ONLY = new Set(['rev_cagr', 'profit_streak', 'rule_of_40', 'growth_percentile',
+// filter ที่ server ไม่คำนวณให้เลยสำหรับหุ้น mirror US/HK (ไม่ใช่เพราะขาดงบ Yahoo แต่เพราะ
+// percentile พวกนี้จัดอันดับเฉพาะ universe ไทย/DR ใน /api/factor-screener เท่านั้น — ดู
+// app.py branch uni=='us'/'hk' ไม่มีการคำนวณ pe_sector_pctile/roe_sector_pctile/growth_percentile
+// เลย) ปิดถาวรจริงๆ เพราะกรองแล้วได้ศูนย์เสมอไม่ว่าหุ้นจะ sync งบ Yahoo หรือไม่ก็ตาม
+const FS_MIRROR_NEVER = new Set(['growth_percentile', 'pe_sector_pctile', 'roe_sector_pctile']);
+
+// filter ที่ต้องใช้งบ Yahoo annual — หุ้น mirror US/HK ที่ "เคย sync งบ Yahoo" แล้ว (สมาชิก
+// ดัชนีหลักส่วนใหญ่ + ตัวที่เคยเปิดดู/on-demand fetch) จะมีค่าจริง ยืนยันจากรีวิว 2026-08-01:
+// ~150-230 ตัวจาก 1,000 แถวแรกมีค่าให้กรองครบทุก field กลุ่มนี้ (ไม่ใช่ศูนย์อย่างที่ comment
+// เดิมอ้างไว้ ตอนนั้นยังไม่มีงาน sync งบ Yahoo ดัชนีหลัก) — เลิกปิดช่องทิ้ง เปิดให้กรองได้
+// พร้อมเตือนสีเหลืองใต้ตาราง (เหมือน FS_PRICE_ONLY ด้านล่าง) แทน กันเข้าใจผิดว่าหุ้นหาย/บั๊ก
+const FS_YAHOO_ONLY = new Set(['rev_cagr', 'profit_streak', 'rule_of_40',
   'interest_coverage', 'cash_cycle', 'goodwill_ratio', 'ocf_neg_years', 'shares_chg_yoy',
-  'net_cash_positive', 'buyback', 'dividend_coverage', 'fcf_yield',
-  'pe_sector_pctile', 'roe_sector_pctile', 'f_score', 'z_zone']);
+  'net_cash_positive', 'buyback', 'dividend_coverage', 'fcf_yield', 'f_score', 'z_zone']);
 
 // filter สายราคา (rs/ema200/52w high/rvol) — มีข้อมูลจริงเฉพาะหุ้น US ที่อยู่ใน
 // S&P500+Dow+NDX (~518 ตัว, overlay จาก us_index_metrics.json ใน app.py) ตัวอื่น
@@ -6007,13 +6015,13 @@ const FS_PRICE_ONLY = new Set(['rs', 'pct_vs_ema200', 'pct_off_high52', 'rvol'])
 
 function _fsApplyUniverseUI() {
   const uni = document.getElementById('fs-universe')?.value;
-  const offYahoo = (uni === 'us' || uni === 'hk');
+  const offNever = (uni === 'us' || uni === 'hk');
   const offPrice = (uni === 'hk');   // US มี overlay ราคาแล้ว (เฉพาะตัวในดัชนีหลัก) — เปิดไว้
   FS_FILTERS.forEach(f => {
     if (f.g) return;
-    const isYahoo = FS_YAHOO_ONLY.has(f.k), isPrice = FS_PRICE_ONLY.has(f.k);
-    if (!isYahoo && !isPrice) return;
-    const off = isYahoo ? offYahoo : offPrice;
+    const isNever = FS_MIRROR_NEVER.has(f.k), isPrice = FS_PRICE_ONLY.has(f.k);
+    if (!isNever && !isPrice) return;
+    const off = isNever ? offNever : offPrice;
     const el = document.getElementById('fsin-' + f.k) || document.getElementById('fsen-' + f.k);
     if (!el) return;
     el.disabled = off;
@@ -6424,6 +6432,77 @@ function buildFsFilterUI() {
   // placeholder จางๆ ในช่อง input เท่านั้น (ดู render ด้านบน) ไม่กรอกค่าจริงให้ล่วงหน้า
   _fsBuilt = true;
   _fsApplyUniverseUI();   // ตั้งสถานะ enable/disable ตาม universe เริ่มต้น
+  initFsAutosave();       // ผูก listener autosave หลัง DOM สร้างเสร็จ (ต้องรอ element มีอยู่จริงก่อน)
+}
+
+// ============================================================
+// PERSISTENT SCREENER+ SETTINGS — เหมือน _SCR_LS ของเมนู Stock Screener ปกติ (ดูด้านล่างของ
+// ไฟล์) ต่างกันที่ field ของ Screener+ สร้างจาก FS_FILTERS แบบ data-driven จึงวน list เอง
+// แทนการ hardcode รายชื่อ id เหมือน _SCR_FIELDS — กันลืมเพิ่ม id ใหม่ทุกครั้งที่เพิ่ม filter
+// ============================================================
+const _FS_LS = 'set_fs_v1';
+
+function saveFsSettings() {
+  const s = {};
+  FS_FILTERS.forEach(f => {
+    if (f.g) return;
+    if (f.cmp === 'bool') {
+      const en = document.getElementById('fsen-' + f.k);
+      if (en) s['fsen-' + f.k] = en.checked;
+      return;
+    }
+    const inp = document.getElementById('fsin-' + f.k);
+    if (inp) s['fsin-' + f.k] = inp.value;
+    if (f.range) {
+      const alt = document.getElementById('fsin-' + f.k + '-alt');
+      if (alt) s['fsin-' + f.k + '-alt'] = alt.value;
+    }
+  });
+  const uni = document.getElementById('fs-universe');
+  if (uni) s['fs-universe'] = uni.value;
+  localStorage.setItem(_FS_LS, JSON.stringify(s));
+}
+
+function loadFsSettings() {
+  try {
+    const raw = localStorage.getItem(_FS_LS);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    FS_FILTERS.forEach(f => {
+      if (f.g) return;
+      if (f.cmp === 'bool') {
+        if (s['fsen-' + f.k] != null) { const en = document.getElementById('fsen-' + f.k); if (en) en.checked = s['fsen-' + f.k]; }
+        return;
+      }
+      if (s['fsin-' + f.k] != null) { const inp = document.getElementById('fsin-' + f.k); if (inp) inp.value = s['fsin-' + f.k]; }
+      if (f.range && s['fsin-' + f.k + '-alt'] != null) { const alt = document.getElementById('fsin-' + f.k + '-alt'); if (alt) alt.value = s['fsin-' + f.k + '-alt']; }
+    });
+    if (s['fs-universe']) { const uni = document.getElementById('fs-universe'); if (uni) uni.value = s['fs-universe']; }
+    _fsApplyUniverseUI();   // universe ที่โหลดกลับมาอาจไม่ตรงกับ default 'th' ตอน build UI — sync enable/disable ใหม่
+  } catch (e) {}
+}
+
+// autosave ทุกครั้งที่แก้ค่า filter — เหมือน initScreenerAutosave() ของเมนู Screener ปกติ
+let _fsAutosaveWired = false;
+function initFsAutosave() {
+  if (_fsAutosaveWired) return;
+  _fsAutosaveWired = true;
+  FS_FILTERS.forEach(f => {
+    if (f.g) return;
+    if (f.cmp === 'bool') {
+      const en = document.getElementById('fsen-' + f.k);
+      if (en) en.addEventListener('change', saveFsSettings);
+      return;
+    }
+    const inp = document.getElementById('fsin-' + f.k);
+    if (inp) inp.addEventListener('input', saveFsSettings);
+    if (f.range) {
+      const alt = document.getElementById('fsin-' + f.k + '-alt');
+      if (alt) alt.addEventListener('input', saveFsSettings);
+    }
+  });
+  const uni = document.getElementById('fs-universe');
+  if (uni) uni.addEventListener('change', saveFsSettings);
 }
 
 function applyFsPreset(i) {
@@ -6450,7 +6529,9 @@ function applyFsPreset(i) {
     const inp = document.getElementById('fsin-' + k); if (inp) inp.value = v;
   });
   (p.bool || []).forEach(k => { const en = document.getElementById('fsen-' + k); if (en) en.checked = true; });
-  _fsApplyUniverseUI();   // ถ้าอยู่ universe US/HK เคลียร์ค่า Yahoo-only ที่ preset เผลอตั้ง
+  _fsApplyUniverseUI();   // ถ้าอยู่ universe US/HK เคลียร์ค่า FS_MIRROR_NEVER ที่ preset เผลอตั้ง (server ไม่คำนวณให้ mirror เลย)
+  saveFsSettings();       // จำ preset ที่เพิ่งกดไว้ด้วย (setter ด้านบนตั้งค่าผ่าน .value ตรงๆ ไม่ผ่าน
+                          // 'input'/'change' event เลยไม่ trigger autosave เอง — ต้องเรียกเอง)
   runFscreener();
 }
 
@@ -6471,6 +6552,9 @@ function resetFscreener(skipRun) {
     document.getElementById('fs-results').innerHTML = '<div class="empty">เลือก preset ด้านบน หรือกรอกเงื่อนไขเอง แล้วกด ค้นหา</div>';
     document.getElementById('fs-export').style.display = 'none';
     const moreBtn = document.getElementById('fs-more'); if (moreBtn) moreBtn.style.display = 'none';
+    // ปุ่ม "รีเซ็ตทั้งหมด" กดจริง (ไม่ใช่แค่เคลียร์ฟอร์มก่อนโหลด/ก่อน apply preset ที่ผ่าน
+    // skipRun=true) — ล้างค่าที่จำไว้ด้วย เหมือน resetScreener() ของเมนู Screener ปกติ
+    localStorage.removeItem(_FS_LS);
   }
 }
 
@@ -6501,7 +6585,12 @@ async function loadFscreener() {
     const m = d.meta || {};
     _fsMainMetaText = `${m.count || _fsRows.length} หุ้น · คำนวณเมื่อ ${m.computed_at || '-'}`;
     document.getElementById('fs-meta').textContent = _fsMainMetaText;
-    resetFscreener();
+    resetFscreener(true);   // เคลียร์ค่าฟอร์มก่อน (skipRun=true: ไม่แตะผลลัพธ์/localStorage)
+    loadFsSettings();       // ดึงค่าที่เคยตั้งไว้ล่าสุดกลับมา (persist เหมือนเมนู Screener ปกติ)
+    document.getElementById('fs-count').textContent = '';
+    document.getElementById('fs-results').innerHTML = '<div class="empty">เลือก preset ด้านบน หรือกรอกเงื่อนไขเอง แล้วกด ค้นหา</div>';
+    document.getElementById('fs-export').style.display = 'none';
+    const moreBtn = document.getElementById('fs-more'); if (moreBtn) moreBtn.style.display = 'none';
   } catch (e) {
     gate.innerHTML = 'โหลดข้อมูลไม่สำเร็จ: ' + e.message;
   }
@@ -6510,10 +6599,10 @@ async function loadFscreener() {
 function _fsReadConds() {
   const conds = [];
   const uni = document.getElementById('fs-universe')?.value;
-  const skipYahoo = (uni === 'us' || uni === 'hk');
+  const skipNever = (uni === 'us' || uni === 'hk');
   FS_FILTERS.forEach(f => {
     if (f.g) return;
-    if (skipYahoo && FS_YAHOO_ONLY.has(f.k)) return;   // mirror ไม่มี field Yahoo — ข้าม
+    if (skipNever && FS_MIRROR_NEVER.has(f.k)) return;   // server ไม่คำนวณให้ mirror เลย — ข้าม
     if (f.cmp === 'bool') {
       const en = document.getElementById('fsen-' + f.k);
       if (en && en.checked) conds.push({ k: f.k, cmp: 'bool' });
@@ -6568,18 +6657,24 @@ async function _runFscreenerMirror(uni, conds) {
     renderFsTable(rows);
     const note = document.createElement('div');
     note.style.cssText = 'font-size:11px;color:var(--text2);margin:4px 0 8px';
-    note.innerHTML = 'ℹ หุ้น US/HK ชุดนี้ใช้งบ <b>Finnomena ล้วน</b> — ตัวกรองที่ต้องใช้งบ Yahoo (net cash, cash cycle, goodwill, buyback, CAGR รายปี, interest coverage, dilution) จะไม่มีค่าและกรองไม่ได้'
-      + ' · FCF Yield%/FCF คุ้มปันผล มาจากงบ Yahoo เหมือนกัน มีค่าเฉพาะหุ้นที่เคย sync งบ Yahoo ไว้แล้ว (FCF Yield% ต้องมี market cap สดด้วย เลยมีเฉพาะหุ้นในดัชนีหลัก, FCF คุ้มปันผลต้องเคยจ่ายปันผลด้วย)'
+    note.innerHTML = 'ℹ หุ้น US/HK ชุดนี้ใช้งบ <b>Finnomena ล้วน</b> เป็นหลัก — เฉพาะหุ้นที่เคย sync งบ <b>Yahoo annual</b> แล้ว (สมาชิกดัชนีหลักส่วนใหญ่ + ตัวที่เคยเปิดดู/on-demand fetch) จะมีค่ากลุ่ม net cash / cash cycle / goodwill / buyback / CAGR รายปี / interest coverage / dilution / F-Score / Z-Score / FCF Yield / FCF คุ้มปันผล ครบ — ตัวที่ยังไม่เคย sync จะไม่มีค่ากลุ่มนี้ (ไม่ใช่บั๊ก)'
+      + ' · FCF Yield% ต้องมี market cap สดด้วย เลยมีเฉพาะหุ้นในดัชนีหลักที่ sync Yahoo แล้ว, FCF คุ้มปันผลต้องเคยจ่ายปันผลด้วย'
       + (uni === 'us'
         ? ' · ค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) มีเฉพาะหุ้นใน S&P500/Dow/Nasdaq 100'
         : ' · ค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) มีเฉพาะหุ้นใน HSI/HSCEI/HSTECH');
-    // เปิดฟิลเตอร์ราคาใน universe US/HK = ตัดหุ้นนอกดัชนีหลัก (ไม่มีค่า rs/ema/52w/rvol)
-    // ออกจากผลทั้งหมดโดยปริยาย — เตือนชัดๆ ไม่ให้เข้าใจว่าหุ้นหาย/บั๊ก
+    // เตือนสีเหลืองถ้าเปิด filter ที่ "มีค่าเฉพาะบางตัว" (ราคา หรืองบ Yahoo) — หุ้นที่ไม่เข้า
+    // เงื่อนไข (นอกดัชนีหลัก / ยังไม่เคย sync Yahoo) จะถูกตัดออกจากผลทั้งหมดโดยปริยาย เตือนชัดๆ
+    // กันเข้าใจผิดว่าหุ้นหาย/บั๊ก (รวม 2 คำเตือนเข้าด้วยกันถ้าเปิดทั้งคู่พร้อมกัน)
+    const warnParts = [];
     if (conds.some(c => FS_PRICE_ONLY.has(c.k))) {
       const idxLabel = uni === 'us' ? 'S&P500 / Dow / Nasdaq 100' : 'HSI / HSCEI / HSTECH';
-      note.innerHTML = '<span style="color:#e3b341">⚠ เปิดฟิลเตอร์ราคา (RS / EMA200 / high 52wk / RVOL) อยู่ — '
-        + `ฟิลเตอร์กลุ่มนี้มีค่าเฉพาะหุ้นใน ${idxLabel} หุ้น ${uni.toUpperCase()} นอกดัชนีถูกตัดออกจากผลทั้งหมด</span><br>`
-        + note.innerHTML;
+      warnParts.push(`ฟิลเตอร์ราคา (RS / EMA200 / high 52wk / RVOL) มีค่าเฉพาะหุ้นใน ${idxLabel} — หุ้น ${uni.toUpperCase()} นอกดัชนีถูกตัดออกจากผลทั้งหมด`);
+    }
+    if (conds.some(c => FS_YAHOO_ONLY.has(c.k))) {
+      warnParts.push('ฟิลเตอร์งบ Yahoo (CAGR/F-Score/Z-Score/FCF ฯลฯ) มีค่าเฉพาะหุ้นที่เคย sync งบ Yahoo annual แล้ว — ตัวที่ยังไม่เคย sync ถูกตัดออกจากผลทั้งหมด');
+    }
+    if (warnParts.length) {
+      note.innerHTML = `<span style="color:#e3b341">⚠ ${warnParts.join(' · ')}</span><br>` + note.innerHTML;
     }
     box.insertBefore(note, box.firstChild);
   } catch (e) {
@@ -6587,8 +6682,37 @@ async function _runFscreenerMirror(uni, conds) {
   }
 }
 
+// เช็คช่วงกลับด้าน (ขั้นต่ำ > ไม่เกิน) ก่อนค้นหา — เดิมกดค้นหาแล้วได้ "พบ 0 หุ้น" เงียบๆ
+// โดยไม่รู้สาเหตุ (เช่น พิมพ์ ROE ขั้นต่ำ 80 ไม่เกิน 15 เผลอสลับช่อง) เตือนชัดๆ แทนปล่อยให้งง
+function _fsRangeWarnings() {
+  const warns = [];
+  FS_FILTERS.forEach(f => {
+    if (!f.range) return;
+    const minId = f.cmp === 'gte' ? `fsin-${f.k}` : `fsin-${f.k}-alt`;
+    const maxId = f.cmp === 'gte' ? `fsin-${f.k}-alt` : `fsin-${f.k}`;
+    const minEl = document.getElementById(minId), maxEl = document.getElementById(maxId);
+    const minV = (minEl && minEl.value !== '') ? parseFloat(minEl.value) : null;
+    const maxV = (maxEl && maxEl.value !== '') ? parseFloat(maxEl.value) : null;
+    if (minV != null && maxV != null && !isNaN(minV) && !isNaN(maxV) && minV > maxV) {
+      const lbl = f.label.replace(/\s*[≥≤]\s*$/, '');
+      warns.push(`${lbl}: ขั้นต่ำ (${minV}) มากกว่าไม่เกิน (${maxV}) — สลับช่องหรือแก้ค่าก่อนค้นหา`);
+    }
+  });
+  return warns;
+}
+
 function runFscreener() {
   if (!_fsLoaded) return;
+  const rangeWarnings = _fsRangeWarnings();
+  if (rangeWarnings.length) {
+    document.getElementById('fs-count').textContent = '';
+    document.getElementById('fs-export').style.display = 'none';
+    const moreBtn = document.getElementById('fs-more'); if (moreBtn) moreBtn.style.display = 'none';
+    document.getElementById('fs-results').innerHTML =
+      '<div class="empty" style="color:var(--red)">⚠ ค่าช่วงกลับด้าน — ช่วงนี้ไม่มีหุ้นไหนผ่านได้แน่นอน:<br>'
+      + rangeWarnings.map(w => `• ${w}`).join('<br>') + '</div>';
+    return;
+  }
   const uni = document.getElementById('fs-universe').value;
   const conds = _fsReadConds();
   if (uni === 'us' || uni === 'hk') { _runFscreenerMirror(uni, conds); return; }
@@ -6742,13 +6866,17 @@ function exportFscreenerCSV() {
   const cols = FS_COLS.map(c => c.k);
   const header = FS_COLS.map(c => c.label).join(',');
   const lines = _fsResultCache.map(r => cols.map(k => {
-    const v = r[k]; return (v == null) ? '' : (typeof v === 'string' ? `"${v}"` : v);
+    const v = r[k]; return (v == null) ? '' : (typeof v === 'string' ? `"${v.replace(/"/g, '""')}"` : v);
   }).join(','));
   const csv = '﻿' + [header, ...lines].join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'fundamental_screener.csv';
+  // universe US/HK กรองฝั่ง server แล้วส่งกลับสูงสุด 500 แถวแรกเสมอ (ดู _runFscreenerMirror) —
+  // ใส่ไว้ในชื่อไฟล์กันเข้าใจผิดว่า export ได้ทุกตัวที่ตรงเงื่อนไข
+  const uni = document.getElementById('fs-universe')?.value || 'all';
+  const suffix = (uni === 'us' || uni === 'hk') ? `_${uni}_top500` : `_${uni}`;
+  a.download = `fundamental_screener${suffix}_${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
 }
 
