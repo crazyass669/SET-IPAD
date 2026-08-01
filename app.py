@@ -2619,6 +2619,15 @@ def factor_screener():
                 r["rvol"] = (round(s["vol_today"] / s["vol_avg20"], 4)
                              if s and s.get("vol_today") and s.get("vol_avg20") else None)
                 r["stage"] = s.get("stage") if s else None
+                # fcf_yield ต้องใช้ mkt_cap สด — us_index_metrics.json ไม่เก็บ mkt_cap เลย
+                # (ยืนยันแล้ว 0/518 ตัวมีค่า เหมือนที่ /api/tearsheet เจอ — ดูคอมเมนต์
+                # "us/hk_index_metrics.json ไม่เก็บ mkt_cap" ในฟังก์ชัน tearsheet) คำนวณเองจาก
+                # price สด × shares_out ล่าสุด (งบ Yahoo annual, มาจาก factor_snapshot อยู่แล้ว
+                # ใน r) แทน — มีค่าเฉพาะหุ้นในดัชนีหลักที่มี price สด ตัวนอกดัชนียังเป็น None
+                mc = s.get("mkt_cap") if s else None
+                if mc is None and s and s.get("price") and r.get("shares_out"):
+                    mc = s["price"] * r["shares_out"]
+                r["fcf_yield"] = (r["fcf"] / mc * 100) if (r.get("fcf") is not None and mc) else None
         elif uni == "hk":
             from sources import hk_index_metrics
             # symbol ในชุด mirror เป็นรหัสดิบ (เช่น "0700") ส่วน hk_index_metrics ใช้
@@ -2634,6 +2643,10 @@ def factor_screener():
                 r["rvol"] = (round(s["vol_today"] / s["vol_avg20"], 4)
                              if s and s.get("vol_today") and s.get("vol_avg20") else None)
                 r["stage"] = s.get("stage") if s else None
+                mc = s.get("mkt_cap") if s else None
+                if mc is None and s and s.get("price") and r.get("shares_out"):
+                    mc = s["price"] * r["shares_out"]
+                r["fcf_yield"] = (r["fcf"] / mc * 100) if (r.get("fcf") is not None and mc) else None
         try:
             filters = json.loads(request.args.get("filters") or "[]")
         except Exception:

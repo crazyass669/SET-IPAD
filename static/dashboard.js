@@ -6568,7 +6568,8 @@ async function _runFscreenerMirror(uni, conds) {
     renderFsTable(rows);
     const note = document.createElement('div');
     note.style.cssText = 'font-size:11px;color:var(--text2);margin:4px 0 8px';
-    note.innerHTML = 'ℹ หุ้น US/HK ชุดนี้ใช้งบ <b>Finnomena ล้วน</b> — ตัวกรองที่ต้องใช้งบ Yahoo (net cash, cash cycle, goodwill, buyback, FCF, CAGR รายปี, interest coverage, dilution) จะไม่มีค่าและกรองไม่ได้'
+    note.innerHTML = 'ℹ หุ้น US/HK ชุดนี้ใช้งบ <b>Finnomena ล้วน</b> — ตัวกรองที่ต้องใช้งบ Yahoo (net cash, cash cycle, goodwill, buyback, CAGR รายปี, interest coverage, dilution) จะไม่มีค่าและกรองไม่ได้'
+      + ' · FCF Yield%/FCF คุ้มปันผล มาจากงบ Yahoo เหมือนกัน มีค่าเฉพาะหุ้นที่เคย sync งบ Yahoo ไว้แล้ว (FCF Yield% ต้องมี market cap สดด้วย เลยมีเฉพาะหุ้นในดัชนีหลัก, FCF คุ้มปันผลต้องเคยจ่ายปันผลด้วย)'
       + (uni === 'us'
         ? ' · ค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) มีเฉพาะหุ้นใน S&P500/Dow/Nasdaq 100'
         : ' · ค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) มีเฉพาะหุ้นใน HSI/HSCEI/HSTECH');
