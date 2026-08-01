@@ -104,9 +104,10 @@ def pending_of(groups, today=None):
         p = e.get("pending")
         if not p:
             continue
-        if today_d is not None:
+        last_date = p.get("last_date", p.get("first_date"))
+        if today_d is not None and last_date:
             try:
-                gap = (today_d - date.fromisoformat(p["last_date"])).days
+                gap = (today_d - date.fromisoformat(last_date)).days
                 if gap > PENDING_STALE_DAYS:
                     continue
             except Exception:
@@ -115,7 +116,7 @@ def pending_of(groups, today=None):
         pending.append({"type": gtype, "name": name,
                         "from": e.get("confirmed"), "to": p["quadrant"],
                         "days": p["days"], "need": CONFIRM_DAYS,
-                        "since": p["first_date"], "last_date": p["last_date"]})
+                        "since": p["first_date"], "last_date": last_date})
     pending.sort(key=lambda x: -x["days"])
     return pending
 
