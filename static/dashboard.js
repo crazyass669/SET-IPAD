@@ -847,9 +847,25 @@ function emaBadge(above) {
     : '<span class="badge badge-red">▼</span>';
 }
 
-function rvolHtml(s) {
-  if (!s.vol_today || !s.vol_avg20 || s.vol_avg20 === 0) return '<span class="text2">—</span>';
-  const rv   = s.vol_today / s.vol_avg20;
+// avg volume ย้อนหลัง `days` วัน (ไม่รวมวันนี้) — คำนวณจาก vol_history เหมือน
+// ตัวกรอง RVOL ใน runScreener() ทุกประการ, fallback เป็น vol_avg20 (เฉลี่ย 20 วัน
+// จาก server) ถ้าไม่มี vol_history หรือ history สั้นเกินไป
+function _rvolCalc(s, days) {
+  if (s.vol_today && s.vol_history && s.vol_history.length) {
+    const slice = s.vol_history.slice(0, -1).slice(-days);
+    const avg = slice.length ? slice.reduce((a,b) => a+b, 0) / slice.length : 0;
+    if (avg > 0) return { rv: s.vol_today / avg, avgVol: avg };
+  }
+  if (s.vol_today && s.vol_avg20) return { rv: s.vol_today / s.vol_avg20, avgVol: s.vol_avg20 };
+  return null;
+}
+
+// days: จำนวนวันเฉลี่ยที่ใช้คำนวณ RVOL — ปกติ 20 (ตาราง breakout/momentum/index-stocks)
+// หน้า Screener ส่ง scr-rvol-days เข้ามาเพื่อให้ตัวเลขในตารางตรงกับเกณฑ์ที่ใช้กรองจริง
+function rvolHtml(s, days = 20) {
+  const calc = _rvolCalc(s, days);
+  if (!calc) return '<span class="text2">—</span>';
+  const { rv, avgVol } = calc;
   const pct  = rv * 100;
   const cls  = pct >= 300 ? 'red' : pct >= 200 ? 'green' : pct >= 150 ? 'yellow' : 'text2';
   const icon = pct >= 300 ? ' 🔥' : pct >= 200 ? ' ⚡' : '';
@@ -857,7 +873,7 @@ function rvolHtml(s) {
   const tip  = [
     `RVOL: ${rv.toFixed(2)}x`,
     `วันนี้: ${_fmtVolRaw(s.vol_today)} หุ้น`,
-    `เฉลี่ย 20วัน: ${_fmtVolRaw(s.vol_avg20)} หุ้น`,
+    `เฉลี่ย ${days}วัน: ${_fmtVolRaw(Math.round(avgVol))} หุ้น`,
     dvol ? `มูลค่าซื้อขาย: ${_fmtVolRaw(dvol)} บาท` : '',
     '',
     '>1.5x = เริ่มผิดปกติ (เหลือง)',
@@ -4641,28 +4657,52 @@ let _scrSortDir = 1; // 1 = desc (มากไปน้อย), -1 = asc (น้
 
 const _SCR_STR  = new Set(['symbol','name','sector']);
 const _SCR_BOOL = new Set(['above_ema50','above_ema200','above_ema20']);
+// คอลัมน์ที่ "เลขน้อย = ดีกว่า" (อันดับ) — คลิกครั้งแรกควรเรียงน้อยไปมาก (rank 1 ขึ้นก่อน)
+// ต่างจากคอลัมน์อื่นที่คลิกครั้งแรกเรียงมากไปน้อยเป็นค่าเริ่มต้น
+const _SCR_ASC_FIRST = new Set(['sec_rank']);
 
 function setScrSort(col) {
   if (_scrSortCol === col) _scrSortDir *= -1;
-  else { _scrSortCol = col; _scrSortDir = 1; }
+  else { _scrSortCol = col; _scrSortDir = _SCR_ASC_FIRST.has(col) ? -1 : 1; }
   renderScrTable();
 }
 
-function renderScrTable() {
+// คำนวณคอลัมน์เสริม (fromHigh/fromLow/rvol/sec_rank) + เรียงตาม _scrSortCol/_scrSortDir
+// ปัจจุบัน — ใช้ร่วมกันระหว่าง renderScrTable() และ exportScreenerCSV() เพื่อให้ไฟล์ที่
+// export ออกมาเรียงลำดับตรงกับที่เห็นบนตารางเป๊ะๆ เสมอ (เดิม export ใช้ _scrStocks ดิบๆ
+// ไม่ผ่านการ sort เลย)
+function _scrComputeSorted() {
   const secRanks = computeSectorRanks();
+  // ใช้จำนวนวันเดียวกับที่ตั้งไว้ในตัวกรอง RVOL (scr-rvol-days) ทั้งคอลัมน์ตัวเลข/สี
+  // และการ sort — เดิม hardcode vol_avg20 (20 วัน) เสมอ ทำให้ตัวเลขในตารางไม่ตรงกับ
+  // เกณฑ์ที่ใช้กรองจริงเมื่อผู้ใช้เปลี่ยนค่า avg เป็นจำนวนวันอื่น
+  const rvolDaysNow = parseInt(document.getElementById('scr-rvol-days')?.value) || 20;
   const withRange = _scrStocks.map(s => {
     const fromHigh = s.high_52w > 0 ? (s.price - s.high_52w) / s.high_52w * 100 : null;
     const fromLow  = s.low_52w  > 0 ? (s.price - s.low_52w)  / s.low_52w  * 100 : null;
-    const rvol     = (s.vol_today && s.vol_avg20 > 0) ? s.vol_today / s.vol_avg20 * 100 : null;
+    const rvCalc   = _rvolCalc(s, rvolDaysNow);
+    const rvol     = rvCalc ? rvCalc.rv * 100 : null;
     const sr = secRanks[s.symbol];
     return { ...s, fromHigh, fromLow, rvol, sec_rank: sr?.rank ?? null, sec_total: sr?.total ?? null };
   });
-  const sorted = [...withRange].sort((a, b) => {
+  return [...withRange].sort((a, b) => {
     const col = _scrSortCol;
     if (_SCR_BOOL.has(col)) return ((b[col]?1:0) - (a[col]?1:0)) * _scrSortDir;
     if (_SCR_STR.has(col))  return ((a[col]??'').localeCompare(b[col]??'')) * _scrSortDir;
-    return ((b[col]??-Infinity) - (a[col]??-Infinity)) * _scrSortDir;
+    // ดัน null ไปท้ายตารางเสมอไม่ว่าจะเรียงมากไปน้อยหรือน้อยไปมาก — เดิมแทน null ด้วย
+    // -Infinity แล้วคูณทิศทาง ทำให้ตอนเรียงน้อยไปมาก (_scrSortDir = -1) ค่า null ลอยขึ้น
+    // บนสุดแทน (เพราะ -Infinity เป็นค่าที่ "น้อยที่สุด" เสมอ)
+    const av = a[col], bv = b[col];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return (bv - av) * _scrSortDir;
   });
+}
+
+function renderScrTable() {
+  const rvolDaysNow = parseInt(document.getElementById('scr-rvol-days')?.value) || 20;
+  const sorted = _scrComputeSorted();
 
   // มือถือจอแคบ (≤480px) ย่อ Sector สุด ๆ เอาพื้นที่คืนให้คอลัมน์ตัวเลข
   // ไอแพด/เดสก์ท็อป มีพื้นที่พอ โชว์ชื่อ sector เต็มได้เลยไม่ต้องย่อ
@@ -4746,7 +4786,7 @@ function renderScrTable() {
           <td class="r text2">${s.pe        != null ? s.pe.toFixed(2)        : '—'}</td>
           <td class="r text2">${s.pbv       != null ? s.pbv.toFixed(2)       : '—'}</td>
           <td class="r">${s.div_yield != null ? `<span class="${s.div_yield >= 5 ? 'green' : s.div_yield >= 3 ? 'yellow' : 'text2'}">${s.div_yield.toFixed(2)}%</span>` : '—'}</td>
-          <td class="r">${rvolHtml(s)}</td>
+          <td class="r">${rvolHtml(s, rvolDaysNow)}</td>
           <td class="r" style="font-size:11px">${fmtCap(s.mkt_cap, s.is_reit)}</td>
           <td class="r">${emaBadge(s.above_ema50)}</td>
           <td class="r">${emaBadge(s.above_ema200)}</td>
@@ -5393,6 +5433,17 @@ function _enrichTechSignals(stocks) {
     s._ema_cross50  = e10!=null&&e50!=null&&e10v!=null&&e50v!=null   && e10>=e50  && e10v<e50v;
     s._ema_cross200 = e10!=null&&e200!=null&&e10v!=null&&e200v!=null  && e10>=e200 && e10v<e200v;
 
+    // เติม ema50/ema200 ตัวเลข + above_ema20 ให้หุ้น DR (server /api/dr ไม่ได้คำนวณ
+    // ให้เหมือนหุ้นไทยใน set_data_fetcher.py) — ไม่งั้น Golden Cross (ema50>ema200)
+    // และติ๊ก EMA20 จะกรอง DR ออกหมดเสมอแบบเงียบๆ · เช็ค == null กันไม่ให้ทับค่าจาก
+    // server ของหุ้นไทยที่มีอยู่แล้ว
+    if (s.ema50  == null && e50  != null) s.ema50  = e50;
+    if (s.ema200 == null && e200 != null) s.ema200 = e200;
+    if (s.above_ema20 == null) {
+      const e20 = _ema(p, 20);
+      if (e20 != null) s.above_ema20 = p[p.length-1] >= e20;
+    }
+
     // RSI Rebound: RSI14 ตัดขึ้น 45 วันนี้ + above SMA200 + above EMA200
     const r=_rsi(p), rv=_rsi(pv);
     const aboveSma200 = s200!=null && p[p.length-1] >= s200;
@@ -5520,7 +5571,8 @@ function applyFundPreset(name) {
 
 // แปลงหุ้น DR (field ชื่อ sym/ind/chg ฯลฯ) ให้มี field ชื่อเดียวกับหุ้นไทย (symbol/sector/ret_1d ฯลฯ)
 // จะได้ผ่าน filter/render logic เดิมของ Screener ได้เลยโดยไม่ต้องเขียนซ้ำ — field ที่หุ้นไทย
-// มีแต่ DR ไม่มี (pe/pbv/div_yield/dq/above_ema50 ฯลฯ) ปล่อยเป็น null ไป filter จะข้ามเองถ้าไม่ได้ตั้งเงื่อนไข
+// มีแต่ DR ไม่มี (pe/pbv/div_yield/dq ฯลฯ) ปล่อยเป็น null ไป filter จะข้ามเองถ้าไม่ได้ตั้งเงื่อนไข
+// (above_ema50/200/20 และ ema50/200 ตัวเลข DR มีครบแล้ว — จาก /api/dr + _enrichTechSignals)
 function _drToScreenerStock(s) {
   return {
     ...s,
@@ -5534,8 +5586,11 @@ function _drToScreenerStock(s) {
 }
 
 // ตัวกรอง "Insider ซื้อสุทธิ" ใน Screener — โหลดธุรกรรม 59-1 ย้อนหลัง 90 วันครั้งเดียว
-// แล้วสรุปเป็นเซ็ตหุ้นที่จำนวนรายการซื้อ > ขาย (net buy) — แยกจาก state ของหน้า Insider
-// เพื่อไม่ให้ปุ่ม 7/30/90 วันในหน้านั้นมากระทบผลกรอง (DR ไม่มีข้อมูล ก.ล.ต. จะถูกตัดออกเสมอ)
+// แล้วสรุปเป็นเซ็ตหุ้นที่ "มูลค่า" ซื้อ > ขาย (net buy) — ถ่วงน้ำหนักด้วย qty*price
+// ไม่ใช่แค่นับจำนวนรายการ (ซื้อ 1 รายการหมื่นบาท ไม่ควรหักล้างขาย 1 รายการร้อยล้านบาท)
+// รายการที่ไม่มี qty/price ชัดเจน (เช่น โอน/ให้) fallback เป็นน้ำหนัก 1 เหมือนเดิม
+// แยกจาก state ของหน้า Insider เพื่อไม่ให้ปุ่ม 7/30/90 วันในหน้านั้นมากระทบผลกรอง
+// (DR ไม่มีข้อมูล ก.ล.ต. จะถูกตัดออกเสมอ)
 let _scrInsiderNetBuy = new Set();
 let _scrInsiderLoaded = false;
 async function _loadScrInsider() {
@@ -5548,13 +5603,19 @@ async function _loadScrInsider() {
     const net = {};
     (res.records || []).forEach(rec => {
       if (rec.trade_date && rec.trade_date < cutoffStr) return;
-      if (rec.action === 'buy')       net[rec.symbol] = (net[rec.symbol] || 0) + 1;
-      else if (rec.action === 'sell') net[rec.symbol] = (net[rec.symbol] || 0) - 1;
+      const val = (rec.qty && rec.price) ? rec.qty * rec.price : null;
+      const weight = val != null ? val : 1;
+      if (rec.action === 'buy')       net[rec.symbol] = (net[rec.symbol] || 0) + weight;
+      else if (rec.action === 'sell') net[rec.symbol] = (net[rec.symbol] || 0) - weight;
     });
     _scrInsiderNetBuy = new Set(Object.keys(net).filter(s => net[s] > 0));
     _scrInsiderLoaded = true;
   } catch (e) { /* โหลดไม่ได้ — runScreener จะแจ้งเตือนแทนการกรองผิดๆ */ }
 }
+
+// promise ของ /api/dr ที่กำลังโหลดอยู่ (ถ้ามี) — กันยิงซ้ำซ้อนเมื่อกดค้นหาซ้ำๆ
+// ระหว่างที่โหลดครั้งแรกยังไม่เสร็จ (เดิมยิง fetch ใหม่ทุกครั้งที่กด ทั้งที่ตัวแรกยังค้างอยู่)
+let _drFetchPromise = null;
 
 async function runScreener() {
   if (!DATA) return;
@@ -5563,11 +5624,14 @@ async function runScreener() {
   if (includeDR && !_drData) {
     const resultBox = document.getElementById('screener-results');
     if (resultBox) resultBox.innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูลหุ้นต่างประเทศ (DR) — อาจใช้เวลา 1-2 นาทีตอนโหลดครั้งแรก...</div>';
-    try {
-      const r = await _fetchTimeout('/api/dr', 150000);
-      const d = await r.json();
-      if (d.stocks) { _drData = d.stocks; _drLoaded = true; _mergeFinAnalyticsInto(_drData, s => s.sym, 'dr'); }
-    } catch (e) { /* เงียบ — ถ้าดึงไม่ได้ก็กรองแค่หุ้นไทยไปก่อน */ }
+    if (!_drFetchPromise) {
+      _drFetchPromise = _fetchTimeout('/api/dr', 150000)
+        .then(r => r.json())
+        .catch(() => null)
+        .finally(() => { _drFetchPromise = null; });
+    }
+    const d = await _drFetchPromise;
+    if (d && d.stocks) { _drData = d.stocks; _drLoaded = true; _mergeFinAnalyticsInto(_drData, s => s.sym, 'dr'); }
   }
   // หุ้น DR มี price_history/vol_history จาก /api/dr แล้ว (server ผูก above_ema50/200
   // ให้ด้วย) — เรียก _enrichTechSignals ตัวเดียวกับหุ้นไทยเพื่อคำนวณ EMA/SMA cross,
@@ -9419,6 +9483,10 @@ function loadSavedPreset(name) {
   const presets = _loadPresets();
   const s = presets[name];
   if (!s) return;
+  // ล้างทุกช่องก่อนเสมอ (เหมือน applyPreset) — กัน field ที่เพิ่มเข้ามาใหม่หลังบันทึก
+  // preset นี้ไว้ค้างค่าจากการค้นหาครั้งก่อนหน้าปนเข้าไปในผลลัพธ์
+  _SCR_FIELDS.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  _SCR_CHECKS.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
   _SCR_FIELDS.forEach(id => { if (s[id] != null) { const el = document.getElementById(id); if (el) el.value = s[id]; } });
   _SCR_CHECKS.forEach(id => { if (s[id] != null) { const el = document.getElementById(id); if (el) el.checked = s[id]; } });
   if (s['scr-market']) { const el = document.getElementById('scr-market'); if (el) el.value = s['scr-market']; }
@@ -9460,29 +9528,36 @@ function renderSavedPresets() {
 // ============================================================
 function exportScreenerCSV() {
   if (!_scrStocks || _scrStocks.length === 0) return;
-  const secRanks = computeSectorRanks();
+  // ใช้ _scrComputeSorted() ตัวเดียวกับตาราง — ไฟล์ CSV จะเรียงลำดับตรงกับที่เห็นบนจอ
+  // เสมอ (เดิม export จาก _scrStocks ดิบๆ ไม่ผ่านการ sort) และคอลัมน์ครบเท่าตาราง
+  // (เดิมขาด 6M%, RVOL, Growth, PEG, FCF Yield%, Div Cover)
+  const sorted = _scrComputeSorted();
   const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const header = ['Symbol','Name','Sector','RS','Sec.Rank','Price',
-                  '1D%','1W%','1M%','3M%','YTD%','1Y%',
-                  '% From High','% From Low','P/E','P/BV','Div Yield%',
-                  'Mkt Cap (MB)','EMA50','EMA200'].map(esc).join(',');
-  const rows = _scrStocks.map(s => {
-    const fh = s.high_52w > 0 ? ((s.price - s.high_52w) / s.high_52w * 100).toFixed(2) : '';
-    const fl = s.low_52w  > 0 ? ((s.price - s.low_52w)  / s.low_52w  * 100).toFixed(2) : '';
-    const sr = secRanks[s.symbol];
+                  '1D%','1W%','1M%','3M%','6M%','1Y%','YTD%',
+                  '% From High','% From Low','P/E','P/BV','Div Yield%','RVOL',
+                  'Mkt Cap (MB)','EMA50','EMA200',
+                  'Growth','PEG','FCF Yield%','Div Cover'].map(esc).join(',');
+  const rows = sorted.map(s => {
     return [
       s.symbol, s.name, s.sector || '',
-      s.rs_score ?? '', sr ? `${sr.rank}/${sr.total}` : '',
+      s.rs_score ?? '', s.sec_rank ? `${s.sec_rank}/${s.sec_total}` : '',
       s.price?.toFixed(2) ?? '',
       s.ret_1d?.toFixed(2) ?? '', s.ret_1w?.toFixed(2) ?? '',
-      s.ret_1m?.toFixed(2) ?? '', s.ret_3m?.toFixed(2) ?? '',
-      s.ret_ytd?.toFixed(2) ?? '', s.ret_1y?.toFixed(2) ?? '',
-      fh, fl,
+      s.ret_1m?.toFixed(2) ?? '', s.ret_3m?.toFixed(2) ?? '', s.ret_6m?.toFixed(2) ?? '',
+      s.ret_1y?.toFixed(2) ?? '', s.ret_ytd?.toFixed(2) ?? '',
+      s.fromHigh != null ? s.fromHigh.toFixed(2) : '',
+      s.fromLow  != null ? s.fromLow.toFixed(2)  : '',
       s.pe?.toFixed(2) ?? '', s.pbv?.toFixed(2) ?? '',
       s.div_yield?.toFixed(2) ?? '',
+      s.rvol != null ? (s.rvol / 100).toFixed(2) : '',
       s.mkt_cap ? Math.round(s.mkt_cap / 1e6) : '',
       s.above_ema50 === true ? 'Y' : s.above_ema50 === false ? 'N' : '',
       s.above_ema200 === true ? 'Y' : s.above_ema200 === false ? 'N' : '',
+      s.growth_score?.toFixed(2) ?? '',
+      s.peg?.toFixed(2) ?? '',
+      s.fcf_yield?.toFixed(2) ?? '',
+      s.dividend_coverage?.toFixed(2) ?? '',
     ].map(esc).join(',');
   });
   const csv = '﻿' + header + '\n' + rows.join('\n');
@@ -16047,7 +16122,7 @@ const _DH_STATUS_COLOR = { ok: 'var(--green)', warn: 'var(--yellow)', red: 'var(
 const DH_SOURCE_MAP = {
   prices:               { text: '⚡ Quick Update (ปุ่มหัวจอ) หรือ ⟳ Full Refresh', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   indices:              { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
-  dr_cache:             { text: 'หน้า DR/DRx — อัพเดทอัตโนมัติตอนเปิดหน้า หรือปุ่ม "⚡ อัปเดตราคา" ในหน้านั้น', gotoPage: 'dr', gotoLabel: 'ไปหน้า DR/DRx' },
+  dr_cache:             { text: '⚡ Quick Update ยิงอัพเดท DR คู่กันให้อัตโนมัติ · หรือหน้า DR/DRx (อัพเดทตอนเปิดหน้า / ปุ่ม "⚡ อัปเดตราคา")', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update', gotoPage: 'dr', gotoLabel: 'ไปหน้า DR/DRx' },
   market_flow:          { text: 'เปิดหน้า Flow จะดึงสดให้อัตโนมัติ (cache 4 ชม.) หรือรอ GitHub Actions (3 รอบ/วัน — เครื่องนี้ต้อง git pull)', gotoPage: 'flow', gotoLabel: 'ไปหน้า Flow' },
   s50_flow:             { text: 'เปิดหน้า Flow จะดึงสดให้อัตโนมัติ (cache 4 ชม.) หรือรอ GitHub Actions (3 รอบ/วัน — เครื่องนี้ต้อง git pull)', gotoPage: 'flow', gotoLabel: 'ไปหน้า Flow' },
   bond_flow:            { text: 'เปิดหน้า Flow จะดึงสดให้อัตโนมัติ (cache 4 ชม.) หรือรอ GitHub Actions (3 รอบ/วัน — เครื่องนี้ต้อง git pull)', gotoPage: 'flow', gotoLabel: 'ไปหน้า Flow' },
@@ -16061,10 +16136,10 @@ const DH_SOURCE_MAP = {
   jp_index_membership:  { text: 'หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม JP → "ดึงเฉพาะที่ขาด/เก่า"', fn: 'startJPIndexSync', fnLabel: '🔄 Sync ดัชนี JP', gotoPage: 'financials' },
   us_prices:            { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 US Index Max" ด้านบนในหน้านี้ (ประวัติยาว)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   hk_prices:            { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 HK Index Max" ด้านบนในหน้านี้ (ประวัติยาว)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
-  jp_prices:            { text: 'ปุ่ม "📈 JP Index Max" ด้านบนในหน้านี้ — ไม่ได้อยู่ใน Quick Update', fn: 'startJpIndexFullRefresh', fnLabel: '📈 JP Index Max' },
+  jp_prices:            { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 JP Index Max" ด้านบนในหน้านี้ (ประวัติยาว)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   us_index_metrics:     { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 US Index Max" ด้านบนในหน้านี้', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   hk_index_metrics:     { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 HK Index Max" ด้านบนในหน้านี้', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
-  jp_index_metrics:     { text: 'ปุ่ม "📈 JP Index Max" ด้านบนในหน้านี้ — ไม่ได้อยู่ใน Quick Update', fn: 'startJpIndexFullRefresh', fnLabel: '📈 JP Index Max' },
+  jp_index_metrics:     { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 JP Index Max" ด้านบนในหน้านี้', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   financials:           { text: 'หน้า งบการเงิน — ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" (หรือ python update_financials.py) · หรือเฉพาะงบหุ้นแม่ DR — หน้า DR/DRx ปุ่ม "🔄 ดึงเฉพาะที่ขาด/เก่า"/"📥 ดึงทั้งหมด"',
                           fn: 'startFinancialsSync', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด', gotoPage: 'financials',
                           fn2: 'startDRFinancialsSyncIncremental', fnLabel2: '🔄 ดึงงบ DR ที่ขาด/เก่า', gotoPage2: 'dr', gotoLabel2: 'ไปหน้า DR/DRx' },
@@ -16294,7 +16369,9 @@ async function pingDataSources() {
   box.style.display = 'block';
   box.innerHTML = '<div class="empty" style="padding:12px">กำลังยิงทดสอบ SET.or.th / Yahoo / Finnomena / TradingView / siamchart...</div>';
   try {
-    const r = await fetch('/api/data-health-ping');
+    // ping ยิง 5 แหล่งภายนอกจริง (timeout ฝั่ง server 6-8 วิ/แหล่ง แต่ยิงขนาน) — ห่อ
+    // _fetchTimeout กัน UI ค้างถ้า worker ฝั่ง Flask แฮงค์ (pattern เดียวกับ endpoint network อื่น)
+    const r = await _fetchTimeout('/api/data-health-ping', 30000, 'หมดเวลารอผลปิง (เกิน 30 วิ) — server อาจค้าง ลองใหม่อีกครั้ง');
     const d = await r.json();
     box.innerHTML = `
       <div class="card" style="padding:12px 14px">

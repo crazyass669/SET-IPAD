@@ -1819,7 +1819,8 @@
             <strong>รวมหุ้นต่างประเทศ (DR Underlying) เข้าผลลัพธ์ด้วย</strong><br>
             เพิ่มหุ้นต้นทางทุกตัวที่มี DR เทรดบน SET (AAPL, TSLA, NVDA ฯลฯ) เข้าไปในผลการกรอง<br><br>
             <span style="color:var(--text2)">
-            ⚠ P/E, P/BV, Div Yield, RS Score ไม่มีข้อมูล (ไม่ได้ดึงจาก SET.or.th) — ถ้าตั้ง filter พวกนี้ หุ้น DR จะถูกกรองออกอัตโนมัติ<br><br>
+            ⚠ P/E, P/BV, Div Yield ไม่มีข้อมูล (ไม่ได้ดึงจาก SET.or.th) — ถ้าตั้ง filter พวกนี้ หุ้น DR จะถูกกรองออกอัตโนมัติ<br><br>
+            ⚠ RS Score ของ DR จัดอันดับ<u>แยกกัน</u>ภายใน universe DR เท่านั้น (เทียบกันเองในกลุ่ม DR ~280 ตัว ไม่ได้เทียบกับหุ้นไทยทั้งตลาด) — ตั้ง RS ≥ 70 จึงไม่ได้แปลว่า "แข็งเท่าหุ้นไทย RS 70" เป๊ะๆ<br><br>
             ⚠ ช่อง "ตลาด" ต้องเป็น "ทั้งหมด" — ถ้าเลือก SET หรือ mai หุ้น DR จะถูกกรองออกทั้งหมด (DR ไม่ใช่ทั้งสองตลาดนั้น)<br><br>
             ✅ Growth Score, PEG, FCF Yield, รายได้/กำไรโตต่อเนื่อง ใช้ได้ปกติ (คำนวณจากงบการเงินเหมือนกัน)<br><br>
             ✅ EMA/SMA Cross, RSI Rebound, Bullish Volume, Break 52W High ใช้ได้แล้ว (คำนวณจากราคาย้อนหลัง yfinance)<br><br>
@@ -1832,7 +1833,7 @@
         <label class="scr-check"><input type="checkbox" id="scr-insider-buy"> 👤 Insider ซื้อสุทธิ
           <span class="scr-tip-icon" style="margin-left:2px">?<div class="scr-tip-box" style="width:290px">
             <strong>👤 ผู้บริหารซื้อมากกว่าขาย (แบบ 59-1 ก.ล.ต.)</strong><br>
-            นับธุรกรรมย้อนหลัง 90 วัน: จำนวนรายการ "ซื้อ" &gt; "ขาย" = ผ่านตัวกรอง<br><br>
+            ธุรกรรมย้อนหลัง 90 วัน ถ่วงน้ำหนักด้วยมูลค่า (จำนวนหุ้น × ราคา): มูลค่า "ซื้อ" รวม &gt; "ขาย" รวม = ผ่านตัวกรอง (รายการที่ไม่มีราคาระบุ เช่น โอน/ให้ นับเป็น 1 หน่วยแทน)<br><br>
             <span style="color:#3fb950">ผู้บริหารรู้กิจการดีที่สุด — ซื้อหุ้นตัวเองมักเป็นสัญญาณเชื่อมั่น</span><br>
             ใช้คู่ "รายได้โต YoY ไตรมาส" + RVOL = combo งบโต + คนในเก็บของ<br><br>
             <span style="color:var(--text2)">⚠ หุ้น DR ไม่มีข้อมูล ก.ล.ต. ไทย จะถูกกรองออกเสมอเมื่อเปิดตัวนี้ · ข้อมูลชุดเดียวกับเมนู Insider &amp; ผู้ถือหุ้นใหญ่</span>
@@ -3749,11 +3750,12 @@
         <div style="padding-left:14px">
           <b>1. ⚡ Quick Update</b> <span style="color:var(--text2)">(~2-5 นาที · ปุ่มบนหัวจอ)</span><br>
           <span style="color:var(--text2);padding-left:16px">ครอบคลุมในปุ่มเดียว: ราคาหุ้นไทย (เฉพาะช่องว่าง) · insider/ผู้ถือหุ้นใหญ่ ·
-          ดัชนีกลุ่ม · ราคา+RS/Stage หุ้นดัชนี US &amp; HK · short sales · NVDR</span><br>
-          <b>2. ⚡ อัปเดตราคา</b> <span style="color:var(--text2)">ในหน้า "DR / DRx" — เฉพาะวันที่จะดูหน้า DR</span><br>
-          <span style="color:var(--text2);padding-left:16px"><b>ต้องกดเอง</b> เพราะ Quick Update
-          <b>ไม่แตะ DR/DRx เลย</b> (ไม่ใช่แค่ช้ากว่า — ข้ามไปทั้งหมด) ลำดับไม่ผูกกับข้อ 1
-          กดก่อนหลังก็ได้ · ไม่ต้องกดถ้าวันนั้นไม่ได้เปิดหน้า DR</span>
+          ดัชนีกลุ่ม · ราคา+RS/Stage หุ้นดัชนี US / HK / JP · short sales · NVDR · Capital/S50/Bond Flow ·
+          และยิงอัพเดทราคา DR/DRx คู่กันให้อัตโนมัติด้วย</span><br>
+          <b>2. ⚡ อัปเดตราคา</b> <span style="color:var(--text2)">ในหน้า "DR / DRx" — ปกติไม่ต้องกดแล้ว</span><br>
+          <span style="color:var(--text2);padding-left:16px">Quick Update ยิง DR/DRx ให้อัตโนมัติทุกครั้งอยู่แล้ว
+          ปุ่มนี้มีไว้กดเฉพาะตอนอยากได้ราคา DR สดระหว่างวันโดยไม่รอรอบ Quick Update
+          (เปิดหน้า DR ครั้งแรกของวันก็อัพเดทให้เองเช่นกัน)</span>
         </div>
         <div style="color:var(--yellow);padding-left:14px;margin-top:4px">
           ⚠ เลี่ยงช่วง 14:30-17:30 น. (Yahoo กำลัง sync ข้อมูลอาจไม่นิ่ง)

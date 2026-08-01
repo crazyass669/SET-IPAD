@@ -4722,8 +4722,15 @@ def data_health():
             _bsd = json.load(f)
         _bn = len(_bsd.get("stocks") or [])
         # ไฟล์ bake ถูก _slim_set_data() ตัดฟิลด์ออก เลยเล็กกว่าตัวเต็มมาก (~7MB vs 12MB)
-        # แต่ถ้าต่ำกว่า 1MB = แทบแน่นอนว่าเป็น payload ว่าง/พร่อง ไม่ใช่แค่ slim
-        _q2 = "ok" if (_bake_mb >= 1.0 and _bn >= 800) else ("warn" if _bn >= 500 else "red")
+        # แต่ถ้าต่ำกว่า 1MB = แทบแน่นอนว่าเป็น payload ว่าง/พร่อง ไม่ใช่แค่ slim — เช็ค mb
+        # ก่อนแยกเป็น red เดี่ยวๆ ไม่งั้นเคส mb<1 แต่ bn>=500 (ไม่เกิดจริงในทางปฏิบัติ แต่ถ้าเกิด
+        # ก็ควรแดง) จะหลุดไปเป็นแค่ warn ทั้งที่ข้อความข้างล่างบอกว่า "<1 MB = payload ว่าง"
+        if _bake_mb < 1.0 or _bn < 500:
+            _q2 = "red"
+        elif _bn < 800:
+            _q2 = "warn"
+        else:
+            _q2 = "ok"
         items.append(_dh_quality_item(
             "q_bake_set_data", "ขนาด/ความครบของ data/set_data.json (เว็บมือถือ)", _q2,
             f"{_bake_mb:.1f} MB · {_bn} ตัว (<1 MB หรือ <500 ตัว = payload ว่าง)",
