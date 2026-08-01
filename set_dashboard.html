@@ -2294,12 +2294,14 @@
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
     <h2 style="margin:0;font-size:16px;color:#e0e6f0">Insider &amp; ผู้ถือหุ้นใหญ่</h2>
     <span id="ins-status" style="font-size:11px;color:var(--muted)"></span>
+    <button id="ins-sync-btn" class="filter-btn" onclick="syncInsiderData()"
+      title="ดึงข้อมูลใหม่จาก SEC ทันที (ปกติ sync อัตโนมัติอยู่แล้วตอน Quick Update)">⟳ Sync ข้อมูล SEC</button>
     <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
       <span style="font-size:11px;color:var(--muted)">ช่วงเวลา:</span>
       <button id="ins-days-7"  class="filter-btn" onclick="setInsDays(7,this)"  title="ย้อนหลัง 7 วัน">7 วัน</button>
       <button id="ins-days-30" class="filter-btn active" onclick="setInsDays(30,this)" title="ย้อนหลัง 30 วัน (แนะนำ)">30 วัน</button>
-      <button id="ins-days-90" class="filter-btn" onclick="setInsDays(90,this)"  title="ย้อนหลัง 90 วัน — แสดงสูงสุด 100 รายการล่าสุด">90 วัน</button>
-      <button id="ins-days-180" class="filter-btn" onclick="setInsDays(180,this)" title="ย้อนหลัง 180 วัน — แสดงสูงสุด 100 รายการล่าสุด">180 วัน</button>
+      <button id="ins-days-90" class="filter-btn" onclick="setInsDays(90,this)"  title="ย้อนหลัง 90 วัน">90 วัน</button>
+      <button id="ins-days-180" class="filter-btn" onclick="setInsDays(180,this)" title="ย้อนหลัง 180 วัน (ค่าสูงสุดที่ระบบเก็บสะสมไว้)">180 วัน</button>
     </div>
   </div>
 

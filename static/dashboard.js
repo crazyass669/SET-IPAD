@@ -18261,9 +18261,8 @@ async function renderValSectorTable() {
 
   function bandCell(dist) {
     if (!dist) return '<td colspan="4" style="color:var(--muted);text-align:center">—</td>';
-    const {avg, std, median, n} = dist;
+    const {avg, std, median} = dist;
     const b = dist.bands;
-    const zMkt_pe = mkt.pe && mkt.pe.std ? (avg - mkt.pe.avg)/mkt.pe.std : null;
     return `
       <td style="text-align:right">${avg.toFixed(1)}<span style="color:var(--muted);font-size:10px"> ±${std.toFixed(1)}</span></td>
       <td style="text-align:right;color:#dca032">${b['+1σ'].toFixed(1)}</td>
@@ -18396,8 +18395,13 @@ async function refreshMarketStats() {
     } else {
       status.textContent = `✓ อัพเดทสำเร็จ! ${d.old_latest} → ${d.new_latest} | P/E=${d.pe_current}x (${d.pe_zscore > 0 ? '+' : ''}${d.pe_zscore}σ) | P/BV=${d.pbv_current}x`;
       status.style.color = '#3ab464';
-      // reload chart data
-      _valData = null;
+      // ต้อง fetch ข้อมูลใหม่ก่อน render — เดิม set _valData = null แล้วเรียก
+      // renderValuation() ตรงๆ แต่ renderValuation() บรรทัดแรกคือ
+      // "if (!_valData) return" เลยไม่มีอะไรถูกวาดใหม่เลย (กราฟ/สถิติค้างชุดเก่า)
+      try {
+        const r2 = await fetch('/api/market-stats?t=' + Date.now());
+        if (r2.ok) _valData = await r2.json();   // fetch ไม่สำเร็จ = คง _valData เดิมไว้
+      } catch (e) { /* คง _valData เดิมไว้ */ }
       renderValuation();
     }
     _showValDataMonth();   // อัพเดทป้ายเดือนข้อมูลให้ตรงหลัง refresh
@@ -18844,10 +18848,11 @@ function setupValHover(canvasId, thresholds, avg, isPE, std) {
   canvas.parentElement.style.position = 'relative';
   canvas.parentElement.appendChild(tip);
 
-  canvas.addEventListener('mousemove', e => {
-    if (!canvas._dates) return;
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
+  // mousemove (desktop) กับ pointermove touch (ไอแพด/มือถือ — mousemove ไม่ทำงาน
+  // บนจอสัมผัส) ใช้ตรรกะวาด tooltip เดียวกันทุกอย่าง ต่างกันแค่ต้นทางพิกัดเมาส์/นิ้ว
+  // จึงรวมเป็นฟังก์ชันเดียวแล้วเรียกจากทั้งสอง event
+  function showTip(clientX, clientY, rect) {
+    const mx = clientX - rect.left;
     const idx = Math.round((mx - canvas._pad.l) / canvas._cw * (canvas._len - 1));
     if (idx < 0 || idx >= canvas._len) { tip.style.display = 'none'; return; }
     const val = canvas._vals[idx];
@@ -18870,42 +18875,21 @@ function setupValHover(canvasId, thresholds, avg, isPE, std) {
     const tipW = 200;
     const tipX = mx + 14 + tipW > canvas._W ? mx - tipW - 4 : mx + 14;
     tip.style.left = tipX + 'px';
-    tip.style.top  = Math.max(4, e.clientY - rect.top - 60) + 'px';
+    tip.style.top  = Math.max(4, clientY - rect.top - 60) + 'px';
+  }
+
+  canvas.addEventListener('mousemove', e => {
+    if (!canvas._dates) return;
+    showTip(e.clientX, e.clientY, canvas.getBoundingClientRect());
   });
   canvas.addEventListener('mouseleave', () => tip.style.display = 'none');
 
-  // Touch (ไอแพด/มือถือ): mousemove ข้างบนไม่ทำงานบนจอสัมผัส — เพิ่ม
-  // pointermove เฉพาะ pointerType==='touch' ให้ลากนิ้วสแกนดูค่าตามแนวแกน
-  // ได้แบบเดียวกับ chart scrubber ของแอปหุ้นทั่วไป (เมาส์ไม่กระทบ ยังใช้
-  // mousemove/mouseleave เดิม) preventDefault กันหน้าเลื่อนตามตอนลากนิ้ว
+  // preventDefault กันหน้าเลื่อนตามตอนลากนิ้วสแกนดูค่าตามแนวแกน (chart scrubber
+  // แบบแอปหุ้นทั่วไป) — เมาส์ไม่กระทบ ยังใช้ mousemove/mouseleave เดิม
   canvas.addEventListener('pointermove', e => {
     if (e.pointerType !== 'touch' || !canvas._dates) return;
     e.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const idx = Math.round((mx - canvas._pad.l) / canvas._cw * (canvas._len - 1));
-    if (idx < 0 || idx >= canvas._len) { tip.style.display = 'none'; return; }
-    const val = canvas._vals[idx];
-    if (val === null) { tip.style.display = 'none'; return; }
-    const diff = val - canvas._avg;
-    const zscore = canvas._std ? (diff / canvas._std) : 0;
-    const diffStr = (diff >= 0 ? '+' : '') + diff.toFixed(2) + 'x';
-    const zStr = (zscore >= 0 ? '+' : '') + zscore.toFixed(2) + 'σ';
-    const zColor = Math.abs(zscore) > 2 ? (zscore>0?'#dc503c':'#3ab464')
-                 : Math.abs(zscore) > 1 ? (zscore>0?'#dca032':'#96c850')
-                 : 'rgba(255,255,255,0.6)';
-    tip.innerHTML =
-      `<b style="color:#e8eef5">${canvas._dates[idx]}</b><br>` +
-      `<span style="font-size:15px;font-weight:700">${val.toFixed(2)}x</span>` +
-      `<span style="font-size:12px;color:${zColor};margin-left:8px">${zStr}</span><br>` +
-      `${_valZoneNameFull(val, canvas._thresholds, canvas._isPE)}<br>` +
-      `<span style="color:rgba(255,255,255,0.4);font-size:11px">vs ค่าเฉลี่ย ${canvas._avg}x: </span>` +
-      `<span style="color:${zColor};font-size:11px">${diffStr}</span>`;
-    tip.style.display = 'block';
-    const tipW = 200;
-    const tipX = mx + 14 + tipW > canvas._W ? mx - tipW - 4 : mx + 14;
-    tip.style.left = tipX + 'px';
-    tip.style.top  = Math.max(4, e.clientY - rect.top - 60) + 'px';
+    showTip(e.clientX, e.clientY, canvas.getBoundingClientRect());
   }, { passive: false });
   canvas.addEventListener('pointerup', e => { if (e.pointerType === 'touch') tip.style.display = 'none'; });
   canvas.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') tip.style.display = 'none'; });
@@ -20317,6 +20301,27 @@ async function fetchInsiderData() {
   }
 }
 
+// ปุ่ม manual sync บนหน้า Insider — เรียก /api/insider-sync (เดิม endpoint นี้มีอยู่
+// แล้วแต่ไม่มีปุ่มเรียกใช้จาก UI เลย ต้องรอ Quick Update ประจำวันเท่านั้นถึงจะ sync)
+async function syncInsiderData() {
+  const btn = document.getElementById('ins-sync-btn');
+  const status = document.getElementById('ins-status');
+  btn.disabled = true;
+  btn.textContent = '⟳ กำลัง sync...';
+  try {
+    const r = await _fetchTimeout('/api/insider-sync', 200000, 'หมดเวลารอ sync ข้อมูล SEC').then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'sync ไม่สำเร็จ');
+    _insData = null;
+    await fetchInsiderData();   // เขียนทับ ins-status ด้วยข้อความ "อัพเดท ..." — ต่อท้ายผลสรุป sync ให้เห็นด้วย
+    status.textContent += ` · ✓ sync ดึงใหม่: ผู้บริหาร +${r.insider_fetched} รายการ · ผู้ถือหุ้นใหญ่ +${r.major_fetched} รายการ`;
+  } catch (e) {
+    status.textContent = '✗ sync ไม่สำเร็จ: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⟳ Sync ข้อมูล SEC';
+  }
+}
+
 function setInsDays(d, btn) {
   _insDays = d; _insData = null;
   document.querySelectorAll('[id^="ins-days-"]').forEach(b => b.classList.remove('active'));
@@ -21140,8 +21145,12 @@ function exportNvdrCSV() {
 async function _fetchFlowMarket(market) {
   if (_flowDataByMarket[market]) return _flowDataByMarket[market];
   const cfg = FLOW_MARKETS[market];
-  const res = await fetch(cfg.endpoint + '?t=' + Date.now());
-  const d   = await res.json();
+  // endpoint นี้มี fallback ดึงสดจาก siamchart/SET API/TFEX/ThaiBMA เมื่อ cache
+  // หมดอายุ (retry 3 ครั้ง x 20s ของ siamchart รวมแล้วอาจถึง ~70s) — ต้องมี
+  // timeout กันหน้าค้าง "กำลังโหลด..." ไม่มีกำหนดเมื่อแหล่งต้นทางช้า/ล่ม
+  const res = await _fetchTimeout(cfg.endpoint + '?t=' + Date.now(), 90000,
+    `หมดเวลารอข้อมูล Capital Flow (${cfg.label}) — แหล่งข้อมูลต้นทางอาจช้าหรือล่มอยู่ ลองใหม่อีกครั้ง`);
+  const d = await res.json();
   if (d.error) throw new Error(d.error);
   _flowDataByMarket[market] = d;
   return d;

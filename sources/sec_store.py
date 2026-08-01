@@ -78,6 +78,17 @@ def _set_meta(base_dir, key, value):
         con.close()
 
 
+# price/pct_* อยู่ใน PRIMARY KEY ของทั้งสองตาราง แต่บางรายการ (เช่น "โอน/รับโอน"
+# ที่ไม่มีราคา) parse ไม่ได้ค่าจริง -> None สิ่งนี้ทำให้ PK ชนกันพังเพราะ SQLite
+# ถือว่า NULL != NULL ใน unique constraint (INSERT OR REPLACE จึงไม่มีวันทับแถวเดิม
+# ที่ price/pct เป็น NULL ได้เลย) sync ซ้ำทุกรอบ (หน้าต่างทับซ้อน 21 วัน) จึงพอกแถว
+# ซ้ำเพิ่มเรื่อยๆ — เข้ารหัสเป็น sentinel ตัวเลขแทน NULL ก่อน insert (ยังคงเทียบ
+# เท่ากันได้ใน PK) แล้วถอดกลับเป็น None ตอน query (_INSIDER_PRICE_NULL/_MAJOR_PCT_NULL
+# อยู่นอกช่วงค่าจริงที่เป็นไปได้ — ดูช่วงค่าจริงที่ตรวจสอบแล้วใน docstring ของตัวแปร)
+_INSIDER_PRICE_NULL = -1        # ราคาจริงเป็นบวกเสมอ (พบช่วง 0.01–3500)
+_MAJOR_PCT_NULL = -999.0        # pct_after พบค่าติดลบได้ (ต่ำสุด -49.74) แต่ไม่มีทางถึง -999
+
+
 def upsert_insider_trades(base_dir, records):
     if not records:
         return
@@ -89,7 +100,9 @@ def upsert_insider_trades(base_dir, records):
                (symbol, company, name, relation, sec_type, trade_date, qty, price, method, action)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
             [(r["symbol"], r["company"], r["name"], r["relation"], r["sec_type"],
-              r["trade_date"], r["qty"], r["price"], r["method"], r["action"])
+              r["trade_date"], r["qty"],
+              r["price"] if r["price"] is not None else _INSIDER_PRICE_NULL,
+              r["method"], r["action"])
              for r in records if r.get("trade_date")]
         )
         con.commit()
@@ -103,12 +116,15 @@ def upsert_major_changes(base_dir, records):
     init_db(base_dir)
     con = _connect(base_dir)
     try:
+        def pct(v):
+            return v if v is not None else _MAJOR_PCT_NULL
         con.executemany(
             """INSERT OR REPLACE INTO major_changes
                (symbol, holder, method, sec_type, pct_before, pct_change, pct_after, trade_date, action)
                VALUES (?,?,?,?,?,?,?,?,?)""",
             [(r["symbol"], r["holder"], r["method"], r["sec_type"],
-              r["pct_before"], r["pct_change"], r["pct_after"], r["trade_date"], r["action"])
+              pct(r["pct_before"]), pct(r["pct_change"]), pct(r["pct_after"]),
+              r["trade_date"], r["action"])
              for r in records if r.get("trade_date")]
         )
         con.commit()
@@ -129,7 +145,11 @@ def query_insider_trades(base_dir, days):
     finally:
         con.close()
     cols = ["symbol", "company", "name", "relation", "sec_type", "trade_date", "qty", "price", "method", "action"]
-    return [dict(zip(cols, row)) for row in rows]
+    out = [dict(zip(cols, row)) for row in rows]
+    for r in out:
+        if r["price"] == _INSIDER_PRICE_NULL:
+            r["price"] = None
+    return out
 
 
 def query_major_changes(base_dir, days):
@@ -145,7 +165,12 @@ def query_major_changes(base_dir, days):
     finally:
         con.close()
     cols = ["symbol", "holder", "method", "sec_type", "pct_before", "pct_change", "pct_after", "trade_date", "action"]
-    return [dict(zip(cols, row)) for row in rows]
+    out = [dict(zip(cols, row)) for row in rows]
+    for r in out:
+        for k in ("pct_before", "pct_change", "pct_after"):
+            if r[k] == _MAJOR_PCT_NULL:
+                r[k] = None
+    return out
 
 
 def _fetch_and_parse_insider(date_from, date_to):

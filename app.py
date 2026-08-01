@@ -6078,7 +6078,10 @@ def insider_trades():
     (เรียกตอน Quick Update / auto-update cron) เท่านั้น"""
     from datetime import datetime as _dt
 
-    days = int(request.args.get("days", 30))
+    try:
+        days = int(request.args.get("days", 30))
+    except ValueError:
+        days = 30
     days = max(1, min(days, 365))
 
     if not sec_store.db_exists(BASE_DIR):
@@ -6104,7 +6107,10 @@ def major_changes():
     """ผู้ถือหุ้นรายใหญ่เปลี่ยนแปลง (แบบ 246-2) — อ่านจากฐานข้อมูลสะสม (sec_filings.db)"""
     from datetime import datetime as _dt
 
-    days = int(request.args.get("days", 30))
+    try:
+        days = int(request.args.get("days", 30))
+    except ValueError:
+        days = 30
     days = max(1, min(days, 365))
 
     if not sec_store.db_exists(BASE_DIR):
