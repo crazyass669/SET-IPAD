@@ -30,7 +30,20 @@ function _wlSave() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbols: watchlist }),
-  }).catch(() => {});
+  }).then(r => {
+    const note = document.getElementById('wl-sync-note');
+    if (!note) return;
+    if (r.ok) { note.textContent = ''; return; }
+    // เกิน 500 ตัว (limit ฝั่ง backend — ดู save_watchlist ใน app.py) หรือ payload ผิดรูป —
+    // localStorage เครื่องนี้ยังบันทึกได้ปกติ แต่ sync ข้ามเครื่องผ่าน data/watchlist.json
+    // หยุดทำงานเงียบๆ ถ้าไม่แจ้ง (เดิม catch ทิ้งทั้งหมด ไม่มีใครรู้ — พบจากรีวิวโค้ด 2026-08-02)
+    note.textContent = watchlist.length > 500
+      ? `⚠ Watchlist เกิน 500 ตัว (มี ${watchlist.length}) — เกินลิมิต sync ข้ามเครื่อง บันทึกได้แค่ในเครื่องนี้`
+      : '⚠ บันทึก Watchlist ไปเซิร์ฟเวอร์ไม่สำเร็จ — sync ข้ามเครื่องอาจไม่ทำงาน';
+  }).catch(() => {
+    const note = document.getElementById('wl-sync-note');
+    if (note) note.textContent = '⚠ ติดต่อเซิร์ฟเวอร์ไม่ได้ — บันทึก Watchlist ได้แค่ในเครื่องนี้ (localStorage)';
+  });
 }
 
 (function _wlSyncFromServer() {
@@ -2954,6 +2967,13 @@ function _wlPopulateSymList() {
   }
 }
 
+// เปิด Tearsheet ของหุ้น mirror US/HK ที่อยู่นอกดัชนีหลัก (ไม่มีแถวราคาให้แสดงในตาราง
+// Watchlist นี้ เพราะ us/hk_index_metrics.json เก็บเฉพาะสมาชิกดัชนีหลัก — ดู renderWatchlist)
+// ใช้ deep-link #ts/ แบบเดียวกับ hedgeOpenTearsheet เพื่อดูข้อมูลเต็ม (ดึงสดจาก Yahoo ได้เสมอ)
+function _wlOpenMirrorTearsheet(mkt, sym) {
+  openInternalHash(`#ts/${mkt.toLowerCase()}/${encodeURIComponent(sym)}`);
+}
+
 function addToWatchlist() {
   let raw = document.getElementById("wl-input").value.trim().toUpperCase();
   if (!raw) return;
@@ -3075,6 +3095,9 @@ function renderWatchlist() {
       `<tr><td colspan="17"><div class="empty">กำลังโหลดข้อมูล...</div></td></tr>`;
     return;
   }
+  // ชื่อบริษัท (s.name/d.name/u.name/h.name) มาจากไฟล์ข้อมูลภายนอก (dr_universe/
+  // us-hk_index_metrics) ไม่ใช่ literal ที่เราคุมเอง — escape ก่อนแทรกเป็น HTML content
+  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   const stockMap = Object.fromEntries(DATA.stocks.map(s => [s.symbol, s]));
   const drMap    = Object.fromEntries((_drData || []).map(s => [s.sym, s]));
   const usMap    = Object.fromEntries((_usData?.stocks || []).map(s => [s.symbol, s]));
@@ -3144,7 +3167,7 @@ function renderWatchlist() {
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">DR</span>
             <a class="tv-link" href="${tvHref}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>
           </td>
-          <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.name}</td>
+          <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.name)}</td>
           <td style="font-size:11px;color:var(--text2)">${d.region}</td>
           <td class="r"><span style="font-size:12px;font-weight:600">${_drFmtPrice(d.price)}</span>
             <br><span class="${chgCls}" style="font-size:10px">${(d.chg??0)>=0?"+":""}${(d.chg??0).toFixed(2)}%</span>
@@ -3175,7 +3198,8 @@ function renderWatchlist() {
           <td><strong style="color:var(--blue)">${under}</strong>
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:4px">US</span>
           </td>
-          <td colspan="14" class="text2">ยังไม่โหลดข้อมูล US Index — ไปหน้า "หุ้น US" แล้วกด Quick Update ก่อน</td>
+          <td colspan="13" class="text2">ไม่อยู่ในดัชนีหลัก S&amp;P500/Dow/NDX ที่เก็บราคาไว้ในเครื่อง — Watchlist ตารางนี้ยังไม่รองรับหุ้นนอกดัชนี (Quick Update ไม่ช่วย)</td>
+          <td class="r"><button class="btn-secondary" style="font-size:11px;padding:4px 8px;white-space:nowrap" onclick="_wlOpenMirrorTearsheet('US','${under}')">📋 Tearsheet</button></td>
           <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
         </tr>`;
       return `
@@ -3186,7 +3210,7 @@ function renderWatchlist() {
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">US</span>
             ${_usTvLink(u.symbol)}
           </td>
-          <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.name||"—"}</td>
+          <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.name)||"—"}</td>
           <td style="font-size:11px">${u.sector||"—"}</td>
           <td class="r">${u.price!=null?u.price.toFixed(2):"—"}${_wlLiveCell(sym, u.price)}</td>
           <td class="r">${pct(u.ret_1d)}</td>
@@ -3214,7 +3238,8 @@ function renderWatchlist() {
           <td><strong style="color:var(--blue)">${under}</strong>
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:4px">HK</span>
           </td>
-          <td colspan="14" class="text2">ยังไม่โหลดข้อมูล HK Index — ไปหน้า "หุ้น HK" แล้วกด Quick Update ก่อน</td>
+          <td colspan="13" class="text2">ไม่อยู่ในดัชนีหลัก HSI/HSCEI/HSTECH ที่เก็บราคาไว้ในเครื่อง — Watchlist ตารางนี้ยังไม่รองรับหุ้นนอกดัชนี (Quick Update ไม่ช่วย)</td>
+          <td class="r"><button class="btn-secondary" style="font-size:11px;padding:4px 8px;white-space:nowrap" onclick="_wlOpenMirrorTearsheet('HK','${under}')">📋 Tearsheet</button></td>
           <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
         </tr>`;
       return `
@@ -3225,7 +3250,7 @@ function renderWatchlist() {
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">HK</span>
             ${_hkTvLink(h.symbol)}
           </td>
-          <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h.name||"—"}</td>
+          <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(h.name)||"—"}</td>
           <td style="font-size:11px">${h.sector||"—"}</td>
           <td class="r">${h.price!=null?h.price.toFixed(2):"—"}${_wlLiveCell(sym, h.price)}</td>
           <td class="r">${pct(h.ret_1d)}</td>
@@ -3271,7 +3296,7 @@ function renderWatchlist() {
               <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">DR</span>
               <a class="tv-link" href="${tvHref2}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>
             </td>
-            <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.name}</td>
+            <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.name)}</td>
             <td style="font-size:11px;color:var(--text2)">${d.region}</td>
             <td class="r"><span style="font-size:12px;font-weight:600">${_drFmtPrice(d.price)}</span>
               <br><span class="${chgCls2}" style="font-size:10px">${(d.chg??0)>=0?"+":""}${(d.chg??0).toFixed(2)}%</span>
@@ -3310,7 +3335,7 @@ function renderWatchlist() {
               <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">US</span>
               ${_usTvLink(u.symbol)}
             </td>
-            <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.name||"—"}</td>
+            <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.name)||"—"}</td>
             <td style="font-size:11px">${u.sector||"—"}</td>
             <td class="r">${u.price!=null?u.price.toFixed(2):"—"}${_wlLiveCell(newSym, u.price)}</td>
             <td class="r">${pct(u.ret_1d)}</td>
@@ -3346,7 +3371,7 @@ function renderWatchlist() {
               <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">HK</span>
               ${_hkTvLink(h.symbol)}
             </td>
-            <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h.name||"—"}</td>
+            <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(h.name)||"—"}</td>
             <td style="font-size:11px">${h.sector||"—"}</td>
             <td class="r">${h.price!=null?h.price.toFixed(2):"—"}${_wlLiveCell(newSym, h.price)}</td>
             <td class="r">${pct(h.ret_1d)}</td>
@@ -3374,7 +3399,7 @@ function renderWatchlist() {
       <tr data-sym="${s.symbol}">
         <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score??"-"}</span></td>
         <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}${dqBadge(s)}</td>
-        <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
+        <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.name)}</td>
         <td style="font-size:11px">${s.sector||"—"}</td>
         <td class="r">${s.price?.toFixed(2)??"—"}${_wlLiveCell(s.symbol, s.price)}</td>
         <td class="r">${pct(s.ret_1d)}</td>
@@ -7610,6 +7635,11 @@ async function loadTearsheet(symArg, marketOverride) {
   document.getElementById('ts-sym').value = sym;
   const box = document.getElementById('ts-body');
   box.innerHTML = '<div class="empty">กำลังโหลด...</div>';
+  // d.error มักสะท้อน sym ที่ผู้ใช้พิมพ์กลับมาตรงๆ (เช่น "ไม่พบหุ้น {sym}") และ sym มาจาก URL
+  // path param — เข้าถึงได้ผ่าน deep-link ที่ปั้นเอง (#ts/us/<payload>) ไม่ใช่แค่ผ่านช่องค้นหา
+  // ปกติ ต้อง escape ก่อนแทรกเป็น HTML content กัน reflected XSS (พบจากรีวิวโค้ด 2026-08-02)
+  // ประกาศไว้นอก try/catch เพราะ catch block ก็ใช้ (block scope ของ const ใน try เข้าไม่ถึง)
+  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   try {
     // marketOverride: ใช้ตอนเปิดจาก modal หุ้น DR (ดู openTearsheetFromModal) — ต้องส่ง
     // market='DR' ให้ backend resolve DR sym เป็น underlying US/HK เอง (DR sym อาจไม่ตรงกับ
@@ -7617,11 +7647,11 @@ async function loadTearsheet(symArg, marketOverride) {
     const r = await _fetchTimeout(`/api/tearsheet/${marketOverride || _tsMarket}/${encodeURIComponent(sym)}`, 35000,
       'หมดเวลารอข้อมูล (เกิน 35 วิ) — หุ้นตัวนี้อาจอยู่นอกดัชนีหลักและต้องดึงราคาสดจาก Yahoo ครั้งแรก ลองใหม่อีกครั้ง');
     const d = await r.json();
-    if (d.error) { box.innerHTML = `<div class="empty">${d.error}</div>`; return; }
+    if (d.error) { box.innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
     _tsData = d;
     renderTearsheet(d);
   } catch (e) {
-    box.innerHTML = '<div class="empty" style="color:var(--red)">โหลดไม่สำเร็จ: ' + e.message + '</div>';
+    box.innerHTML = '<div class="empty" style="color:var(--red)">โหลดไม่สำเร็จ: ' + esc(e.message) + '</div>';
   }
 }
 
@@ -7762,12 +7792,15 @@ function renderTearsheet(d) {
       <div id="ts-news"><div class="empty" style="padding:8px 0;font-size:11px">กำลังโหลด...</div></div>
     </div>`;
 
-  const filLinksFn = mkt === 'US' ? _filLinksUS : mkt === 'HK' ? _filLinksHK : _filLinksTH;
+  // JP: หน้า Filings แบบเต็มยังไม่มีแท็บ JP (fil-tab-th/us/hk เท่านั้น) — ใช้ _filLinksJP
+  // สำหรับลิงก์ในการ์ดนี้ได้ปกติ (ไม่ต้องพึ่งหน้า Filings) แต่ซ่อนลิงก์ "เปิดหน้ารายงานทางการ →"
+  // ที่พาไปหน้านั้นไปก่อน (เดิม fallback เป็น _filLinksTH ผิดตลาด ขึ้นลิงก์ SET.or.th ของหุ้นญี่ปุ่น)
+  const filLinksFn = mkt === 'US' ? _filLinksUS : mkt === 'HK' ? _filLinksHK : mkt === 'JP' ? _filLinksJP : _filLinksTH;
   const docs = lite ? '' : `
     <div class="card" style="padding:16px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div style="font-size:13px;font-weight:700">📑 เอกสารทางการ</div>
-        <a href="#" onclick="_tsGoFilings('${h.symbol}');return false" style="font-size:11px;color:var(--blue)">เปิดหน้ารายงานทางการ →</a>
+        ${mkt !== 'JP' ? `<a href="#" onclick="_tsGoFilings('${h.symbol}');return false" style="font-size:11px;color:var(--blue)">เปิดหน้ารายงานทางการ →</a>` : ''}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
         ${filLinksFn(h.symbol)[0].links.map(l => `<a class="filter-btn" href="${l.url}" target="_blank" rel="noopener"
@@ -7778,6 +7811,10 @@ function renderTearsheet(d) {
     </div>`;
 
   const inWl = watchlist.includes(_tsWlKey(h.symbol));
+  // Watchlist/ปฏิทิน ยังไม่รองรับ prefix "JP:" เลย (ดู renderWatchlist/_calResolveWatchlist —
+  // ไม่มี branch JP) — ซ่อนปุ่มเพิ่ม Watchlist ของตลาด JP ไปก่อน กันสร้าง entry ที่หน้าอื่นแสดง
+  // ผลไม่ได้ (จะกลายเป็นแถว "ไม่พบข้อมูล" ถาวร) จนกว่าจะเพิ่ม branch JP ให้ครบวงจร
+  const wlSupported = mkt !== 'JP';
   // ปุ่ม _tsGoNews/_tsGoFilings/_tsGoPeer/_tsGoDividends พาไปหน้า TH/US/HK ที่ไม่รู้จักหุ้นตลาด
   // lite (peer ตอบ 501, ข่าว/เอกสาร/ปันผลผูกตลาดพวกนั้น) — ตัดออก เหลือแค่กราฟ DR + Watchlist
   const actionBar = lite ? `
@@ -7788,7 +7825,7 @@ function renderTearsheet(d) {
     </div>` : `
     <div class="card" style="padding:12px 16px;margin-bottom:12px">
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn-secondary" id="ts-wl-btn" style="font-size:12.5px" onclick="_tsToggleWl('${h.symbol}')">${inWl ? '⭐ อยู่ใน Watchlist แล้ว' : '☆ เพิ่มเข้า Watchlist'}</button>
+        ${wlSupported ? `<button class="btn-secondary" id="ts-wl-btn" style="font-size:12.5px" onclick="_tsToggleWl('${h.symbol}')">${inWl ? '⭐ อยู่ใน Watchlist แล้ว' : '☆ เพิ่มเข้า Watchlist'}</button>` : ''}
         <button class="btn-secondary" style="font-size:12.5px" onclick="closeTsOpenChart('${h.symbol}')">📈 กราฟเต็ม</button>
         <button class="btn-secondary" style="font-size:12.5px" onclick="_tsGoNews('${h.symbol}')">📰 ข่าว</button>
         <button class="btn-secondary" style="font-size:12.5px" onclick="_tsGoFilings('${h.symbol}')">📑 เอกสาร</button>
@@ -8448,11 +8485,16 @@ async function _tsLoadNews(sym) {
   }
 }
 
-// watchlist key: TH ใช้ symbol ตรงๆ, US/HK ใช้ prefix "US:"/"HK:" + รหัสดิบ (ไม่มี .HK)
-// เหมือน convention เดิมของทั้งแอป (ดู addToWatchlist/_calResolveWatchlist)
+// watchlist key: TH ใช้ symbol ตรงๆ, US/HK ใช้ prefix "US:"/"HK:" + h.symbol เต็ม (HK มี
+// ".HK" ต่อท้ายอยู่แล้วเหมือน convention เดิมของทั้งแอป — ห้ามตัดออกด้วย _tsRawSym เหมือนเดิม
+// เพราะ hkMap/renderWatchlist/_calResolveWatchlist ทุกจุดคาดหวังรหัสมี ".HK" ต่อท้าย ตัดออก
+// แล้วจะหา entry ไม่เจอ กลายเป็นแถว "ไม่พบข้อมูล" ถาวร (พบจากรีวิวโค้ด 2026-08-02)
+// หุ้น DR ที่ resolve เป็น underlying US/HK แล้ว (dr_symbol ไม่ว่าง) ใช้ "DR:"+dr_symbol แทน
+// ให้ตรงกับ entry ที่หน้า DR สร้างไว้เดิม กันสร้าง entry ซ้ำซ้อนคนละ key กับหุ้นตัวเดียวกัน
 function _tsWlKey(sym) {
+  if (_tsData?.dr_symbol) return 'DR:' + _tsData.dr_symbol;
   const mkt = _tsData?.market || 'TH';
-  return mkt === 'TH' ? sym : `${mkt}:${_tsRawSym(sym)}`;
+  return mkt === 'TH' ? sym : `${mkt}:${sym}`;
 }
 
 function _tsToggleWl(sym) {
@@ -8596,7 +8638,10 @@ async function _tsLoadCalendarWeek(sym, mkt) {
   const el = document.getElementById('ts-calendar');
   if (!el) return;
   try {
-    const r = await fetch(`/api/calendar-events/${mkt}/${encodeURIComponent(sym)}`);
+    // /api/calendar-events อาจ fallback ดึงสดจาก SET.or.th + yfinance ถ้า cache stale เกิน 7 วัน
+    // (ดู _CALENDAR_STALE_DAYS ฝั่ง app.py) — ต้องมี timeout กันหน้าค้าง "กำลังโหลด..." ไม่รู้จบ
+    // เหมือน pattern อื่นทั้งหมดในไฟล์นี้ (ดู loadCalendarPage ที่ endpoint เดียวกันใช้ 15000ms)
+    const r = await _fetchTimeout(`/api/calendar-events/${mkt}/${encodeURIComponent(sym)}`, 15000);
     const d = await r.json();
     if (_tsData?.symbol !== sym || !document.getElementById('ts-calendar')) return;
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -8606,6 +8651,9 @@ async function _tsLoadCalendarWeek(sym, mkt) {
       .filter(e => e._dt >= today && e._dt <= limit)
       .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
     if (!events.length) { el.innerHTML = ''; return; }
+    // e.detail มาจากข้อความสด (agenda ประชุมผู้ถือหุ้นจาก SET.or.th / EPS ประมาณการจาก yfinance)
+    // ต้อง escape ก่อนแทรกเป็น HTML content เหมือน _calRenderList ในหน้า 📅 ปฏิทิน
+    const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
     const rows = events.map(e => {
       const dLeft = Math.round((e._dt - today) / 86400000);
       const dayLabel = dLeft === 0 ? 'วันนี้' : `อีก ${dLeft} วัน`;
@@ -8613,7 +8661,7 @@ async function _tsLoadCalendarWeek(sym, mkt) {
         <span>${_CAL_TYPE_BADGE[e.type] || e.type}</span>
         <span style="font-weight:600">${e.date}</span>
         <span style="color:var(--text2);font-size:11px">(${dayLabel})</span>
-        ${e.detail ? `<span style="color:var(--text2);font-size:11px">${e.detail}</span>` : ''}
+        ${e.detail ? `<span style="color:var(--text2);font-size:11px">${esc(e.detail)}</span>` : ''}
         <span style="color:${_CAL_CONF_COLOR[e.confidence] || 'var(--text2)'};font-size:11px;margin-left:auto">${_CAL_CONF_LABEL[e.confidence] || e.confidence}</span>
       </div>`;
     }).join('');
@@ -14580,8 +14628,33 @@ function _calDisplayFor(market, symbol) {
   return market === 'DR' ? 'DR:' + symbol : symbol;
 }
 
+// สต๊อกเดียวกันอาจถูก sync ปฏิทินไว้ 2 ทาง: ผ่านหน้า DR (market='DR', symbol=รหัส DR เช่น
+// "APPL") และผ่าน Tearsheet/หุ้น US-HK ตรงๆ ที่ resolve underlying แล้ว (market='US'/'HK',
+// symbol=ticker จริงเช่น "AAPL") — earnings date ออกมาเป็นแถวซ้ำ 2 แถวได้ (ในสโคป "ทั้งหมด"/
+// "ตามตลาด" หรือ Watchlist ถ้ามีทั้ง DR: และ US:/HK: ของหุ้นเดียวกันอยู่) ต้อง map รหัส DR เป็น
+// underlying ก่อนเทียบซ้ำ โดยใช้ _drData ที่โหลดไว้แล้ว (ถ้ายังไม่เคยโหลดในเซสชันนี้ก็ข้ามการ
+// map ไป — ไม่ crash แค่ dedupe ไม่ครบ ดีกว่าบังคับโหลด /api/dr ก้อนใหญ่แค่เพื่อ dedupe)
+// ถ้าซ้ำจริง เก็บแถวที่ไม่ใช่ DR ไว้ (market จริงของ underlying อ่านง่ายกว่ารหัส DR)
+function _calDedupeEvents(events) {
+  const drMap = Object.fromEntries((_drData || []).map(s => [s.sym, s]));
+  const canonical = e => {
+    if (e.market !== 'DR') return `${e.market}:${e.symbol}`;
+    const d = drMap[e.symbol];
+    return d && d.region && d.yf ? `${d.region}:${d.yf.toUpperCase()}` : `DR:${e.symbol}`;
+  };
+  const seen = new Map();
+  for (const e of events) {
+    const key = `${canonical(e)}|${e.type}|${e.date}`;
+    const prev = seen.get(key);
+    if (!prev || (prev.market === 'DR' && e.market !== 'DR')) seen.set(key, e);
+  }
+  return [...seen.values()];
+}
+
 async function loadCalendarPage(refresh) {
   const box = document.getElementById('cal-result');
+  const note = document.getElementById('cal-fetch-note');
+  if (note) note.textContent = '';
 
   if (_calScope === 'watchlist') {
     const { list } = _calResolveWatchlist();
@@ -14592,21 +14665,28 @@ async function loadCalendarPage(refresh) {
     }
     box.innerHTML = `<div class="empty" style="padding:24px">กำลังดึงปฏิทิน ${list.length} หุ้น...</div>`;
     const qs = refresh ? '?refresh=1' : '';
+    // ยิงพร้อมกันทุกตัวใน watchlist — ถ้าตัวไหน timeout/error (โดยเฉพาะตอน refresh=1 ที่บังคับ
+    // ดึงสดใหม่ทุกตัวพร้อมกัน หนัก/ช้ากว่าปกติ) จะหลุดเงียบๆ ถ้าไม่นับไว้ — แจ้งจำนวนที่พลาดให้
+    // ผู้ใช้รู้ว่าปฏิทินที่เห็นอาจไม่ครบ ไม่ใช่แปลว่าหุ้นนั้นไม่มี event (พบจากรีวิวโค้ด 2026-08-02)
+    let failCount = 0;
     const results = await Promise.all(list.map(async it => {
       try {
         const r = await _fetchTimeout(`/api/calendar-events/${it.market}/${encodeURIComponent(it.symbol)}${qs}`, 15000);
         const d = await r.json();
-        return (d.events || []).map(e => ({ ...e, symbol: it.display, market: it.market }));
-      } catch (e) { return []; }
+        return (d.events || []).map(e => ({ ...e, symbol: it.symbol, market: it.market }));
+      } catch (e) { failCount++; return []; }
     }));
-    _calCache = results.flat();
+    const deduped = _calDedupeEvents(results.flat());
+    _calCache = deduped.map(e => ({ ...e, symbol: _calDisplayFor(e.market, e.symbol) }));
+    if (note && failCount) note.textContent = `⚠ ดึงไม่สำเร็จ ${failCount}/${list.length} ตัว (timeout/error) — ปฏิทินที่เห็นอาจไม่ครบ ลองกด "ดึงข้อมูลใหม่ทั้งหมด" อีกครั้ง`;
   } else {
     box.innerHTML = `<div class="empty" style="padding:24px">กำลังโหลดปฏิทิน...</div>`;
     const qs = _calScope === 'market' ? `?market=${_calScopeMarket}` : '';
     try {
       const r = await _fetchTimeout(`/api/calendar-events-all${qs}`, 25000);
       const d = await r.json();
-      _calCache = (d.events || []).map(e => ({ ...e, symbol: _calDisplayFor(e.market, e.symbol) }));
+      const deduped = _calDedupeEvents(d.events || []);
+      _calCache = deduped.map(e => ({ ...e, symbol: _calDisplayFor(e.market, e.symbol) }));
     } catch (e) { _calCache = []; }
   }
   _calRenderFromCache();
@@ -14716,19 +14796,22 @@ function _calRenderList() {
       return dir === 1 ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
     });
   }
+  // e.detail มาจากข้อความสด (agenda ประชุมผู้ถือหุ้นจาก SET.or.th / EPS ประมาณการจาก yfinance)
+  // ไม่ใช่ literal ที่เราคุมเองเหมือน type/confidence — ต้อง escape ก่อนแทรกเป็น HTML content
+  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   const rows = flat.map(e => {
     const dt = new Date(e.date + 'T00:00:00');
     const dLeft = Math.round((dt - today) / 86400000);
     const dLeftLabel = dLeft >= 0 ? `(อีก ${dLeft} วัน)` : `(${-dLeft} วันที่แล้ว)`;
     const link = _calSourceLink(e);
     const linkCell = link
-      ? `<button onclick="window.open('${link}','_blank','noopener')" title="เปิดหน้าข่าวผลประกอบการของ ${e.symbol} บน SET.or.th" style="font-size:11px;padding:3px 8px;border-radius:5px;border:1px solid var(--border);background:var(--bg2);color:var(--blue);cursor:pointer;white-space:nowrap">🔗 ดูงบจริง</button>`
+      ? `<button onclick="window.open('${link}','_blank','noopener')" title="เปิดหน้าข่าวผลประกอบการของ ${esc(e.symbol)} บน SET.or.th" style="font-size:11px;padding:3px 8px;border-radius:5px;border:1px solid var(--border);background:var(--bg2);color:var(--blue);cursor:pointer;white-space:nowrap">🔗 ดูงบจริง</button>`
       : '';
     return `<tr>
       <td style="padding:8px 10px;white-space:nowrap">${e.date} <span style="color:var(--text2);font-size:11px">${dLeftLabel}</span></td>
-      <td style="padding:8px 10px"><b>${e.symbol}</b> <span style="color:var(--text2);font-size:11px">${e.market}</span></td>
+      <td style="padding:8px 10px"><b>${esc(e.symbol)}</b> <span style="color:var(--text2);font-size:11px">${e.market}</span></td>
       <td style="padding:8px 10px">${_CAL_TYPE_BADGE[e.type] || e.type}</td>
-      <td style="padding:8px 10px;color:var(--text2)">${e.detail || ''}</td>
+      <td style="padding:8px 10px;color:var(--text2)">${esc(e.detail)}</td>
       <td style="padding:8px 10px;text-align:right"><span style="color:${_CAL_CONF_COLOR[e.confidence] || 'var(--text2)'};font-size:11px">${_CAL_CONF_LABEL[e.confidence] || e.confidence}</span></td>
       <td style="padding:8px 10px;text-align:right">${linkCell}</td>
     </tr>`;
@@ -14758,10 +14841,9 @@ const _CAL_WEEKDAY_TH = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
 const _CAL_MONTH_TH = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
   'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
 
-// มุมมองปฏิทินรายเดือน (grid) — backend คืนเฉพาะ event ตั้งแต่วันนี้เป็นต้นไปเสมอ (ดู
-// /api/calendar-events, from_date=today_iso) ดังนั้นเดือนย้อนหลังจะว่างเปล่าเสมอโดยดีไซน์
-// (ไม่ใช่บั๊ก — ปฏิทินสนใจแต่อนาคตตามสโคปเดิมของงาน #4) เดือนปัจจุบัน/อนาคตใช้ _calCache เดิม
-// ไม่ fetch เพิ่ม (cache มีเหตุการณ์ล่วงหน้าเต็มปีอยู่แล้วจาก loadCalendarPage)
+// มุมมองปฏิทินรายเดือน (grid) — ใช้ _calCache เดิมที่โหลดไว้แล้วจาก loadCalendarPage เสมอ
+// ไม่ fetch เพิ่ม (ย้อนหลังได้ถึง _CALENDAR_LOOKBACK_DAYS วันฝั่ง app.py ~1 ปี ไม่ได้ว่างเปล่า
+// เสมอเหมือนที่เคยเขียนไว้ก่อนเพิ่ม lookback ย้อนหลัง — กด ◀ ย้อนดูเดือนก่อนได้จริง)
 function _calRenderGrid() {
   const box = document.getElementById('cal-result');
   const year = _calMonthCursor.getFullYear(), month = _calMonthCursor.getMonth();
@@ -14804,9 +14886,13 @@ function _calGridRows(year, month, byDate, today) {
       const iso = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
       const isToday = cellDate.getTime() === today.getTime();
       const dayEvents = byDate[iso] || [];
+      // title เป็น attribute (ไม่ใช่ HTML content) แต่เดิม escape แค่ " ยังเหลือ < และ & ที่
+      // browser อาจตีความเป็นจุดเริ่ม entity ได้ในบางเคส — escape ให้ครบเหมือนจุดอื่นที่แทรก
+      // e.detail (ข้อความสดจาก SET.or.th/yfinance ไม่ใช่ literal ที่เราคุมเอง)
+      const escAttr = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
       const chips = dayEvents.slice(0, 3).map(e => {
         const link = _calSourceLink(e);
-        const title = `${e.symbol} ${(e.detail || '').replace(/"/g, '')}${link ? ' — คลิกดูงบจริงที่ SET.or.th' : ''}`;
+        const title = escAttr(`${e.symbol} ${e.detail || ''}${link ? ' — คลิกดูงบจริงที่ SET.or.th' : ''}`);
         const style = "font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 3px;margin-top:2px;border-radius:3px;background:var(--bg2)" + (link ? ";cursor:pointer;text-decoration:underline" : "");
         const onclick = link ? ` onclick="window.open('${link}','_blank','noopener')"` : '';
         return `<div title="${title}" style="${style}"${onclick}>${_CAL_TYPE_ICON[e.type] || '•'} ${e.symbol}</div>`;
@@ -20853,7 +20939,7 @@ async function checkWatchlistConfluence() {
   let changed = false;
 
   for (const rawSym of watchlist) {
-    if (_isDRSym(rawSym) || _isUsSym(rawSym)) continue;   // สัญญาณคำนวณเฉพาะหุ้นไทย SET ไม่ครอบคลุม DR/US
+    if (_isDRSym(rawSym) || _isUsSym(rawSym) || _isHkSym(rawSym)) continue;   // สัญญาณคำนวณเฉพาะหุ้นไทย SET ไม่ครอบคลุม DR/US/HK
     const row = d.stocks.find(r => r.symbol === rawSym);
     if (!row || Math.abs(row.score) < 3) continue;
     if (seen[rawSym] === genAt) continue;   // แจ้งไปแล้วสำหรับข้อมูลชุดนี้
@@ -21534,6 +21620,30 @@ function _filLinksHK(sym) {
   ];
 }
 
+// ใช้เฉพาะใน Tearsheet (การ์ด "📑 เอกสารทางการ" — ดู renderTearsheet) — หน้า Filings แบบเต็ม
+// ยังไม่มีแท็บ JP (fil-tab-th/us/hk เท่านั้น) จึงซ่อนลิงก์ "เปิดหน้ารายงานทางการ →" สำหรับ
+// ตลาดนี้ไปก่อน (ดู mkt !== 'JP' ใน renderTearsheet) EDINET/TDnet เป็น portal ค้นหาเอง
+// ไม่รองรับ deep-link ตรงด้วยรหัสหุ้น เหมือนข้อจำกัดเดียวกับ HKEXnews ใน _filLinksHK ด้านบน
+function _filLinksJP(sym) {
+  const code = sym.replace(/\.T$/i, '');
+  return [
+    { group: '📑 เอกสารทางการ (ญี่ปุ่น)', links: [
+      { label: '🏛️ EDINET (ก.ล.ต. ญี่ปุ่น)', url: 'https://disclosure2.edinet-fsa.go.jp/WEEE0010.aspx',
+        tip: `ระบบเปิดเผยข้อมูลทางการของสำนักงาน กลต. ญี่ปุ่น (เทียบเท่า ก.ล.ต./SET ไทย) — เปิดแล้วค้นด้วยชื่อบริษัทหรือรหัส ${code}` },
+      { label: '📢 TDnet (ข่าว/ประกาศตลาดหลักทรัพย์)', url: 'https://www.release.tdnet.info/inbs/I_main_00.html',
+        tip: 'ระบบประกาศข่าวทางการของตลาดหลักทรัพย์โตเกียว (เทียบเท่า SET News ของไทย)' },
+    ]},
+    { group: '📊 เว็บสรุป/วิเคราะห์', links: [
+      { label: 'Yahoo Finance Japan', url: `https://finance.yahoo.co.jp/quote/${code}.T`,
+        tip: 'ราคา งบย่อ ข่าว บทวิเคราะห์ (ภาษาญี่ปุ่น)' },
+      { label: 'Yahoo Finance (English)', url: `https://finance.yahoo.com/quote/${code}.T/`,
+        tip: 'เวอร์ชันภาษาอังกฤษ' },
+      { label: 'TradingView', url: `https://www.tradingview.com/symbols/TSE-${code}/`,
+        tip: 'กราฟ + ภาพรวมปัจจัยพื้นฐาน' },
+    ]},
+  ];
+}
+
 // ---------- ค้นหา + render ----------
 function searchFilings() {
   const inp = document.getElementById('fil-sym');
@@ -21579,9 +21689,13 @@ function resetFilings() {
 }
 
 function copyFilPrompt(sym) {
-  const groups = _filTab === 'TH' ? _filLinksTH(sym) : _filTab === 'US' ? _filLinksUS(sym) : _filLinksHK(sym);
+  // JP มาจากปุ่ม "คัดลอก Prompt" ใน Tearsheet เท่านั้น (หน้า Filings เต็มยังไม่มีแท็บ JP —
+  // ดู renderTearsheet) เดิม fallback ไป _filLinksHK ผิดตลาดเงียบๆ ทั้งชื่อตลาดในพรอมต์ก็ได้
+  // "undefined" เพราะ object ด้านล่างไม่มี key JP (พบจากรีวิวโค้ด 2026-08-02)
+  const groups = _filTab === 'TH' ? _filLinksTH(sym) : _filTab === 'US' ? _filLinksUS(sym)
+    : _filTab === 'JP' ? _filLinksJP(sym) : _filLinksHK(sym);
   const linkLines = groups.map(g => g.links.map(l => `- ${l.label.replace(/^[^\w฀-๿]+\s*/, '')}: ${l.url}`).join('\n')).join('\n');
-  const mkt = { TH: 'ตลาดหุ้นไทย (SET)', US: 'ตลาดหุ้น US', HK: 'ตลาดหุ้นฮ่องกง (HKEX)' }[_filTab];
+  const mkt = { TH: 'ตลาดหุ้นไทย (SET)', US: 'ตลาดหุ้น US', HK: 'ตลาดหุ้นฮ่องกง (HKEX)', JP: 'ตลาดหุ้นญี่ปุ่น (TSE)' }[_filTab];
   const prompt = `ช่วยวิเคราะห์หุ้น ${sym} (${mkt}) ตามกรอบ 13 ข้อนี้ โดยอ้างอิงข้อมูลจากรายงานทางการล่าสุด (แหล่งอ้างอิงด้านล่าง) ตอบเป็นภาษาไทย ใส่ตัวเลขประกอบทุกข้อ ถ้าข้อมูลไม่พอให้บอกตรงๆ ว่าขาดอะไร:
 
 1. ธุรกิจคืออะไร — หาเงินจากอะไร สินค้า/บริการหลัก รายได้แบ่งกี่ segment ส่วนไหนใหญ่สุด (% หรือตัวเลข) อธิบาย 2 ประโยคภาษาคนทั่วไป

@@ -3133,17 +3133,20 @@ def tearsheet(market, symbol):
 
     # ticker จริงสำหรับดึงราคาสดจาก Yahoo (ใช้แก้ Valuation Snapshot ให้เป็นราคาสด แทน
     # ราคาสิ้นงวด/สิ้นวันของ snapshot) — DR ที่ resolve เป็น underlying แล้ว sym ตัวนี้คือ
-    # yf ticker เต็มอยู่แล้ว (มี .HK ต่อท้ายให้ถ้าเป็น HK) ส่วน US/HK ที่เข้าตรงๆ (ไม่ผ่าน DR)
-    # sym ยังเป็นรหัสดิบไม่มี suffix ต้องเติมเอง
+    # yf ticker เต็มอยู่แล้ว (มี .HK/.T ต่อท้ายให้ถ้าเป็น HK/JP) ส่วน US/HK/JP ที่เข้าตรงๆ
+    # (ไม่ผ่าน DR) sym ก็เป็น yf ticker ที่ถูกต้องอยู่แล้วเหมือนกัน (มาจาก th_map ที่เก็บ
+    # symbol พร้อม suffix ตาม convention เดียวกับ us/hk/jp_index_metrics.json ทุกจุดในแอป)
+    # ห้ามเอาไปเข้า mirror_ondemand._yf_ticker() ซ้ำ — ฟังก์ชันนั้นออกแบบมาสำหรับ "รหัสดิบไม่มี
+    # suffix" (namespace mirror) คนละบริบทกัน เดิมเรียกซ้ำแล้วได้ suffix HK ซ้อนสอง (เช่น
+    # "0700.HK.HK") ทำให้ /api/live-price ของทุก Tearsheet หุ้น HK ได้ 500 กลับมาเงียบๆ
+    # (frontend ดัก .catch(()=>{}) ไว้ ไม่มี error โชว์ แค่ราคาสด/PE/PBV/PS ไม่อัพเดท —
+    # พบจากทดสอบจริงในเบราว์เซอร์ 2026-08-02)
     if lite:
         yf_symbol = lite_yf
-    elif dr_symbol and mkt in ("US", "HK"):
-        yf_symbol = sym
     elif mkt == "TH":
         yf_symbol = f"{sym}.BK"
     else:
-        from sources import mirror_ondemand as _mo
-        yf_symbol = _mo._yf_ticker(mkt, sym)
+        yf_symbol = sym
 
     header = {
         "symbol": sym, "name": s.get("name"), "sector": s.get("sector"), "industry": s.get("industry"),

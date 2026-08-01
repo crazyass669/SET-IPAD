@@ -826,6 +826,7 @@
     <button class="filter-btn" onclick="wlImport()" title="วางข้อความ watchlist ที่คัดลอกมาจากอีกเครื่อง" style="font-size:11px">📥 วางจากเครื่องอื่น</button>
     <button class="filter-btn" id="wl-live-btn" onclick="wlRefreshLivePrices()" title="ดึงราคาล่าสุดจาก Yahoo Finance สดๆ ทีละตัว (หุ้นใน Watchlist มีไม่เยอะ ทำได้ไว ต่างจาก Heatmap ทั้งดัชนีที่ช้าเกินไป)" style="font-size:11px">⚡ ราคาล่าสุด</button>
     <span id="wl-live-note" class="text2" style="font-size:11px"></span>
+    <span id="wl-sync-note" style="font-size:11px;color:var(--red)"></span>
   </div>
 
   <div class="card">
@@ -2981,6 +2982,7 @@
         <button class="filter-btn active" onclick="_calSetScopeMarket('TH',this)" style="border-radius:6px 0 0 6px">TH</button>
         <button class="filter-btn" onclick="_calSetScopeMarket('US',this)">US</button>
         <button class="filter-btn" onclick="_calSetScopeMarket('HK',this)">HK</button>
+        <button class="filter-btn" onclick="_calSetScopeMarket('JP',this)">JP</button>
         <button class="filter-btn" onclick="_calSetScopeMarket('DR',this)" style="border-radius:0 6px 6px 0">DR</button>
       </div>
       <div class="filter-row" style="gap:0;margin:0">
@@ -3004,6 +3006,7 @@
       </div>
       <button class="filter-btn" onclick="_calOpenMarketWideNews()" style="font-size:12px;margin-left:auto" title="เปิดหน้าข่าวผลประกอบการของ SET.or.th แบบทั้งตลาด (ไม่กรองหุ้น) ย้อนหลัง 90 วันล่าสุด">🔎 ข่าวงบทั้งตลาด (90 วัน)</button>
       <button class="filter-btn" id="cal-refresh-btn" style="font-size:12px" onclick="loadCalendarPage(true)">🔄 ดึงข้อมูลใหม่ทั้งหมด</button>
+      <span id="cal-fetch-note" class="text2" style="font-size:11px"></span>
     </div>
   </div>
   <div id="cal-result"><div class="empty" style="padding:24px">กำลังโหลด...</div></div>
