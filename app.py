@@ -994,7 +994,9 @@ def dr_quick_update():
                         entry["closes"] = old_closes
                         entry["_full_vols"] = old_vols
                         # อัปเดต close100 จาก full history ที่ dedupe แล้ว (ตัดปัญหาแท่งซ้ำ)
-                        entry["close100"] = old_closes[-100:]
+                        # ปัด 4 ตำแหน่งให้ตรงกับ _dr_do_rebuild (old_closes/closes เก็บละเอียด
+                        # 6 ตำแหน่งสำหรับ full history — close100 ใช้แค่วาด sparkline คร่าวๆ)
+                        entry["close100"] = [round(c, 4) for c in old_closes[-100:]]
                         # recalculate return metrics from updated full history
                         def _ret_q(arr, n):
                             if len(arr) < n + 1:
