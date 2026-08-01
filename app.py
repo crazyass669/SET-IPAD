@@ -3961,7 +3961,9 @@ def stock_news(symbol):
     is_dr = request.args.get("is_dr") == "1"
     market = (request.args.get("market") or "US").upper()
 
-    cache_key = (sym, is_dr)
+    # market อยู่ใน key ด้วย — หุ้นนอกตัวเดียวกันคนละ market ได้ yf ticker คนละตัว
+    # (เช่น 0700 → 0700.HK vs 0700) ถ้าไม่แยกจะได้ผลของ market ก่อนหน้าติดมา
+    cache_key = (sym, is_dr, market if is_dr else "")
     cached = _stock_news_cache.get(cache_key)
     if cached and (time.time() - cached["ts"] < _STOCK_NEWS_CACHE_TTL):
         return jsonify(cached)
@@ -4004,7 +4006,11 @@ def stock_news(symbol):
     deduped.sort(key=_ts_key, reverse=True)
 
     result = {"rows": deduped[:80], "ts": time.time(), "symbol": sym, "errors": errors}
-    _stock_news_cache[cache_key] = result
+    # ไม่ cache "ก้อนว่างเพราะทุกแหล่งพัง" — เน็ตสะดุดครั้งเดียวแล้ว cache ไว้ 15 นาที
+    # ทำให้ผู้ใช้กดค้นใหม่ก็ได้ผลว่างเดิมซ้ำๆ ทั้งที่แหล่งข้อมูลกลับมาปกติแล้ว
+    # (มีข่าวอย่างน้อย 1 แถว = ถือว่าใช้ได้ cache ตามปกติ)
+    if deduped or not errors:
+        _stock_news_cache[cache_key] = result
     return jsonify(result)
 
 
@@ -5994,6 +6000,7 @@ def _run_quick():
             from sources import sec_store as _sec_store
             _sec_store.sync_insider_trades(BASE_DIR)
             _sec_store.sync_major_changes(BASE_DIR)
+            _invalidate_flow_signals()   # insider เป็น 1 ใน 3 ชั้นของสัญญาณรวม
         _sub_step("Insider/ผู้ถือหุ้นใหญ่", 91, "อัพเดท Insider/ผู้ถือหุ้นใหญ่...", _insider)
 
         def _indices():
@@ -6136,6 +6143,7 @@ def insider_sync():
     try:
         n1 = sec_store.sync_insider_trades(BASE_DIR)
         n2 = sec_store.sync_major_changes(BASE_DIR)
+        _invalidate_flow_signals()   # insider เป็น 1 ใน 3 ชั้นของสัญญาณรวม
         return jsonify({"ok": True, "insider_fetched": n1, "major_fetched": n2})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -6346,6 +6354,7 @@ def short_sales_daily_update():
 
         global _short_data_cache, _short_data_ts
         _short_data_cache = None  # invalidate cache
+        _invalidate_flow_signals()   # short เป็น 1 ใน 3 ชั้นของสัญญาณรวม
         print(f"[short-sales] updated {updated} stocks ({trade_date})")
 
     except Exception as e:
@@ -6847,6 +6856,7 @@ def nvdr_daily_update():
         _atomic_write_json(_NVDR_DATA_FILE, data)
         global _nvdr_data_cache
         _nvdr_data_cache = None
+        _invalidate_flow_signals()   # NVDR เป็น 1 ใน 3 ชั้นของสัญญาณรวม
         print(f"[nvdr] updated {updated} stocks ({trade_date})")
 
     except Exception as e:
@@ -6900,6 +6910,14 @@ def get_prices():
 
 _flow_signals_cache: dict = {"result": None, "ts": 0}
 _FLOW_SIGNALS_TTL = 3600   # ข้อมูล short/nvdr/insider อัพเดตวันละครั้ง
+
+
+def _invalidate_flow_signals():
+    """ล้าง cache สัญญาณรวม — ต้องเรียกทุกครั้งที่แหล่งต้นทาง (short / NVDR / insider)
+    ถูกอัพเดต ไม่งั้นหน้า "🎯 สัญญาณรวม" ค้างข้อมูลชุดเก่าได้อีกเกือบชั่วโมงเต็ม TTL
+    ทั้งที่เพิ่งกด Quick Update เสร็จ (เจอจริง: กดอัพเดตแล้ว score ไม่ขยับจนกว่าจะครบ 1 ชม.)"""
+    _flow_signals_cache["result"] = None
+    _flow_signals_cache["ts"] = 0
 
 
 @app.route("/api/flow-signals")

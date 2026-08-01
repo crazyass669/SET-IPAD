@@ -90,6 +90,10 @@ jp_prices.db-shm
 sec_filings.db
 sec_filings.db-wal
 sec_filings.db-shm
+# ชุดสำรองอัตโนมัติที่แอปสร้างเอง (sec_filings.db.bak_YYYYMMDD_HHMMSS) — ตัวไฟล์ .db
+# ถูก ignore อยู่แล้วแต่ .bak_* หลุดออกมาเป็น untracked ขนาด ~5MB เสี่ยงโดน
+# auto-commit เก็บขึ้น GitHub โดยไม่ตั้งใจ
+*.db.bak_*
 
 # SQLite financials store + ชุดสำรองอัตโนมัติ (local only — ใหญ่และ regenerate ได้)
 financials.db

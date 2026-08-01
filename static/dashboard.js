@@ -353,6 +353,9 @@ async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = nul
         // clear all page caches so next visit fetches fresh data
         _idxData = null; _valData = null; _nvdrData = null;
         _shortData = null; _insData = null;
+        // สัญญาณรวมคำนวณจาก short+NVDR+insider ที่เพิ่งล้างไป — ถ้าไม่ล้างด้วย หน้า
+        // "🎯 สัญญาณรวม" (และ alert watchlist ที่เช็คทุก 5 นาที) จะค้างชุดเก่าทั้ง session
+        _flowSigData = null;
         Object.keys(_flowDataByMarket).forEach(k => delete _flowDataByMarket[k]); _valStockData = null;
         _drLoaded = false; _drData = null;
         // ล้าง cache หุ้น US/HK ด้วย — job ที่วิ่งผ่าน _startJob (Quick Update, US/HK
@@ -369,6 +372,7 @@ async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = nul
         if (_activePage === 'page-dr')        loadDRPage();
         if (_activePage === 'page-valuation') loadValuationPage();
         if (_activePage === 'page-short')     loadShortPage();
+        if (_activePage === 'page-confluence') loadConfluencePage();
         if (_activePage === 'page-insider')   loadInsiderPage();
         if (_activePage === 'page-flow')      loadFlowPage();
         if (_activePage === 'page-us-stocks')   loadUsStocksPage();
@@ -13651,9 +13655,17 @@ async function searchStockNews() {
     _newsRecentAdd(sym, _newsTab);
     document.getElementById('news-src-filter').style.display = 'flex';
     const age = Math.max(0, Math.round(Date.now() / 1000 - d.ts));
-    const errNote = Object.keys(d.errors || {}).length
-      ? ` · ⚠ แหล่งที่ดึงไม่สำเร็จ: ${Object.keys(d.errors).join(', ')}` : '';
-    hint.textContent = `ข้อมูล ณ ${age < 60 ? age + ' วิ' : Math.round(age / 60) + ' นาที'}ที่แล้ว${errNote}`;
+    hint.textContent = `ข้อมูล ณ ${age < 60 ? age + ' วิ' : Math.round(age / 60) + ' นาที'}ที่แล้ว`;
+    // backend ส่งสาเหตุรายแหล่งมาแล้ว — เอาไปใส่ tooltip แทนที่จะโชว์แค่ชื่อแหล่ง
+    // (ใช้ textContent/title ไม่ใช่ innerHTML เพราะข้อความ error มาจาก exception ภายนอก)
+    const errs = Object.entries(d.errors || {});
+    if (errs.length) {
+      const note = document.createElement('span');
+      note.textContent = ` · ⚠ แหล่งที่ดึงไม่สำเร็จ: ${errs.map(([k]) => k).join(', ')}`;
+      note.title = errs.map(([k, v]) => `${k}: ${v}`).join('\n');
+      note.style.cssText = 'color:var(--red);cursor:help';
+      hint.appendChild(note);
+    }
     _renderNewsRows();
   } catch (e) {
     hint.textContent = '';
@@ -19302,14 +19314,33 @@ function renderNvdrPopup(sym) {
 let _flowSigData = null;         // {stocks:[...], count, generated_at}
 let _confluenceFilter = 'all';
 
+// index หุ้นตาม symbol — ตารางสัญญาณรวม/Short เดิมเรียก DATA.stocks.find() ต่อแถว
+// (และต่อการเปรียบเทียบตอน sort) ทำให้เป็น O(n²) บนตารางหลายร้อยแถว
+// สร้าง Map ใหม่เมื่อ DATA ถูกแทนที่ด้วยก้อนใหม่เท่านั้น (เทียบ identity)
+let _stockIdxMap = null, _stockIdxSrc = null;
+function _stockBySym(sym) {
+  if (_stockIdxSrc !== DATA) {
+    _stockIdxSrc = DATA;
+    _stockIdxMap = new Map((DATA?.stocks || []).map(s => [s.symbol, s]));
+  }
+  return _stockIdxMap.get(sym);
+}
+
+// cache ฝั่ง client มีอายุจำกัด — เดิม cache ตลอด session ทำให้ checkWatchlistConfluence
+// ที่ตั้ง interval ทุก 5 นาทีได้ก้อนเดิมทุกครั้ง (ไม่มีทางเจอสัญญาณใหม่จนกว่าจะ F5)
+// ฝั่ง server cache 1 ชม. + invalidate ตอนข้อมูลต้นทางอัพเดตอยู่แล้ว ยิงถี่กว่านี้ไม่หนัก
+let _flowSigTs = 0;
+const _FLOW_SIG_TTL = 5 * 60 * 1000;
+
 async function loadFlowSignals() {
-  if (_flowSigData) return _flowSigData;
+  if (_flowSigData && (Date.now() - _flowSigTs < _FLOW_SIG_TTL)) return _flowSigData;
   try {
     const r = await fetch('/api/flow-signals');
-    if (!r.ok) return null;
+    if (!r.ok) return _flowSigData;   // ยิงไม่ผ่าน — ใช้ของเดิมดีกว่าคืน null ให้หน้าว่าง
     _flowSigData = await r.json();
+    _flowSigTs = Date.now();
     return _flowSigData;
-  } catch { return null; }
+  } catch { return _flowSigData; }
 }
 
 function setConfluenceFilter(f, btn) {
@@ -19344,9 +19375,9 @@ function _dirIcon(dir, tip) {
 let _confluenceSort = null;   // { key, dir: 1=มาก→น้อย, -1=น้อย→มาก }
 const _CONFLUENCE_SORT_GETTERS = {
   symbol: r => r.symbol || '',
-  sector: r => (DATA?.stocks?.find(s => s.symbol === r.symbol)?.sector) || '',
-  price:  r => DATA?.stocks?.find(s => s.symbol === r.symbol)?.price ?? -Infinity,
-  ret_1d: r => DATA?.stocks?.find(s => s.symbol === r.symbol)?.ret_1d ?? -Infinity,
+  sector: r => _stockBySym(r.symbol)?.sector || '',
+  price:  r => _stockBySym(r.symbol)?.price ?? -Infinity,
+  ret_1d: r => _stockBySym(r.symbol)?.ret_1d ?? -Infinity,
   score:  r => r.score ?? -Infinity,
   ins_net: r => r.insider?.net_value_mbaht ?? -Infinity,
   short_pos: r => r.short?.short_pos_pct ?? -Infinity,
@@ -19408,7 +19439,7 @@ function _renderConfluenceTable() {
     const shTip = sh.trend_pp != null ? `Short pos ${sh.short_pos_pct ?? '—'}% · เทรนด์ ${sh.trend_pp>0?'+':''}${sh.trend_pp} pp${sh.dir ? '' : ' (เปลี่ยนน้อยกว่า 0.1pp — ไม่นับทิศทาง)'}` : 'ไม่มีข้อมูล/เทรนด์ short';
     const nvTip = nv.trend_pp != null ? `NVDR ${nv.nvdr_pct ?? '—'}% · เทรนด์ ${nv.trend_pp>0?'+':''}${nv.trend_pp} pp${nv.dir ? '' : ' (เปลี่ยนน้อยกว่า 0.1pp — ไม่นับทิศทาง)'}` : 'ไม่มีข้อมูล/เทรนด์ NVDR';
     const star = r.n_signals === 3 ? ' <span title="ครบ 3 สัญญาณ" style="color:#e3b341">⭐</span>' : '';
-    const stock = DATA?.stocks?.find(s => s.symbol === r.symbol);
+    const stock = _stockBySym(r.symbol);
     const priceStr = stock?.price != null ? stock.price.toFixed(2) : '—';
     const retStr = stock ? pct(stock.ret_1d) : '—';
     const sectorStr = stock?.sector || '—';
@@ -19472,6 +19503,25 @@ function _loadFlowSummary(symbol) {
 // ══════════════════════════════════════════════════════════
 let _shortData = null;  // {period_from, period_to, last_api_update, stocks:{sym:{...}}}
 
+// ── ป้ายช่วงเวลาของยอดสะสมรายงวด (period_vol / period_pct_value) ──────────────
+// เดิม hardcode "6M" ทุกจุดเพราะ SET เคยให้ยอดย้อนหลัง 6 เดือน แต่ backend เปลี่ยนไป
+// rebuild ตั้งแต่ 1 ม.ค. ของปี (YTD) แล้ว — ป้ายเลยโกหกผู้ใช้ (ข้อมูลจริง 9 ม.ค.–31 ก.ค.
+// = ~7 เดือน) ทุกป้ายจึงต้อง derive จาก period_from/period_to ที่ API ส่งมาจริง
+function _shortPeriodTag() {
+  const f = _shortData?.period_from, t = _shortData?.period_to;
+  if (!f || !t) return 'สะสม';
+  // ต้นทางเริ่มนับใหม่ทุกต้นปี — from อยู่ในเดือน ม.ค. ปีเดียวกับ to = YTD
+  if (f.slice(0, 4) === t.slice(0, 4) && f.slice(5, 7) === '01') return 'YTD';
+  const months = Math.max(1, Math.round((new Date(t) - new Date(f)) / (30.44 * 864e5)));
+  return months + 'M';
+}
+
+// ข้อความช่วงเต็มสำหรับ tooltip — บอกวันจริงไปเลย ไม่ต้องให้ผู้ใช้เดาว่า YTD คือกี่วัน
+function _shortPeriodRange() {
+  const f = _shortData?.period_from, t = _shortData?.period_to;
+  return (f && t) ? `${f} ถึง ${t}` : 'ช่วงสะสมล่าสุด';
+}
+
 async function loadShortData() {
   if (_shortData) return _shortData;
   try {
@@ -19490,7 +19540,7 @@ function shortBadge(sym) {
   // ไม่แสดงถ้า short position น้อยมาก
   if (pct < 0.5) return '';
   const col = pct >= 2 ? '#e05252' : pct >= 1 ? '#d07030' : '#b09030';
-  const tip = `Short Position ${pct.toFixed(2)}% ของหุ้นชำระแล้ว · %Val 6M: ${v.period_pct_value?.toFixed(2)}%`;
+  const tip = `Short Position ${pct.toFixed(2)}% ของหุ้นชำระแล้ว · %Val ${_shortPeriodTag()} (${_shortPeriodRange()}): ${v.period_pct_value?.toFixed(2)}%`;
   return `<span title="${tip}" style="display:inline-block;font-size:8px;font-weight:700;color:${col};border:1px solid ${col};border-radius:3px;padding:0 3px;margin-left:4px;vertical-align:middle;line-height:13px;cursor:help">S</span>`;
 }
 
@@ -19539,10 +19589,10 @@ function renderShortPopup(sym) {
       'จำนวนหุ้นที่ขาย short แล้วยังไม่ได้ซื้อคืน — ถ้าราคาขึ้น คนกลุ่มนี้ต้องรีบซื้อคืน (Short Squeeze)')}
     ${row('Short Position %', v.short_pos_pct.toFixed(3) + '% · ' + posLevel, posColor,
       'Short Position % ของหุ้นชำระแล้วทั้งหมด — ตลาดไทย: >0.5%=มีนัยยะ · >1%=สูง · >2%=สูงมาก')}
-    ${row('ปริมาณ Short รวม 6 เดือน', vol_m + 'M หุ้น', '',
-      'ปริมาณหุ้นที่ถูกขาย short สะสมตลอด 6 เดือน — บอกว่า short seller สนใจหุ้นนี้มากแค่ไหนในระยะยาว')}
-    ${row('% Short ต่อการซื้อขาย 6 เดือน', v.period_pct_value.toFixed(2) + '%', '',
-      '% ของมูลค่าซื้อขายรวมที่เป็น short sell ตลอด 6 เดือน — ยิ่งสูง = short seller มีบทบาทในหุ้นนี้มาก')}
+    ${row(`ปริมาณ Short รวม (${_shortPeriodTag()})`, vol_m + 'M หุ้น', '',
+      `ปริมาณหุ้นที่ถูกขาย short สะสมช่วง ${_shortPeriodRange()} — บอกว่า short seller สนใจหุ้นนี้มากแค่ไหน`)}
+    ${row(`% Short ต่อการซื้อขาย (${_shortPeriodTag()})`, v.period_pct_value.toFixed(2) + '%', '',
+      `% ของมูลค่าซื้อขายรวมที่เป็น short sell ช่วง ${_shortPeriodRange()} — ยิ่งสูง = short seller มีบทบาทในหุ้นนี้มาก`)}
     ${dailyHtml}
     ${dailyCount > 0
       ? `<div style="font-size:10px;color:var(--muted);margin-top:6px" title="อัพเดทเพิ่มทุกครั้งที่กด Quick Update">มี daily snapshot ${dailyCount} วัน · กด Quick Update เพื่อเพิ่ม</div>`
@@ -19588,6 +19638,16 @@ function buildInsAccum() {
   });
 }
 
+// ฝั่งเด่นของ insider ต่อหุ้น (>0 = ซื้อ, <0 = ขาย) — ใช้ "มูลค่าบาทสุทธิ" เป็นหลัก
+// การนับ "จำนวนครั้ง" ล้วนๆ หลอกได้เมื่อขนาดธุรกรรมต่างกันมาก (ยืนยันจริง: GULF ซื้อ
+// 1 ครั้ง 1,976.5M ขาย 2 ครั้งรวม 1,237.7M — นับครั้งได้ net=-1 จัดเป็น Net Sell ทั้งที่
+// เงินไหลเข้าสุทธิ 738.8M บาท) fallback ไปนับครั้งเมื่อไม่มีราคาเลยทั้งสองฝั่ง
+// ทุกที่ที่ตัดสินฝั่ง insider ต้องเรียกตัวนี้ ไม่ใช่อ่าน a.net ตรงๆ
+function _insDominant(a) {
+  if (!a) return 0;
+  return (a.buyValue > 0 || a.sellValue > 0) ? (a.buyValue - a.sellValue) : a.net;
+}
+
 // มูลค่าบาทแบบอ่านง่าย: ฿1.2B / ฿34.5M / ฿890K
 function _insFmtBaht(v) {
   const a = Math.abs(v);
@@ -19599,15 +19659,20 @@ function _insFmtBaht(v) {
 
 function insiderBadge(sym) {
   const a = _insAccum[sym];
-  if (!a || a.net === 0) return '';
-  const isCluster = a.people.size >= 2;
-  if (a.net > 0) {
-    const col = isCluster ? '#3ab464' : '#7dd4a0';
-    const tip = `Insider ซื้อสะสม ${a.buys}x (${a.people.size} คน) ใน ${_insDays} วัน`;
+  // ฝั่งอิงมูลค่าบาทสุทธิเหมือนตารางสะสม Insider — เดิมใช้ a.net (นับครั้ง) ทำให้จุดสี
+  // ขัดกับตัวเลขในแถวเดียวกันได้ (เคส GULF: จุดแดงแต่ตารางบอก Net Buy)
+  const dom = _insDominant(a);
+  if (!dom) return '';
+  const netValue = a.buyValue - a.sellValue;
+  const valPart = (a.buyValue > 0 || a.sellValue > 0)
+    ? ` · สุทธิ ${netValue >= 0 ? '+' : '−'}${_insFmtBaht(Math.abs(netValue)).slice(1)}` : '';
+  if (dom > 0) {
+    const col = a.people.size >= 2 ? '#3ab464' : '#7dd4a0';
+    const tip = `Insider ซื้อสะสม ${a.buys}x (${a.people.size} คน) ใน ${_insDays} วัน${valPart}`;
     return `<span title="${tip}" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${col};margin-left:4px;vertical-align:middle;cursor:help"></span>`;
   } else {
     const col = '#dc503c';
-    const tip = `Insider ขายสะสม ${a.sells}x ใน ${_insDays} วัน`;
+    const tip = `Insider ขายสะสม ${a.sells}x (${a.sellPeople.size} คน) ใน ${_insDays} วัน${valPart}`;
     return `<span title="${tip}" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${col};margin-left:4px;vertical-align:middle;cursor:help"></span>`;
   }
 }
@@ -19622,12 +19687,8 @@ function renderInsAccumTable() {
   const allRows = Object.entries(_insAccum)
     .map(([sym, a]) => {
       const netValue = a.buyValue - a.sellValue;
-      // ตัวชี้ขาดฝั่ง/กลุ่ม: ใช้มูลค่าบาทสุทธิเป็นหลักเมื่อมีข้อมูลราคาอย่างน้อยฝั่งใดฝั่งหนึ่ง
-      // — นับจำนวน "ครั้ง" ล้วนๆ (a.net) หลอกได้ง่ายเมื่อขนาดธุรกรรมต่างกันมาก
-      // (ยืนยันจริง: GULF ซื้อ 1 ครั้ง 1,976.5M ขาย 2 ครั้งรวม 1,237.7M — นับครั้งได้
-      // net=-1 จัดเป็น Net Sell ทั้งที่เงินไหลเข้าสุทธิ 738.8M บาท) ไม่มีราคาเลยทั้งคู่
-      // (buyValue=sellValue=0) ค่อย fallback ไปนับครั้งแทน
-      const dominant = (a.buyValue > 0 || a.sellValue > 0) ? netValue : a.net;
+      // ตัวชี้ขาดฝั่ง/กลุ่ม: มูลค่าบาทสุทธิเป็นหลัก (ดูเหตุผลที่ _insDominant)
+      const dominant = _insDominant(a);
       return {sym, ...a, peopleCount: a.people.size, sellPeopleCount: a.sellPeople.size, netValue, dominant};
     })
     .filter(r => r.dominant !== 0);
@@ -19701,7 +19762,7 @@ function _accumRow(r) {
   const lastDate = isBuySide ? r.lastBuy : r.lastSell;
 
   // find stock info from DATA
-  const stock = DATA?.stocks?.find(s => s.symbol === r.sym);
+  const stock = _stockBySym(r.sym);
   const sector = stock?.sector || '';
   const curPrice = stock?.price;
 
@@ -19802,6 +19863,12 @@ async function loadShortPage() {
   shortStatusEl.textContent = `ข้อมูล ${data.period_from} ถึง ${data.period_to} · ${upd}`;
   const shortStaleBadge = _staleTradeDateBadge(data.last_api_update);
   if (shortStaleBadge) shortStatusEl.appendChild(shortStaleBadge);
+  // ปุ่มเรียงเป็น HTML คงที่ — เขียนป้ายช่วงจริงทับ (ที่เหลือ render จาก JS อยู่แล้ว)
+  const valSortBtn = document.getElementById('short-sort-val');
+  if (valSortBtn) {
+    valSortBtn.textContent = `% Vol ${_shortPeriodTag()}`;
+    valSortBtn.title = `เรียงตาม % Short ต่อมูลค่าซื้อขายรวม ช่วง ${_shortPeriodRange()}`;
+  }
   // Squeeze Radar ต้องใช้ _insAccum (insider) + _nvdrData ด้วย — เดิมต้องเข้าหน้า
   // Insider/NVDR ก่อนถึงจะมีข้อมูล (แถว NVDR% ในการ์ด squeeze หายเงียบๆ)
   // โหลดให้อัตโนมัติตรงนี้เลย ไม่ต้องพึ่งลำดับที่ผู้ใช้กดหน้าไหนก่อน
@@ -19873,14 +19940,16 @@ function renderShortSqueeze() {
   const el = document.getElementById('short-squeeze-wrap');
   if (!el || !_shortData) return;
 
-  // หุ้นที่ short สูง (>1%) + insider net buy
+  // หุ้นที่ short สูง (>1%) + insider ซื้อสุทธิ — ฝั่ง insider ตัดสินด้วยมูลค่าบาทสุทธิ
+  // (_insDominant) ไม่ใช่การนับครั้ง เดิมใช้ ins.net > 0 ทำให้หุ้นที่ซื้อจิ๋วหลายครั้ง
+  // แต่ขายก้อนใหญ่ครั้งเดียวยังติด radar เป็น "Insider ซื้อสะสม" อยู่
   const candidates = [];
   Object.entries(_shortData.stocks).forEach(([sym, v]) => {
     if (v.short_pos_pct < 1) return;
     const ins = _insAccum[sym];
-    if (!ins || ins.net <= 0) return;
+    if (_insDominant(ins) <= 0) return;
     const nvdr = _nvdrData?.stocks?.[sym];
-    candidates.push({ sym, ...v, ins, nvdr });
+    candidates.push({ sym, ...v, ins, insNet: ins.buyValue - ins.sellValue, nvdr });
   });
   candidates.sort((a, b) => b.short_pos_pct - a.short_pos_pct);
 
@@ -19900,7 +19969,7 @@ function renderShortSqueeze() {
   el.innerHTML = `
     <div class="card" style="padding:14px;margin-bottom:14px">
       <div style="font-size:13px;font-weight:600;color:#c8d0dc;margin-bottom:12px">
-        <span title="Squeeze = ราคาขึ้น ทำให้ short seller ต้องซื้อคืน (cover) → ดันราคาขึ้นต่อ · เงื่อนไข: Short Pos > 1% AND Insider ซื้อสะสม (net buy)">🎯 Squeeze Radar</span>
+        <span title="Squeeze = ราคาขึ้น ทำให้ short seller ต้องซื้อคืน (cover) → ดันราคาขึ้นต่อ · เงื่อนไข: Short Pos > 1% AND Insider ซื้อสุทธิ (วัดด้วยมูลค่าบาท ไม่ใช่จำนวนครั้ง)">🎯 Squeeze Radar</span>
         <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px">
           Short Pos > 1% + Insider ซื้อสะสมใน ${_insDays} วัน · ${candidates.length} หุ้น
         </span>
@@ -19908,8 +19977,14 @@ function renderShortSqueeze() {
       <div style="display:flex;flex-wrap:wrap;gap:8px">
         ${candidates.map(r => {
           const isCluster = r.ins.people.size >= 2;
-          const stock = DATA?.stocks?.find(s => s.symbol === r.sym);
+          const stock = _stockBySym(r.sym);
           const posCol = r.short_pos_pct >= 2 ? '#e05252' : '#d07030';
+          // มูลค่าสุทธิคือเกณฑ์ที่ใช้คัดเข้า radar — โชว์ไปเลย ไม่ใช่โชว์แค่จำนวนครั้ง
+          const netPart = (r.ins.buyValue > 0 || r.ins.sellValue > 0)
+            ? `<div style="display:flex;justify-content:space-between;margin-bottom:3px" title="มูลค่าซื้อ−ขายสุทธิของ insider (เฉพาะรายการที่มีราคา) — เกณฑ์ที่ใช้คัดเข้า Squeeze Radar">
+                 <span style="font-size:11px;color:var(--muted)">ซื้อสุทธิ</span>
+                 <span style="font-size:11px;font-weight:600;color:#3ab464">+${_insFmtBaht(r.insNet).slice(1)}</span>
+               </div>` : '';
           return `
             <div onclick="openChartModal('${r.sym}')"
                  style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);
@@ -19930,6 +20005,7 @@ function renderShortSqueeze() {
                 <span style="font-size:11px;color:var(--muted)">Insider ซื้อ</span>
                 <span style="font-size:11px;font-weight:600;color:#3ab464">${r.ins.buys}x (${r.ins.people.size} คน)</span>
               </div>
+              ${netPart}
               <div style="display:flex;justify-content:space-between;margin-bottom:3px">
                 <span style="font-size:11px;color:var(--muted)">ราคา</span>
                 <span style="font-size:11px;color:#c8d0dc">${stock?.price?.toFixed(2)||'—'}</span>
@@ -19953,18 +20029,12 @@ function renderShortTable() {
     pos_m:  (a,b) => (b.short_pos       - a.short_pos)       * _shortSortDir * -1,
     val:    (a,b) => (b.period_pct_value - a.period_pct_value)* _shortSortDir * -1,
     vol:    (a,b) => (b.period_vol       - a.period_vol)      * _shortSortDir * -1,
-    price:  (a,b) => {
-      const sa = DATA?.stocks?.find(s=>s.symbol===a.sym);
-      const sb = DATA?.stocks?.find(s=>s.symbol===b.sym);
-      return ((sb?.price||0) - (sa?.price||0)) * _shortSortDir * -1;
-    },
-    ret1d:  (a,b) => {
-      const sa = DATA?.stocks?.find(s=>s.symbol===a.sym);
-      const sb = DATA?.stocks?.find(s=>s.symbol===b.sym);
-      return ((sb?.ret_1d||0) - (sa?.ret_1d||0)) * _shortSortDir * -1;
-    },
-    sym:    (a,b) => a.sym.localeCompare(b.sym) * _shortSortDir,
-    ins:    (a,b) => ((_insAccum[b.sym]?.net||0) - (_insAccum[a.sym]?.net||0)) * _shortSortDir * -1,
+    price:  (a,b) => ((_stockBySym(b.sym)?.price||0) - (_stockBySym(a.sym)?.price||0)) * _shortSortDir * -1,
+    ret1d:  (a,b) => ((_stockBySym(b.sym)?.ret_1d||0) - (_stockBySym(a.sym)?.ret_1d||0)) * _shortSortDir * -1,
+    // คูณ -1 เหมือนคอลัมน์อื่น — เดิมไม่คูณ ทำให้คลิกแรกได้ Z→A ทั้งที่ tooltip บอก A→Z
+    sym:    (a,b) => a.sym.localeCompare(b.sym) * _shortSortDir * -1,
+    // อิงมูลค่าบาทสุทธิเหมือนคอลัมน์ Insider ที่แสดง (ดู _insDominant)
+    ins:    (a,b) => (_insDominant(_insAccum[b.sym]) - _insDominant(_insAccum[a.sym])) * _shortSortDir * -1,
   };
 
   const _searchQ = (document.getElementById('short-search')?.value || '').trim().toUpperCase();
@@ -19998,7 +20068,13 @@ function renderShortTable() {
     return `<div style="display:inline-block;width:${w.toFixed(0)}%;height:4px;background:${col};border-radius:2px;vertical-align:middle;margin-left:4px"></div>`;
   };
 
-  const arr = (col) => _shortSort===col ? (_shortSortDir===-1?'▼':'▲') : '⇅';
+  // คอลัมน์ตัวอักษร (sym) กลับด้าน: dir=-1 คือ A→Z (น้อยไปมาก) ตรงข้ามคอลัมน์ตัวเลข
+  // ที่ dir=-1 คือมาก→น้อย — ถ้าใช้เกณฑ์เดียวกันหมด ลูกศรจะชี้สวนกับลำดับที่เห็นจริง
+  const arr = (col) => {
+    if (_shortSort !== col) return '⇅';
+    const asc = col === 'sym' ? _shortSortDir === -1 : _shortSortDir === 1;
+    return asc ? '▲' : '▼';
+  };
   const th = (col, label, tip, right=true) =>
     `<th class="${right?'r':''}" style="cursor:pointer;user-select:none;white-space:nowrap"
          title="${tip}" onclick="setShortSortCol('${col}')">
@@ -20015,8 +20091,8 @@ function renderShortTable() {
         <th>Sector</th>
         ${th('pos','Pos%','Short Position ค้างอยู่ % ของหุ้นชำระแล้ว — ยิ่งสูงยิ่ง bearish')}
         ${th('pos_m','Position (M)','จำนวนหุ้น short ที่ยังค้างอยู่ (ยังไม่ได้ซื้อคืน)')}
-        ${th('val','%Val 6M','% Short ต่อมูลค่าซื้อขายรวม ช่วง 6 เดือน — ยิ่งสูง = short seller สนใจมาก')}
-        ${th('vol','Vol 6M (M)','ปริมาณหุ้น short รวม 6 เดือน')}
+        ${th('val',`%Val ${_shortPeriodTag()}`,`% Short ต่อมูลค่าซื้อขายรวม ช่วง ${_shortPeriodRange()} — ยิ่งสูง = short seller สนใจมาก`)}
+        ${th('vol',`Vol ${_shortPeriodTag()} (M)`,`ปริมาณหุ้น short รวมช่วง ${_shortPeriodRange()}`)}
         ${th('price','ราคา','เรียงตามราคา')}
         ${th('ret1d','1D%','เรียงตาม % เปลี่ยนแปลงวันนี้')}
         ${th('ins','Insider','สถานะ Insider — net buy/sell ใน ' + _insDays + ' วัน',false)}
@@ -20024,10 +20100,13 @@ function renderShortTable() {
       </tr></thead>
       <tbody id="short-tbl-body">
         ${rows.map((r, i) => {
-          const stock = DATA?.stocks?.find(s => s.symbol === r.sym);
+          const stock = _stockBySym(r.sym);
           const ins   = _insAccum[r.sym];
-          const insHtml = ins && ins.net !== 0
-            ? ins.net > 0
+          // ฝั่งอิงมูลค่าบาทสุทธิ (ดู _insDominant) ไม่ใช่นับครั้ง — ให้ตรงกับจุดสีข้าง
+          // ชื่อหุ้นและตารางสะสม Insider
+          const insDom = _insDominant(ins);
+          const insHtml = insDom
+            ? insDom > 0
               ? `<span style="color:#3ab464;font-size:11px">▲ ซื้อ ${ins.buys}x</span>`
               : `<span style="color:#e05252;font-size:11px">▼ ขาย ${ins.sells}x</span>`
             : '—';
@@ -20087,7 +20166,7 @@ async function showShortDetail(sym, rowEl) {
   panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
   _shortDetailSym = sym;
-  const stock = DATA?.stocks?.find(s => s.symbol === sym);
+  const stock = _stockBySym(sym);
   document.getElementById('short-detail-title').textContent = sym + (stock ? '  ' + stock.name : '');
 
   // ดึง daily snapshots จาก API — เวอร์ชันเว็บไม่มี endpoint รายตัว (404)
@@ -20110,27 +20189,31 @@ async function showShortDetail(sym, rowEl) {
 
     // stats
     const ins = _insAccum[sym];
-    const insHtml = ins && ins.net !== 0
-      ? ins.net > 0
+    const insDom = _insDominant(ins);   // อิงมูลค่าบาทสุทธิ ไม่ใช่นับครั้ง
+    const insHtml = insDom
+      ? insDom > 0
         ? `<span style="color:#3ab464">▲ Insider ซื้อ ${ins.buys}x (${ins.people.size} คน)</span>`
-        : `<span style="color:#e05252">▼ Insider ขาย ${ins.sells}x</span>`
+        : `<span style="color:#e05252">▼ Insider ขาย ${ins.sells}x (${ins.sellPeople.size} คน)</span>`
       : '<span style="color:var(--muted)">ไม่มีข้อมูล Insider</span>';
 
     document.getElementById('short-detail-stats').innerHTML = [
       `<div title="Short Position ค้างอยู่ % ของหุ้นชำระแล้ว — ยิ่งสูงยิ่ง bearish · >1% = สูงสำหรับไทย · >2% = สูงมาก"><div style="font-size:10px;color:var(--muted);cursor:help">Short Pos %</div><div style="font-size:14px;font-weight:700;color:${d.short_pos_pct>=2?'#e05252':d.short_pos_pct>=1?'#d07030':'#c8d0dc'}">${d.short_pos_pct?.toFixed(3)}%</div></div>`,
       `<div title="จำนวนหุ้น short ที่ยังค้างอยู่ (ยังไม่ได้ซื้อคืน) — ถ้าราคาขึ้น คนเหล่านี้ต้องซื้อคืน = Short Squeeze"><div style="font-size:10px;color:var(--muted);cursor:help">Outstanding</div><div style="font-size:14px;font-weight:700;color:#c8d0dc">${(d.short_pos/1e6).toFixed(2)}M</div></div>`,
-      `<div title="% Short ต่อมูลค่าซื้อขายรวม ช่วง 6 เดือน — ยิ่งสูง = short seller สนใจหุ้นนี้มาก ตลอด 6 เดือน"><div style="font-size:10px;color:var(--muted);cursor:help">%Val 6M</div><div style="font-size:14px;font-weight:700;color:#c8d0dc">${d.period_pct_value?.toFixed(2)}%</div></div>`,
+      `<div title="% Short ต่อมูลค่าซื้อขายรวม ช่วง ${_shortPeriodRange()} — ยิ่งสูง = short seller สนใจหุ้นนี้มาก"><div style="font-size:10px;color:var(--muted);cursor:help">%Val ${_shortPeriodTag()}</div><div style="font-size:14px;font-weight:700;color:#c8d0dc">${d.period_pct_value?.toFixed(2)}%</div></div>`,
       `<div><div style="font-size:10px;color:var(--muted)">ราคา</div><div style="font-size:14px;font-weight:700;color:#c8d0dc">${stock?.price?.toFixed(2)||'—'}</div></div>`,
       `<div title="สถานะ Insider ใน ${_insDays} วัน จากหน้า Insider (ต้องโหลดก่อน)"><div style="font-size:10px;color:var(--muted);cursor:help">Insider (${_insDays}ว)</div><div style="font-size:13px;font-weight:600">${insHtml}</div></div>`,
     ].join('');
 
-    drawShortTrendChart(daily, d.short_pos);
+    drawShortTrendChart(daily);
   } catch(e) {
     document.getElementById('short-detail-sub').textContent = 'โหลดไม่สำเร็จ: ' + e.message;
   }
 }
 
-function drawShortTrendChart(daily, currentPos) {
+// วาดเฉพาะ snapshot ที่มีจริงใน daily — เดิมเติมจุด "วันนี้" ด้วยค่า short_pos ปัจจุบัน
+// ซึ่ง (ก) ซ้ำกับ daily[-1] เสมออยู่แล้ว เพราะ backend เขียนทั้งสองที่จาก snap ก้อนเดียวกัน
+// และ (ข) ถ้าเปิดดูวันเสาร์-อาทิตย์/วันหยุด จะได้จุดวันที่ไม่ใช่วันทำการโผล่ท้ายกราฟ
+function drawShortTrendChart(daily) {
   const canvas = document.getElementById('short-trend-canvas');
   if (!canvas) return;
   const W = canvas.offsetWidth || 600;
@@ -20155,14 +20238,7 @@ function drawShortTrendChart(daily, currentPos) {
     return;
   }
 
-  // รวม daily + current point
-  const points = [...daily.map(d => ({ date: d.date, val: d.short_pos }))];
-  // ถ้า point สุดท้ายไม่ใช่วันนี้ให้เพิ่ม current
-  if (currentPos && (points.length === 0 || points[points.length-1].val !== currentPos)) {
-    const today = new Date().toISOString().slice(0,10);
-    if (points.length === 0 || points[points.length-1].date !== today)
-      points.push({ date: today, val: currentPos });
-  }
+  const points = daily.map(d => ({ date: d.date, val: d.short_pos }));
   if (points.length < 2) {
     ctx.fillStyle = '#607080';
     ctx.font = '12px sans-serif';
@@ -20892,7 +20968,7 @@ function _showNextAlertPopup() {
       `สัญญาณเงินทุนรวม <strong style="font-size:18px;color:${isUp ? "var(--green)" : "var(--red)"}">${row.score > 0 ? "+" : ""}${row.score}</strong>
        ${row.n_signals === 3 ? " ⭐ครบ 3 สัญญาณ" : ""}<br>
        <span style="font-size:12px;color:var(--text2)">Insider ${_dirIcon(row.insider?.dir)} · Short ${_dirIcon(row.short?.dir)} · NVDR ${_dirIcon(row.nvdr?.dir)}</span>`;
-    document.getElementById("alert-popup-note").textContent = "หุ้นใน Watchlist — ดูรายละเอียดที่เมนู Flow Confluence";
+    document.getElementById("alert-popup-note").textContent = "หุ้นใน Watchlist — ดูรายละเอียดที่เมนู 🎯 สัญญาณรวม";
   } else {
     const { alert, price } = item;
     const condTh = alert.condition === "above" ? "≥" : "≤";

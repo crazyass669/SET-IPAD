@@ -9,6 +9,9 @@ score เพื่อหาหุ้นที่สัญญาณ "ตรงก
   insider: ซื้อสุทธิ (มูลค่า buy - sell > 0) = bullish
   short  : short position % "ลดลง" (คลุมสถานะ) = bullish ; เพิ่ม = bearish
   nvdr   : สัดส่วนถือครองต่างชาติ "เพิ่ม" = bullish ; ลด = bearish
+
+หน้าต่างเวลา: insider ใช้ 90 วัน (insider_days) · short/NVDR ใช้ TREND_WINDOW
+snapshots ล่าสุด (~1 เดือนทำการ) ไม่ใช่ daily ทั้งชุดที่เก็บยาวถึง 365 วัน
 """
 import json
 import os
@@ -59,13 +62,21 @@ def insider_signal(rows):
     return d, {"net_value_mbaht": round(net / 1e6, 2), "n_buy": n_buy, "n_sell": n_sell}
 
 
-def _trend_dir(daily, key, min_points=3, rel_thresh=0.05):
+TREND_WINDOW = 21   # snapshots ล่าสุดที่ใช้คิดเทรนด์ (~1 เดือนทำการ)
+
+
+def _trend_dir(daily, key, min_points=3, window=TREND_WINDOW):
     """เทรนด์ของ key ใน daily array: เทียบค่าเฉลี่ย 'ช่วงท้าย' vs 'ช่วงต้น'
-    คืน (change_pct_of_series, avg_recent, avg_early) หรือ None ถ้าข้อมูลไม่พอ"""
+    คืน (change_pct_of_series, avg_recent, avg_early) หรือ None ถ้าข้อมูลไม่พอ
+
+    ตัดเหลือ window snapshots ล่าสุดก่อนคำนวณเสมอ — daily เก็บยาวถึง 365 วัน ถ้าใช้
+    ทั้งชุดจะกลายเป็นเทียบ "ค่าเฉลี่ย 4 เดือนแรกของปี vs 4 เดือนท้าย" ซึ่งไม่ใช่
+    สัญญาณ flow ระยะใกล้อีกต่อไป (ตอนเขียนมีข้อมูลแค่ ~24 วันเลยยังไม่เห็นอาการ)"""
     vals = [(d.get("date"), d.get(key)) for d in (daily or []) if d.get(key) is not None]
     if len(vals) < min_points:
         return None
     vals.sort()
+    vals = vals[-window:]
     k = max(1, len(vals) // 3)
     early = sum(v for _, v in vals[:k]) / k
     recent = sum(v for _, v in vals[-k:]) / k

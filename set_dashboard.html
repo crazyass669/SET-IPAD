@@ -2357,13 +2357,16 @@
 
       <strong>Position (M)</strong> = จำนวนหุ้นที่ short ค้างอยู่จริง (หน่วยล้านหุ้น) — ตัวเลขดิบของ Pos% ด้านบน<br><br>
 
-      <strong>%Val 6M</strong> = สัดส่วน short ต่อมูลค่าซื้อขายรวม 6 เดือนล่าสุด — วัด
+      <strong>%Val YTD</strong> = สัดส่วน short ต่อมูลค่าซื้อขายรวม<b>ตลอดช่วงสะสม</b> — วัด
       "ความคึกคักของการ short ช่วงนี้" ต่างจาก Pos% ที่วัดยอดค้างสะสม
-      ถ้า %Val 6M สูงแต่ Pos% ต่ำ = short เข้า-ออกไว (เปิด-ปิดสถานะเร็ว) ไม่ได้ค้างยาว<br><br>
+      ถ้า %Val สูงแต่ Pos% ต่ำ = short เข้า-ออกไว (เปิด-ปิดสถานะเร็ว) ไม่ได้ค้างยาว<br>
+      <span style="color:var(--text2)">ช่วงสะสมจริงดูได้ที่บรรทัดสถานะบนหัวหน้า ("ข้อมูล ... ถึง ...")
+      — SET เริ่มนับใหม่ทุกต้นปี ป้ายจึงเป็น YTD ไม่ใช่ 6 เดือนตายตัว</span><br><br>
 
-      <strong>Vol 6M (M)</strong> = ปริมาณหุ้นที่ถูก short รวม 6 เดือน (ตัวเลขดิบของ %Val 6M)<hr>
+      <strong>Vol YTD (M)</strong> = ปริมาณหุ้นที่ถูก short รวมตลอดช่วงสะสม (ตัวเลขดิบของ %Val)<hr>
 
-      <strong style="color:#e3b341">🎯 Squeeze Radar</strong> = จับคู่ "Short Pos สูง (&gt;1%) + Insider ซื้อสะสม"<br>
+      <strong style="color:#e3b341">🎯 Squeeze Radar</strong> = จับคู่ "Short Pos สูง (&gt;1%) + Insider ซื้อสุทธิ"
+      (วัดฝั่ง insider ด้วย<b>มูลค่าบาทสุทธิ</b> ไม่ใช่จำนวนครั้ง — ซื้อจิ๋ว 5 ครั้งแต่ขายก้อนใหญ่ 1 ครั้ง ไม่นับเป็นซื้อ)<br>
       ถ้าราคาเริ่มขึ้นตอน short ค้างเยอะ + คนในซื้อ (รู้ข้อมูลดี) มักเป็นสัญญาณว่า
       short seller เริ่มเพลี่ยงพล้ำ ต้อง cover เร่ง (short squeeze) → ราคาพุ่งแรงกว่าปกติ
       เพราะมีทั้งแรงซื้อจริง + แรงซื้อคืนบังคับมาพร้อมกัน<br><br>
@@ -2379,7 +2382,8 @@
     <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
       <span style="font-size:11px;color:var(--muted)">เรียงตาม:</span>
       <button class="filter-btn active" id="short-sort-pos" onclick="setShortSort('pos',this)" title="เรียงตาม Short Position % ของหุ้นชำระแล้ว">Position %</button>
-      <button class="filter-btn" id="short-sort-val" onclick="setShortSort('val',this)" title="เรียงตาม % Short ต่อมูลค่าซื้อขายรวม 6 เดือน">% Vol 6M</button>
+      <!-- ป้าย "% Vol YTD" ถูกเขียนทับด้วยช่วงจริงจาก period_from/period_to ใน loadShortPage() -->
+      <button class="filter-btn" id="short-sort-val" onclick="setShortSort('val',this)" title="เรียงตาม % Short ต่อมูลค่าซื้อขายรวมตลอดช่วงสะสม">% Vol YTD</button>
     </div>
   </div>
 
