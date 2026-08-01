@@ -433,7 +433,7 @@ function confirmRefresh(period) {
     _drData   = null;
     const statusEl = document.getElementById('dr-status');
     if (statusEl) statusEl.textContent = 'กำลังอัปเดตข้อมูลหุ้นต่างประเทศ...';
-    _fetchTimeout('/api/dr', 90000)
+    _fetchTimeout('/api/dr', 150000)
       .then(r => r.json())
       .then(d => {
         if (d.stocks) {
@@ -638,6 +638,9 @@ function yfToTVSym(yf) {
   if (yf.endsWith('.PA')) return `EURONEXT:${yf.slice(0,-3)}`; // MC.PA → EURONEXT:MC
   if (yf.endsWith('.MI')) return `MIL:${yf.slice(0,-3)}`;      // SMSWLD.MI → MIL:SMSWLD
   if (yf.endsWith('.VN')) return yf.slice(0,-3);               // FPT.VN → FPT (TV resolves)
+  if (yf.endsWith('.DE')) return `XETR:${yf.slice(0,-3)}`;     // DEAM.DE → XETR:DEAM
+  if (yf.endsWith('.AS')) return `EURONEXT:${yf.slice(0,-3)}`; // AMS listing → Euronext Amsterdam
+  if (yf.endsWith('.L'))  return `LSE:${yf.slice(0,-2)}`;      // London Stock Exchange
   return yf.replace(/-/g, '.');                                 // BRK-B → BRK.B (US stocks)
 }
 
@@ -1666,7 +1669,7 @@ async function loadDRRotation() {
   if (!_drData || !_drData.length) {
     gate.style.display = ''; gate.textContent = 'กำลังดึงข้อมูลหุ้นต่างประเทศ (DR)...'; body.style.display = 'none';
     try {
-      const d = await (await _fetchTimeout('/api/dr', 90000)).json();
+      const d = await (await _fetchTimeout('/api/dr', 150000)).json();
       if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
     } catch (e) { gate.textContent = 'โหลดข้อมูล DR ไม่สำเร็จ: ' + e.message; return; }
   }
@@ -2870,7 +2873,7 @@ function _wlPopulateSymList() {
     if (!_wlSymListReady && !_wlSymListFetching) {
       _wlSymListFetching = true;
       Promise.all([
-        _drData ? Promise.resolve() : _fetchTimeout('/api/dr', 90000).then(r => r.json()).then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; } }).catch(() => {}),
+        _drData ? Promise.resolve() : _fetchTimeout('/api/dr', 150000).then(r => r.json()).then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; } }).catch(() => {}),
         _usData ? Promise.resolve() : fetch('/api/us-index-metrics').then(r => r.json()).then(d => { _usData = d; }).catch(() => {}),
         _hkData ? Promise.resolve() : fetch('/api/hk-index-metrics').then(r => r.json()).then(d => { _hkData = d; }).catch(() => {}),
       ]).then(() => {
@@ -3026,7 +3029,7 @@ function renderWatchlist() {
       document.getElementById("wl-tbody").innerHTML =
         `<tr><td colspan="17"><div class="empty" style="font-size:12px">กำลังโหลดข้อมูล DR/DRx, US Index และ HK Index...</div></td></tr>`;
       Promise.all([
-        (_drData || !need.has("DR")) ? Promise.resolve() : _fetchTimeout('/api/dr', 90000).then(r => r.json()).then(d => {
+        (_drData || !need.has("DR")) ? Promise.resolve() : _fetchTimeout('/api/dr', 150000).then(r => r.json()).then(d => {
           if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
         }).catch(() => {}),
         (_usData || !need.has("US")) ? Promise.resolve() : fetch('/api/us-index-metrics').then(r => r.json()).then(d => {
@@ -6427,7 +6430,7 @@ async function fsOpenDetail(sym, isDr) {
   if (isDr) {
     if (!_drData) {
       try {
-        const d = await (await _fetchTimeout('/api/dr', 90000)).json();
+        const d = await (await _fetchTimeout('/api/dr', 150000)).json();
         if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
       } catch (e) { fsOpenFin(sym, true); return; }
     }
@@ -14060,7 +14063,7 @@ function initFinPage() {
     if (_drData && _drData.length) {
       _buildDrDatalist();
     } else {
-      _fetchTimeout('/api/dr', 90000).then(r => r.json()).then(d => {
+      _fetchTimeout('/api/dr', 150000).then(r => r.json()).then(d => {
         if (d.stocks) { _drData = _drData || d.stocks; _buildDrDatalist(); }
       }).catch(() => {});
     }
@@ -15998,11 +16001,11 @@ const _DR_LOGO_DOMAIN = {
   '1177.HK':'sinobiopharma.com','0981.HK':'smics.com','2727.HK':'shanghai-electric.com',
   '2382.HK':'sunny-optical.com','0700.HK':'tencent.com','9880.HK':'ubtrobot.com',
   '2269.HK':'wuxibiologics.com','2359.HK':'wuxiapptec.com','1810.HK':'mi.com',
-  '9868.HK':'xpeng.com','9688.HK':'zailaboratory.com','2899.HK':'zijinmining.com',
+  '9868.HK':'xpeng.com','2513.HK':'zailaboratory.com','2899.HK':'zijinmining.com',
   '0175.HK':'geely.com','1772.HK':'ganfengligroup.com','6690.HK':'haier.com',
   '3692.HK':'hansoh.com','600900.SS':'cypc.com.cn','2238.HK':'en.gac.com.cn',
   '002230.SZ':'iflytek.com','3888.HK':'kingsoft.com','6181.HK':'laopugold.com',
-  '688100.SS':'montagemi.com','002371.SZ':'naura.com','688256.SS':'cambricon.com',
+  '6809.HK':'montagemi.com','002371.SZ':'naura.com','688256.SS':'cambricon.com',
   '000625.SZ':'changan.com.cn','159682.SZ':'csop.com.hk','6680.HK':'jlmag.com',
   '300308.SZ':'giglight.com',
   // Japan
@@ -16585,7 +16588,7 @@ function loadDRPage() {
   document.getElementById('dr-table-wrap').innerHTML =
     '<div class="dr-loading"><span class="dr-load-spin"></span>กำลังโหลดข้อมูล DR/DRx... (ช้าเฉพาะการรันครั้งแรกสุดของเครื่อง ~1 นาที — ปกติขึ้นทันที)</div>';
 
-  _fetchTimeout('/api/dr', 90000)
+  _fetchTimeout('/api/dr', 150000)
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -16850,6 +16853,9 @@ function _drExchBadge(yf) {
   if (yf.endsWith('.MI'))  return '🇮🇹 BIT';
   if (yf.endsWith('.SS'))  return '🇨🇳 SSE';
   if (yf.endsWith('.SZ'))  return '🇨🇳 SZSE';
+  if (yf.endsWith('.DE'))  return '🇩🇪 XETRA';
+  if (yf.endsWith('.AS'))  return '🇳🇱 AEX';
+  if (yf.endsWith('.L'))   return '🇬🇧 LSE';
   return '🇺🇸 US';
 }
 
@@ -16866,7 +16872,6 @@ function _drCardGrid(stocks) {
     const badges = s.drs.map(d =>
       `<a class="dr-badge${d.endsWith('X') ? ' dr-badge-x' : ''}" href="https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(d)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="เปิด ${d} ใน TradingView">${d}</a>`
     ).join('');
-    const closeData = JSON.stringify(s.close100 || []);
     const cPct = v => v != null ? `<span class="${v>=0?'green':'red'}">${v>=0?'+':''}${v.toFixed(2)}%</span>` : '—';
     const rsDisp = s.rs_score != null ? `<span class="${rsColor(s.rs_score)}" style="font-weight:700">RS ${s.rs_score}</span>` : '';
     return `<div class="dr-card" onclick="openDRChartModal('${s.sym}')" style="cursor:pointer">

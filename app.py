@@ -863,6 +863,10 @@ def dr_quick_update():
     cached = _dr_cache.get("result")
     if not cached or not cached.get("stocks"):
         return jsonify({"error": "ยังไม่มี DR cache — กรุณาโหลดหน้า DR ก่อน"}), 400
+    # เก็บ ts ของ cache ตอนเริ่ม — ถ้า background full rebuild (_dr_do_rebuild, ดู
+    # _kick_dr_rebuild) แทนที่ _dr_cache["result"] ด้วย object ใหม่เสร็จก่อนเราเขียนจบ
+    # ต้องรู้ตัวและไม่ทับมันด้วย `cached` ที่เรามัวแต่ mutate อยู่ (ของเก่ากว่า) ทิ้งไป
+    _ts_at_start = _dr_cache.get("ts")
 
     def _do_quick():
         _dr_refresh_state.update(running=True, error=None, done=False, n_total=None, n_updated=None)
@@ -972,21 +976,25 @@ def dr_quick_update():
                         new_closes_raw = [round(float(c), 4) for c in close.tolist()]
                         new_dates_raw  = [str(d)[:10] for d in close.index.tolist()]
                         new_vols_raw   = [int(v) for v in vol_s.tolist()] if len(vol_s) == len(close) else [0] * len(close)
-                        # อัปเดต close100
-                        old100 = entry.get("close100", [])
-                        entry["close100"] = (old100 + new_closes_raw)[-100:]
                         # อัปเดต full history (+ volume คู่กัน สำหรับ _bullish_vol ฝั่ง client)
+                        # gap fetch ตั้งใจดึงทับแท่งสุดท้ายเดิมซ้ำ (overlap) — นับเฉพาะแท่งที่
+                        # วันที่ใหม่จริงๆ (appended_count) ไว้ใช้ merge close100/ohlc30 ต่อ
+                        # ไม่งั้นแท่งซ้ำจะถูกเบิ้ลเข้า close100 ทุกครั้งที่กดอัปเดต
                         old_dates  = entry.get("dates", [])
                         old_closes = entry.get("closes", [])
                         old_vols   = entry.get("_full_vols", [0] * len(old_dates))
+                        appended_count = 0
                         for dt, cl, vv in zip(new_dates_raw, new_closes_raw, new_vols_raw):
                             if not old_dates or dt > old_dates[-1]:
                                 old_dates.append(dt)
                                 old_closes.append(cl)
                                 old_vols.append(vv)
+                                appended_count += 1
                         entry["dates"]  = old_dates
                         entry["closes"] = old_closes
                         entry["_full_vols"] = old_vols
+                        # อัปเดต close100 จาก full history ที่ dedupe แล้ว (ตัดปัญหาแท่งซ้ำ)
+                        entry["close100"] = old_closes[-100:]
                         # recalculate return metrics from updated full history
                         def _ret_q(arr, n):
                             if len(arr) < n + 1:
@@ -998,6 +1006,10 @@ def dr_quick_update():
                         entry["ret_3m"] = _ret_q(old_closes, 63)
                         entry["ret_6m"] = _ret_q(old_closes, 126)
                         entry["ret_1y"] = _ret_q(old_closes, 250)
+                        entry["ret_3y"] = _ret_q(old_closes, 756)
+                        entry["ret_5y"] = _ret_q(old_closes, 1260)
+                        entry["rs_raw"] = round(rs_raw, 4) if (rs_raw := calc_rs_raw(
+                            entry["ret_1m"], entry["ret_3m"], entry["ret_6m"], entry["ret_1y"])) is not None else None
                         # อัปเดต above_ema50/200 + price_history/vol_history (ให้ Screener
                         # เรียก _enrichTechSignals() กับ DR ได้แบบเดียวกับหุ้นไทย — ดู
                         # comment เต็มใน _dr_do_rebuild)
@@ -1015,23 +1027,22 @@ def dr_quick_update():
                         entry["vol_today"]   = old_vols[-1] if old_vols else None
                         entry["vol_avg20"]   = (round(sum(old_vols[-21:-1]) / 20)
                                                  if len(old_vols) >= 21 else None)
-                        # rebuild ohlc30 with volume from latest 5d data
+                        # ต่อ ohlc30 เฉพาะแท่งที่ใหม่จริง (appended_count เดียวกับ close100/dates
+                        # ด้านบน) — เดิมต่อแท่งที่ fetch มาทั้งหมดรวม overlap ทำให้ตัดฐานเก่า
+                        # ทิ้งเกิน 1 แท่งเสมอ (แท่งวันก่อนหน้าหายไปจากกราฟแท่งเทียน 30D)
                         try:
-                            n = min(30, len(close))
-                            ohlc30 = []
-                            for i in range(-n, 0):
-                                o = float(open_s.iloc[i]) if len(open_s) >= abs(i) else price
-                                h = float(high_s.iloc[i]) if len(high_s) >= abs(i) else price
-                                l = float(low_s.iloc[i])  if len(low_s)  >= abs(i) else price
-                                c2 = float(close.iloc[i])
-                                v  = float(vol_s.iloc[i]) if len(vol_s) >= abs(i) else 0
-                                ohlc30.append([round(o,4), round(h,4), round(l,4), round(c2,4), int(v)])
-                            if ohlc30:
-                                # merge: keep old 30d base, replace tail with fresh data
+                            if appended_count > 0:
+                                n = min(appended_count, len(close))
+                                new_ohlc = []
+                                for i in range(-n, 0):
+                                    o = float(open_s.iloc[i]) if len(open_s) >= abs(i) else price
+                                    h = float(high_s.iloc[i]) if len(high_s) >= abs(i) else price
+                                    l = float(low_s.iloc[i])  if len(low_s)  >= abs(i) else price
+                                    c2 = float(close.iloc[i])
+                                    v  = float(vol_s.iloc[i]) if len(vol_s) >= abs(i) else 0
+                                    new_ohlc.append([round(o,4), round(h,4), round(l,4), round(c2,4), int(v)])
                                 old_ohlc = entry.get("ohlc30", [])
-                                keep = max(0, 30 - len(ohlc30))
-                                entry["ohlc30"] = old_ohlc[:keep] + ohlc30
-                                entry["ohlc30"] = entry["ohlc30"][-30:]
+                                entry["ohlc30"] = (old_ohlc + new_ohlc)[-30:]
                         except Exception:
                             pass
                         # recalculate 52W, ATH, YTD from updated full history
@@ -1056,9 +1067,24 @@ def dr_quick_update():
                 except Exception as e:
                     print(f"[DR quick] {sym}: {e}")
 
-            cached["ts"] = _dt.now().isoformat()
-            _dr_cache.update(result=cached, ts=time.time())
-            _save_dr_cache_to_file(cached)
+            # RS rank ใหม่ทั้ง universe — rs_raw ของตัวที่เพิ่ง quick-update เปลี่ยนไปแล้ว
+            # (ดู rs_raw ด้านบน) แต่อันดับเป็นค่าสัมพัทธ์เทียบกับทุกตัว ต้องคำนวณใหม่ทั้งชุด
+            # เหมือน _dr_do_rebuild ไม่งั้น rs_score ค้างจนกว่าจะ full rebuild รอบถัดไป (4 ชม.)
+            valid_rs = [s for s in cached["stocks"] if s.get("rs_raw") is not None]
+            valid_rs.sort(key=lambda x: x["rs_raw"])
+            n_rs = len(valid_rs)
+            for i, s in enumerate(valid_rs):
+                s["rs_score"] = int(round(i / n_rs * 99)) if n_rs > 0 else None
+
+            # ถ้า background full rebuild แทนที่ _dr_cache ไปแล้วระหว่างที่เรารันอยู่
+            # (ts ไม่ตรงกับตอนเริ่ม) ผลของมันสดกว่าและครบกว่า `cached` ที่เรา mutate
+            # มาตลอด — ข้ามการเขียนทับไปเลย ไม่งั้นจะเอาผล quick-update (เก่ากว่า) ไปทับ
+            if _dr_cache.get("ts") != _ts_at_start:
+                print("[DR quick] ข้ามการบันทึก — background full rebuild เสร็จก่อนแล้ว")
+            else:
+                cached["ts"] = _dt.now().isoformat()
+                _dr_cache.update(result=cached, ts=time.time())
+                _save_dr_cache_to_file(cached)
             _dr_refresh_state["done"] = True
             _dr_refresh_state["n_total"] = len(_universe)
             _dr_refresh_state["n_updated"] = updated
