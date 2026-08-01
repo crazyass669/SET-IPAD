@@ -183,6 +183,14 @@
   .mini-tbl-scroll { max-height: 296px; overflow-y: auto; }
   .mini-tbl-scroll .tbl thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
 
+  /* ตารางผล Screener+ / เทียบเพื่อน (.data-table) — ไม่เคยมี padding ของตัวเอง
+     โดน global reset (* { padding:0 }) ทับจนเซลล์ชิดกันหมด ดูแน่นเกินไป */
+  .data-table { border-collapse: collapse; }
+  .data-table th, .data-table td { padding: 6px 9px; }
+  .data-table th { font-weight: 600; color: var(--text2); }
+  .data-table td { border-bottom: 1px solid #1c2128; }
+  .data-table tr:hover td { background: var(--bg3); }
+
   /* ตารางงบการเงิน (หน้างบ) — ตรึงคอลัมน์ "รายการ" ไว้เวลาเลื่อนดูตัวเลขไปทางขวา
      คอลัมน์แรกต้องมีพื้นหลังทึบ (var(--bg2) = สีการ์ด) กันตัวเลขที่เลื่อนทะลุขึ้นมา */
   #fin-result .tbl th:first-child,

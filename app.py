@@ -2575,12 +2575,23 @@ def financials_analytics():
             except Exception:
                 pass
 
+        # mkt_cap หุ้น DR ไม่ได้อยู่ใน set_data.json (นั่นมีแต่หุ้นไทย) — ต้องอ่านจาก
+        # dr_cache.json แยก (คีย์ 'sym') ไม่งั้น fcf_yield ของ DR ทุกตัวจะเป็น None เสมอ
+        # (FCF Yield = FCF ÷ mkt_cap ต้องมี mkt_cap) — ใช้ pattern เดียวกับ /api/factor-screener
+        dr_mktcap_map = {}
+        try:
+            with open(DR_CACHE_FILE, encoding="utf-8") as f:
+                for s in json.load(f).get("stocks", []):
+                    dr_mktcap_map[s["sym"]] = s.get("mkt_cap")
+        except Exception:
+            pass
+
         set_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=False)
         dr_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=True)
         fin_sector_syms = factor_snapshot._financial_sector_symbols(BASE_DIR)
         result = {
             "set": _compute_fin_analytics_for(set_symbols, False, pe_map, mktcap_map, yahoo_only=yahoo_only, fin_sector_syms=fin_sector_syms),
-            "dr": _compute_fin_analytics_for(dr_symbols, True, pe_map, mktcap_map, yahoo_only=yahoo_only),
+            "dr": _compute_fin_analytics_for(dr_symbols, True, pe_map, dr_mktcap_map, yahoo_only=yahoo_only),
         }
 
         slot["result"] = result
