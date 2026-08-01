@@ -2157,7 +2157,7 @@ def get_financials_full(symbol):
                 pass
         return data
 
-    data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr)
+    data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr, market=market)
     if data:
         return jsonify(_with_quality(data))
 
@@ -2174,7 +2174,7 @@ def get_financials_full(symbol):
         return jsonify({"error": str(e)}), 404
 
     financials_store.upsert(BASE_DIR, sym, source, payload, is_dr=is_dr)
-    data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr)
+    data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr, market=market)
     return jsonify(_with_quality(data))
 
 

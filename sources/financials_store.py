@@ -200,7 +200,7 @@ def upsert(base_dir, symbol, source, payload, is_dr=False):
         con.close()
 
 
-def get(base_dir, symbol, source, is_dr=False):
+def get(base_dir, symbol, source, is_dr=False, market=None):
     if not db_exists(base_dir):
         return None
     key = _dr_key(symbol) if is_dr else symbol
@@ -212,8 +212,10 @@ def get(base_dir, symbol, source, is_dr=False):
         # fallback: งบ finnomena_q ที่ไม่มี key รายตัว ให้ไปอ่านจาก mirror ทั้งตลาด
         # (namespace FINN:{ex}:{name}) — ทำให้ screener/หน้างบใช้งบ 16 ปีที่โหลดไว้ได้
         # โดยไม่ต้อง sync รายตัวซ้ำ; ข้าม marker 'ไม่มีงบ' (คืน None เหมือนไม่มีข้อมูล)
+        # ส่ง market ต่อเสมอ — กัน _finn_mirror_keys เดาข้าม HK ผิดตอน market='JP'
+        # (ดูคอมเมนต์เต็มใน _finn_mirror_keys)
         if row is None and source == "finnomena_q":
-            cands = _finn_mirror_keys(symbol, is_dr=is_dr)
+            cands = _finn_mirror_keys(symbol, is_dr=is_dr, market=market)
             for mkey in cands:
                 mrow = con.execute(
                     "SELECT payload, synced_at FROM financials WHERE symbol=? AND source=?",
@@ -1016,13 +1018,21 @@ def _finn_resolve(symbol, is_dr=False):
     raise ValueError(f"{sym} ({yf_t}) อยู่ตลาดที่ Finnomena ไม่มีข้อมูล (มีเฉพาะ TH/US/HK)")
 
 
-def _finn_mirror_keys(symbol, is_dr=False):
+def _finn_mirror_keys(symbol, is_dr=False, market=None):
     """คืน list ของ FINN:{ex}:{name} ที่ 'อาจจะ' เป็น key ใน mirror ของ symbol นี้
     (ดู _mirror_key / mirror_finnomena) — ใช้ให้ get(source='finnomena_q') fallback
     ไปอ่านงบจาก mirror ทั้งตลาดได้ โดยไม่ต้อง sync finnomena_q รายตัวซ้ำ
 
     HK ในรายชื่อ Finnomena มีทั้งแบบเติม 0 นำหน้าและไม่เติม — คืนหลายตัวเลือกให้ลองครบ
-    คืน [] ถ้าตลาดไม่รองรับ (ETF / นอก TH-US-HK) — เหมือน _finn_resolve ที่ raise"""
+    คืน [] ถ้าตลาดไม่รองรับ (ETF / นอก TH-US-HK) — เหมือน _finn_resolve ที่ raise
+
+    market='JP': คืน [] เสมอโดยไม่เดา — Finnomena ไม่มีข้อมูลตลาดญี่ปุ่นเลย (รองรับแค่
+    TH/US/HK) แต่รหัสหุ้น JP เป็นตัวเลข 4 หลักเหมือนหุ้น HK พอดี (พิสูจน์แล้วว่าชนกันจริง
+    40 ตัวใน Nikkei 225 เช่น 9983/8316/6098) ถ้าไม่กันไว้ตรงนี้ branch 'ไม่อยู่ใน DR
+    universe' ด้านล่างจะเดาลอง FINN:HK:{รหัส} แล้วเจอข้อมูลจริงของ 'หุ้น HK คนละตัว'
+    พอดี ทำให้หน้างบการเงินโชว์งบบริษัท HK ผิดตัวแทนโดยไม่มี error ใดๆ เตือนเลย"""
+    if market == "JP":
+        return []
     sym = symbol.upper().strip()
     in_universe = True
     if is_dr:   # ETF ไม่มีงบการเงิน — กันเผลอดึง FINN key ของตราสารอื่นที่ชื่อชนกัน

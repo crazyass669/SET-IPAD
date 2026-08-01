@@ -13739,13 +13739,18 @@ function _finRecentLoad() {
   catch { return []; }
 }
 
-function _finRecentAdd(sym, tab) {
+// mkt (US/HK/JP) จำไว้ด้วยเฉพาะแท็บ dr — หุ้น mirror ตัวเลข (เช่นรหัส JP) ชนกับรหัสตลาด
+// อื่นได้ (ดู bug _finn_mirror_keys) ถ้าไม่จำตลาดไว้ คลิกชิปซ้ำตอนแท็บตลาดปัจจุบันไม่ตรง
+// จะ resolve yf ticker ผิดตลาดแบบเงียบๆ
+function _finRecentAdd(sym, tab, mkt) {
   let list = _finRecentLoad().filter(r => !(r.sym === sym && r.tab === tab));
-  list.unshift({ sym, tab });
+  list.unshift({ sym, tab, mkt: mkt || null });
   list = list.slice(0, FIN_RECENT_MAX);
   try { localStorage.setItem(FIN_RECENT_KEY, JSON.stringify(list)); } catch {}
   _finRecentRender();
 }
+
+const FIN_RECENT_FLAG = { US: '🇺🇸', HK: '🇭🇰', JP: '🇯🇵' };
 
 function _finRecentRender() {
   const box = document.getElementById('fin-recent');
@@ -13758,10 +13763,11 @@ function _finRecentRender() {
   box.style.alignItems = 'center';
   box.innerHTML = '<span style="color:var(--text2);margin-right:2px">🕓 เพิ่งดู:</span>' +
     list.map(r => `<button class="filter-btn" style="font-size:11px;padding:3px 10px"
-      onclick="_finRecentPick('${r.sym}','${r.tab}')">${r.tab === 'dr' ? '🌏' : '🇹🇭'} ${r.sym}</button>`).join('');
+      onclick="_finRecentPick('${r.sym}','${r.tab}','${r.mkt || ''}')">${r.tab === 'dr' ? (FIN_RECENT_FLAG[r.mkt] || '🌏') : '🇹🇭'} ${r.sym}</button>`).join('');
 }
 
-function _finRecentPick(sym, tab) {
+function _finRecentPick(sym, tab, mkt) {
+  if (tab === 'dr' && mkt && mkt !== _finMirMarket) _finMirSelectMarket(mkt);
   if (_finTab !== tab) {
     setFinTab(tab, document.getElementById(tab === 'set' ? 'fin-tab-set-btn' : 'fin-tab-dr-btn'));
   }
@@ -13811,6 +13817,9 @@ function toggleFinCompare() {
   if (!opening) {
     setFinTab(_finTab, document.getElementById(_finTab === 'set' ? 'fin-tab-set-btn' : 'fin-tab-dr-btn'));
     _finRecentRender();   // setFinTab->initFinPage เรียกอยู่แล้ว แต่ระบุชัดเจนกันพลาด
+    // setFinTab ล้าง fin-result ทิ้งเสมอ (เผื่อกรณีสลับแท็บจริง) แต่ตรงนี้แท็บไม่ได้เปลี่ยน
+    // (ปิดโหมดเทียบ = แท็บเดิมก่อนเปิด) — คืนผลค้นหุ้นเดี่ยวล่าสุดกลับมาแทนปล่อยว่างเปล่า
+    if (_finData) _renderFinancialsFull(_finData, _finRenderSource);
     return;
   }
   initFinPage();   // ให้แน่ใจว่า fin-set-datalist/fin-dr-datalist โหลดแล้ว (ช่องเทียบชี้ไปใช้ตรงๆ)
@@ -13820,7 +13829,9 @@ function toggleFinCompare() {
 
 function _finGuessDrMarket(sym) {
   const mir = _finDrMirrorSyms || {};
-  return (mir.HK || []).includes(sym) ? 'HK' : 'US';
+  if ((mir.HK || []).includes(sym)) return 'HK';
+  if ((mir.JP || []).includes(sym)) return 'JP';
+  return 'US';
 }
 
 async function _finCompareFetch(sym, isDr) {
@@ -14433,10 +14444,13 @@ async function searchFinancials() {
     // จำว่าค้นหุ้นตัวนี้ (ใช้เลือกหุ้นค้นบ่อยมาอัพเดทงบในโหมดเบา) — เงียบ ไม่บล็อก
     fetch('/api/track-search', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol: sym }) }).catch(() => {});
-    _finRecentAdd(sym, _finTab);   // ประวัติหุ้นที่เพิ่งดู (localStorage ฝั่ง client)
+    _finRecentAdd(sym, _finTab, isDrSym ? _finMirMarket : null);   // ประวัติหุ้นที่เพิ่งดู (localStorage ฝั่ง client)
     // อัพเดท URL hash ให้ refresh/back-forward/แชร์ลิงก์กลับมาที่หุ้นตัวนี้ได้ — replaceState
     // แทนการเซ็ต location.hash ตรงๆ กัน hashchange ยิงซ้ำแล้ว _finApplyHash ค้นหาซ้ำเป็นลูป
-    history.replaceState(null, '', '#fin/' + _finTab + '/' + encodeURIComponent(sym));
+    // ต้องพก market (US/HK/JP) ไปกับ DR เสมอ — ไม่งั้น refresh/แชร์ลิงก์หุ้น mirror ที่ไม่ใช่
+    // ตลาด default (US) จะ resolve yf ticker ผิดตลาด (ดู bug รหัส JP ชนกับ HK ใน _finn_mirror_keys)
+    const hashMkt = isDrSym ? _finMirMarket + ':' : '';
+    history.replaceState(null, '', '#fin/' + _finTab + '/' + hashMkt + encodeURIComponent(sym));
     _renderFinancialsFull(d, source);
     // เทียบ Yahoo vs SET.or.th — เดิมรันเฉพาะมุมมอง Yahoo รายปี ทั้งที่ Finnomena (มุมมอง
     // default) ก็น่าเตือนเหมือนกัน — endpoint อ่านจาก cache ทั้งสองแหล่งเสมออยู่แล้ว
@@ -14453,6 +14467,7 @@ async function _checkFinDQ(sym) {
   try {
     const r = await fetch(`/api/financials-dq-check/${encodeURIComponent(sym)}`);
     const d = await r.json();
+    if (_finData?.sym !== sym) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด — กันแบนเนอร์ของหุ้นเก่าไปแปะหน้าหุ้นใหม่
     if (d.status !== 'mismatch') return;
     const box = document.getElementById('fin-result');
     if (!box || !box.firstElementChild) return;
@@ -15066,7 +15081,14 @@ function _ttmPeSeries(epsRow, closeRow) {
 function _ttmEpsLast(epsRow) {
   const epsItems = _finSeries(epsRow);
   if (epsItems.length < 4) return null;
-  const sum = epsItems.slice(-4).reduce((a, o) => a + o.v, 0);
+  const last4 = epsItems.slice(-4);
+  // กันไตรมาสขาดหาย (gap) ทำให้ TTM รวมข้ามช่วงเวลาที่ไม่ติดกันจริง — เช็คระยะห่างระหว่าง
+  // ไตรมาสติดกันต้องไม่เกิน ~105 วัน เหมือนเกณฑ์ฝั่ง backend (ดู _calc_ttm ใน app.py)
+  for (let i = 1; i < last4.length; i++) {
+    const gapDays = (new Date(last4[i].d) - new Date(last4[i - 1].d)) / 86400000;
+    if (gapDays > 105) return null;
+  }
+  const sum = last4.reduce((a, o) => a + o.v, 0);
   return sum > 0 ? sum : null;
 }
 
@@ -15527,6 +15549,20 @@ function _finRowChart(label, colLabels, vals, isRatioKey) {
 function _finFullTable(title, cols, colLabels, groups, rows, getVal, isRatio, showAll, noPctCols, hideGroupHdr, pctOffset) {
   const skipPct = noPctCols || new Set();
   const offset = pctOffset || 1;   // 1 = เทียบคอลัมน์ก่อนหน้า (QoQ/รายปี) · 4 = เทียบไตรมาสเดียวกันปีก่อน (YoY)
+  // หา index คอลัมน์ "ก่อนหน้า" ของแต่ละคอลัมน์ไว้ล่วงหน้า — offset=1 (QoQ/รายปี) ใช้ i-1
+  // ตรงๆ ได้เสมอ (เทียบงวดก่อนหน้าไม่ว่าจะห่างแค่ไหนยังมีความหมาย) แต่ offset=4 (YoY) ต้องหา
+  // คอลัมน์ที่ "ห่างจริง ~1 ปี" แทนนับถอยหลัง 4 ช่องตรงๆ เพราะถ้ามีไตรมาสขาดหายกลางทาง
+  // (เช่น Finnomena บางตัวขาดงบไตรมาสหนึ่ง) การนับ index ถอยหลังจะเทียบผิดไตรมาสไปเงียบๆ
+  const prevIdxByCol = cols.map((c, i) => {
+    if (offset !== 4) return i - offset;
+    const target = new Date(c); target.setDate(target.getDate() - 365);
+    let best = -1, bestDiff = Infinity;
+    for (let j = 0; j < i; j++) {
+      const diff = Math.abs(new Date(cols[j]) - target);
+      if (diff < bestDiff) { bestDiff = diff; best = j; }
+    }
+    return bestDiff <= 45 * 86400000 ? best : -1;   // ยอมรับคลาดเคลื่อนได้ไม่เกิน 45 วัน
+  });
   const isChart = _finViewMode === 'chart';
   const headerCells = colLabels.map(c => `<th class="r" style="min-width:90px;white-space:nowrap">${c}</th>`).join('');
   let bodyHtml = '';
@@ -15557,7 +15593,7 @@ function _finFullTable(title, cols, colLabels, groups, rows, getVal, isRatio, sh
       }
       shown++;
       const cells = vals.map((v, i) => {
-        const prevIdx = i - offset;
+        const prevIdx = prevIdxByCol[i];
         const prev = prevIdx >= 0 ? vals[prevIdx] : null;
         const cls = _finColCls(v, prev, r.key);
         const text = v == null ? '—' : (isRatio(r.key) ? v.toFixed(2) : _finFmt(v));
@@ -15709,7 +15745,7 @@ function _renderFinancialsFull(d, source) {
     // ชื่อบริษัท: หุ้น mirror US/HK เก็บ name = ticker — หาชื่อเต็มจาก _finMirNames (แยกตลาดด้วยสกุลเงิน)
     let dispName = (d.name && d.name !== d.sym) ? d.name : '';
     if (!dispName) {
-      const mk = d.currency === 'USD' ? 'US' : d.currency === 'HKD' ? 'HK' : null;
+      const mk = d.currency === 'USD' ? 'US' : d.currency === 'HKD' ? 'HK' : d.currency === 'JPY' ? 'JP' : null;
       if (mk) dispName = _finMirName(mk, d.sym);
     }
 
