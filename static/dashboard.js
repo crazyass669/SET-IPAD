@@ -8837,13 +8837,19 @@ function _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId) {
     .then(st => {
       if (st.running) { setTimeout(() => _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId), 1500); return; }
       if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
-      if (st.error) { alert('อัพเดทราคา Live ไม่สำเร็จ: ' + st.error); return; }
       // ต่อท้าย note เดิม (ที่ loadHeatmapPage/loadHkHeatmapPage/loadJpHeatmapPage เซ็ตตอน
       // โหลดข้อมูลใหม่เสร็จ) ด้วยสรุปผลรอบ live-update นี้ — แบบเดียวกับปุ่ม "⚡ ราคาล่าสุด"
       // ของ Watchlist (ดู wlRefreshLivePrices) ต้องรอ onDone() (โหลด/render ข้อมูลใหม่เสร็จ
       // ก่อน — มัน return promise ของ fetch เอง) ไม่งั้น note จะถูกเขียนทับด้วย "ข้อมูล ณ ..."
-      // ของมันทีหลัง
+      // ของมันทีหลัง — เรียก onDone() ก่อนเช็ค error เสมอ เพราะ backend merge ราคาส่วนที่ได้
+      // ลงไฟล์ไปแล้วแม้เคส error (ได้ live price บางส่วน <20%) หน้าจอต้องโชว์ของที่ได้มาจริง
+      // ไม่ใช่ทิ้งไว้เป็นข้อมูลเก่า
       const p = onDone();
+      if (st.error) {
+        const showError = () => alert('อัพเดทราคา Live ไม่สำเร็จ: ' + st.error);
+        if (p && typeof p.then === 'function') p.then(showError); else showError();
+        return;
+      }
       if (noteId && st.n_fetched != null) {
         const appendNote = () => {
           const note = document.getElementById(noteId);
@@ -8854,13 +8860,22 @@ function _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId) {
         };
         if (p && typeof p.then === 'function') p.then(appendNote); else appendNote();
       }
+    })
+    .catch(e => {
+      // fetch ล้มเหลว (เซิร์ฟเวอร์รีสตาร์ท/เน็ตสะดุด) — เดิมไม่มี .catch ทำให้ปุ่มค้าง
+      // disabled + textContent "กำลังดึงราคา Live..." ถาวรจนกว่าจะกด F5 เอง
+      if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
+      alert('เช็คสถานะอัพเดทราคา Live ไม่สำเร็จ: ' + e.message);
     });
 }
 
 function setHmPeriod(key, btn) {
   hmSortDir = (key === hmPeriod) ? -hmSortDir : 1;
   hmPeriod = key;
-  document.querySelectorAll('#page-heatmap .filter-btn').forEach(b => b.classList.remove('active'));
+  // scope แค่แถวปุ่ม metric ของแท็บไทย — เดิมกวาดทั้ง #page-heatmap ทำให้แท็บตลาด
+  // (🇹🇭/🇺🇸/🇭🇰/🇯🇵) และปุ่มดัชนี/metric ของ US/HK/JP ที่เป็น .filter-btn เหมือนกัน
+  // หายไฮไลต์ไปด้วยทุกครั้งที่คลิกปุ่ม metric ฝั่งไทย (ดู setEMABreadthView ด้านล่างที่แก้ไปแล้ว)
+  document.querySelectorAll('#hm-th-period-btns .filter-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   renderHeatmap();
 }
@@ -13021,6 +13036,12 @@ let _hmPopupSym = null;
 // ลิงก์ไปหน้า Heatmap จริงของ TradingView.com ต่อดัชนี — เผื่อผู้ใช้อยากดู treemap ขนาดกล่อง
 // = market cap จริง (ของเราตัด market cap ออกแล้วเปลี่ยนเป็น grid ขนาดเท่ากันแทน เพราะเดิมต้อง
 // ยิง Yahoo fast_info ทีละ ticker ทำให้หน้าโหลดช้ามาก — ดู _hmGridHtml ด้านล่าง)
+//
+// DOW ใช้ dataSource "DJCA" (Dow Jones Composite Average ~65 ตัว = อุตสาหกรรม 30 + ขนส่ง 20 +
+// สาธารณูปโภค 15) ไม่ใช่ DJIA 30 ตัวล้วนที่หน้าเราแสดง — เช็คแล้วว่า widget heatmap สาธารณะของ
+// TradingView (tradingview.com/heatmap/stock) ไม่มี dataSource ให้เลือกเฉพาะ DJIA 30 ตัวตรงๆ
+// (ตัวเลือก "Dow Jones" ในหน้านั้นคือ DJCA นี่แหละ) เลยเป็นตัวที่ใกล้เคียงที่สุดที่มี ผู้ใช้คลิก
+// จากแท็บ Dow แล้วจะเห็นหุ้นเพิ่มมาจากกลุ่มขนส่ง/สาธารณูปโภคที่ไม่ได้อยู่ใน DJIA 30 ตัว
 const _HM_TV_URL = {
   SP500: 'https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22SPX500%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D',
   NDX:   'https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22NASDAQ100%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D',
@@ -13211,6 +13232,9 @@ function _hmGridHtml(rows, cfgKey, search, popupFn, dir = 1) {
 function _renderHeatmap(data) {
   const box = document.getElementById('hm-box');
   if (!box) return;
+  // data เป็น undefined ได้ตอนพิมพ์ค้นหา (oninput) ก่อนโหลดเสร็จ/หลังโหลดล้มเหลว
+  // (_hmData[_hmIndex] ยังไม่เคยตั้งค่า) — เดิมพัง data.rows ด้วย TypeError
+  if (!data) return;
   const rows = data.rows || data;   // เผื่อเรียกจากที่อื่นด้วย array ตรงๆ
   if (!rows.length) {
     box.innerHTML = '<div class="text2" style="font-size:13px;padding:20px;text-align:center">ไม่มีข้อมูลราคาที่ใช้วาด heatmap ได้</div>';
@@ -13343,6 +13367,8 @@ function loadHkHeatmapPage(forceRefresh = false) {
 function _renderHkHeatmap(data) {
   const box = document.getElementById('hk-hm-box');
   if (!box) return;
+  // data undefined ได้ตอนพิมพ์ค้นหาก่อนโหลดเสร็จ/หลังโหลดล้มเหลว (ดูคอมเมนต์ใน _renderHeatmap)
+  if (!data) return;
   const rows = data.rows || data;
   if (!rows.length) {
     box.innerHTML = '<div class="text2" style="font-size:13px;padding:20px;text-align:center">ไม่มีข้อมูลราคาที่ใช้วาด heatmap ได้</div>';
@@ -13452,6 +13478,8 @@ function loadJpHeatmapPage(forceRefresh = false) {
 function _renderJpHeatmap(data) {
   const box = document.getElementById('jp-hm-box');
   if (!box) return;
+  // data undefined ได้ตอนพิมพ์ค้นหาก่อนโหลดเสร็จ/หลังโหลดล้มเหลว (ดูคอมเมนต์ใน _renderHeatmap)
+  if (!data) return;
   const rows = data.rows || data;
   if (!rows.length) {
     box.innerHTML = '<div class="text2" style="font-size:13px;padding:20px;text-align:center">ไม่มีข้อมูลราคาที่ใช้วาด heatmap ได้</div>';

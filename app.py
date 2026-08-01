@@ -3661,6 +3661,21 @@ def _run_jp_index_sync():
         _update(running=False)
 
 
+def _index_metrics_ts(data):
+    """แปลง updated_at ("%Y-%m-%d %H:%M:%S", เวลาที่ build()/update_live_prices() เขียนไฟล์
+    ล่าสุดจริง) เป็น epoch วินาที ให้ frontend คำนวณ "ข้อมูล ณ กี่นาทีที่แล้ว" ได้ถูกต้อง —
+    เดิมส่ง time.time() (เวลาที่ request เข้ามา) ทำให้โชว์ "0 วิที่แล้ว" ตลอดแม้ไฟล์จะเก่า
+    ข้ามวันก็ตาม ถ้าไม่มี updated_at (ไฟล์ยังไม่เคย build) fallback เป็นเวลาปัจจุบันแทน"""
+    raw = data.get("updated_at")
+    if raw:
+        try:
+            import datetime as _dt
+            return _dt.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").timestamp()
+        except ValueError:
+            pass
+    return time.time()
+
+
 @app.route("/api/hk-index-heatmap")
 def hk_index_heatmap():
     """Heatmap ของ HSI / HSCEI / HSTECH — ?index=HSI|HSCEI|HSTECH
@@ -3682,7 +3697,7 @@ def hk_index_heatmap():
         return jsonify({"error": f"ยังไม่มีข้อมูล {index_key} ในเครื่อง — กด \"📈 HK Index Max\" ก่อน"}), 404
 
     requested = len(hk_index_membership.load_local(BASE_DIR).get(index_key) or [])
-    return jsonify({"rows": rows, "ts": time.time(),
+    return jsonify({"rows": rows, "ts": _index_metrics_ts(data),
                      "requested": max(requested, len(rows)), "missing": max(0, requested - len(rows))})
 
 
@@ -3699,7 +3714,7 @@ def jp_index_heatmap():
         return jsonify({"error": "ยังไม่มีข้อมูล NIKKEI225 ในเครื่อง — กด \"📈 JP Index Max\" ก่อน"}), 404
 
     requested = len(jp_index_membership.load_local(BASE_DIR).get("NIKKEI225") or [])
-    return jsonify({"rows": rows, "ts": time.time(),
+    return jsonify({"rows": rows, "ts": _index_metrics_ts(data),
                      "requested": max(requested, len(rows)), "missing": max(0, requested - len(rows))})
 
 
@@ -3723,7 +3738,7 @@ def us_index_heatmap():
         return jsonify({"error": f"ยังไม่มีข้อมูล {index_key} ในเครื่อง — กด \"📈 US Index Max\" ก่อน"}), 404
 
     requested = len(us_index_membership.load_local(BASE_DIR).get(index_key) or [])
-    return jsonify({"rows": rows, "ts": time.time(),
+    return jsonify({"rows": rows, "ts": _index_metrics_ts(data),
                      "requested": max(requested, len(rows)), "missing": max(0, requested - len(rows))})
 
 
