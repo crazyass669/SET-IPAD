@@ -3732,6 +3732,7 @@ function loadHedgePage() {
     .then(d => {
       _hedgeData = d;
       _hedgeLoaded = true;
+      _hedgeGlobalStatsCache = null;   // ข้อมูลชุดใหม่ — badge 13F ใน chart modal ต้องคำนวณใหม่
       // ค่าเริ่มต้น: เลือกทุกกองที่มี holdings เพื่อให้ consensus มีความหมายทันที
       _hedgeSel = new Set(Object.values(d.managers || {})
         .filter(m => (m.holdings || []).length).map(m => m.code));
@@ -3877,7 +3878,7 @@ function renderHedgeSoldOut() {
 function renderHedgeHeatmap() {
   const box = document.getElementById('hedge-hm-box');
   if (!box || !_hedgeData) return;
-  const minFunds = parseInt(document.getElementById('hedge-min-funds')?.value || '3', 10);
+  const minFunds = parseInt(document.getElementById('hedge-hm-min-funds')?.value || '3', 10);
   const search = (document.getElementById('hedge-hm-search')?.value || '').trim().toLowerCase();
   const colorBy = document.getElementById('hedge-hm-color')?.value || 'count';
 
@@ -3888,10 +3889,10 @@ function renderHedgeHeatmap() {
   let list = _hedgeComputeOverlap().filter(e => e.funds.length >= minFunds);
   const maxCount = list.reduce((m, e) => Math.max(m, e.funds.length), 1);
   document.getElementById('hedge-hm-hint').textContent =
-    `${list.length} หุ้น · ขนาดกล่อง = จำนวนกองที่ถือ`;
+    `${list.length} หุ้น (≥${minFunds} กองถือ) · ขนาดกล่อง = จำนวนกองที่ถือ`;
   document.getElementById('hedge-hm-legend').innerHTML = colorBy === 'count'
     ? `สี: <span style="color:var(--text2)">น้อย</span> → <span style="color:#3fb950">หลายกอง</span>`
-    : `สี: <span style="color:#f85149">ต่ำกว่าต้นทุนกูรู</span> ↔ <span style="color:#3fb950">สูงกว่า</span>`;
+    : `สี: <span style="color:#f85149">ราคาย่อจาก 13F</span> ↔ <span style="color:#3fb950">ราคาขึ้นจาก 13F</span>`;
 
   if (!list.length) {
     box.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text2)">ไม่มีหุ้นเข้าเงื่อนไข — ลองลดจำนวนกองขั้นต่ำ</div>';
@@ -3913,7 +3914,7 @@ function renderHedgeHeatmap() {
     const sub = colorBy === 'count' ? `${e.funds.length} กอง`
       : (e.vsCost != null ? `${e.vsCost >= 0 ? '+' : ''}${e.vsCost.toFixed(0)}%` : '');
     const tip = `${e.name} (${e.sym}) · ${e.funds.length} กองถือ` +
-      (e.vsCost != null ? ` · vs ต้นทุน ${e.vsCost >= 0 ? '+' : ''}${e.vsCost.toFixed(1)}%` : '');
+      (e.vsCost != null ? ` · เปลี่ยนแปลงจากราคา ณ 13F ${e.vsCost >= 0 ? '+' : ''}${e.vsCost.toFixed(1)}%` : '');
     return `<div onclick="hedgeShowStock('${_hedgeEsc(e.sym)}')" title="${_hedgeEsc(tip)}"
       style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;background:${bg};
       border:1px solid var(--bg2);box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;
@@ -3955,8 +3956,10 @@ function renderHedgeManagers() {
   const wrap = document.getElementById('hedge-managers-list');
   if (!wrap || !_hedgeData) return;
   const q = (document.getElementById('hedge-mgr-search')?.value || '').toLowerCase().trim();
-  let mgrs = Object.values(_hedgeData.managers || {})
-    .filter(m => (m.holdings || []).length);
+  const all = Object.values(_hedgeData.managers || {});
+  let mgrs = all.filter(m => (m.holdings || []).length);
+  // กองที่ขูดพลาดรอบล่าสุด (error) หรือหน้าเปล่า — เดิมถูกกรองหายเงียบๆ ผู้ใช้ไม่รู้ว่าขาดกองไหน
+  const broken = all.filter(m => !(m.holdings || []).length);
   if (q) mgrs = mgrs.filter(m => (m.name || '').toLowerCase().includes(q) ||
                                  (m.code || '').toLowerCase().includes(q));
   if (_hedgeMgrSort && _HEDGE_MGR_SORT_GETTERS[_hedgeMgrSort.key]) {
@@ -3986,7 +3989,18 @@ function renderHedgeManagers() {
     </tr>`;
   }).join('');
 
-  wrap.innerHTML = `<div class="card" style="padding:0;overflow-x:auto">
+  // แยกสองกรณี: ขูดพลาด (error — กดอัพเดทใหม่ช่วยได้) กับ Dataroma เองไม่มีข้อมูลให้ (tbody
+  // ว่าง เช่นกอง MP/Makaira รอบ Q1 2026 — กดใหม่กี่ครั้งก็ยังว่าง ไม่ต้องให้ผู้ใช้เสียเวลา)
+  const failed = broken.filter(m => m.error), empty = broken.filter(m => !m.error);
+  const nameList = (arr, n) => arr.slice(0, n).map(m => _hedgeEsc(m.name || m.code)).join(', ') +
+    (arr.length > n ? ` และอีก ${arr.length - n} กอง` : '');
+  const brokenNote = broken.length ? `<div class="card" style="padding:10px 16px;margin-bottom:10px;font-size:11.5px;color:var(--yellow);line-height:1.6">
+    ${failed.length ? `⚠️ ${failed.length} กองดึงข้อมูลไม่สำเร็จรอบล่าสุด (ไม่ถูกนับใน consensus) — ${nameList(failed, 6)}
+      · ลองกด "⟳ อัพเดท Hedge Holdings" ใหม่<br>` : ''}
+    ${empty.length ? `ℹ️ ${empty.length} กองยังไม่มีรายการถือครองบน Dataroma รอบนี้ — ${nameList(empty, 6)}` : ''}
+  </div>` : '';
+
+  wrap.innerHTML = brokenNote + `<div class="card" style="padding:0;overflow-x:auto">
     <table class="hedge-table">
       <thead><tr>
         <th style="width:34px">✓</th><th style="cursor:pointer" onclick="hedgeMgrSortBy('name')">กอง / นักลงทุน${_hedgeMgrSortArrow('name')}</th>
@@ -4032,7 +4046,9 @@ function _hedgeComputeOverlap() {
       if (am.sell) e.anySell = true;
     });
   });
-  // เติม avg hold price (ต้นทุนเฉลี่ยถ่วงหุ้น = Σมูลค่า/Σหุ้น), current, ส่วนต่าง%, % พอร์ตรวม
+  // เติมราคา ณ วันรายงาน 13F (Σมูลค่า/Σหุ้น), ราคาปัจจุบัน, %เปลี่ยนแปลง, % พอร์ตรวม
+  // avgHold ไม่ใช่ "ต้นทุนซื้อ" — 13F รายงานมูลค่าด้วยราคาปิดวันสิ้นไตรมาส (cost basis ไม่ต้องยื่น)
+  // และแต่ละกองอาจคนละไตรมาส (Q4/Q1 ปนกันได้) ถ้ายื่นไม่พร้อมกัน
   const q = _hedgeData.quotes || {};
   Object.values(map).forEach(e => {
     e.avgHold = e.totalShares > 0 ? e.totalValue / e.totalShares : null;
@@ -4122,7 +4138,8 @@ function renderHedgeOverlap() {
         return `<span class="hedge-fund-chip" title="${_hedgeEsc(tip)}" style="border-color:${col}55"
                   onclick="hedgeShowManager('${_hedgeEsc(f.code)}')">${_hedgeEsc(f.code)}</span>`;
       }).join('');
-    // ส่วนต่างจากต้นทุนกูรู: เขียว = ปัจจุบันสูงกว่าที่กูรูเข้า (กำไรกระดาษ), แดง = ต่ำกว่า (เข้าได้ถูกกว่า)
+    // เขียว = ราคาวิ่งขึ้นจากวันรายงาน 13F, แดง = ย่อลงมา (ตอนนี้ซื้อได้ถูกกว่าราคาที่กองรายงาน)
+    // ย้ำ: ไม่ใช่กำไร/ขาดทุนของกอง — 13F ไม่เปิดเผย cost basis (ดู avgHold ใน _hedgeComputeOverlap)
     const vs = e.vsCost == null ? '<span style="color:var(--text2)">—</span>'
       : `<span style="color:${e.vsCost >= 0 ? '#2ea043' : '#d1242f'}">${e.vsCost >= 0 ? '+' : ''}${e.vsCost.toFixed(1)}%</span>`;
     const miss = _hedgeIsMissing(e.sym)
@@ -4150,9 +4167,9 @@ function renderHedgeOverlap() {
         <th style="text-align:center;cursor:pointer" onclick="hedgeOvSortBy('funds')"># กองถือ${_hedgeOvSortArrow('funds')}</th>
         <th style="text-align:center;cursor:pointer" title="จำนวนกองที่ซื้อเข้าใหม่/เพิ่มไตรมาสนี้" onclick="hedgeOvSortBy('buy')">ซื้อ/เพิ่ม${_hedgeOvSortArrow('buy')}</th>
         <th style="text-align:center;cursor:pointer" title="จำนวนกองที่ลด/ขายบางส่วนไตรมาสนี้ (ไม่รวมขายทิ้งหมด ซึ่งหายจากพอร์ต)" onclick="hedgeOvSortBy('sell')">ลด/ขาย${_hedgeOvSortArrow('sell')}</th>
-        <th style="text-align:right;cursor:pointer" title="ต้นทุนเฉลี่ยถ่วงหุ้นของกองที่เลือก (Σมูลค่า ÷ Σหุ้น)" onclick="hedgeOvSortBy('avgHold')">ต้นทุนกูรู${_hedgeOvSortArrow('avgHold')}</th>
+        <th style="text-align:right;cursor:pointer" title="ราคาเฉลี่ยถ่วงหุ้น ณ วันรายงาน 13F ของกองที่เลือก (Σมูลค่า ÷ Σหุ้น) — 13F ไม่เปิดเผยต้นทุนซื้อจริง มูลค่าที่ยื่นคิดจากราคาปิดวันสิ้นไตรมาส" onclick="hedgeOvSortBy('avgHold')">ราคา ณ 13F${_hedgeOvSortArrow('avgHold')}</th>
         <th style="text-align:right;cursor:pointer" onclick="hedgeOvSortBy('current')">ราคาปัจจุบัน${_hedgeOvSortArrow('current')}</th>
-        <th style="text-align:right;cursor:pointer" title="ราคาปัจจุบันสูง/ต่ำกว่าต้นทุนเฉลี่ยกูรูกี่ %" onclick="hedgeOvSortBy('vsCost')">vs ต้นทุน${_hedgeOvSortArrow('vsCost')}</th>
+        <th style="text-align:right;cursor:pointer" title="ราคาปัจจุบันเปลี่ยนไปกี่ % นับจากราคา ณ วันรายงาน 13F (ไม่ใช่กำไร/ขาดทุนของกองทุน)" onclick="hedgeOvSortBy('vsCost')">เปลี่ยนแปลง${_hedgeOvSortArrow('vsCost')}</th>
         <th style="text-align:right;cursor:pointer" title="น้ำหนักในพอร์ตรวมของกองที่เลือก (ถ่วงตามขนาดกอง)" onclick="hedgeOvSortBy('poolPct')">% พอร์ตรวม${_hedgeOvSortArrow('poolPct')}</th>
         <th style="text-align:right;cursor:pointer" onclick="hedgeOvSortBy('totalValue')">มูลค่ารวม${_hedgeOvSortArrow('totalValue')}</th>
         <th>กองที่ถือ (คลิกดูพอร์ต · hover ดู activity)</th>
@@ -4343,6 +4360,8 @@ function _hedgeRenderDetail(html) {
 function startHedgeRefresh() {
   if (!confirm('ขูดการถือครองทุกกอง (~84 กอง) จาก Dataroma ใหม่?\n\nใช้เวลา ~2–4 นาที · ข้อมูล 13F เปลี่ยนแค่รายไตรมาส')) return;
   _hedgeLoaded = false;
+  _hedgeData = null;                 // บังคับให้ loadHedgePage ยิงโหลดใหม่ (ไม่งั้นเข้า early-return)
+  _hedgeGlobalStatsCache = null;
   _startJob('/api/hedge-refresh', 'hedge-refresh-btn', '⟳ อัพเดท Hedge Holdings', null, () => {
     loadHedgePage();
   });
@@ -7810,8 +7829,8 @@ function renderTearsheet(d) {
         ${filLinksFn(h.symbol)[0].links.map(l => `<a class="filter-btn" href="${l.url}" target="_blank" rel="noopener"
           title="${l.tip}" style="text-decoration:none;font-size:12px;padding:6px 12px">${l.label} ↗</a>`).join('')}
       </div>
-      <button class="btn-secondary" style="font-size:11.5px" onclick="_filTab='${mkt}';copyFilPrompt('${h.symbol}')">📋 คัดลอก Prompt วิเคราะห์ 13 ข้อ</button>
-      <span id="fil-copy-note" style="font-size:11px;color:var(--green);margin-left:8px"></span>
+      <button class="btn-secondary" style="font-size:11.5px" onclick="copyFilPrompt('${h.symbol}','${mkt}','ts-fil-copy-note')">📋 คัดลอก Prompt วิเคราะห์ 13 ข้อ</button>
+      <span id="ts-fil-copy-note" style="font-size:11px;color:var(--green);margin-left:8px"></span>
     </div>`;
 
   const inWl = watchlist.includes(_tsWlKey(h.symbol));
@@ -13727,6 +13746,9 @@ function _buildDrDatalist() {
   });
   drd.innerHTML = '';
   drd.appendChild(frag);
+  // datalist ต้นทางเพิ่งพร้อม (โหลด /api/dr + /api/mirror-symbols แบบ async) — โคลนเข้าหน้า
+  // Filings ด้วย ไม่งั้น autocomplete ที่นั่นค้างว่างจนกว่าจะสลับแท็บ/เข้าหน้าใหม่
+  if (typeof _filBuildDatalist === 'function') _filBuildDatalist();
 }
 
 // ประวัติหุ้นที่เพิ่งดูในหน้างบการเงิน (localStorage) — เก็บ 10 ตัวล่าสุด ไม่ซ้ำ
@@ -21617,20 +21639,49 @@ function initFilingsPage() {
   _filRecentRender();
 }
 
+// TH โคลนจาก fin-set-datalist ได้ตรงๆ แต่ US/HK ต้องสร้างเองจาก _finDrMirrorSyms ซึ่งแยก
+// ตลาดไว้ชัดเจน ({US:['A',...], HK:['0001',...], JP:[...]}) — เดิมโคลน fin-dr-datalist แล้ว
+// แยกตลาดด้วย suffix ".HK" ซึ่งไม่มีอยู่จริงในข้อมูล (mirror เก็บ HK เป็นรหัส 4 หลักเปล่าๆ)
+// ผลคือแท็บ HK ได้ 0 ตัวเลือก ส่วนแท็บ US มีรหัส HK/JP ปนมาทั้งหมด (รีวิว 2026-08-02)
 function _filBuildDatalist() {
   const dl = document.getElementById('fil-datalist');
   if (!dl) return;
-  const src = document.getElementById(_filTab === 'TH' ? 'fin-set-datalist' : 'fin-dr-datalist');
-  if (!src || !src.childElementCount) return;
-  // แท็บ US/HK ใช้ datalist DR ร่วมกัน — แยกตลาดด้วย suffix .HK
-  const key = _filTab + ':' + src.childElementCount;
-  if (dl.dataset.key === key) return;
+
+  if (_filTab === 'TH') {
+    const src = document.getElementById('fin-set-datalist');
+    if (!src || !src.childElementCount) return;
+    const key = 'TH:' + src.childElementCount;
+    if (dl.dataset.key === key) return;
+    dl.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    [...src.children].forEach(o => frag.appendChild(o.cloneNode(true)));
+    dl.appendChild(frag);
+    dl.dataset.key = key;
+    return;
+  }
+
+  const mir = (typeof _finDrMirrorSyms === 'object' && _finDrMirrorSyms) ? _finDrMirrorSyms : {};
+  // HK: รหัสตัวเลขจาก mirror → เติม .HK ให้พร้อมใช้ทันที (_filLinksHK ต้องการตัวเลข ถ้าเจอ
+  // ตัวอักษรล้วนอย่าง "BABA" จะได้ code เป็น NaN — ดู guard ใน searchFilings)
+  // US: ticker จาก mirror + underlying ของ DR ที่ region=US (BRK.B ฯลฯ ที่ไม่อยู่ใน mirror)
+  let syms;
+  if (_filTab === 'HK') {
+    syms = (mir.HK || []).map(s => [String(s).padStart(4, '0') + '.HK', _finMirName('HK', s)]);
+  } else {
+    const drUs = (typeof _drData !== 'undefined' && _drData ? _drData : [])
+      .filter(s => s.region === 'US' && s.sym).map(s => [s.sym, s.name]);
+    const seen = new Set(drUs.map(([s]) => s));
+    syms = drUs.concat((mir.US || []).filter(s => !seen.has(s)).map(s => [s, _finMirName('US', s)]));
+  }
+  const key = _filTab + ':' + syms.length;
+  if (!syms.length || dl.dataset.key === key) return;
   dl.innerHTML = '';
   const frag = document.createDocumentFragment();
-  [...src.children].forEach(o => {
-    if (_filTab === 'HK' && !o.value.endsWith('.HK')) return;
-    if (_filTab === 'US' && o.value.endsWith('.HK')) return;
-    frag.appendChild(o.cloneNode(true));
+  syms.forEach(([sym, name]) => {
+    const o = document.createElement('option');
+    o.value = sym;
+    if (name) o.label = name;
+    frag.appendChild(o);
   });
   dl.appendChild(frag);
   dl.dataset.key = key;
@@ -21657,9 +21708,12 @@ function _filRecentRender() {
   box.style.gap = '6px';
   box.style.alignItems = 'center';
   const flag = { TH: '🇹🇭', US: '🇺🇸', HK: '🇭🇰' };
+  // sym มาจาก localStorage — กรองเป็น [A-Z0-9.-] ก่อนยัดลง onclick (กันอักขระพิเศษแตก HTML)
+  const safe = s => String(s || '').replace(/[^A-Z0-9.\-]/gi, '');
   box.innerHTML = '<span style="color:var(--text2)">🕓 เพิ่งดู:</span>' +
-    list.map(r => `<button class="filter-btn" style="font-size:11px;padding:3px 10px"
-      onclick="_filRecentPick('${r.sym}','${r.tab}')">${flag[r.tab] || ''} ${r.sym}</button>`).join('');
+    list.filter(r => safe(r.sym) && flag[r.tab])
+      .map(r => `<button class="filter-btn" style="font-size:11px;padding:3px 10px"
+      onclick="_filRecentPick('${safe(r.sym)}','${r.tab}')">${flag[r.tab]} ${safe(r.sym)}</button>`).join('');
 }
 
 function _filRecentAdd(sym, tab) {
@@ -21801,6 +21855,13 @@ function searchFilings() {
   // auto-detect: พิมพ์ .HK ในแท็บไหนก็ได้ = HK
   if (sym.endsWith('.HK') && _filTab !== 'HK') setFilTab('HK', document.getElementById('fil-tab-hk'));
   if (_filTab === 'HK' && !sym.endsWith('.HK') && /^\d+$/.test(sym)) sym = sym.padStart(4, '0') + '.HK';
+  // HKEX อ้างอิงหุ้นด้วยรหัสตัวเลขเท่านั้น — ถ้าพิมพ์ชื่อย่อ (เช่น BABA) ลิงก์จะได้ code
+  // เป็น NaN/0000 ทั้งชุด บอกให้ผู้ใช้ใส่รหัสแทนดีกว่าปล่อยเปิดลิงก์เสีย
+  if (_filTab === 'HK' && !/\d/.test(sym)) {
+    const hint0 = document.getElementById('fil-hint');
+    if (hint0) hint0.innerHTML = '<span style="color:var(--yellow)">หุ้น HK ต้องใช้รหัสตัวเลข เช่น 0700.HK หรือพิมพ์ 700 (ชื่อย่ออย่าง BABA ใช้ไม่ได้)</span>';
+    return;
+  }
   inp.value = sym;
   const groups = _filTab === 'TH' ? _filLinksTH(sym) : _filTab === 'US' ? _filLinksUS(sym) : _filLinksHK(sym);
   _filRecentAdd(sym, _filTab);
@@ -21837,14 +21898,19 @@ function resetFilings() {
   // ไม่แตะ FIL_RECENT_KEY — เก็บชิป "🕓 เพิ่งดู" ไว้เหมือนเดิม
 }
 
-function copyFilPrompt(sym) {
+// market: ระบุตลาดมาตรงๆ (Tearsheet ส่ง mkt ของหุ้นที่เปิดอยู่) — ไม่ส่ง = ใช้แท็บปัจจุบันของหน้า
+// noteId: id ของ span ที่จะขึ้น "✓ คัดลอกแล้ว" (Tearsheet มี span ของตัวเองคนละอันกับหน้านี้)
+// เดิม Tearsheet เซ็ต _filTab ทิ้งไว้ก่อนเรียก ทำให้แท็บของหน้า Filings เพี้ยนถาวรหลังกดปุ่ม
+// (ปุ่ม active ยังเป็นไทยแต่ตัวแปรเป็นตลาดอื่น → ค้นหุ้นไทยได้ลิงก์ผิดตลาด — รีวิว 2026-08-02)
+function copyFilPrompt(sym, market, noteId) {
   // JP มาจากปุ่ม "คัดลอก Prompt" ใน Tearsheet เท่านั้น (หน้า Filings เต็มยังไม่มีแท็บ JP —
   // ดู renderTearsheet) เดิม fallback ไป _filLinksHK ผิดตลาดเงียบๆ ทั้งชื่อตลาดในพรอมต์ก็ได้
   // "undefined" เพราะ object ด้านล่างไม่มี key JP (พบจากรีวิวโค้ด 2026-08-02)
-  const groups = _filTab === 'TH' ? _filLinksTH(sym) : _filTab === 'US' ? _filLinksUS(sym)
-    : _filTab === 'JP' ? _filLinksJP(sym) : _filLinksHK(sym);
+  const tab = market || _filTab;
+  const groups = tab === 'TH' ? _filLinksTH(sym) : tab === 'US' ? _filLinksUS(sym)
+    : tab === 'JP' ? _filLinksJP(sym) : _filLinksHK(sym);
   const linkLines = groups.map(g => g.links.map(l => `- ${l.label.replace(/^[^\w฀-๿]+\s*/, '')}: ${l.url}`).join('\n')).join('\n');
-  const mkt = { TH: 'ตลาดหุ้นไทย (SET)', US: 'ตลาดหุ้น US', HK: 'ตลาดหุ้นฮ่องกง (HKEX)', JP: 'ตลาดหุ้นญี่ปุ่น (TSE)' }[_filTab];
+  const mkt = { TH: 'ตลาดหุ้นไทย (SET)', US: 'ตลาดหุ้น US', HK: 'ตลาดหุ้นฮ่องกง (HKEX)', JP: 'ตลาดหุ้นญี่ปุ่น (TSE)' }[tab];
   const prompt = `ช่วยวิเคราะห์หุ้น ${sym} (${mkt}) ตามกรอบ 13 ข้อนี้ โดยอ้างอิงข้อมูลจากรายงานทางการล่าสุด (แหล่งอ้างอิงด้านล่าง) ตอบเป็นภาษาไทย ใส่ตัวเลขประกอบทุกข้อ ถ้าข้อมูลไม่พอให้บอกตรงๆ ว่าขาดอะไร:
 
 1. ธุรกิจคืออะไร — หาเงินจากอะไร สินค้า/บริการหลัก รายได้แบ่งกี่ segment ส่วนไหนใหญ่สุด (% หรือตัวเลข) อธิบาย 2 ประโยคภาษาคนทั่วไป
@@ -21863,7 +21929,7 @@ function copyFilPrompt(sym) {
 
 แหล่งอ้างอิง:
 ${linkLines}`;
-  const note = document.getElementById('fil-copy-note');
+  const note = document.getElementById(noteId || 'fil-copy-note');
   const ok = () => { if (note) { note.textContent = '✓ คัดลอกแล้ว — เอาไปวางใน Claude / ChatGPT ได้เลย'; setTimeout(() => note.textContent = '', 4000); } };
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(prompt).then(ok).catch(() => _filCopyFallback(prompt, ok));

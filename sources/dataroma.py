@@ -12,7 +12,6 @@ mirror บุคคลที่สาม, ไม่พึ่ง lib ภายน
 import json
 import os
 import re
-import ssl
 import time
 import urllib.request
 
@@ -24,10 +23,10 @@ CACHE_REL = os.path.join("data", "hedge_holdings.json")
 
 
 def _ctx():
-    c = ssl.create_default_context()
-    c.check_hostname = False
-    c.verify_mode = ssl.CERT_NONE
-    return c
+    """verify cert จริงผ่าน core.net (certifi) — เดิมปิด verify ทิ้ง (CERT_NONE) ซึ่งเปิดช่อง
+    MITM โดยไม่จำเป็น cert ของ dataroma.com ใช้งานได้ปกติ (รีวิวความปลอดภัย 2026-08-02)"""
+    from core.net import ssl_context
+    return ssl_context()
 
 
 def _get(url, tries=3):
