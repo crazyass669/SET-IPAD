@@ -2750,6 +2750,11 @@
           <button class="filter-btn" id="drrot-tf-short" onclick="setDrRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
         </div>
         <select id="drrot-region" onchange="renderDRRotation()" style="font-size:13px"></select>
+        <div class="filter-row" style="gap:0;margin:0" title="เทียบราคาแต่ละตัวกับค่าเฉลี่ยของ DR ทั้งกลุ่ม หรือเฉพาะภูมิภาคที่เลือก (มีผลเมื่อเลือกภูมิภาคเจาะจง ไม่ใช่ 'ทุกภูมิภาค')">
+          <button class="filter-btn active" id="drrot-bm-group" onclick="setDrRotBenchmark('group',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">เทียบทั้งกลุ่ม</button>
+          <button class="filter-btn" id="drrot-bm-region" onclick="setDrRotBenchmark('region',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">เทียบภูมิภาค</button>
+        </div>
+        <span id="drrot-refreshing" style="display:none;font-size:11px;color:var(--accent)">⟳ กำลังดึงข้อมูลชุดใหม่เบื้องหลัง...</span>
         <span id="drrot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
       </div>
       <div class="card" style="padding:8px">

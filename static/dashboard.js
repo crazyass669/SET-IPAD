@@ -1659,15 +1659,31 @@ function renderRotRVOL() {
 // reuse drawRotationScatter โดยส่ง relative return (หุ้น − ค่าเฉลี่ยกลุ่ม)
 // ============================================================
 let _drRotTf = 'long';
+let _drRotBenchmark = 'group';   // group|region — เทียบค่าเฉลี่ย DR ทั้งกลุ่ม หรือเฉพาะภูมิภาคที่เลือก
+
+// subtitle ต้องบอกแกนตามโหมดที่เลือกจริง — เดิมเขียน 3M/1M ตายตัวแม้สลับเป็นโหมดเร็ว
+// (และบอก benchmark ตามโหมดเทียบทั้งกลุ่ม/ภูมิภาคด้วย)
+function _drRotUpdateSubtitle() {
+  const sub = document.getElementById('drrot-subtitle');
+  if (!sub) return;
+  const bm = _drRotBenchmark === 'region' ? 'ค่าเฉลี่ยของภูมิภาคที่เลือก' : 'ค่าเฉลี่ยของ DR ทั้งกลุ่ม';
+  sub.innerHTML = `RRG ของหุ้นต่างประเทศ (DR underlying) แต่ละตัว — เทียบกับ <b>${bm}</b> (ราคาท้องถิ่น ไม่แปลงค่าเงิน) · ` +
+    (_drRotTf === 'short' ? 'แกน X = 1M% Y = 1W% (เทียบกลุ่ม)' : 'แกน X = 3M% Y = 1M% (เทียบกลุ่ม)');
+}
 
 function setDrRotTf(tf, btn) {
   _drRotTf = tf;
   document.querySelectorAll('#drrot-tf-long,#drrot-tf-short').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
-  // subtitle ต้องบอกแกนตามโหมดที่เลือกจริง — เดิมเขียน 3M/1M ตายตัวแม้สลับเป็นโหมดเร็ว
-  const sub = document.getElementById('drrot-subtitle');
-  if (sub) sub.innerHTML = 'RRG ของหุ้นต่างประเทศ (DR underlying) แต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของ DR ทั้งกลุ่ม</b> (ราคาท้องถิ่น ไม่แปลงค่าเงิน) · ' +
-    (tf === 'short' ? 'แกน X = 1M% Y = 1W% (เทียบกลุ่ม)' : 'แกน X = 3M% Y = 1M% (เทียบกลุ่ม)');
+  _drRotUpdateSubtitle();
+  renderDRRotation();
+}
+
+function setDrRotBenchmark(mode, btn) {
+  _drRotBenchmark = mode;
+  btn?.closest('.filter-row')?.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  _drRotUpdateSubtitle();
   renderDRRotation();
 }
 
@@ -1678,6 +1694,12 @@ async function loadDRRotation() {
     try {
       const d = await (await _fetchTimeout('/api/dr', 150000)).json();
       if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
+      // stale-while-revalidate: /api/dr ตอบชุดเก่าพร้อม refreshing=true ตอน cache หมดอายุ
+      // แล้ว rebuild เบื้องหลัง — เดิมแท็บนี้โชว์ชุดเก่าเงียบๆ ไม่มีป้ายและไม่ดึงซ้ำ
+      // (poller ตัวเดียวกับหน้า DR — มี guard กัน start ซ้อน พอได้ชุดใหม่จะวาดแท็บนี้ซ้ำ)
+      const rf = document.getElementById('drrot-refreshing');
+      if (rf) rf.style.display = d.refreshing ? '' : 'none';
+      if (d.refreshing) _drPollRefresh(0);
     } catch (e) { gate.textContent = 'โหลดข้อมูล DR ไม่สำเร็จ: ' + e.message; return; }
   }
   if (!_drData || !_drData.length) { gate.style.display = ''; gate.textContent = 'ไม่มีข้อมูล DR'; body.style.display = 'none'; return; }
@@ -1706,10 +1728,20 @@ function renderDRRotation() {
     ? (s.ret_1m != null && s.ret_1w != null)
     : (s.ret_3m != null && s.ret_1m != null)));
   if (!valid.length) return;
-  const avg = f => { const v = valid.filter(s => s[f] != null); return v.length ? v.reduce((a, s) => a + s[f], 0) / v.length : 0; };
-  const a3m = avg('ret_3m'), a1m = avg('ret_1m'), a1w = avg('ret_1w');
   const region = document.getElementById('drrot-region')?.value || 'all';
   const shown = region === 'all' ? valid : valid.filter(s => s.region === region);
+  // ปุ่ม "เทียบภูมิภาค" ไม่มีผลตอนยังเลือก "ทุกภูมิภาค" — disable พร้อม hint กันเข้าใจผิด
+  const bmBtn = document.getElementById('drrot-bm-region');
+  if (bmBtn) {
+    bmBtn.disabled = region === 'all';
+    bmBtn.title = region === 'all' ? 'เลือกภูมิภาคเจาะจงก่อน จึงเทียบค่าเฉลี่ยภูมิภาคได้' : '';
+  }
+  // benchmark = ค่าเฉลี่ยเท่าน้ำหนักของ DR ทั้งกลุ่ม (ปกติ) หรือเฉพาะภูมิภาคที่เลือก
+  // (ถ้าสลับโหมดและเลือกภูมิภาคเจาะจงแล้ว) — ดูว่าใครนำ/ตาม "เพื่อนร่วมภูมิภาค" แทนทั้งกลุ่ม
+  const bmRegion = _drRotBenchmark === 'region' && region !== 'all';
+  const bmSet = bmRegion ? shown : valid;
+  const avg = f => { const v = bmSet.filter(s => s[f] != null); return v.length ? v.reduce((a, s) => a + s[f], 0) / v.length : 0; };
+  const a3m = avg('ret_3m'), a1m = avg('ret_1m'), a1w = avg('ret_1w');
   // relative return (หุ้น − ค่าเฉลี่ยกลุ่ม) ต่อทุก timeframe ที่ RRG ใช้
   const a6m = avg('ret_6m'), a1y = avg('ret_1y');
   const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
@@ -1719,23 +1751,44 @@ function renderDRRotation() {
     ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
   }));
   const info = document.getElementById('drrot-info');
-  if (info) info.textContent = `${shown.length} หุ้น · benchmark = ค่าเฉลี่ย DR ${valid.length} ตัว` +
+  if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmRegion ? `ค่าเฉลี่ยภูมิภาค ${region}` : 'ค่าเฉลี่ย DR ทั้งกลุ่ม'} (${bmSet.length} ตัว)` +
     (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
              : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
-  drawRotationScatter(items, { canvasId: 'dr-rotation-map', legendId: 'dr-rot-legend', tf: _drRotTf, onOpen: openDRChartModal });
+  drawRotationScatter(items, { canvasId: 'dr-rotation-map', legendId: 'dr-rot-legend', tf: _drRotTf, onOpen: openDRChartModal, relative: true });
 }
 
+// วาดซ้ำอัตโนมัติตอนขนาดหน้าต่างเปลี่ยน/หมุนจอ — canvas เป็น bitmap ขนาดตายตัว ถูก CSS
+// ยืดจนเบลอจนกว่าจะวาดใหม่ (hit-test ไม่พังเพราะคำนวณ scale จาก rect จริงอยู่แล้ว)
+// เก็บ args รอบล่าสุดต่อ canvas แล้ววาดซ้ำเฉพาะตัวที่มองเห็นอยู่ (debounce 200ms)
+const _rotLastDraw = {};
+(() => {
+  let t = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(t);
+    t = setTimeout(() => {
+      Object.values(_rotLastDraw).forEach(d => {
+        const cv = document.getElementById(d.opts.canvasId || 'rotation-map');
+        if (cv && cv.offsetParent !== null) drawRotationScatter(d.sectors, d.opts);
+      });
+    }, 200);
+  });
+})();
+
 function drawRotationScatter(sectors, opts = {}) {
-  // opts: { canvasId, legendId, tf, onOpen } — default = หน้า Rotation ไทย (ไม่กระทบของเดิม)
+  // opts: { canvasId, legendId, tf, onOpen, relative } — default = หน้า Rotation ไทย (ไม่กระทบของเดิม)
   //       ใช้ opts เพื่อ reuse ตัววาดนี้กับหน้า DR Rotation (คนละ canvas/legend/คลิกเปิดอะไร)
   const canvasId = opts.canvasId || 'rotation-map';
   const legendId = opts.legendId || 'rot-legend';
   const tf = opts.tf || rotTimeframe;
+  // หน้า Stock Rotation ส่งค่าเป็น relative return (หุ้น − ค่าเฉลี่ยกลุ่ม) — tooltip ต้อง
+  // บอกชัด ไม่งั้นคนอ่านเป็น return จริงของหุ้น (ป้าย 1M/3M/6M/1Y เหมือนหน้า sector เป๊ะ)
+  const isRelative = !!opts.relative;
   // เดิมคลิกจุดเปิด openSectorModal ตายตัว — บนหน้า DR Rotation จุดคือ DR symbol
   // ไม่ใช่ sector ไทย ต้องเปิด openDRChartModal แทน
   const onOpen = opts.onOpen || openSectorModal;
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
+  _rotLastDraw[canvasId] = { sectors, opts };   // ให้ resize handler ข้างบนวาดซ้ำได้
 
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.offsetWidth || canvas.parentElement?.offsetWidth || 960;
@@ -1801,7 +1854,9 @@ function drawRotationScatter(sectors, opts = {}) {
   const nameToColor = {};
   sectors.forEach(s => { nameToColor[s.name] = palette[_nameColorIdx(s.name)]; });
 
-  const BUBBLE_R = 10;
+  // จุดเยอะ (เช่น US โหมด "ทั้งหมด" ~800 ตัว) R=10 กินพื้นที่เกินครึ่ง plot จน
+  // collision 25 รอบแยกไม่หมด — ลดขนาดตามจำนวนจุดให้ map ยังพออ่านได้
+  const BUBBLE_R = sectors.length > 300 ? 6 : sectors.length > 150 ? 8 : 10;
   const points = sectors.map(s => {
     const ox = toX(getX(s)), oy = toY(getY(s));
     return {
@@ -2150,6 +2205,7 @@ function drawRotationScatter(sectors, opts = {}) {
     const fmt = v => v != null ? `<span style="color:${v>=0?'#3fb950':'#f85149'};font-weight:600">${v>0?'+':''}${v.toFixed(2)}%</span>` : '<span style="color:#6e7681">—</span>';
     tooltipDiv.innerHTML = `
       <div style="font-weight:700;color:${hit.color};margin-bottom:6px;font-size:13px">${hit.name}</div>
+      ${isRelative ? `<div style="font-size:10px;color:#8b949e;margin:-4px 0 6px">ทุกค่า = ส่วนต่างจากค่าเฉลี่ยกลุ่ม (เทียบกลุ่ม)</div>` : ''}
       <div style="display:grid;grid-template-columns:auto 1fr;gap:1px 12px;font-size:11px;color:#8b949e">
         <span>1M</span>${fmt(hit.ret_1m)}
         <span>3M</span>${fmt(hit.ret_3m)}
@@ -2224,8 +2280,11 @@ function drawRotationScatter(sectors, opts = {}) {
   // (เมาส์/ปากกายังใช้ onmousemove/onclick เดิมทุกอย่างไม่เปลี่ยน)
   // แตะครั้งแรก = โชว์ tooltip ค้างไว้ (preview เหมือน hover), แตะจุดเดิม
   // ซ้ำอีกที = เปิดหน้ารายละเอียด กันเปิดหน้าเพี้ยนทั้งที่แค่อยากดูตัวเลข
+  // assign property (ไม่ใช่ addEventListener) ให้รอบวาดใหม่ทับ handler เก่าเอง —
+  // เดิม listener สะสมทุกรอบวาด closure เก่าถือ points ชุดเก่า แตะทีเดียว
+  // ยิงพร้อมกันหลายตัว เปิดกราฟผิดตัว/ซ้ำหลายรอบบนจอสัมผัสได้
   let _touchPreview = null;
-  canvas.addEventListener('pointerdown', function(e) {
+  canvas.onpointerdown = function(e) {
     if (e.pointerType !== 'touch') return;
     e.preventDefault();
     const r2 = canvas.getBoundingClientRect();
@@ -2245,7 +2304,7 @@ function drawRotationScatter(sectors, opts = {}) {
       _touchPreview = hit.name;
       redraw(hit.name); showTooltip(hit, e);
     }
-  }, { passive: false });
+  };
 }
 
 
@@ -11992,7 +12051,10 @@ async function _rotLoad(mkt) {
   if (!c.getData()) {
     gate.style.display = ''; gate.textContent = `กำลังดึงข้อมูลหุ้น ${c.marketName}...`; body.style.display = 'none';
     try {
-      const d = await (await fetch(c.endpoint)).json();
+      // endpoint อ่าน cache local จึงเร็ว แต่ถ้า server ค้าง fetch เปล่าจะแขวน gate
+      // "กำลังดึงข้อมูล..." ตลอดกาล — ห่อ timeout ให้หลุดมาเห็น error เสมอ
+      const d = await (await _fetchTimeout(c.endpoint, 30000,
+        `หมดเวลารอข้อมูลหุ้น ${c.marketName} (เกิน 30 วิ) — ลองใหม่อีกครั้ง`)).json();
       if (d.error) throw new Error(d.error);
       c.setData(d);
     } catch (e) {
@@ -12038,6 +12100,13 @@ function _rotRender(mkt) {
   if (!valid.length) return;
   const sector = document.getElementById(`${c.prefix}-sector`)?.value || 'ALL';
   const shown = sector === 'ALL' ? valid : valid.filter(s => (s.sector || 'Unknown') === sector);
+  // ปุ่ม "เทียบ Sector" ไม่มีผลตอนยังเลือก "ทุก Sector" (bmSet ถอยไปใช้ทั้งดัชนีเงียบๆ)
+  // — disable พร้อม hint กันปุ่มติด active แต่พฤติกรรมไม่เปลี่ยนแล้วคนงง
+  const bmBtn = document.getElementById(`${c.prefix}-bm-sector`);
+  if (bmBtn) {
+    bmBtn.disabled = sector === 'ALL';
+    bmBtn.title = sector === 'ALL' ? 'เลือก Sector เจาะจงก่อน จึงเทียบค่าเฉลี่ย sector ได้' : '';
+  }
   // benchmark = ค่าเฉลี่ยทั้งดัชนี (ปกติ) หรือค่าเฉลี่ยเฉพาะ sector ที่เลือก (ถ้าสลับโหมด
   // และเลือก sector เจาะจงแล้ว) — ใช้ดูว่าใครแรง/อ่อนกว่า "เพื่อนร่วม sector" แทนทั้งตลาด
   const bmSet = (c.getBenchmark() === 'sector' && sector !== 'ALL') ? shown : valid;
@@ -12054,7 +12123,7 @@ function _rotRender(mkt) {
   if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmLabel} (${bmSet.length} ตัว)` +
     (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
              : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
-  drawRotationScatter(items, { canvasId: c.canvasId, legendId: c.legendId, tf: c.getTf(), onOpen: c.onOpen });
+  drawRotationScatter(items, { canvasId: c.canvasId, legendId: c.legendId, tf: c.getTf(), onOpen: c.onOpen, relative: true });
 }
 
 function setUsRotBenchmark(mode, btn) { _rotSetBenchmark('us', mode, btn); }
@@ -16614,12 +16683,20 @@ function loadDRPage() {
 
 // stale-while-revalidate: server ตอบข้อมูลเก่าทันทีแล้ว rebuild เบื้องหลัง —
 // poll ทุก 30 วิ (สูงสุด ~4 นาที) จนได้ชุดใหม่แล้ววาดตารางซ้ำเงียบๆ
+// ใช้ร่วมกัน 2 หน้า (หน้า DR + แท็บ TH ของ Stock Rotation) — guard กัน start ซ้อน
+// ไม่งั้นเปิดทั้งสองหน้าไล่กันจะยิง /api/dr คู่ขนานทุก 30 วิ
+let _drPollActive = false;
 function _drPollRefresh(attempt) {
-  if (attempt >= 8) return;   // เกินนี้ปล่อย — เปิดหน้าครั้งถัดไปก็ได้ชุดใหม่เอง
+  if (attempt === 0) {
+    if (_drPollActive) return;
+    _drPollActive = true;
+  }
+  if (attempt >= 8) { _drPollActive = false; return; }   // เกินนี้ปล่อย — เปิดหน้าครั้งถัดไปก็ได้ชุดใหม่เอง
   setTimeout(() => {
     _fetchTimeout('/api/dr', 30000).then(r => r.json()).then(d => {
-      if (!d.stocks || !d.stocks.length) return;
+      if (!d.stocks || !d.stocks.length) { _drPollActive = false; return; }
       if (d.refreshing) { _drPollRefresh(attempt + 1); return; }
+      _drPollActive = false;
       _drData = d.stocks;
       _drLoaded = true;
       _mergeFinAnalyticsInto(_drData, s => s.sym, 'dr');
@@ -16630,6 +16707,10 @@ function _drPollRefresh(attempt) {
         _drWarningsHtml(d);
       _updateDRRegionCounts();
       if (document.getElementById('page-dr')?.classList.contains('active')) renderDRTable();
+      // แท็บ TH ของ Stock Rotation ใช้ _drData ชุดเดียวกัน — ปิดป้ายและวาดซ้ำถ้าดูอยู่
+      const rf = document.getElementById('drrot-refreshing');
+      if (rf) rf.style.display = 'none';
+      if (document.getElementById('page-stock-rotation')?.classList.contains('active') && _srMarket === 'TH') renderDRRotation();
     }).catch(() => _drPollRefresh(attempt + 1));
   }, 30000);
 }
