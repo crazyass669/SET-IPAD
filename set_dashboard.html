@@ -140,7 +140,7 @@
 <!-- PAGE: OVERVIEW -->
 <div id="page-overview" class="page active">
   <div class="page-title">Market Overview</div>
-  <div class="page-sub">ภาพรวม SET — กด Refresh เพื่ออัปเดตข้อมูล</div>
+  <div class="page-sub">ภาพรวม SET &amp; mai — กด Refresh เพื่ออัปเดตข้อมูล</div>
 
   <!-- STAT CARDS -->
   <div class="grid-4" id="stat-cards"></div>
@@ -310,7 +310,7 @@
       </div>
       <div style="background:#0d1117;padding:8px;border-radius:6px;border:1px solid var(--border)">
         <div style="color:#58a6ff;font-weight:700;margin-bottom:3px">RS SET</div>
-        rank vs หุ้น 930 ตัว<br>ต้นรอบ: RS ยังไม่สูง<br><span style="color:var(--text2)">แต่ RS Trend ↑ กำลังขึ้น</span>
+        rank vs หุ้น <span id="idx-guide-nstocks">SET</span> ตัว<br>ต้นรอบ: RS ยังไม่สูง<br><span style="color:var(--text2)">แต่ RS Trend ↑ กำลังขึ้น</span>
       </div>
       <div style="background:#0d1117;padding:8px;border-radius:6px;border:1px solid var(--border)">
         <div style="color:var(--green);font-weight:700;margin-bottom:3px">RS Trend ↑</div>
@@ -334,8 +334,8 @@
       <button class="filter-btn" id="idx-sort-btn-ret_3m"  onclick="setIdxSort('ret_3m',this)">3M%</button>
       <button class="filter-btn" id="idx-sort-btn-ret_6m"  onclick="setIdxSort('ret_6m',this)">6M%</button>
       <button class="filter-btn" id="idx-sort-btn-ret_1y"  onclick="setIdxSort('ret_1y',this)">1Y%</button>
-      <button class="filter-btn" id="idx-sort-btn-rs_set"  onclick="event.stopPropagation(); setIdxSort('rs_set',this); showIdxTT('<b>RS SET</b><br>Relative Strength เทียบหุ้น SET 930 ตัว<br>0=อ่อนสุด · 99=แรงสุด<br>≥70 แรง · 40–69 กลาง · &lt;40 อ่อน',event)"
-        onmouseenter="showIdxTT('<b>RS SET</b><br>Relative Strength เทียบหุ้น SET 930 ตัว<br>0=อ่อนสุด · 99=แรงสุด<br>≥70 แรง · 40–69 กลาง · &lt;40 อ่อน',event)" onmouseleave="hideIdxTT()">RS SET</button>
+      <button class="filter-btn" id="idx-sort-btn-rs_set"  onclick="event.stopPropagation(); setIdxSort('rs_set',this); showIdxTT(_rsSetTip('RS SET'),event)"
+        onmouseenter="showIdxTT(_rsSetTip('RS SET'),event)" onmouseleave="hideIdxTT()">RS SET</button>
       <button class="filter-btn" id="idx-sort-btn-mom"     onclick="event.stopPropagation(); setIdxSort('mom',this); showIdxTT('<b>Momentum Score</b><br>สูตร: 1M% − (6M%÷6)<br>วัดว่า momentum ระยะสั้นแรงกว่า long-term avg แค่ไหน<br>ค่าสูง = momentum กำลังเร่ง = สัญญาณต้นรอบ',event)"
         onmouseenter="showIdxTT('<b>Momentum Score</b><br>สูตร: 1M% − (6M%÷6)<br>วัดว่า momentum ระยะสั้นแรงกว่า long-term avg แค่ไหน<br>ค่าสูง = momentum กำลังเร่ง = สัญญาณต้นรอบ',event)" onmouseleave="hideIdxTT()">Momentum</button>
       <span style="border-left:1px solid var(--border);margin:0 4px;height:16px;display:inline-block"></span>
@@ -437,7 +437,7 @@
     <strong>%EMA200</strong> = ภาพใหญ่ (ควรถือหุ้นเยอะแค่ไหน) →
     <strong>NH/NL</strong> = ยืนยัน leadership (ขาขึ้นนี้ของจริงไหม) →
     <strong>McClellan</strong> = จังหวะ (เข้าตอนนี้หรือรอย่อ)<br>
-    จุดแข็ง: ตัวเลขเหล่านี้คำนวณจากหุ้นทั้ง 930 ตัวแบบ equal-weight ในขณะที่ SET Index เป็น cap-weighted —
+    จุดแข็ง: ตัวเลขเหล่านี้คำนวณจากหุ้นทั้ง <span id="bc-universe-n">SET</span> ตัวแบบ equal-weight ในขณะที่ SET Index เป็น cap-weighted —
     ความต่างระหว่างสองภาพนี้คือข้อมูลที่หาไม่ได้จากการดูกราฟดัชนีอย่างเดียว
   </div>
 

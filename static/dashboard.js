@@ -46,8 +46,11 @@ function _wlSave() {
     if (watchlist.length && (changed || watchlist.length !== serverList.length)) _wlSave();
   }).catch(() => {});
 })();
-let stockSort = { key: "rs_score", dir: -1 };
-let sectorSort = { key: "ret_1m", dir: -1 };
+// dir: 1 = มาก→น้อย (descending, ค่าเริ่มต้น) · -1 = น้อย→มาก (ascending) — เหมือน _boSortDir/
+// _momSortDir ของตาราง Breakout/Momentum (ดู renderBreakout/renderMomentum) เดิม dir เริ่มที่ -1
+// ทำให้ตารางเรียงจากน้อยไปมากตั้งแต่เปิดหน้า (RS ต่ำสุดขึ้นก่อน) สวนทางกับลูกศร ↓ ที่โชว์อยู่
+let stockSort = { key: "rs_score", dir: 1 };
+let sectorSort = { key: "ret_1m", dir: 1 };
 let rotView = "sector";
 let rotTimeframe = 'short';  // 'long'=3M/1M, 'short'=1M/1W — default Short
 let sectorView = "sector";
@@ -764,16 +767,20 @@ function stageBadge(stage) {
 }
 
 // ── Market Regime ──────────────────────────────────────────────
+// หมายเหตุ: เดิมใช้ % หุ้น RS≥80 เป็น component (น้ำหนัก 25%) แต่ rs_score เป็น percentile
+// rank ภายใน universe (rank_rs ปัดเป็น 0-99 ตามอันดับ) ทำให้ตาม "นิยาม" แล้วประมาณ 20% ของ
+// หุ้นที่มี RS ถูกต้องเสมอจะมี RS≥80 ไม่ว่าตลาดจะ bull/bear แค่ไหน — แทบไม่แปรผันจริง
+// เปลี่ยนเป็น % หุ้นที่ ret_3m เป็นบวก (magnitude-based เหมือน pctPos1m) ซึ่งแปรตามสภาพตลาดจริง
 function calcMarketRegime(stocks) {
   const n = stocks.length || 1;
   const pct200 = stocks.filter(s => s.above_ema200).length / n * 100;
   const pct50  = stocks.filter(s => s.above_ema50).length  / n * 100;
-  const pctRS80 = stocks.filter(s => (s.rs_score||0) >= 80).length / n * 100;
+  const pctPos3m = stocks.filter(s => (s.ret_3m||0) > 0).length / n * 100;
   const pctPos1m = stocks.filter(s => (s.ret_1m||0) > 0).length / n * 100;
-  const score = Math.round(pct200 * 0.35 + pct50 * 0.25 + pctRS80 * 0.25 + pctPos1m * 0.15);
+  const score = Math.round(pct200 * 0.35 + pct50 * 0.25 + pctPos3m * 0.25 + pctPos1m * 0.15);
   const capped = Math.min(100, score);
   let desc = '';
-  if (pct200 >= 60 && pctRS80 >= 20)    desc = `EMA200: ${pct200.toFixed(0)}% · RS80+: ${pctRS80.toFixed(0)}%`;
+  if (pct200 >= 60 && pctPos3m >= 60)   desc = `EMA200: ${pct200.toFixed(0)}% · 3M เป็นบวก: ${pctPos3m.toFixed(0)}%`;
   else if (pct200 < 40) desc = `ระวัง: เพียง ${pct200.toFixed(0)}% อยู่เหนือ EMA200`;
   else desc = `EMA200: ${pct200.toFixed(0)}% · EMA50: ${pct50.toFixed(0)}%`;
   return { score: capped, desc };
@@ -928,11 +935,15 @@ function fmtValuation(val, type) {
 // ============================================================
 // FEAR & GREED INDEX
 // ============================================================
+// c2 เดิมใช้ % หุ้น RS≥50 — rs_score เป็น percentile rank ภายใน universe เอง (rank_rs)
+// จึงมีหุ้นประมาณครึ่งหนึ่งอยู่ที่ RS≥50 เสมอโดยนิยาม แทบไม่ขยับตามสภาพตลาดจริง (validated:
+// คงที่แถว 47-50% ไม่ว่าตลาดจะเป็นอย่างไร) เปลี่ยนเป็น % หุ้นที่ ret_1w เป็นบวก (breadth
+// ระยะสั้น — magnitude-based เหมือน component อื่นๆ ในชุดนี้ จึงแปรผันตามตลาดจริง)
 function calcFGI(stocks) {
   const n = stocks.length;
   if (!n) return { score: 50, c1: 50, c2: 50, c3: 50, c4: 50, c5: 50 };
   const c1 = stocks.filter(s => s.above_ema50).length / n * 100;
-  const c2 = stocks.filter(s => (s.rs_score || 0) >= 50).length / n * 100;
+  const c2 = stocks.filter(s => (s.ret_1w || 0) > 0).length / n * 100;
   const c3 = stocks.filter(s => s.above_ema200).length / n * 100;
   const c4 = stocks.filter(s => (s.ret_3m || 0) > 0).length / n * 100;
   const w1m = stocks.filter(s => s.ret_1m != null);
@@ -1045,7 +1056,7 @@ function renderOverview() {
         <div style="flex:1;min-width:220px;padding-top:26px">
           <div style="font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Components — 0 = Fear · 100 = Greed</div>
           ${compBarFGI('Market Breadth (% เหนือ EMA50)', fgi.c1)}
-          ${compBarFGI('RS Strength (% หุ้น RS &ge; 50)', fgi.c2)}
+          ${compBarFGI('Short-term Breadth (% หุ้นบวก 1 สัปดาห์)', fgi.c2)}
           ${compBarFGI('Market Breadth (% เหนือ EMA200)', fgi.c3)}
           ${compBarFGI('Positive 3M Momentum', fgi.c4)}
           ${compBarFGI('Avg 1M Return (±15% range)', fgi.c5)}
@@ -1082,7 +1093,9 @@ function renderOverview() {
     {label:"80-89", min:80, max:90,  color:"#5fca7f"},
     {label:"90-99", min:90, max:100, color:"var(--green)"},
   ];
-  const binCounts = bins.map(b => stocks.filter(s => (s.rs_score||0) >= b.min && (s.rs_score||0) < b.max).length);
+  // (s.rs_score||0) เดิมทำหุ้นที่ยังไม่มี rs_score (ineligible/ถูกกันออกจาก RS Rank) ตกไป
+  // นับรวมใน bin "0-19" ทั้งที่ไม่ควรถูกนับเลย — filter ตัว null ออกก่อน
+  const binCounts = bins.map(b => stocks.filter(s => s.rs_score != null && s.rs_score >= b.min && s.rs_score < b.max).length);
   const maxBin = Math.max(...binCounts);
   document.getElementById("rs-dist-bars").innerHTML = bins.map((b,i) => {
     const h = Math.round(binCounts[i]/maxBin*56) + 4;
@@ -2446,7 +2459,7 @@ function setSectorView(v, btn) {
 }
 function sortSectors(key) {
   if (sectorSort.key === key) sectorSort.dir *= -1;
-  else { sectorSort.key = key; sectorSort.dir = -1; }
+  else { sectorSort.key = key; sectorSort.dir = 1; }
   renderSectorTable();
 }
 
@@ -2597,11 +2610,12 @@ function _ensureIdxDataLoaded(onLoaded) {
   _idxDataWaiters.push(onLoaded);
   if (_idxDataLoading) return;
   _idxDataLoading = true;
-  fetch('/api/indices').then(r => r.json()).then(d => {
+  _fetchTimeout('/api/indices').then(r => r.json()).then(d => {
     _idxDataLoading = false;
     if (!d.error) {
       _idxData = d;
       _idxDataWaiters.forEach(fn => fn());
+      renderDqBanner();   // เพิ่งมี _idxData ครั้งแรก — เช็คว่าเก่ากว่าราคาหุ้นไปหรือยัง
     }
     _idxDataWaiters = [];
   }).catch(() => { _idxDataLoading = false; _idxDataWaiters = []; });
@@ -2689,7 +2703,8 @@ function renderSectorTable() {
 // ============================================================
 function sortStocks(key) {
   if (stockSort.key === key) stockSort.dir *= -1;
-  else { stockSort.key = key; stockSort.dir = -1; }
+  // symbol เริ่มจาก ascending (A→Z) เหมือน peerSortBy — คอลัมน์ตัวเลขเริ่มจาก descending (มากสุดก่อน)
+  else { stockSort.key = key; stockSort.dir = key === 'symbol' ? -1 : 1; }
   // อัปเดต header indicator
   const headers = {
     rs_score:'sh-rs', symbol:'sh-sym', price:'sh-px',
@@ -2700,7 +2715,7 @@ function sortStocks(key) {
   };
   document.querySelectorAll('#tbl-stocks th[id] .sort-ind').forEach(ind => {
     const th = ind.closest('th');
-    ind.textContent = headers[stockSort.key] === th.id ? (stockSort.dir === -1 ? '↓' : '↑') : '↕';
+    ind.textContent = headers[stockSort.key] === th.id ? (stockSort.dir === 1 ? '↓' : '↑') : '↕';
   });
   renderStocksTable();
 }
@@ -2838,14 +2853,15 @@ function renderStocksTable() {
     const av = a[stockSort.key], bv = b[stockSort.key];
     if (av == null && bv == null) return 0;
     if (av == null) return 1; if (bv == null) return -1;
-    if (typeof av === 'string') return av.localeCompare(bv) * stockSort.dir;
+    // สลับ operand (bv.localeCompare(av) ไม่ใช่ av.localeCompare(bv)) ให้ dir=1 หมายถึง
+    // descending เสมอทั้งสอง type — เดิม string ใช้ dir ตรงข้ามความหมายกับตัวเลข
+    if (typeof av === 'string') return bv.localeCompare(av) * stockSort.dir;
     return (bv - av) * stockSort.dir;
   });
 
   document.getElementById("stocks-count").textContent = `แสดง ${stocks.length} จาก ${DATA.total} ตัว`;
 
   // แสดงทีละ 100 แบบ lazy load
-  let stockPage = 1;
   const PAGE_SIZE = 100;
 
   window._currentStockList = stocks;
@@ -2888,7 +2904,6 @@ function renderStocksTable() {
     }
   }
 
-  window._currentStockList = stocks;
   window._stockPage = 1;
   renderStockRows(stocks, 1);
 
@@ -4328,9 +4343,10 @@ function startHedgeFetchMissing() {
 // ในดัชนีจริงถ่วงน้ำหนัก market cap ของ SET (indices_cache.json) — ใช้ override ret_1d/1w/1m/3m/1y
 // ในตาราง Sectors & Industries แทนค่าเฉลี่ยหุ้นรายตัวแบบไม่ถ่วงน้ำหนัก (summarize_groups)
 // เพราะสองค่านี้คำนวณคนละสูตร ต่างกันได้มากถ้ากลุ่มมีหุ้นเล็ก outlier (ดู PLAN/บทสนทนา 2026-07-28)
-// "Industrial"/"Industrials" เป็นชื่อ industry group ที่ปนกันอยู่ในข้อมูลหุ้น (data quality
-// ไม่ตรงกัน) เลย map ทั้งคู่ไปที่ ^INDUS.BK ตัวเดียว — ไม่มี entry สำหรับ "Mining" เพราะ
-// summarize_groups ไม่เคยสร้างกลุ่มนี้ขึ้นมา (ไม่มีหุ้นในกลุ่มนี้ในข้อมูลปัจจุบัน)
+// mai ใช้ industry field ต่อ " -mai" เหมือน sector แล้ว (แก้ที่ set_data_fetcher.py) —
+// "Industrial" (มai, ไม่มี suffix) เคยชนกับ SET "Industrials" ปนข้อมูลกัน ตอนนี้แยกกันแล้ว
+// ไม่มี entry สำหรับ "Mining" เพราะ summarize_groups ไม่เคยสร้างกลุ่มนี้ขึ้นมา (หุ้นตัวสุดท้าย
+// ใน sector นี้ถูกเพิกถอนไปแล้ว — ^MINE.BK ก็ตัดออกจาก INDEX_INFO ด้วยเหตุผลเดียวกัน)
 const SECTOR_NAME_TO_IDX_SYM = {
   // sectors (mainboard)
   "Agribusiness":                          "^AGRI.BK",
@@ -4364,7 +4380,6 @@ const SECTOR_NAME_TO_IDX_SYM = {
   "Agro & Food Industry":                  "^AGRO.BK",
   "Consumer Products":                     "^CONSUMP.BK",
   "Financials":                            "^FINCIAL.BK",
-  "Industrial":                            "^INDUS.BK",
   "Industrials":                           "^INDUS.BK",
   "Property & Construction":               "^PROPCON.BK",
   "Resources":                             "^RESOURC.BK",
@@ -5426,6 +5441,19 @@ function renderDqBanner() {
   if (DATA.data_as_of) {
     const gap = Math.round((Date.now() - new Date(DATA.data_as_of).getTime()) / 86400000);
     if (gap > 5) msgs.push(`⚠️ ข้อมูลอาจไม่เป็นปัจจุบัน — ราคาล่าสุดคือวันที่ <b>${DATA.data_as_of}</b> (${gap} วันก่อน) ลองกด Quick Update`);
+  }
+
+  // D3: indices_cache (ดัชนีกลุ่มอุตสาหกรรม SET/mai) เก่ากว่าราคาหุ้นมาก — ใช้คำนวณ
+  // ret_1d/1w/1m/.../rs_set ของ sector/industry override (_sectorWithIdxOverride) และหน้า
+  // "ดัชนีกลุ่มอุตสาหกรรม" เอง ถ้าห่างกันมากตัวเลขที่โชว์จะไม่ตรงกับราคาหุ้นปัจจุบัน — เช็คแค่
+  // ตอนที่ _idxData โหลดแล้ว (ไม่บังคับ fetch เพิ่มแค่เพื่อเช็ค banner นี้)
+  if (_idxData && DATA.data_as_of) {
+    const idxSample = Object.values(_idxData)[0];
+    const idxDate = idxSample?.updated_at?.slice(0, 10);
+    if (idxDate) {
+      const gapIdx = Math.round((new Date(DATA.data_as_of).getTime() - new Date(idxDate).getTime()) / 86400000);
+      if (gapIdx > 3) msgs.push(`⚠️ ข้อมูลดัชนีกลุ่มอุตสาหกรรม (Sector/Industry Index) เก่ากว่าราคาหุ้น ${gapIdx} วัน (อัปเดตล่าสุด <b>${idxDate}</b>) — ตัวเลข return/RS ของ sector อาจไม่ตรงกับราคาปัจจุบัน ลองกด "อัปเดตดัชนี" ในหน้าดัชนีกลุ่มอุตสาหกรรม`);
+    }
   }
 
   // D1: สรุปหุ้นที่ถูกกันออกจาก RS Rank
@@ -7057,6 +7085,9 @@ function setPeerMarket(mkt, btn) {
   const sel = document.getElementById('peer-sector-select');
   if (sel) { sel.innerHTML = '<option value="">— เลือก Sector ตรง ๆ —</option>'; sel.dataset.built = ''; }
   document.getElementById('peer-meta').textContent = '';
+  // สลับตลาดต้องล้างผลลัพธ์ค้างของตลาดก่อนหน้าด้วย ไม่งั้นกด preset/view mode ก่อนค้นหุ้นใหม่
+  // จะ render ตารางตลาดเก่ากลับมาแสดงทั้งที่แท็บสลับไปแล้ว (renderPeerResults ยึด _peerRows เดิม)
+  _peerRows = []; _peerMedian = null; _peerMeta = null; _peerSort = null;
   _peerDestroyScatterChart();
   document.getElementById('peer-results').innerHTML = '<div class="empty">พิมพ์ชื่อหุ้นหรือเลือก Sector เพื่อเริ่มเทียบ</div>';
   _peerBuildDatalist();
@@ -7081,12 +7112,18 @@ async function _peerBuildDatalist() {
   const dataVar = _peerMarket === 'US' ? '_usData' : _peerMarket === 'HK' ? '_hkData' : '_jpData';
   const metricsUrl = _peerMarket === 'US' ? '/api/us-index-metrics'
     : _peerMarket === 'HK' ? '/api/hk-index-metrics' : '/api/jp-index-metrics';
+  let justLoaded = false;
   if (!window[dataVar]) {
     try {
       const d = await (await fetch(metricsUrl)).json();
       if (_peerMarket === 'US') _usData = d; else if (_peerMarket === 'HK') _hkData = d; else _jpData = d;
+      justLoaded = true;
     } catch { return; }
   }
+  // sector select ถูกเรียกคู่กันตอนเปิดหน้า/สลับแท็บ แต่ตอนนั้น window[dataVar] ยังไม่มา (async
+  // ด้านบน) เลยออกจากฟังก์ชันไปเปล่าๆ — ถ้าเพิ่งโหลดเสร็จรอบนี้ต้อง rebuild sector select เอง
+  // ไม่งั้น dropdown ค้างว่างจนกว่าจะสลับแท็บไปมา
+  if (justLoaded) _peerBuildSectorSelect();
   const stocks = window[dataVar]?.stocks || [];
   const mirror = (await _loadMirrorSymbols())[_peerMarket] || [];
   const key = _peerMarket + ':' + stocks.length + ':' + mirror.length;
@@ -7150,8 +7187,29 @@ function setPeerViewMode(mode, btn) {
 }
 
 function renderPeerResults() {
+  _peerRenderMeta();
   if (_peerViewMode === 'scatter') renderPeerScatter();
   else renderPeerTable();
+}
+
+// meta บนสุด (จำนวนหุ้น/กลุ่ม/ลิงก์ขยาย industry/หมายเหตุ on-demand) ใช้ร่วมกันทั้งมุมมองตาราง
+// และ scatter — เดิมอยู่ใน renderPeerTable อย่างเดียว ทำให้ถ้าเปิดมุมมอง scatter ค้างไว้ตอน
+// ค้นหุ้นใหม่ (renderPeerResults ข้าม renderPeerTable ไปเลย) แถบ meta จะว่างเปล่าตลอด
+function _peerRenderMeta() {
+  const meta = document.getElementById('peer-meta');
+  if (!meta || !_peerMeta) return;
+  const rows = _peerRows;
+  // widen ทำได้เฉพาะตลาด TH เท่านั้น — US/HK/JP มีแค่ sector ชั้นเดียว (ดู comment ใน
+  // /api/peer-compare) ก่อนหน้านี้ลิงก์นี้โผล่ในตลาดอื่นด้วยทั้งที่กดแล้วไม่มีผลอะไรเลย
+  const canWiden = _peerMeta.market === 'TH' && !_peerMeta.widened && _peerMeta.level === 'sector' && rows.length < 8;
+  const ondemandNote = _peerMeta.ondemand_note
+    ? `<div style="font-size:11px;color:#d29922;margin-bottom:6px">⚠ ${_peerMeta.ondemand_note}</div>` : '';
+  const drNote = _peerMeta.dr_symbol
+    ? `<div style="font-size:11px;color:var(--text2);margin-bottom:6px">ℹ DR "${_peerMeta.dr_symbol}" อ้างอิงหุ้น underlying "${_peerMeta.base_symbol}" (ตลาด ${_peerMeta.market}) — กลุ่มเพื่อนด้านล่างคือเพื่อนของ underlying</div>` : '';
+  meta.innerHTML = ondemandNote + drNote +
+    `พบ ${rows.length} หุ้น ใน ${_peerMeta.level === 'industry' ? 'Industry' : 'Sector'} "<b>${_peerMeta.group}</b>"` +
+    (_peerMeta.computed_at ? ` · คำนวณเมื่อ ${_peerMeta.computed_at}` : '') +
+    (canWiden ? ` &nbsp;<a href="#" onclick="_peerWiden();return false" style="color:var(--blue)">ขยับไปดูระดับ Industry (กลุ่มใหญ่ขึ้น)</a>` : '');
 }
 
 function loadPeerCompare(symArg, marketOverride) {
@@ -7188,7 +7246,9 @@ async function _peerFetch(url) {
   box.innerHTML = '<div class="empty">กำลังโหลด...</div>';
   meta.textContent = '';
   try {
-    const r = await fetch(url);
+    // หุ้น mirror นอกดัชนีหลัก (US/HK) ต้อง fetch sector สดจาก Yahoo ก่อนตอบ (ดู
+    // fetch_header ใน app.py) — ใช้ timeout เดียวกับ tearsheet กันหน้าค้าง "กำลังโหลด..." ไม่รู้จบ
+    const r = await _fetchTimeout(url, 35000, 'โหลดข้อมูลกลุ่มนี้ช้าเกินไป (เกิน 35 วิ) — ลองใหม่อีกครั้ง');
     const d = await r.json();
     if (!d.rows || !d.rows.length) {
       box.innerHTML = `<div class="empty">${(d.meta && d.meta.note) || 'ไม่พบข้อมูลกลุ่มนี้'}</div>`;
@@ -7243,12 +7303,6 @@ function renderPeerTable() {
 
   const widenNote = (_peerMeta && _peerMeta.widened)
     ? `<div style="font-size:11px;color:#d29922;margin-bottom:6px">⚠ sector เดิมมีสมาชิกน้อยกว่า 4 ตัว — ขยับไปเทียบระดับ industry "${_peerMeta.group}" แทนอัตโนมัติ</div>` : '';
-  const canWiden = _peerMeta && !_peerMeta.widened && _peerMeta.level === 'sector' && rows.length < 8;
-
-  document.getElementById('peer-meta').innerHTML =
-    `พบ ${rows.length} หุ้น ใน ${_peerMeta.level === 'industry' ? 'Industry' : 'Sector'} "<b>${_peerMeta.group}</b>"` +
-    (_peerMeta.computed_at ? ` · คำนวณเมื่อ ${_peerMeta.computed_at}` : '') +
-    (canWiden ? ` &nbsp;<a href="#" onclick="_peerWiden();return false" style="color:var(--blue)">ขยับไปดูระดับ Industry (กลุ่มใหญ่ขึ้น)</a>` : '');
 
   const finNote = rows.some(r => r.is_financial_sector)
     ? '<div style="font-size:11px;color:var(--text2);margin-bottom:6px">ℹ กลุ่มนี้มีหุ้นสถาบันการเงิน — Z-Score/margin บางตัวตีความต่างจากกลุ่มอื่น เทียบตรง ๆ ระวัง</div>' : '';
@@ -7406,6 +7460,15 @@ function renderPeerScatter() {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      onClick: (evt, elements) => {
+        // คลิกจุดใน scatter เปิดกราฟหุ้นตัวนั้นได้เหมือนคลิกชื่อหุ้นในมุมมองตาราง
+        if (!elements.length) return;
+        const p = pts[elements[0].index];
+        if (p) closePeerAndOpenChart(p.symbol);
+      },
+      onHover: (evt, elements) => {
+        evt.native.target.style.cursor = elements.length ? 'pointer' : 'default';
+      },
       plugins: {
         legend: { display: false },
         tooltip: {
@@ -7429,6 +7492,7 @@ function renderPeerScatter() {
 function closePeerAndOpenChart(sym) {
   if (_peerMarket === 'US') openUsChartModal(sym);
   else if (_peerMarket === 'HK') openHkChartModal(sym);
+  else if (_peerMarket === 'JP') openJpChartModal(sym);
   else openChartModal(sym);
 }
 
@@ -8979,6 +9043,8 @@ function drawBreadthCharts() {
   const d = _breadthData;
   if (!d) return;
   const n = d.dates.length;
+  const bcUnivEl = document.getElementById('bc-universe-n');
+  if (bcUnivEl && DATA?.stocks?.length) bcUnivEl.textContent = DATA.stocks.length;
 
   // 1) % above EMA50/200
   let c = _bcSetup('bc-ema');
@@ -10778,7 +10844,7 @@ const IDX_TO_SECTOR = {
   "^AGRO.BK":      ["Agro & Food Industry"],
   "^CONSUMP.BK":   ["Consumer Products"],
   "^FINCIAL.BK":   ["Financials"],
-  "^INDUS.BK":     ["Industrials", "Industrial"],
+  "^INDUS.BK":     ["Industrials"],
   "^PROPCON.BK":   ["Property & Construction"],
   "^RESOURC.BK":   ["Resources"],
   "^SERVICE.BK":   ["Services"],
@@ -17197,6 +17263,12 @@ function showIdxTT(html, e) {
   if (!tt) return;
   tt.innerHTML = html; tt.style.display = 'block'; _moveIdxTT(e);
 }
+// จำนวนหุ้นในตัวหาร RS เปลี่ยนได้ทุกรอบ Refresh (เข้าใหม่/ถูกถอด) — ดึงจาก DATA สดแทน
+// hardcode ตัวเลขในข้อความ tooltip ที่จะค้างผิดทันทีที่ universe เปลี่ยน
+function _rsSetTip(label) {
+  const n = DATA?.stocks?.length ?? '—';
+  return `<b>${label}</b><br>Relative Strength เทียบหุ้น SET ${n} ตัว<br>0=อ่อนสุด · 99=แรงสุด<br>≥70 แรง · 40–69 กลาง · &lt;40 อ่อน`;
+}
 function hideIdxTT() {
   const tt = document.getElementById('idx-tt');
   if (tt) tt.style.display = 'none';
@@ -17244,6 +17316,8 @@ function toggleIdxGuide() {
   const open = box.style.display === 'none';
   box.style.display = open ? '' : 'none';
   btn.style.background = open ? '#1f6feb44' : '#1f6feb22';
+  const nEl = document.getElementById('idx-guide-nstocks');
+  if (nEl && DATA?.stocks?.length) nEl.textContent = DATA.stocks.length;
 }
 
 async function loadIndicesPage() {
@@ -17251,7 +17325,7 @@ async function loadIndicesPage() {
   const grid = document.getElementById('idx-grid');
   grid.innerHTML = '<div style="color:var(--text2);padding:20px">กำลังโหลดข้อมูลดัชนี...</div>';
   try {
-    const res = await fetch('/api/indices?t=' + Date.now());
+    const res = await _fetchTimeout('/api/indices?t=' + Date.now());
     const d   = await res.json();
     if (d.error) {
       grid.innerHTML = `<div style="padding:20px">
@@ -17396,12 +17470,14 @@ function renderIdxGrid() {
   let items = Object.values(_idxData);
   if (_idxGroup !== 'ALL') items = items.filter(x => x.group === _idxGroup);
 
-  // คำนวณ Momentum Score = ret_1m − (ret_6m ÷ 6)
+  // คำนวณ Momentum Score = ret_1m − (ret_6m ÷ 6) — ถ้าไม่มี ret_6m (ดัชนีประวัติสั้น) เดิม
+  // fallback เป็น ret_1m เต็มๆ ซึ่งไม่ใช่ momentum score จริง (ไม่ได้หักส่วน long-term avg
+  // ออก) ทำให้ค่าเว่อร์กว่าดัชนีอื่นที่คำนวณสูตรเต็มได้ — คืน null (โชว์ "—") ปลอดภัยกว่า
   items = items.map(i => ({
     ...i,
     mom: (i.ret_1m != null && i.ret_6m != null)
       ? +((i.ret_1m - i.ret_6m / 6).toFixed(2))
-      : (i.ret_1m != null ? i.ret_1m : null)
+      : null
   }));
 
   // Filter กลับตัว
@@ -17507,8 +17583,8 @@ function renderIdxGrid() {
             <div class="idx-ret-lbl">Momentum</div>
             ${momBar(idx.mom)}
           </div>
-          <div onmouseenter="showIdxTT('<b>RS (vs SET)</b><br>Relative Strength เทียบหุ้น SET 930 ตัว<br>0=อ่อนสุด · 99=แรงสุด<br>≥70 แรง · 40–69 กลาง · &lt;40 อ่อน',event)" onmouseleave="hideIdxTT()"
-            onclick="event.stopPropagation(); showIdxTT('<b>RS (vs SET)</b><br>Relative Strength เทียบหุ้น SET 930 ตัว<br>0=อ่อนสุด · 99=แรงสุด<br>≥70 แรง · 40–69 กลาง · &lt;40 อ่อน',event)">
+          <div onmouseenter="showIdxTT(_rsSetTip('RS (vs SET)'),event)" onmouseleave="hideIdxTT()"
+            onclick="event.stopPropagation(); showIdxTT(_rsSetTip('RS (vs SET)'),event)">
             <div class="idx-ret-lbl">RS SET</div>
             ${rsBar2(idx.rs_set)}
           </div>

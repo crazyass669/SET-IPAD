@@ -168,6 +168,12 @@ def load_set_symbols(base_dir=None):
         clean_sector   = sector   if sector   not in _blank else None
         if clean_sector is None:
             clean_sector = (clean_industry + " -mai") if market == "mai" else "Unknown"
+        # mai ใช้ชื่อ industry group เดียวกับ SET (เช่น "Technology" ทั้งคู่ ยกเว้น
+        # "Industrial"/"Industrials" ที่ต่างกันโดยบังเอิญ) — ถ้าไม่ต่อ "-mai" เหมือน sector
+        # ด้านบน หุ้น mai จะถูกนับรวมเข้ากลุ่ม industry ระดับ SET (ที่มีดัชนี ^XXX.BK ของตัวเอง
+        # ซึ่งไม่รวมหุ้น mai จริง) ทำให้ count/return ของกลุ่ม industry เพี้ยนทั้งสองฝั่ง
+        if market == "mai":
+            clean_industry = clean_industry + " -mai"
         symbols.append({
             "symbol":   sym,
             "ticker":   f"{sym}.BK",

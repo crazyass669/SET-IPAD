@@ -41,7 +41,9 @@ INDEX_INFO = {
     "^PFREIT.BK":   {"name": "กองทุนอสังหาฯ/REIT",         "group": "SET_SECTORS"},
     "^CONS.BK":     {"name": "รับเหมาก่อสร้าง",            "group": "SET_SECTORS"},
     "^ENERG.BK":    {"name": "พลังงาน",                     "group": "SET_SECTORS"},
-    "^MINE.BK":     {"name": "เหมืองแร่",                   "group": "SET_SECTORS"},
+    # ^MINE.BK (เหมืองแร่) ตัดออก — หุ้นตัวสุดท้ายใน sector นี้ถูกเพิกถอนไปแล้ว
+    # ตั้งแต่ พ.ค. 2023 (ไม่มีหุ้นเหลือใน universe ปัจจุบันเลย) ราคาดัชนีค้างไม่ขยับ
+    # ทำให้ 1D/1M/1Y% ที่โชว์ดูเหมือนข้อมูลสดทั้งที่จริงหยุดคำนวณไปแล้ว
     "^COMM.BK":     {"name": "สื่อและโฆษณา",                "group": "SET_SECTORS"},
     "^HELTH.BK":    {"name": "สุขภาพ",                      "group": "SET_SECTORS"},
     "^MEDIA.BK":    {"name": "สื่อ",                        "group": "SET_SECTORS"},

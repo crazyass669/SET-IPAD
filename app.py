@@ -2904,9 +2904,23 @@ def peer_compare():
     base = th_map.get(symbol) if symbol else None
     if sector_q:
         group_key = sector_q
+        if level == "industry":
+            # ปุ่ม "ขยับไปดู Industry" ตอนไม่มีหุ้นตั้งต้น (_peerWiden ส่ง sector เดิม + level=
+            # industry ตรงๆ) — sector_q ยังเป็นชื่อ sector ต้องหา industry จากสมาชิกกลุ่มนั้น
+            # ก่อน ไม่งั้นจะเอาไปเทียบกับ field 'industry' ตรงๆ แล้วไม่เจอสมาชิกเลย (ดู
+            # auto-widen ด้านล่างที่ทำแบบเดียวกันสำหรับกรณี sector เริ่มต้นสมาชิกน้อยไป)
+            sample = next((s for s in th_map.values() if s.get("sector") == sector_q), None)
+            ind = sample.get("industry") if sample else None
+            if ind:
+                group_key = ind
+            else:
+                level = "sector"
     elif base:
         group_key = base.get(level) or base.get("sector")
         level = level if base.get(level) else "sector"
+    elif symbol:
+        return jsonify({"rows": [], "median": None, "count": 0,
+                        "meta": {"note": f"ไม่พบหุ้น {symbol} ในตลาด {mkt}"}})
     else:
         return jsonify({"rows": [], "median": None, "count": 0,
                         "meta": {"note": "ต้องระบุ symbol หรือ sector"}})
@@ -4039,7 +4053,12 @@ def _compute_idx_rs(result: dict):
             hist   = entry.get("rs_history", [])
 
             if len(closes) >= 252 and len(hist) < 8:
-                # คำนวณ rs_raw ทุก 5 วันทำการ ย้อนหลัง 52 สัปดาห์
+                # คำนวณ rs_raw ทุก 5 วันทำการ ย้อนหลัง 52 สัปดาห์ แล้ว rank เทียบ stock_raws
+                # (percentile ของวันนี้) แบบเดียวกับ rs_val ด้านบน — เดิม normalize แบบ
+                # min-max ภายใน range ของดัชนีตัวเอง (0-99 เทียบกับปีที่ผ่านมาของตัวมันเอง)
+                # ทำให้สเกลของ backfill "rs" ไม่ตรงกับ rs_val ที่ append รายวัน (percentile
+                # เทียบหุ้นทั้งตลาด) — RS Trend arrow เทียบข้ามสเกลกันจึงผิดเพี้ยนจนกว่าข้อมูล
+                # สะสมจริงจะไล่ backfill ออกจากหน้าต่าง 4 สัปดาห์ที่ใช้เทียบ
                 weekly = []
                 step = 5
                 for i in range(0, min(52 * step, len(closes) - 252), step):
@@ -4050,17 +4069,12 @@ def _compute_idx_rs(result: dict):
                     def _ret(n, _c=c):
                         return (_c[-1] - _c[-(n+1)]) / _c[-(n+1)] * 100 if len(_c) > n and _c[-(n+1)] else None
                     rr = calc_rs_raw(_ret(21), _ret(63), _ret(126), _ret(250))
-                    if rr is not None:
-                        weekly.append({"date": dates[pos], "raw": rr})
+                    if rr is not None and ns > 0:
+                        rank = bisect.bisect_left(stock_raws, rr)
+                        weekly.append({"date": dates[pos], "rs": int(round(rank / ns * 99))})
                 if weekly:
                     weekly.reverse()  # เรียงตามเวลา oldest → newest
-                    raws = [e["raw"] for e in weekly]
-                    mn, mx = min(raws), max(raws)
-                    rng = mx - mn or 1
-                    # normalize เป็น 0–99 ภายใน range ของดัชนีนั้น
-                    hist = [{"date": e["date"],
-                             "rs": int(round((e["raw"] - mn) / rng * 99))}
-                            for e in weekly]
+                    hist = weekly
 
             # เพิ่ม entry วันนี้ / เขียนทับถ้าเป็นวันเดียวกับที่มีอยู่แล้ว (closes ย้อนหลังที่
             # ใช้คำนวณ rs_raw อาจถูก TradingView แก้ไขระหว่างวัน — เดิม append-only เลยค้าง
