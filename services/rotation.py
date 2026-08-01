@@ -16,12 +16,15 @@ state เก็บใน rotation_state.json (ไฟล์เล็ก ~30KB) �
 """
 import json
 import os
+from datetime import date
 
 from core.store import _atomic_write_json
 
 STATE_FILE    = "rotation_state.json"
 CONFIRM_DAYS  = 3      # ต้องอยู่ quadrant ใหม่กี่วันทำการติดกันถึงยืนยัน
 DEAD_ZONE_PCT = 0.3    # |ret| ต่ำกว่านี้ = วันไม่มีสัญญาณ
+PENDING_STALE_DAYS = 10  # ปฏิทินวัน — pending ที่ไม่ขยับ (ค้างใน dead zone) เกินนี้ไม่โชว์
+                         # กัน UI ค้างป้าย "⏳ x/3 วัน" ทั้งที่ไม่มีความเคลื่อนไหวจริงมาสัปดาห์
 
 # ชุดสัญญาณเร็ว: แกน x=1M, y=1W — เห็น rotation เร็วกว่าชุดหลัก (3M/1M) ได้เป็นสัปดาห์
 # แต่ 1W แกว่ง ±2-3%/สัปดาห์เป็นปกติ noise สูงกว่ามาก จึงใช้ dead zone กว้างขึ้น
@@ -86,6 +89,37 @@ def load_state(base_dir):
         return {"last_processed": None, "groups": {}, "transitions": []}
 
 
+def pending_of(groups, today=None):
+    """groups (state["groups"]/["groups_fast"]) -> list ของ quadrant ที่กำลังนับยืนยัน
+    ตัด entry ที่เงียบมานาน (ค้างใน dead zone ไม่ขยับ) เกิน PENDING_STALE_DAYS ทิ้ง —
+    ไม่งั้น UI จะโชว์ "⏳ 2/3 วัน" ค้างเป็นสัปดาห์ทั้งที่ไม่มีสัญญาณต่อแล้ว"""
+    today_d = None
+    if today:
+        try:
+            today_d = date.fromisoformat(today)
+        except Exception:
+            today_d = None
+    pending = []
+    for key, e in groups.items():
+        p = e.get("pending")
+        if not p:
+            continue
+        if today_d is not None:
+            try:
+                gap = (today_d - date.fromisoformat(p["last_date"])).days
+                if gap > PENDING_STALE_DAYS:
+                    continue
+            except Exception:
+                pass
+        gtype, name = key.split(":", 1)
+        pending.append({"type": gtype, "name": name,
+                        "from": e.get("confirmed"), "to": p["quadrant"],
+                        "days": p["days"], "need": CONFIRM_DAYS,
+                        "since": p["first_date"], "last_date": p["last_date"]})
+    pending.sort(key=lambda x: -x["days"])
+    return pending
+
+
 def update_rotation_state(base_dir, data_as_of, sectors, industries):
     """เรียกหลัง summarize_groups ทุกครั้งที่ข้อมูลอัปเดต (Quick/Full refresh)
     เดิน state machine เฉพาะเมื่อ data_as_of ใหม่กว่าที่ประมวลผลไปแล้ว
@@ -107,9 +141,11 @@ def update_rotation_state(base_dir, data_as_of, sectors, industries):
     for groups_key, trans_key, quad_fn, tag in configs:
         state.setdefault(groups_key, {})   # state เก่าก่อนมีชุดเร็ว — seed เงียบรอบแรก
         state.setdefault(trans_key, [])
+        current_keys = set()
         for gtype, groups in (("sector", sectors or []), ("industry", industries or [])):
             for g in groups:
                 key  = f"{gtype}:{g['name']}"
+                current_keys.add(key)
                 quad = quad_fn(g)
                 entry, trans = _advance(state[groups_key].get(key), quad, data_as_of)
                 if entry is not None:
@@ -119,6 +155,11 @@ def update_rotation_state(base_dir, data_as_of, sectors, industries):
                     state[trans_key].insert(0, trans)
                     print(f"[Rotation{tag}] {gtype} '{g['name']}': "
                           f"{trans['from']} -> {trans['to']} (ยืนยัน {CONFIRM_DAYS} วัน)")
+        # ลบ key ที่ไม่อยู่ในรอบนี้แล้ว (sector/industry ถูกเปลี่ยนชื่อ/ยุบทิ้ง)
+        # กันสถานะค้างใน state ไปตลอดกาลโดยไม่มีทางถูกอัปเดต/ล้าง
+        for stale_key in list(state[groups_key].keys()):
+            if stale_key not in current_keys:
+                del state[groups_key][stale_key]
         state[trans_key] = state[trans_key][:50]
 
     state["last_processed"] = data_as_of

@@ -5799,28 +5799,16 @@ def backtest_report():
 def rotation_alerts():
     """Quadrant-change alerts ของ Rotation map — อ่านจาก rotation_state.json
     ส่งทั้งชุดหลัก (3M/1M) และชุดสัญญาณเร็ว (1M/1W, dead zone กว้างกว่า)"""
-    from services.rotation import load_state, CONFIRM_DAYS, DEAD_ZONE_PCT, FAST_DEAD_ZONE_PCT
+    from services.rotation import load_state, pending_of, CONFIRM_DAYS, DEAD_ZONE_PCT, FAST_DEAD_ZONE_PCT
     state = load_state(BASE_DIR)
-
-    def _pending_of(groups):
-        pending = []
-        for key, e in groups.items():
-            p = e.get("pending")
-            if p:
-                gtype, name = key.split(":", 1)
-                pending.append({"type": gtype, "name": name,
-                                "from": e.get("confirmed"), "to": p["quadrant"],
-                                "days": p["days"], "need": CONFIRM_DAYS,
-                                "since": p["first_date"]})
-        pending.sort(key=lambda x: -x["days"])
-        return pending
+    today = state.get("last_processed")
 
     return jsonify({
         "transitions":      state.get("transitions", [])[:20],
-        "pending":          _pending_of(state.get("groups", {})),
+        "pending":          pending_of(state.get("groups", {}), today),
         "transitions_fast": state.get("transitions_fast", [])[:20],
-        "pending_fast":     _pending_of(state.get("groups_fast", {})),
-        "last_processed":   state.get("last_processed"),
+        "pending_fast":     pending_of(state.get("groups_fast", {}), today),
+        "last_processed":   today,
         "rules": {"confirm_days": CONFIRM_DAYS, "dead_zone_pct": DEAD_ZONE_PCT,
                   "axes": "x=ret_3m, y=ret_1m"},
         "rules_fast": {"confirm_days": CONFIRM_DAYS, "dead_zone_pct": FAST_DEAD_ZONE_PCT,

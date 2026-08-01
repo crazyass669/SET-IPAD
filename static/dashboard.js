@@ -1191,7 +1191,7 @@ async function renderRotAlerts() {
   if (!el) return;
   try {
     if (!_rotAlertsData) {
-      const r = await fetch('/api/rotation-alerts');
+      const r = await _fetchTimeout('/api/rotation-alerts', 15000);
       _rotAlertsData = await r.json();
     }
     const d = _rotAlertsData;
@@ -1216,6 +1216,7 @@ async function renderRotAlerts() {
          ⏳ <b style="color:var(--text)">${p.name}</b>
          <span style="font-size:10px">(${p.type})</span>
          กำลังเข้า ${_quadSpan(p.to)} — ยืนยันแล้ว ${p.days}/${p.need} วัน
+         <span style="font-size:10px">· ล่าสุด ${p.last_date || p.since}</span>
        </div>`;
     const transHtml = trans.map(transRow).join('');
     const pendHtml  = pending.map(pendRow).join('');
@@ -1246,6 +1247,7 @@ async function renderRotAlerts() {
     el.innerHTML =
       `<div class="card" style="padding:10px 16px;font-size:12px">
          <div style="font-weight:700;margin-bottom:4px">🔔 Quadrant Changes
+           <span style="font-size:9px;font-weight:600;color:#58a6ff;background:rgba(88,166,255,0.12);border:1px solid rgba(88,166,255,0.35);border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:middle">แกน Long (3M/1M)</span>
            <span class="scr-tip-icon" style="font-size:10px;width:15px;height:15px;margin-left:6px;vertical-align:middle">?<div class="scr-tip-box" style="width:280px">
              นับจากแกน Long (X=3M%, Y=1M%) — ต้องอยู่ quadrant ใหม่ครบ
              <b>${d.rules?.confirm_days ?? 3} วันทำการติดต่อกัน</b>ถึงยืนยัน
@@ -1426,14 +1428,18 @@ function renderRotTab(tab) {
 }
 
 let _multiSortKey = 'ret_1w';
+let _multiSortDir = 1; // 1 = desc, -1 = asc
 
 function renderRotMulti(sortKey) {
-  if (sortKey) _multiSortKey = sortKey;
+  if (sortKey) {
+    if (_multiSortKey === sortKey) _multiSortDir *= -1;
+    else { _multiSortKey = sortKey; _multiSortDir = 1; }
+  }
   _ensureIdxDataLoaded(renderRotMulti);
   // ret_1d/1w/1m/3m/6m/1y ใช้ดัชนีถ่วงน้ำหนักจริงถ้ามี (ตารางนี้เป็นแค่มุมมองแสดงผล — คนละจุด
   // กับแกน X/Y ของ Scatter Plot/Momentum Playbook ที่ยังตั้งใจใช้ค่าเฉลี่ยหุ้นเดิมอยู่)
   const data = (rotView === 'sector' ? DATA.sectors : DATA.industries).map(_sectorWithIdxOverride);
-  const sorted = [...data].sort((a,b) => (b[_multiSortKey]||0)-(a[_multiSortKey]||0));
+  const sorted = [...data].sort((a,b) => ((b[_multiSortKey]||0)-(a[_multiSortKey]||0)) * _multiSortDir);
   const pc = (v) => v == null ? '<span class="text2">—</span>'
     : `<span class="${v>0?'green':v<0?'red':'text2'}">${v>0?'+':''}${v.toFixed(2)}%</span>`;
   const label = rotView === 'sector' ? 'Sector' : 'Industry';
@@ -1445,8 +1451,9 @@ function renderRotMulti(sortKey) {
   ];
   const th = (col) => {
     const active = _multiSortKey === col.key;
+    const arrow  = active ? (_multiSortDir === 1 ? ' ▼' : ' ▲') : '';
     return `<th class="r" style="cursor:pointer;${active?'color:#58a6ff':''}"
-      onclick="renderRotMulti('${col.key}')">${col.label}${colTipIcon(col.key)}${active?' ↑':''}</th>`;
+      onclick="renderRotMulti('${col.key}')">${col.label}${colTipIcon(col.key)}${arrow}</th>`;
   };
   const el = document.getElementById('rot-multi-content');
   el.innerHTML = `
@@ -1761,12 +1768,6 @@ function drawRotationScatter(sectors, opts = {}) {
   // ค่าใน ±SL_C (%) จะเกือบ linear, นอกจากนั้น log compress
   const SL_C = 3;
   function symlog(v)    { return Math.sign(v) * Math.log10(1 + Math.abs(v) / SL_C); }
-  function _pct(arr, p) {
-    const sorted = [...arr].sort((a,b) => a-b);
-    const idx = (p/100) * (sorted.length - 1);
-    const lo = Math.floor(idx), hi = Math.ceil(idx);
-    return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
-  }
   // แกน X: ซ้ายแค่ -50%, ขวาขยายเต็มที่ตามข้อมูล
   const sxs  = xs.map(symlog), sys = ys.map(symlog);
   const sxMin = Math.min(...sxs), sxMax = Math.max(...sxs);
@@ -1790,16 +1791,21 @@ function drawRotationScatter(sectors, opts = {}) {
     "#ff69b4","#98fb98","#dda0dd","#f0e68c","#87cefa","#a8e6cf","#90ee90",
     "#ffcba4","#c3b1e1",
   ];
+  // hash ชื่อ -> index สี คงที่ — เดิมผูกกับลำดับ sort ของ ret_1m วันนั้น ทำให้สี
+  // ของ sector เดียวกันเปลี่ยนไปเรื่อยๆ ทุกวันที่อันดับขยับ จำสีไม่ได้
+  function _nameColorIdx(name) {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    return h % palette.length;
+  }
   const nameToColor = {};
-  sectors.forEach((s,i) => { nameToColor[s.name] = palette[i % palette.length]; });
+  sectors.forEach(s => { nameToColor[s.name] = palette[_nameColorIdx(s.name)]; });
 
   const BUBBLE_R = 10;
-  const MARGIN = BUBBLE_R + 3;
   const points = sectors.map(s => {
     const ox = toX(getX(s)), oy = toY(getY(s));
     return {
       x: ox, y: oy, ox, oy,
-      isOutlier: false,
       R: BUBBLE_R,
       name: s.name,
       count: s.count || 0,
@@ -1887,8 +1893,8 @@ function drawRotationScatter(sectors, opts = {}) {
     ctx.restore();
 
     // Grid lines + tick labels — filter ใน symlog space
-    const xTicks = [-60,-50,-40,-30,-20,-10,-5,0,5,10,20,30,40,50,60].filter(v => symlog(v) > xLow && symlog(v) < xHigh);
-    const yTicks = [-40,-30,-25,-20,-15,-10,-5,0,5,10,15,20,25,30,40].filter(v => symlog(v) > yLow && symlog(v) < yHigh);
+    const xTicks = [-100,-80,-60,-50,-40,-30,-20,-10,-5,0,5,10,20,30,40,50,60,80,100,150,200].filter(v => symlog(v) > xLow && symlog(v) < xHigh);
+    const yTicks = [-60,-50,-40,-30,-25,-20,-15,-10,-5,0,5,10,15,20,25,30,40,50,60,80].filter(v => symlog(v) > yLow && symlog(v) < yHigh);
     ctx.save();
     ctx.strokeStyle = "rgba(48,54,61,0.7)";
     ctx.lineWidth = 0.4;
@@ -1920,6 +1926,10 @@ function drawRotationScatter(sectors, opts = {}) {
           anchors.push({ rx: p.ret_3m || 0, ry: p.ret_1m || 0 });
         }
         const trail = anchors.map(a => ({ x: toX(a.rx), y: toY(a.ry) }));
+        // anchor สุดท้าย = ตำแหน่งจริงบน data แต่ bubble ที่วาดจริงอาจถูกดันหลบชนกัน
+        // (collision resolution) แล้ว — เดิม trail จบที่ตำแหน่งดิบ ไม่ตรงกับ bubble
+        // ที่เรืองแสงอยู่จริง ทำให้เส้น trail "ลอย" ไม่ชนกับจุดปลายทาง
+        trail[trail.length - 1] = { x: p.x, y: p.y };
         for (let i = 1; i < trail.length; i++) {
           const prev = trail[i-1], curr = trail[i];
           const t0 = (i-1)/(trail.length-1), t1 = i/(trail.length-1);
@@ -1989,30 +1999,15 @@ function drawRotationScatter(sectors, opts = {}) {
           ctx.fillText(Math.round(p.avg_rs), p.x, p.y);
           ctx.textBaseline = "alphabetic";
         }
-        // Outlier indicator — แสดงลูกศรชี้ทิศที่ฟองอยู่นอกสเกล
-        if (p.isOutlier) {
-          const angle = Math.atan2(p.outDirY, p.outDirX);
-          const tipX = p.x + Math.cos(angle) * (p.R + 8);
-          const tipY = p.y + Math.sin(angle) * (p.R + 8);
-          const sz = 6;
-          ctx.save();
-          ctx.globalAlpha = 0.9;
-          ctx.fillStyle = p.color;
-          ctx.strokeStyle = p.color; ctx.lineWidth = 1.5;
-          ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(tipX, tipY); ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(tipX, tipY);
-          ctx.lineTo(tipX - Math.cos(angle - 0.5) * sz, tipY - Math.sin(angle - 0.5) * sz);
-          ctx.lineTo(tipX - Math.cos(angle + 0.5) * sz, tipY - Math.sin(angle + 0.5) * sz);
-          ctx.closePath(); ctx.fill();
-          ctx.restore();
-        }
         // Direction arrow: long=(ret_6m,ret_3m)→(ret_3m,ret_1m), short=(ret_3m,ret_1m)→(ret_1m,ret_1w)
         if (!highlightName) {
           const prevCx = isShort ? toX(p.ret_3m ?? p.ret_1m) : toX(p.ret_6m ?? p.ret_3m);
           const prevCy = isShort ? toY(p.ret_1m || 0)        : toY(p.ret_3m || 0);
-          const dx = p.x - prevCx;
-          const dy = p.y - prevCy;
+          // ทิศคำนวณจากตำแหน่งจริงบนข้อมูล (ox,oy) ไม่ใช่ตำแหน่งหลังถูก collision
+          // resolution ดันหลบ bubble ข้างเคียง (x,y) — เดิมผสมกัน ทำให้กลุ่มที่
+          // เบียดกันแน่นๆ ลูกศรชี้ผิดทิศ (จุดวาดปลายลูกศรยังอิง x,y ตามเดิมได้ ไม่กระทบ)
+          const dx = p.ox - prevCx;
+          const dy = p.oy - prevCy;
           const len = Math.hypot(dx, dy);
           if (len > 0.5) {
             const angle = Math.atan2(dy, dx);
