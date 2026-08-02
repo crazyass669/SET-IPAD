@@ -39,8 +39,11 @@ def _norm(sym):
 
 def _parse_ndx_sectors(txt):
     # แต่ละแถวอยู่บรรทัดเดียว: "| TICKER || [[Company]] || Sector || Subsector"
+    # ช่องว่างรอบ "||" ไม่คงเส้นคงวาเสมอ (เช่นแถว FER: "...|| Industrials|| Military...”
+    # ไม่มีช่องว่างก่อน "||" ตัวที่สาม) — ใช้ \s* แทนช่องว่างตายตัว ไม่งั้น parse ตกหล่น
+    # กลายเป็น sector "Unknown" ทั้งที่ Wikipedia มีข้อมูลอยู่จริง
     out = {}
-    for m in re.finditer(r'^\| ([A-Z.]+) \|\| .*? \|\| ([^|]+?) \|\|', _table_body(txt), re.MULTILINE):
+    for m in re.finditer(r'^\| ([A-Z.]+) \|\|\s*.*?\s*\|\|\s*([^|]+?)\s*\|\|', _table_body(txt), re.MULTILINE):
         out[_norm(m.group(1))] = m.group(2).strip()
     return out
 

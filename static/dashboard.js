@@ -12066,7 +12066,8 @@ async function loadUsBreadthChart() {
     if (canvas)  canvas.style.display = 'none';
   });
   try {
-    const r = await fetch('/api/us-breadth?range=' + encodeURIComponent(rng));
+    const r = await _fetchTimeout('/api/us-breadth?range=' + encodeURIComponent(rng), 30000,
+      'หมดเวลารอ Market Breadth หุ้น US (เกิน 30 วิ) — ลองใหม่อีกครั้ง');
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     _usBreadthCacheByRange[rng] = d;
@@ -12323,7 +12324,7 @@ function loadUsStocksPage() {
   if (_usData) { renderUsTable(); loadUsBreadthChart(); return; }
   const tbody = document.getElementById('us-stocks-tbody');
   if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
-  fetch('/api/us-index-metrics')
+  _fetchTimeout('/api/us-index-metrics', 30000, 'หมดเวลารอข้อมูลหุ้น US (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -12469,7 +12470,10 @@ function setUsMode(mode) {
   if (btn) btn.classList.toggle('active', mode === 'sectors');
   document.getElementById('us-stocks-wrap').style.display  = mode === 'sectors' ? 'none' : '';
   document.getElementById('us-sectors-wrap').style.display = mode === 'sectors' ? '' : 'none';
+  // กลับมาโหมด stocks ต้อง render ใหม่เสมอ — ไม่งั้นถ้าสลับดัชนี (setUsIndex) ระหว่างอยู่
+  // โหมด sectors ตารางหุ้นจะยังค้างข้อมูลของดัชนีเก่าจนกว่าจะมี trigger อื่นมา render ซ้ำ
   if (mode === 'sectors') loadUsSectorRanks();
+  else renderUsTable();
 }
 
 function usSectorSortBy(key) {
@@ -12480,13 +12484,18 @@ function usSectorSortBy(key) {
 
 function loadUsSectorRanks() {
   if (_usSectorRanks[_usIndex]) { renderUsSectorTable(); return; }
+  const idx = _usIndex;   // capture ตอนยิง fetch — กัน response เขียนผิดช่องถ้าผู้ใช้สลับ
+                           // ดัชนี (setUsIndex) ระหว่างรอ response กลับมา
   const tbody = document.getElementById('us-sectors-tbody');
   if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
-  fetch(`/api/us-sector-ranks?index=${_usIndex}`)
+  _fetchTimeout(`/api/us-sector-ranks?index=${idx}`, 30000, 'หมดเวลารอ Sector Ranking หุ้น US (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
-    .then(d => { _usSectorRanks[_usIndex] = d.sectors || []; renderUsSectorTable(); })
+    .then(d => {
+      _usSectorRanks[idx] = d.sectors || [];
+      if (idx === _usIndex) renderUsSectorTable();
+    })
     .catch(e => {
-      if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
+      if (idx === _usIndex && tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
     });
 }
 
@@ -12624,7 +12633,8 @@ async function loadHkBreadthChart() {
     if (canvas)  canvas.style.display = 'none';
   });
   try {
-    const r = await fetch('/api/hk-breadth?range=' + encodeURIComponent(rng));
+    const r = await _fetchTimeout('/api/hk-breadth?range=' + encodeURIComponent(rng), 30000,
+      'หมดเวลารอ Market Breadth หุ้น HK (เกิน 30 วิ) — ลองใหม่อีกครั้ง');
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     _hkBreadthCacheByRange[rng] = d;
@@ -12651,7 +12661,7 @@ function loadHkStocksPage() {
   if (_hkData) { renderHkTable(); loadHkBreadthChart(); return; }
   const tbody = document.getElementById('hk-stocks-tbody');
   if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
-  fetch('/api/hk-index-metrics')
+  _fetchTimeout('/api/hk-index-metrics', 30000, 'หมดเวลารอข้อมูลหุ้น HK (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -12784,7 +12794,9 @@ function setHkMode(mode) {
   if (btn) btn.classList.toggle('active', mode === 'sectors');
   document.getElementById('hk-stocks-wrap').style.display  = mode === 'sectors' ? 'none' : '';
   document.getElementById('hk-sectors-wrap').style.display = mode === 'sectors' ? '' : 'none';
+  // เหตุผลเดียวกับ setUsMode — กันตารางค้างดัชนีเก่าตอนกลับมาโหมด stocks
   if (mode === 'sectors') loadHkSectorRanks();
+  else renderHkTable();
 }
 
 function hkSectorSortBy(key) {
@@ -12795,13 +12807,17 @@ function hkSectorSortBy(key) {
 
 function loadHkSectorRanks() {
   if (_hkSectorRanks[_hkIndex]) { renderHkSectorTable(); return; }
+  const idx = _hkIndex;   // เหตุผลเดียวกับ loadUsSectorRanks — กัน race ตอนสลับดัชนีระหว่างรอ
   const tbody = document.getElementById('hk-sectors-tbody');
   if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
-  fetch(`/api/hk-sector-ranks?index=${_hkIndex}`)
+  _fetchTimeout(`/api/hk-sector-ranks?index=${idx}`, 30000, 'หมดเวลารอ Sector Ranking หุ้น HK (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
-    .then(d => { _hkSectorRanks[_hkIndex] = d.sectors || []; renderHkSectorTable(); })
+    .then(d => {
+      _hkSectorRanks[idx] = d.sectors || [];
+      if (idx === _hkIndex) renderHkSectorTable();
+    })
     .catch(e => {
-      if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
+      if (idx === _hkIndex && tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
     });
 }
 
@@ -12901,7 +12917,7 @@ function loadJpStocksPage() {
   if (_jpData) { renderJpTable(); return; }
   const tbody = document.getElementById('jp-stocks-tbody');
   if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
-  fetch('/api/jp-index-metrics')
+  _fetchTimeout('/api/jp-index-metrics', 30000, 'หมดเวลารอข้อมูลหุ้น JP (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -14282,12 +14298,28 @@ async function _stockApplyHash() {
   // ซ้ำอีกรอบ (เพราะตอนนั้น _usData/_hkData ยังว่างอยู่)
   const pageId = mktRaw === 'us' ? 'us-stocks' : 'hk-stocks';
   if (mktRaw === 'us') {
-    if (!_usData) { try { _usData = await (await fetch('/api/us-index-metrics')).json(); } catch (e) { /* เช็ค found ใน openUsChartModal จะแจ้งเตือนเอง */ } }
+    if (!_usData) {
+      // เช็ค d.error/d.stocks ก่อนเก็บ — ถ้า server ตอบ error object (เช่นยังไม่เคยกด
+      // US Index Max) แล้วเก็บดื้อๆ renderUsTable จะ crash เพราะ _usData.stocks undefined
+      try {
+        const d = await (await fetch('/api/us-index-metrics')).json();
+        if (!d.error && d.stocks) _usData = d;
+      } catch (e) { /* เช็ค found ใน openUsChartModal จะแจ้งเตือนเอง */ }
+      if (_usData) _rebuildUsSectorFilter();   // เดิม path ปกติ (loadUsStocksPage) เรียกอยู่แล้ว
+                                                // แต่ deep-link เซ็ต _usData เองข้าม path นั้น
+                                                // ทำให้ dropdown Sector ค้างว่างจนกว่าจะสลับดัชนี
+    }
     showPage(pageId, document.querySelector(`.nav-btn[onclick*="${pageId}"]`));
     openUsChartModal(sym);
   } else {
     const hkSym = sym.endsWith('.HK') ? sym : `${sym}.HK`;
-    if (!_hkData) { try { _hkData = await (await fetch('/api/hk-index-metrics')).json(); } catch (e) { /* เช็ค found ใน openHkChartModal จะแจ้งเตือนเอง */ } }
+    if (!_hkData) {
+      try {
+        const d = await (await fetch('/api/hk-index-metrics')).json();
+        if (!d.error && d.stocks) _hkData = d;
+      } catch (e) { /* เช็ค found ใน openHkChartModal จะแจ้งเตือนเอง */ }
+      if (_hkData) _rebuildHkSectorFilter();   // เหตุผลเดียวกับฝั่ง US ด้านบน
+    }
     showPage(pageId, document.querySelector(`.nav-btn[onclick*="${pageId}"]`));
     openHkChartModal(hkSym);
   }
