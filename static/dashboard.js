@@ -16665,11 +16665,32 @@ function _dhRunAction(fnName) {
   if (typeof fn === 'function') fn();
 }
 
+// เช็คดัชนี US/HK/JP (checkUSIndexUpdates ฯลฯ) เขียนผลลง DOM ที่อยู่ในแท็บ "ต่างประเทศ (DR)"
+// ของหน้างบการเงินเท่านั้น — เรียกตรงๆ จากปุ่มในหน้า Data Health (ที่ยังไม่ได้สลับไปหน้า/แท็บ
+// นั้น) แล้วผลจะเงียบหายเพราะ element ปลายทางถูกซ่อนอยู่ (display:none) ดูเหมือนปุ่ม
+// "กดแล้วไม่ทำงาน" ทั้งที่ backend ทำงานสำเร็จจริง — ฟังก์ชันนี้พาไปหน้า/แท็บ/ตลาดที่ถูกต้อง
+// ก่อนค่อยรันเช็ค ผลจะได้โผล่ให้เห็นจริง
+const _DH_FIN_INDEX_MARKET = { checkUSIndexUpdates: 'US', checkHKIndexUpdates: 'HK', checkJPIndexUpdates: 'JP' };
+function _dhRunFinIndexCheck(fnName) {
+  _dhGoto('financials');
+  setFinTab('dr', document.getElementById('fin-tab-dr-btn'));
+  const mk = _DH_FIN_INDEX_MARKET[fnName];
+  const mkBtnId = { US: 'fin-mir-us', HK: 'fin-mir-hk', JP: 'fin-mir-jp' }[mk];
+  _finMirBrowse(mk, document.getElementById(mkBtnId));
+  const fn = window[fnName];
+  if (typeof fn === 'function') fn();
+}
+
 function _dhSourceCell(key) {
   const src = DH_SOURCE_MAP[key];
   if (!src) return '—';
   const btns = [];
-  if (src.fn) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhRunAction('${src.fn}')">${src.fnLabel || 'อัพเดท'}</button>`);
+  // checkUSIndexUpdates/HK/JP เขียนผลลง DOM ในแท็บ "ต่างประเทศ (DR)" ของหน้างบการเงิน — เรียกผ่าน
+  // _dhRunFinIndexCheck ให้พาไปหน้า/แท็บ/ตลาดที่ถูกต้องก่อน ไม่งั้นผลจะเงียบหาย (ดูเหมือนกดไม่ทำงาน)
+  if (src.fn) {
+    const runner = _DH_FIN_INDEX_MARKET[src.fn] ? '_dhRunFinIndexCheck' : '_dhRunAction';
+    btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="${runner}('${src.fn}')">${src.fnLabel || 'อัพเดท'}</button>`);
+  }
   if (src.gotoPage) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhGoto('${src.gotoPage}')">${src.gotoLabel || 'ไปหน้านั้น'}</button>`);
   // fn2/gotoPage2: ใช้กับ key ที่มีมากกว่า 1 หน้า/ปุ่มเขียนลงไฟล์เดียวกัน (เช่น financials.db
   // ที่ทั้งหน้า "งบการเงิน" และปุ่มงบ DR ในหน้า DR/DRx ต่างก็เขียนทับ)
