@@ -120,6 +120,19 @@ if os.path.exists(os.path.join(BASE_DIR, "Table_PE.xls")):
     except Exception as e:
         log(f"⚠️ import_market_stats ข้าม: {e}")
 
+# ── 2b. merge ข้อมูลเดือนล่าสุด + ปันผล/มูลค่าหลักทรัพย์/breadth จาก
+# Market_Statistics_Month_th_TH.xls (ถ้ามีในรีโป) — รันหลัง step 2 เสมอ เพื่อ
+# ให้ upsert ทับบน history ที่เพิ่ง rebuild สดๆ (ดู sources/set_market_stats_monthly.py) ──
+if os.path.exists(os.path.join(BASE_DIR, "Market_Statistics_Month_th_TH.xls")):
+    try:
+        import subprocess
+        r = subprocess.run([sys.executable, os.path.join(BASE_DIR, "import_market_stats_monthly.py")],
+                           capture_output=True, text=True, timeout=120)
+        log("✅ market stats จาก Market_Statistics_Month_th_TH เสร็จ" if r.returncode == 0
+            else f"⚠️ import_market_stats_monthly ล้ม: {r.stderr[-300:]}")
+    except Exception as e:
+        log(f"⚠️ import_market_stats_monthly ข้าม: {e}")
+
 
 # ── 3. Snapshot ทุก API endpoint ลง data/*.json ─────────────
 log("=== Snapshot API endpoints -> data/ ===")

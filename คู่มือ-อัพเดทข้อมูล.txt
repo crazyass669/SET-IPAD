@@ -36,13 +36,18 @@
      ข้อควรรู้: ปุ่มนี้ "ไม่ได้" อัพเดทข่าวผู้บริหาร/หุ้น short/NVDR ให้ — ถ้า
      อยากได้ของพวกนั้นต้องกด Quick Update แยกต่างหาก (คนละหน้าที่กัน)
 
-  2) หน้า "Valuation" — วางไฟล์ P/E P/BV ใหม่จาก SET
-     ทำอะไร: อัพเดทค่า P/E เฉลี่ยตลาด/รายอุตสาหกรรมให้ทันเดือนล่าสุด
-     วิธีทำ: โหลดไฟล์ Table_PE.xls + Table_PBV.xls จากเว็บ SET.or.th มาวางทับ
-             ไฟล์เดิมในโฟลเดอร์โปรแกรม แล้วกดปุ่ม "⟳ อัพเดทข้อมูล P/E & P/BV"
-             ในหน้า Valuation
+  2) หน้า "Valuation" — วางไฟล์ Market Statistics ใหม่จาก SET
+     ทำอะไร: อัพเดทค่า P/E, P/BV, อัตราปันผล, มูลค่าหลักทรัพย์, จำนวนบริษัท
+             จดทะเบียน (SET/mai) ให้ทันเดือนล่าสุด
+     วิธีทำ: เข้า set.or.th -> Market Data -> Statistics -> Market Statistics
+             โหลดไฟล์ Market_Statistics_Month_th_TH.xls มาวางทับไฟล์เดิมใน
+             โฟลเดอร์โปรแกรม แล้วกดปุ่ม "⟳ อัพเดทข้อมูล (Market Statistics)"
+             ในหน้า Valuation (เติมเฉพาะเดือนล่าสุด ไม่ทับประวัติเก่า)
      เตือนเอง: ถ้าเลยวันที่ 10 ของเดือนแล้วยังไม่อัพเดท แอปจะมีป้ายเตือนขึ้นเอง
              ไม่ต้องจำเอง
+     fallback: ปุ่ม "⟳ Rebuild ประวัติ (Table_PE/PBV)" ข้างๆ กัน — ใช้เฉพาะกรณี
+             ไฟล์ Market Statistics มีปัญหา หรืออยากได้ประวัติยาวตั้งแต่ปี 1975
+             (ต้องโหลด Table_PE.xls + Table_PBV.xls จากหน้า P/E & P/BV แยก)
 
 --------------------------------------------------------------------------------
  ไตรมาสละครั้ง (หลังบริษัทประกาศงบ ~ก.พ. / พ.ค. / ส.ค. / พ.ย.)
@@ -198,13 +203,14 @@ Capital Flow                 market_flow_data.json         ✅    ✅   ✅
 Insider                      sec_filings.db                ✅    ❌   ✅
 Short                        short_sales_data.json + NVDR  ✅    ❌   ✅
 -----------------------------------------------------------------------------
-🔴 Valuation (P/E&P/BV ตลาด)  Table_PE.xls + Table_PBV.xls  ❌    ❌   ❌*  ✅ ทำเอง
+🔴 Valuation (P/E&P/BV ตลาด)  Market_Statistics_Month_th_TH.xls ❌ ❌ ❌*  ✅ ทำเอง
 🔴 งบการเงิน                  financials.db                 ❌    ❌   ❌   ✅ ทำเอง(local)
 🔴 FCF Yield                  financials.db                 ❌    ❌   ❌   ✅ ทำเอง(local)
 🔴 Screener+ (Fundamental)    factor_snapshot(financials.db)❌    ❌   ❌   ✅ ทำเอง(local)
 
-* Valuation จะ auto ก็ต่อเมื่อมีคนวางไฟล์ Table_PE.xls ใหม่ลง repo
-  (SET ไม่มี API ให้ scrape — ต้องโหลด Excel เอง)
+* Valuation จะ auto ก็ต่อเมื่อมีคนวางไฟล์ Market_Statistics_Month_th_TH.xls ใหม่
+  ลง repo (SET ไม่มี API ให้ scrape — ต้องโหลด Excel เอง) — Table_PE.xls/
+  Table_PBV.xls ยังใช้ได้เป็น fallback สำหรับ rebuild ประวัติทั้งชุด
 
 หมายเหตุความเร็วหน้า DR/DRx: เดิมเปิดหน้านี้ครั้งแรกอาจรอ 1-2 นาทีถ้าข้อมูล
 หมดอายุพอดี ตอนนี้แก้แล้ว — ระบบโชว์ข้อมูลเก่าให้ดูก่อนทันที แล้วค่อยอัพเดท
@@ -318,12 +324,17 @@ Short                        short_sales_data.json + NVDR  ✅    ❌   ✅
 ################################################################################
 
 --- 6.1  P/E & P/BV ตลาด (เมนู Valuation) -----------------------------------
-  1. เข้า set.or.th -> Market Data -> Market Statistics -> P/E & P/BV
-  2. โหลด Table_PE.xls + Table_PBV.xls
+  1. เข้า set.or.th -> Market Data -> Statistics -> Market Statistics
+  2. โหลด Market_Statistics_Month_th_TH.xls
   3. วางทับไฟล์เดิมในโฟลเดอร์โปรเจกต์
-  4. เปิดแอป -> เมนู Valuation -> กดปุ่ม "⟳ อัพเดทข้อมูล P/E & P/BV"
+  4. เปิดแอป -> เมนู Valuation -> กดปุ่ม "⟳ อัพเดทข้อมูล (Market Statistics)"
+  - ไฟล์เดียวได้ครบ: P/E, P/BV, อัตราปันผล, มูลค่าหลักทรัพย์, จำนวนบริษัท
+    จดทะเบียน (SET/mai) — เติมเฉพาะเดือนล่าสุด ไม่ทับประวัติเก่า
   - ข้อมูล SET ช้ากว่าปัจจุบัน ~1 เดือนเป็นปกติ (หน้าจะแสดง "ข้อมูลล่าสุด: เดือน X")
   - ระบบเตือนอัตโนมัติทุกวันที่ 10 ของเดือน ถ้ายังไม่อัพเดทเดือนนั้น
+  - fallback: ปุ่ม "⟳ Rebuild ประวัติ (Table_PE/PBV)" ข้างๆ กัน ใช้เฉพาะกรณีไฟล์
+    Market Statistics มีปัญหา หรืออยากได้ประวัติยาวตั้งแต่ปี 1975 — ต้องโหลด
+    Table_PE.xls + Table_PBV.xls จากหน้า P/E & P/BV แยกต่างหาก (rebuild ทับทั้งชุด)
 
 --- 6.2  งบการเงิน (เมนู งบการเงิน / FCF Yield / Screener+) ------------------
   ทำผ่านสคริปต์ (ดูส่วนที่ 5) หรือปุ่มในแอป:
@@ -431,7 +442,9 @@ Short                        short_sales_data.json + NVDR  ✅    ❌   ✅
   mirror_finnomena.py           โหลด/refresh งบ Finnomena ทั้งตลาด (มีโหมด force)
   build_snapshot.py             สร้าง factor snapshot (main + mirror US/HK)
   check_mirror.py / .bat        เช็คสถานะ mirror
-  import_market_stats.py        แปลง Table_PE/PBV.xls -> set_market_stats.json
+  import_market_stats.py        แปลง Table_PE/PBV.xls -> set_market_stats.json (rebuild ทับ, fallback)
+  import_market_stats_monthly.py แปลง Market_Statistics_Month_th_TH.xls -> set_market_stats.json
+                                 (merge เดือนล่าสุด, ทางหลัก — ดู 6.1)
   backtest_screener.py          ทดสอบย้อนหลังว่า preset ไหนทำเงินจริง (local)
 
 ไฟล์ข้อมูล LOCAL-ONLY (ห้าม push ขึ้น GitHub — gitignore กันไว้แล้ว):
@@ -453,7 +466,8 @@ Short                        short_sales_data.json + NVDR  ✅    ❌   ✅
   indices_cache.json            ดัชนีกลุ่ม
   short_sales_data.json         short sales
   market_flow_data.json         capital flow
-  set_market_stats.json         P/E & P/BV ตลาด (จาก Table_PE/PBV.xls)
+  set_market_stats.json         P/E & P/BV/ปันผล/มูลค่าหลักทรัพย์/breadth ตลาด
+                                 (จาก Market_Statistics_Month_th_TH.xls เป็นหลัก)
   sec_filings.db                insider/major-changes
   mirror_names.json             ชื่อเต็มบริษัทหุ้น mirror US/HK (build_mirror_names.py)
 
@@ -489,7 +503,7 @@ Short                        short_sales_data.json + NVDR  ✅    ❌   ✅
 
 รอบการอัพเดทที่แนะนำ:
   ทุกวันทำการ    -> Quick Update (ในแอป) หรือปล่อย GitHub Actions auto
-  ทุกเดือน       -> วาง Table_PE/PBV.xls ใหม่ (เตือนวันที่ 10)
+  ทุกเดือน       -> วาง Market_Statistics_Month_th_TH.xls ใหม่ (เตือนวันที่ 10)
   หลังงบไตรมาส   -> python update_financials.py (ก.พ./พ.ค./ส.ค./พ.ย.)
                     หรือกด "🔄 อัพเดทงบการเงินทั้งหมด" + "🔄 ดึงเฉพาะที่ขาด/เก่า"
   ไตรมาสละครั้ง  -> python mirror_finnomena.py force (US/HK ทั้งตลาด, กลางคืน)

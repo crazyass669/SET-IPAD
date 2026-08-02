@@ -5873,6 +5873,63 @@ def refresh_market_stats():
     })
 
 
+@app.route("/api/refresh-market-stats-monthly", methods=["POST"])
+def refresh_market_stats_monthly():
+    """อ่าน Market_Statistics_Month_th_TH.xls แล้ว merge (upsert รายเดือน) เข้า
+    set_market_stats.json ที่มีอยู่ — ไม่ rebuild ทับประวัติทั้งชุดเหมือน
+    /api/refresh-market-stats (Table_PE/PBV.xls) ดู sources/set_market_stats_monthly.py"""
+    from datetime import datetime as _dt
+
+    from sources.set_market_stats_monthly import merge_monthly, parse_annual_market_statistics
+
+    SRC_FILE = os.path.join(BASE_DIR, "Market_Statistics_Month_th_TH.xls")
+    if not os.path.exists(SRC_FILE):
+        return jsonify({"ok": False, "error": "ไม่พบไฟล์: Market_Statistics_Month_th_TH.xls"}), 400
+
+    try:
+        records, year_ad = parse_annual_market_statistics(SRC_FILE)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"อ่านไฟล์ไม่สำเร็จ: {e}"}), 500
+    if not records:
+        return jsonify({"ok": False, "error": f"ไม่พบข้อมูลเดือนไหนเลยในไฟล์ (ปี {year_ad})"}), 400
+
+    data = {}
+    old_latest = None
+    if os.path.exists(_MARKET_STATS_FILE):
+        with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        old_latest = (data.get("pe", {}).get("dates") or [None])[-1]
+
+    data = merge_monthly(data, records)
+    data["updated_at"] = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+    _atomic_write_json(_MARKET_STATS_FILE, data)
+
+    new_latest = data["pe"]["dates"][-1] if data["pe"]["dates"] else None
+    pe_cur  = data["pe"]["stats"].get("SET", {})
+    pbv_cur = data["pbv"]["stats"].get("SET", {})
+    dy_cur  = data["div_yield"]["stats"].get("SET", {})
+    mc_cur  = data["mkt_cap"]["stats"].get("SET", {})
+    breadth = data["breadth"]["series"]
+    return jsonify({
+        "ok": True,
+        "new_data": new_latest != old_latest,
+        "months_in_file": len(records),
+        "file_range": f"{min(records)} – {max(records)}",
+        "pe_current":  pe_cur.get("current"),
+        "pbv_current": pbv_cur.get("current"),
+        "pe_zscore":   pe_cur.get("zscore"),
+        "pbv_zscore":  pbv_cur.get("zscore"),
+        "div_yield_current": dy_cur.get("current"),
+        "mkt_cap_current":   mc_cur.get("current"),
+        "listed_current":    breadth["listed_SET"][-1] if breadth.get("listed_SET") else None,
+        "new_listed_latest": breadth["new_listed_SET"][-1] if breadth.get("new_listed_SET") else None,
+        "delisted_latest":   breadth["delisted_SET"][-1] if breadth.get("delisted_SET") else None,
+        "updated_at": data["updated_at"],
+        "old_latest": old_latest,
+        "new_latest": new_latest,
+    })
+
+
 @app.route("/api/stock-valuation-stats")
 def stock_valuation_stats():
     """คำนวณ cross-sectional PE/PBV stats รายตัวและรายกลุ่ม"""

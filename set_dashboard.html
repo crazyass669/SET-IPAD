@@ -2119,16 +2119,22 @@
 <div id="page-valuation" class="page">
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px">
     <div class="page-title" style="margin:0">Valuation ตลาดหุ้น SET</div>
+    <button id="val-refresh-monthly-btn" onclick="refreshMarketStatsMonthly()"
+      style="font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border);
+             background:var(--bg-card2);color:#c8d0dc;cursor:pointer;display:flex;align-items:center;gap:6px"
+      data-vtip="&lt;div class='tip-head'&gt;วิธีอัพเดทข้อมูล (แนะนำ)&lt;/div&gt;&lt;b&gt;1.&lt;/b&gt; เข้าเว็บ &lt;b&gt;SET.or.th&lt;/b&gt; → Market Data → Statistics → Market Statistics&lt;br&gt;&lt;b&gt;2.&lt;/b&gt; ดาวน์โหลด &lt;b&gt;Market_Statistics_Month_th_TH.xls&lt;/b&gt;&lt;br&gt;&lt;b&gt;3.&lt;/b&gt; วางทับไฟล์เดิมในโฟลเดอร์ &lt;b&gt;SET_Dashboard&lt;/b&gt;&lt;br&gt;&lt;b&gt;4.&lt;/b&gt; กดปุ่ม ⟳ นี้ได้เลย — เติมเฉพาะเดือนล่าสุด ไม่ทับประวัติเก่า&lt;hr&gt;ไฟล์เดียวได้ P/E, P/BV, ปันผล, มูลค่าหลักทรัพย์, จำนวนบริษัทจดทะเบียน ครบในทีเดียว">
+      ⟳ อัพเดทข้อมูล (Market Statistics)
+    </button>
     <button id="val-refresh-btn" onclick="refreshMarketStats()"
       style="font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border);
              background:var(--bg-card2);color:#c8d0dc;cursor:pointer;display:flex;align-items:center;gap:6px"
-      data-vtip="&lt;div class='tip-head'&gt;วิธีอัพเดทข้อมูล P/E &amp;amp; P/BV&lt;/div&gt;&lt;b&gt;1.&lt;/b&gt; เข้าเว็บ &lt;b&gt;SET.or.th&lt;/b&gt; → Statistics → P/E &amp;amp; P/BV&lt;br&gt;&lt;b&gt;2.&lt;/b&gt; ดาวน์โหลด &lt;b&gt;Table_PE.xls&lt;/b&gt; และ &lt;b&gt;Table_PBV.xls&lt;/b&gt;&lt;br&gt;&lt;b&gt;3.&lt;/b&gt; วางทับไฟล์เดิมในโฟลเดอร์ &lt;b&gt;SET_Dashboard&lt;/b&gt;&lt;br&gt;&lt;b&gt;4.&lt;/b&gt; กดปุ่ม ⟳ นี้ได้เลย — โปรแกรมคำนวณใหม่อัตโนมัติ&lt;hr&gt;ข้อมูลอัพเดทรายเดือน ทุกต้นเดือน">
-      ⟳ อัพเดทข้อมูล P/E &amp; P/BV
+      data-vtip="&lt;div class='tip-head'&gt;วิธี Rebuild ประวัติทั้งชุด (fallback)&lt;/div&gt;&lt;b&gt;1.&lt;/b&gt; เข้าเว็บ &lt;b&gt;SET.or.th&lt;/b&gt; → Statistics → P/E &amp;amp; P/BV&lt;br&gt;&lt;b&gt;2.&lt;/b&gt; ดาวน์โหลด &lt;b&gt;Table_PE.xls&lt;/b&gt; และ &lt;b&gt;Table_PBV.xls&lt;/b&gt;&lt;br&gt;&lt;b&gt;3.&lt;/b&gt; วางทับไฟล์เดิมในโฟลเดอร์ &lt;b&gt;SET_Dashboard&lt;/b&gt;&lt;br&gt;&lt;b&gt;4.&lt;/b&gt; กดปุ่ม ⟳ นี้ได้เลย — rebuild ประวัติ P/E &amp;amp; P/BV ทั้งชุดทับใหม่&lt;hr&gt;ใช้กรณีไฟล์ Market Statistics มีปัญหา หรืออยากได้ประวัติยาวตั้งแต่ต้น (ปกติใช้ปุ่มซ้ายมือพอ)">
+      ⟳ Rebuild ประวัติ (Table_PE/PBV)
     </button>
     <span id="val-refresh-status" style="font-size:11px;color:var(--muted)"></span>
   </div>
   <div class="page-sub">P/E และ P/BV ย้อนหลัง เพื่อประเมิน Valuation Zone ของตลาด
-    <span style="color:var(--muted)"> · วาง Table_PE.xls + Table_PBV.xls ใหม่ในโฟลเดอร์ แล้วกด อัพเดท</span>
+    <span style="color:var(--muted)"> · วาง Market_Statistics_Month_th_TH.xls ใหม่ในโฟลเดอร์ แล้วกด อัพเดท</span>
   </div>
   <div id="val-data-month" style="font-size:12px;margin:4px 0 2px;color:var(--muted)"></div>
 
@@ -2137,6 +2143,9 @@
 
   <!-- Summary cards -->
   <div id="val-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px"></div>
+
+  <!-- ข้อมูลเสริมจาก Market_Statistics_Month_th_TH.xls: ปันผล/market cap/breadth -->
+  <div id="val-extra-box" style="display:none"></div>
 
   <!-- ตารางเปรียบเทียบค่าเฉลี่ยตามช่วงเวลา -->
   <div class="card" style="margin-bottom:16px;padding:16px">
@@ -4481,6 +4490,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260802f"></script>
+<script src="static/dashboard.js?v=20260802g"></script>
 </body>
 </html>

@@ -18761,6 +18761,52 @@ async function refreshMarketStats() {
   btn.innerHTML = '⟳ อัพเดทข้อมูล P/E &amp; P/BV';
 }
 
+// อัพเดทจากไฟล์ Market_Statistics_Month_th_TH.xls (ไฟล์เดียว รายเดือนปกติ) — ต่าง
+// จาก refreshMarketStats() ด้านบน (Table_PE/PBV.xls) ตรงที่ merge เพิ่มเข้า
+// set_market_stats.json ไม่ rebuild ทับ และได้ div_yield/mkt_cap/breadth มาด้วย
+async function refreshMarketStatsMonthly() {
+  const btn = document.getElementById('val-refresh-monthly-btn');
+  const status = document.getElementById('val-refresh-status');
+  btn.disabled = true;
+  btn.textContent = '⟳ กำลังอัพเดท...';
+  status.textContent = '';
+  status.style.color = 'var(--muted)';
+
+  try {
+    const r = await fetch('/api/refresh-market-stats-monthly', { method: 'POST' });
+    const d = await r.json();
+
+    if (!d.ok) {
+      status.textContent = '✗ ' + d.error;
+      status.style.color = 'var(--red)';
+      btn.disabled = false;
+      btn.innerHTML = '⟳ อัพเดทข้อมูล (Market Statistics)';
+      return;
+    }
+
+    if (!d.new_data) {
+      status.textContent = `✓ ข้อมูลเป็นปัจจุบันแล้ว (ล่าสุด: ${d.new_latest})`;
+      status.style.color = '#96c850';
+    } else {
+      status.textContent = `✓ อัพเดทสำเร็จ! ${d.old_latest} → ${d.new_latest} | P/E=${d.pe_current}x | P/BV=${d.pbv_current}x | ปันผล=${d.div_yield_current}%`;
+      status.style.color = '#3ab464';
+      try {
+        const r2 = await fetch('/api/market-stats?t=' + Date.now());
+        if (r2.ok) _valData = await r2.json();
+      } catch (e) { /* คง _valData เดิมไว้ */ }
+      renderValuation();
+      renderMarketStatsExtra();
+    }
+    _showValDataMonth();
+  } catch (e) {
+    status.textContent = '✗ ไม่สามารถเชื่อมต่อ server: ' + e.message;
+    status.style.color = 'var(--red)';
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '⟳ อัพเดทข้อมูล (Market Statistics)';
+}
+
 // แปลง "2026-06" -> "มิ.ย. 2026"
 function _thMonth(ym) {
   if (!ym || !/^\d{4}-\d{2}$/.test(ym)) return ym || '—';
@@ -18782,17 +18828,72 @@ async function _showValDataMonth() {
   } catch (e) { el.textContent = ''; }
 }
 
+// ข้อมูลเสริมจาก Market_Statistics_Month_th_TH.xls ที่ Table_PE/PBV.xls ไม่มี:
+// อัตราปันผลตอบแทน, มูลค่าหลักทรัพย์ตามราคาตลาด, จำนวนบริษัทจดทะเบียน (breadth)
+// — ใช้ _svgBand เดียวกับ P/E-P/BV ด้านบน (ฟังก์ชันเองจะโชว์ "ข้อมูลไม่พอ" เองถ้า
+// ยังมีน้อยกว่า 8 งวด ซึ่งเป็นปกติช่วงแรกที่เพิ่งเริ่มเก็บ series พวกนี้)
+function renderMarketStatsExtra() {
+  const box = document.getElementById('val-extra-box');
+  if (!box || !_valData) return;
+  const dy = _valData.div_yield, mc = _valData.mkt_cap, br = _valData.breadth;
+  if (!dy || !dy.dates || !dy.dates.length) { box.style.display = 'none'; return; }
+
+  const toSeries = (stat, key) => stat.dates.map((d, i) => ({ d, v: stat.series[key][i] })).filter(o => o.v != null);
+  const dySet = toSeries(dy, 'SET'), dyMai = toSeries(dy, 'mai');
+  const mcSet = toSeries(mc, 'SET'), mcMai = toSeries(mc, 'mai');
+  const curMc = mcSet.length ? mcSet[mcSet.length - 1].v : null;
+
+  let breadthHtml = '<div style="font-size:12px;color:var(--text2)">ข้อมูลไม่พอ</div>';
+  if (br && br.dates && br.dates.length) {
+    const i = br.dates.length - 1;
+    const s = br.series;
+    const netSet = (s.new_listed_SET[i] || 0) - (s.delisted_SET[i] || 0);
+    const netMai = (s.new_listed_mai[i] || 0) - (s.delisted_mai[i] || 0);
+    const netColor = n => n > 0 ? '#3ab464' : n < 0 ? '#dc503c' : 'var(--muted)';
+    const block = (label, listed, net, newC, delC) => `
+      <div>
+        <div style="color:var(--muted);font-size:11px">จำนวนบริษัทจดทะเบียน ${label}</div>
+        <div style="font-size:18px;font-weight:700">${listed ?? '—'}</div>
+        <div style="font-size:11px;color:${netColor(net)}">${net > 0 ? '+' : ''}${net} เดือนนี้ (เข้าใหม่ ${newC ?? 0} / เพิกถอน ${delC ?? 0})</div>
+      </div>`;
+    breadthHtml = `<div style="display:flex;gap:24px;flex-wrap:wrap">
+      ${block('SET', s.listed_SET[i], netSet, s.new_listed_SET[i], s.delisted_SET[i])}
+      ${block('mai', s.listed_mai[i], netMai, s.new_listed_mai[i], s.delisted_mai[i])}
+    </div>`;
+  }
+
+  box.style.display = 'block';
+  box.innerHTML = `
+    <div class="card" style="padding:16px;margin-bottom:16px">
+      <div style="font-weight:600;margin-bottom:4px;font-size:14px">อัตราเงินปันผลตอบแทนตลาด (Dividend Yield)</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">ยิ่งสูง = ตลาดยิ่ง "ถูก" เทียบพื้นฐานปันผล (ทิศทางตรงข้ามกับ P/E &amp; P/BV)</div>
+      ${_svgBand(dySet, 'SET', false)}
+      ${_svgBand(dyMai, 'mai', false)}
+    </div>
+    <div class="card" style="padding:16px;margin-bottom:16px">
+      <div style="font-weight:600;margin-bottom:4px;font-size:14px">มูลค่าหลักทรัพย์ตามราคาตลาด (Market Cap)</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">${curMc != null ? `SET ปัจจุบัน ${(curMc / 1e6).toFixed(2)} ล้านล้านบาท` : ''}</div>
+      ${_svgBand(mcSet, 'SET (ล้านบาท)', true)}
+      ${_svgBand(mcMai, 'mai (ล้านบาท)', true)}
+    </div>
+    <div class="card" style="padding:16px;margin-bottom:16px">
+      <div style="font-weight:600;margin-bottom:10px;font-size:14px">Breadth — จำนวนบริษัทจดทะเบียน</div>
+      ${breadthHtml}
+    </div>`;
+}
+
 async function loadValuationPage() {
   _showValDataMonth();
   // Load both in parallel
   const [_1, _2] = await Promise.allSettled([
     (async () => {
-      if (_valData) { renderValuation(); return; }
+      if (_valData) { renderValuation(); renderMarketStatsExtra(); return; }
       try {
         const r = await fetch('/api/market-stats?t=' + Date.now());
         if (!r.ok) throw new Error('ไม่พบข้อมูล');
         _valData = await r.json();
         renderValuation();
+        renderMarketStatsExtra();
       } catch(e) {
         document.getElementById('val-summary').innerHTML =
           '<div style="color:var(--red);padding:16px">ไม่พบ set_market_stats.json — รัน import_market_stats.py ก่อน</div>';
