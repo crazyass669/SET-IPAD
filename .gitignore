@@ -53,6 +53,9 @@ start.bat
 # changes) — 2026-08 แก้นามสกุล + git rm --cached
 listedCompanies_en_US.xls
 listedCompanies_en_US.xlsx
+# ไฟล์ฝั่งไทย (ชื่อบริษัทภาษาไทย) — ดาวน์โหลดคู่กันอัตโนมัติเหมือนไฟล์อังกฤษด้านบน
+listedCompanies_th_TH.xls
+listedCompanies_th_TH.xlsx
 
 # Claude Code local settings
 .claude/settings.local.json
@@ -94,6 +97,10 @@ sec_filings.db-shm
 # ถูก ignore อยู่แล้วแต่ .bak_* หลุดออกมาเป็น untracked ขนาด ~5MB เสี่ยงโดน
 # auto-commit เก็บขึ้น GitHub โดยไม่ตั้งใจ
 *.db.bak_*
+# สำรองก่อนแก้ symbol (rename_symbol.py -> set_prices_backup_<stamp>_rename.db) — ตั้งชื่อ
+# คนละแบบกับ *.db.bak_* ด้านบน เลยหลุด gitignore เดิม ไฟล์ระดับ 300MB+ เกิน limit 100MB
+# ของ GitHub push ไม่ผ่านและทำ repo บวมถาวรถ้าหลุดขึ้นไป
+*_backup_*.db
 
 # SQLite financials store + ชุดสำรองอัตโนมัติ (local only — ใหญ่และ regenerate ได้)
 financials.db

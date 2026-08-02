@@ -3903,15 +3903,58 @@
       </div>
 
       <div style="margin-bottom:14px">
-        <div style="font-weight:600;color:var(--green);margin-bottom:4px">🔍 เช็คหุ้นเข้าใหม่/ถูกถอด — ไตรมาสละครั้ง หรือเมื่อสงสัย</div>
+        <div style="font-weight:600;color:var(--green);margin-bottom:4px">🆕 หุ้นเข้าใหม่/ถูกถอด — ลำดับการ sync แยกตามตลาด (ไตรมาสละครั้ง หรือเมื่อสงสัย)</div>
         <div style="padding-left:14px;color:var(--text2)">
-          <b style="color:var(--text)">การ์ด 🔍 ข้างล่างหน้านี้</b> — หุ้นไทย (เทียบ SET.or.th) + Mirror US/HK (เทียบ Finnomena)<br>
-          <b style="color:var(--text)">🔍 เช็คหุ้นใหม่/ถูกถอดจาก SET.or.th</b> หน้า "DR / DRx"
-          — เช็คให้อัตโนมัติตอนเปิดหน้าอยู่แล้ว กดเองเมื่ออยากยืนยัน<br>
-          <b style="color:var(--text)">🔍 เช็คหุ้นใหม่/ถูกถอดจากดัชนี</b> หน้า "งบการเงิน" → แท็บต่างประเทศ (DR)
-          — สลับปุ่ม <b>US</b> / <b>HK</b> / <b>JP</b> เพื่อเช็คคนละชุดดัชนี (S&amp;P500/Dow/NDX · HSI/HSCEI/HSTECH · Nikkei 225)<br>
-          <b style="color:var(--text)">📖 ดึงคำอธิบายบริษัท DR</b> หน้า "DR / DRx"
-          — เฉพาะตอนมี DR ใหม่เข้ามา (cache 180 วัน ปกติไม่ต้องกด)
+          กลไกของแต่ละตลาด<b>ไม่เหมือนกัน</b> — ทำตามลำดับของตลาดนั้น ห้ามข้ามขั้น
+          (ระบบเช็ค drift ให้อัตโนมัติสัปดาห์ละครั้งท้าย Quick Update อยู่แล้ว ตารางข้างล่างจะขึ้น 🟡 เองถ้าเจอตัวเข้า/ออก)
+
+          <div style="margin-top:10px;padding:8px 10px;background:var(--card2);border-radius:6px">
+            <b style="color:var(--text)">🇹🇭 หุ้นไทย (SET/mai)</b> — <b style="color:var(--green)">ไม่ต้องทำอะไรเลย</b><br>
+            <span style="padding-left:14px">ระบบดาวน์โหลด <code>listedCompanies_en_US.xls</code> (+ <code>_th_TH</code> สำหรับชื่อไทย)
+            จาก SET.or.th ใหม่ให้เอง<b>ทุกครั้ง</b>ที่กด Quick Update / Full Refresh — มี backup กันไฟล์เสีย
+            ถ้าโหลดไม่ได้ใช้ไฟล์เดิมต่อ หุ้น IPO ใหม่จึงเข้าระบบเองอัตโนมัติ<br>
+            กดปุ่ม <b style="color:var(--text)">เช็คกับ SET.or.th</b> ในการ์ด 🔍 ข้างล่างเมื่ออยากยืนยันด้วยตาเท่านั้น</span>
+          </div>
+
+          <div style="margin-top:8px;padding:8px 10px;background:var(--card2);border-radius:6px">
+            <b style="color:var(--text)">🌏 DR / DRx (หุ้นต่างประเทศในพอร์ต)</b> — เกือบอัตโนมัติ<br>
+            <span style="padding-left:14px"><b>1.</b> เปิดหน้า "DR / DRx" — ระบบเช็คหุ้นเข้าใหม่/ถูกถอดให้เองทุกครั้งที่เปิด
+            แล้ว auto-sync เข้า universe (derive ticker Yahoo + ตรวจว่ามีจริง)<br>
+            <b>2.</b> กด <b style="color:var(--text)">🔄 ดึงเฉพาะที่ขาด/เก่า</b> ในหน้าเดียวกัน — ดึงงบของตัวใหม่<br>
+            <b>3.</b> <span style="color:var(--yellow)">เฉพาะกรณี derive ticker ไม่ได้</span> — ต้องเพิ่มใน
+            <code>_DR_STATIC</code> เอง (ปุ่มเช็คแยกให้แล้วว่าตัวไหน "ต้องเพิ่มจริง" กับตัวไหนแค่ SET เปลี่ยนรหัสภายใน)</span>
+          </div>
+
+          <div style="margin-top:8px;padding:8px 10px;background:var(--card2);border-radius:6px">
+            <b style="color:var(--text)">🇺🇸 🇭🇰 🇯🇵 ดัชนี US / HK / JP</b>
+            <span style="color:var(--yellow)">— 3 ขั้น ต้องกดเองครบทุกขั้น</span><br>
+            <span style="padding-left:14px">(S&amp;P500+Dow+NDX · HSI+HSCEI+HSTECH · Nikkei 225 — เทียบกับ Wikipedia)<br>
+            <b>1. เช็ค drift</b> — ปุ่ม <b style="color:var(--text)">🔍 เช็คดัชนี US/HK/JP</b>
+            ในตารางข้างล่างหน้านี้ หรือในการ์ด 🔍 ล่างสุด (กดได้เลยในหน้านี้ ไม่ต้องสลับหน้า)<br>
+            <b>2. Sync สมาชิก + งบ</b> — ถ้าเจอตัวใหม่: หน้า "งบการเงิน" → แท็บ <b>ต่างประเทศ (DR)</b> →
+            ปุ่ม <b>US</b>/<b>HK</b>/<b>JP</b> → <b style="color:var(--text)">🔄 ดึงเฉพาะที่ขาด/เก่า</b>
+            (อัพเดทไฟล์ membership + ดึงงบตัวใหม่)<br>
+            <b>3. ดึงราคาย้อนหลัง</b> — กด <b style="color:var(--text)">📈 US/HK/JP Index Max</b> ด้านบนหน้านี้
+            <span style="color:var(--yellow)">จำเป็นเฉพาะรอบที่มีตัวใหม่</span> — Quick Update เติมแค่ช่วงที่ขาด
+            ของตัวที่มีอยู่แล้วในฐาน <b>ไม่ดึงประวัติยาวให้ตัวใหม่เอง</b></span>
+          </div>
+
+          <div style="margin-top:8px;padding:8px 10px;background:var(--card2);border-radius:6px">
+            <b style="color:var(--text)">🌐 Mirror US/HK ทั้งตลาด (~5,000 ตัว สำหรับ Screener+)</b>
+            — <span style="color:var(--text2)">คนละกลไกกับดัชนีด้านบน ไม่เกี่ยวกับ Wikipedia</span><br>
+            <span style="padding-left:14px">ปุ่ม <b style="color:var(--text)">เช็คกับ Finnomena</b> ในการ์ด 🔍 ข้างล่าง →
+            เจอตัวใหม่กด <b style="color:var(--text)">📥 ดึงเฉพาะตัวใหม่</b> → ตามด้วย
+            <b style="color:var(--text)">🏷️ ดึงชื่อหุ้น mirror ใหม่</b> (ไม่งั้นตัวใหม่โชว์แค่ ticker เปล่าตอนค้นหา)</span>
+          </div>
+
+          <div style="margin-top:8px;padding-left:14px">
+            <b style="color:var(--text)">📖 ดึงคำอธิบายบริษัท DR</b> หน้า "DR / DRx"
+            — เฉพาะตอนมี DR ใหม่เข้ามา (cache 180 วัน ปกติไม่ต้องกด)
+          </div>
+        </div>
+        <div style="padding-left:14px;margin-top:8px">
+          <button class="filter-btn" onclick="toggleBtNote('dh-symbol-event-note')" style="font-size:11px">🧑‍💻 เจอ "ตัวใหม่/ตัวหายไป" ในการ์ด 🔍 ด้านล่างแล้ว ต้องกดอะไรต่อ — กดอ่าน</button>
+          <div id="dh-symbol-event-note" style="display:none;margin-top:8px;padding:12px;background:#0d1117;border:1px solid var(--border);border-radius:8px"></div>
         </div>
       </div>
 
@@ -3978,31 +4021,34 @@
       <div id="dh-mirror-diff-result" style="display:none;margin-top:8px"></div>
     </div>
 
-    <!-- ดัชนี US -->
+    <!-- ดัชนี US/HK/JP — เช็คได้ในหน้านี้เลย (_dhCheckIndexDrift ยิง endpoint เดียวกับปุ่มในหน้า
+         งบการเงิน แต่เขียนผลลงกล่องของตัวเอง) ปุ่ม "ไปหน้างบการเงิน" ยังอยู่เพราะขั้นถัดไป
+         (🔄 ดึงเฉพาะที่ขาด/เก่า = sync สมาชิก+งบ) ต้องทำที่หน้านั้น -->
     <div style="padding:10px 0;border-bottom:1px solid var(--border)">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <strong style="font-size:12.5px;min-width:110px">📈 ดัชนี US (S&amp;P500/DOW/NDX)</strong>
-        <span style="font-size:11px;color:var(--text2)">มีปุ่มเช็คอยู่แล้วในหน้า "งบการเงิน" → แท็บต่างประเทศ (DR) → ปุ่ม US</span>
-        <button class="filter-btn" onclick="_dhGoto('financials')">ไปหน้างบการเงิน</button>
+        <button class="filter-btn" onclick="_dhCheckIndexDrift('US', this, 'dh-us-idx-diff-result')">เช็คกับ Wikipedia</button>
+        <button class="filter-btn" onclick="_dhGoto('financials')">ไปหน้างบการเงิน (sync ต่อ)</button>
       </div>
+      <div id="dh-us-idx-diff-result" style="display:none;margin-top:8px;font-size:11px"></div>
     </div>
 
-    <!-- ดัชนี HK -->
     <div style="padding:10px 0;border-bottom:1px solid var(--border)">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <strong style="font-size:12.5px;min-width:110px">📈 ดัชนี HK (HSI/HSTECH/HSCEI)</strong>
-        <span style="font-size:11px;color:var(--text2)">มีปุ่มเช็คอยู่แล้วในหน้า "งบการเงิน" → แท็บต่างประเทศ (DR) → ปุ่ม HK</span>
-        <button class="filter-btn" onclick="_dhGoto('financials')">ไปหน้างบการเงิน</button>
+        <button class="filter-btn" onclick="_dhCheckIndexDrift('HK', this, 'dh-hk-idx-diff-result')">เช็คกับ Wikipedia</button>
+        <button class="filter-btn" onclick="_dhGoto('financials')">ไปหน้างบการเงิน (sync ต่อ)</button>
       </div>
+      <div id="dh-hk-idx-diff-result" style="display:none;margin-top:8px;font-size:11px"></div>
     </div>
 
-    <!-- ดัชนี JP -->
     <div style="padding:10px 0 0">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <strong style="font-size:12.5px;min-width:110px">📈 ดัชนี JP (Nikkei 225)</strong>
-        <span style="font-size:11px;color:var(--text2)">มีปุ่มเช็คอยู่แล้วในหน้า "งบการเงิน" → แท็บต่างประเทศ (DR) → ปุ่ม JP</span>
-        <button class="filter-btn" onclick="_dhGoto('financials')">ไปหน้างบการเงิน</button>
+        <button class="filter-btn" onclick="_dhCheckIndexDrift('JP', this, 'dh-jp-idx-diff-result')">เช็คกับ Wikipedia</button>
+        <button class="filter-btn" onclick="_dhGoto('financials')">ไปหน้างบการเงิน (sync ต่อ)</button>
       </div>
+      <div id="dh-jp-idx-diff-result" style="display:none;margin-top:8px;font-size:11px"></div>
     </div>
   </div>
 </div>
@@ -4435,6 +4481,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260802a"></script>
+<script src="static/dashboard.js?v=20260802f"></script>
 </body>
 </html>

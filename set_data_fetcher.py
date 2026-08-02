@@ -28,6 +28,12 @@ except ImportError as e:
     raise
 
 XLS_FILE     = "listedCompanies_en_US.xls"
+# ไฟล์ฝั่งไทยจาก SET.or.th — คอลัมน์เรียงเหมือนไฟล์อังกฤษเป๊ะ (symbol ตรงกัน 100%)
+# ต่างแค่หัวตาราง/ชื่อบริษัท/กลุ่มอุตสาหกรรม/หมวดธุรกิจเป็นภาษาไทย + encoding TIS-620
+# ใช้เสริม "ชื่อบริษัทภาษาไทย" (name_th) และเป็นแหล่งสำรองถ้าไฟล์อังกฤษโหลดไม่ได้
+# หน้าเว็บ SET: https://www.set.or.th/th/market/information/securities-list/main
+XLS_FILE_TH  = "listedCompanies_th_TH.xls"
+_TH_ENCODING = "cp874"
 
 # สูตรคำนวณทั้งหมดอยู่ที่ core/metrics.py (single source of truth)
 # re-export ที่นี่เพื่อ backward compatibility กับ app.py และ tests
@@ -54,11 +60,17 @@ from core.metrics import (                       # noqa: E402
 # 1. อ่านรายชื่อหุ้นจากไฟล์ SET
 # ============================================================
 
-def _try_download_xls(path):
-    """ดาวน์โหลด XLS ใหม่จาก SET.or.th พร้อม backup/restore ถ้าไม่สำเร็จ"""
+def _try_download_xls(path, encoding=None):
+    """ดาวน์โหลด XLS ใหม่จาก SET.or.th พร้อม backup/restore ถ้าไม่สำเร็จ
+    ชื่อไฟล์ปลายทาง (basename ของ path) ใช้เป็นชื่อไฟล์บน SET ตรงๆ — รองรับทั้ง
+    listedCompanies_en_US.xls (หลัก) และ listedCompanies_th_TH.xls (ชื่อบริษัทไทย)
+    encoding: ไฟล์ฝั่งไทยเป็น TIS-620/cp874 ไม่ใช่ utf-8 — ต้องส่งมาตอน validate
+    ไม่งั้น pandas เดาผิดแล้วได้ตัวอักษรเพี้ยน (ยังไม่ error แต่กันไว้ก่อน)"""
     import urllib.request, shutil
+    fname = os.path.basename(path)
+    lang  = "th" if "_th_TH" in fname else "en"
     from core.net import ssl_context
-    url = "https://www.set.or.th/dat/eod/listedcompany/static/listedCompanies_en_US.xls"
+    url = f"https://www.set.or.th/dat/eod/listedcompany/static/{fname}"
     backup = path + ".bak"
     # backup ไฟล์เดิม
     if os.path.exists(path):
@@ -67,7 +79,7 @@ def _try_download_xls(path):
         ctx = ssl_context()
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-            "Referer":    "https://www.set.or.th/en/market/product/stock/quote/",
+            "Referer":    f"https://www.set.or.th/{lang}/market/product/stock/quote/",
             "Accept":     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         })
         with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
@@ -77,43 +89,89 @@ def _try_download_xls(path):
             raise ValueError(f"ไฟล์เล็กเกินไป ({len(data)} bytes) — น่าจะเป็น error page")
         # ตรวจสอบว่ามี table จริง
         import io
-        test = pd.read_html(io.BytesIO(data), header=None)
+        test = pd.read_html(io.BytesIO(data), header=None, encoding=encoding)
         if not test:
             raise ValueError("ไม่พบตารางในไฟล์ที่ดาวน์โหลด")
         # ผ่านทุก check — บันทึกไฟล์ใหม่
         with open(path, "wb") as f:
             f.write(data)
-        print(f"[XLS] อัพเดทสำเร็จ ({len(data):,} bytes)")
+        print(f"[XLS] อัพเดทสำเร็จ: {fname} ({len(data):,} bytes)")
         if os.path.exists(backup):
             os.remove(backup)
+        return True
     except Exception as e:
-        print(f"[XLS] ดาวน์โหลดไม่สำเร็จ ({e}) — ใช้ไฟล์เดิม")
+        print(f"[XLS] ดาวน์โหลดไม่สำเร็จ: {fname} ({e}) — ใช้ไฟล์เดิม")
         # restore backup
         if os.path.exists(backup):
             shutil.copy2(backup, path)
             os.remove(backup)
+        return False
 
 
-def load_set_symbols(base_dir=None):
-    path = os.path.join(base_dir, XLS_FILE) if base_dir else XLS_FILE
-    # ลองดาวน์โหลดใหม่ทุกครั้ง (มี backup ป้องกัน)
-    _try_download_xls(path)
-    # fallback: ถ้าไม่มี .xls ให้หา .xlsx
-    if not os.path.exists(path):
-        alt = path.replace(".xls", ".xlsx")
-        if os.path.exists(alt):
-            path = alt
-        else:
-            raise FileNotFoundError(
-                f"ไม่พบไฟล์ {path}\n"
-                "โหลดจาก: https://www.set.or.th/dat/eod/listedcompany/static/listedCompanies_en_US.xls"
-            )
+# หัวตารางไฟล์ไทยเป็นคนละคำกับไฟล์อังกฤษทั้งแถว — ใช้จับคอลัมน์ในโหมด fallback
+# (คีย์ = ชื่อ field ในระบบ, ค่า = คำที่ต้องเจอในหัวคอลัมน์ไทย)
+_TH_COL_KEYS = {
+    "symbol":   "หลักทรัพย์",
+    "name":     "บริษัท",
+    "market":   "ตลาด",
+    "industry": "กลุ่มอุตสาหกรรม",
+    "sector":   "หมวดธุรกิจ",
+}
 
-    # ลอง read_html ก่อน (ไฟล์ .xls จาก SET.or.th เป็น HTML table)
-    # ถ้าไม่ได้ให้ลอง .xlsx ด้วย read_excel
+# ไทย -> อังกฤษ สำหรับโหมด fallback (อ่านไฟล์ไทยแทนไฟล์อังกฤษที่โหลดไม่ได้)
+# ต้องแปลงกลับเป็นอังกฤษเสมอ เพราะ industry/sector ถูกใช้เป็น "คีย์" จับคู่กับดัชนีกลุ่ม
+# ^XXX.BK และ mapping อื่นทั่วระบบ (ปล่อยเป็นไทยจะทำให้กลุ่มแตกเป็นคนละก้อนเงียบๆ)
+_TH_INDUSTRY_EN = {
+    "เกษตรและอุตสาหกรรมอาหาร":  "Agro & Food Industry",
+    "สินค้าอุปโภคบริโภค":        "Consumer Products",
+    "ธุรกิจการเงิน":             "Financials",
+    "สินค้าอุตสาหกรรม":          "Industrials",   # ฝั่ง mai ใช้ "Industrial" — ปรับตาม market ตอนแปลง
+    "อสังหาริมทรัพย์และก่อสร้าง": "Property & Construction",
+    "ทรัพยากร":                  "Resources",
+    "บริการ":                    "Services",
+    "เทคโนโลยี":                 "Technology",
+}
+
+_TH_SECTOR_EN = {
+    "กระดาษและวัสดุการพิมพ์":     "Paper & Printing Materials",
+    "กองทุนรวมอสังหาริมทรัพย์และกองทรัสต์เพื่อการลงทุนในอสังหาริมทรัพย์": "Property Fund & REITs",
+    "การท่องเที่ยวและสันทนาการ":   "Tourism & Leisure",
+    "การแพทย์":                   "Health Care Services",
+    "ขนส่งและโลจิสติกส์":          "Transportation & Logistics",
+    "ของใช้ส่วนตัวและเวชภัณฑ์":    "Personal Products & Pharmaceuticals",
+    "ของใช้ในครัวเรือนและสำนักงาน": "Home & Office Products",
+    "ชิ้นส่วนอิเล็กทรอนิกส์":       "Electronic Components",
+    "ธนาคาร":                     "Banking",
+    "ธุรกิจการเกษตร":              "Agribusiness",
+    "บรรจุภัณฑ์":                  "Packaging",
+    "บริการรับเหมาก่อสร้าง":       "Construction Services",
+    "บริการเฉพาะกิจ":              "Professional Services",
+    "ประกันภัยและประกันชีวิต":      "Insurance",
+    "ปิโตรเคมีและเคมีภัณฑ์":        "Petrochemicals & Chemicals",
+    "พลังงานและสาธารณูปโภค":       "Energy & Utilities",
+    "พัฒนาอสังหาริมทรัพย์":        "Property Development",
+    "พาณิชย์":                     "Commerce",
+    "ยานยนต์":                     "Automotive",
+    "วัสดุก่อสร้าง":                "Construction Materials",
+    "วัสดุอุตสาหกรรมและเครื่องจักร": "Industrial Materials & Machinery",
+    "สื่อและสิ่งพิมพ์":             "Media & Publishing",
+    "อาหารและเครื่องดื่ม":          "Food & Beverage",
+    "เงินทุนและหลักทรัพย์":         "Finance & Securities",
+    "เทคโนโลยีสารสนเทศและการสื่อสาร": "Information & Communication Technology",
+    "เหล็ก และ ผลิตภัณฑ์โลหะ":      "Steel and Metal Products",
+    "แฟชั่น":                      "Fashion",
+}
+
+
+def _read_listed_table(path, encoding=None):
+    """อ่านไฟล์ listedCompanies_*.xls -> DataFrame ที่ตั้งหัวคอลัมน์แล้ว
+    ไฟล์จาก SET.or.th จริงๆ เป็น HTML table (ไม่ใช่ xls ไบนารี) — read_html ก่อน
+    แล้วค่อย fallback ไป read_excel เผื่อผู้ใช้เอา .xlsx จริงมาวางเอง
+    หาแถวหัวตารางจาก keyword ทั้งฝั่งอังกฤษ (symbol+market/company) และฝั่งไทย
+    (หลักทรัพย์+ตลาด/บริษัท) — ไฟล์ไทยหัวตารางเป็นภาษาไทยทั้งแถว"""
     tables = None
     try:
-        tables = pd.read_html(path, header=None)
+        tables = pd.read_html(path, header=None, encoding=encoding)
         if not tables:
             raise ValueError("no tables")
     except Exception:
@@ -128,20 +186,124 @@ def load_set_symbols(base_dir=None):
             df_raw = pd.read_excel(path, header=None, engine="openpyxl")
         tables = [df_raw]
 
-    df = None
     for t in tables:
         for i, row in t.iterrows():
             row_str = " ".join(str(v).lower() for v in row.values)
-            if "symbol" in row_str and ("market" in row_str or "company" in row_str):
+            is_en = "symbol" in row_str and ("market" in row_str or "company" in row_str)
+            # ฝั่งไทยต้องเทียบทั้งเซลล์แบบเป๊ะ ไม่ใช่ substring ของทั้งแถว — แถวชื่อเรื่อง
+            # ("รายชื่อบริษัทจดทะเบียนในตลาดหลักทรัพย์แห่งประเทศไทย") มีทั้งคำว่า "หลักทรัพย์"
+            # และ "ตลาด" ซ่อนอยู่ในประโยค จะถูกจับเป็นหัวตารางแทนแถวหัวจริงที่อยู่ถัดลงมา
+            cells = [str(v).strip() for v in row.values]
+            is_th = ("หลักทรัพย์" in cells) and ("ตลาด" in cells or "บริษัท" in cells)
+            if is_en or is_th:
                 t.columns = t.iloc[i]
                 t = t.iloc[i + 1:].reset_index(drop=True)
                 t.columns = [str(c).strip() for c in t.columns]
-                df = t
-                break
-        if df is not None:
-            break
-    if df is None:
-        raise ValueError("ไม่พบตารางรายชื่อหุ้นในไฟล์ HTML")
+                return t
+    raise ValueError("ไม่พบตารางรายชื่อหุ้นในไฟล์ HTML")
+
+
+def _load_thai_listed(base_dir=None, download=True):
+    """อ่านไฟล์ไทย -> {symbol: {"name_th","industry_th","sector_th"}}
+    ใช้ 2 ทาง: (ก) เสริมชื่อบริษัทไทยให้ไฟล์อังกฤษ (ปกติ) (ข) เป็นแหล่งหลักในโหมด
+    fallback ตอนไฟล์อังกฤษโหลดไม่ได้เลย — ล้มเหลวได้ไม่กระทบงานหลัก (คืน {} เฉยๆ)"""
+    path = os.path.join(base_dir, XLS_FILE_TH) if base_dir else XLS_FILE_TH
+    try:
+        if download:
+            _try_download_xls(path, encoding=_TH_ENCODING)
+        if not os.path.exists(path):
+            return {}
+        df = _read_listed_table(path, encoding=_TH_ENCODING)
+        cols = {}
+        for key, kw in _TH_COL_KEYS.items():
+            for col in df.columns:
+                if kw in col:
+                    cols[key] = col
+                    break
+        if "symbol" not in cols:
+            return {}
+        out = {}
+        for _, row in df.iterrows():
+            sym = str(row.get(cols["symbol"], "")).strip().upper()
+            if not sym or sym in ("NAN", "หลักทรัพย์"):
+                continue
+            def _get(k):
+                v = str(row.get(cols.get(k, ""), "")).strip()
+                return "" if v in ("nan", "-", "N/A") else v
+            out[sym] = {"name_th":     _get("name"),
+                        "industry_th": _get("industry"),
+                        "sector_th":   _get("sector"),
+                        "market":      _get("market")}
+        return out
+    except Exception as e:
+        print(f"[XLS-TH] อ่านไฟล์ไทยไม่สำเร็จ ({e}) — ข้ามชื่อไทย ใช้ชื่ออังกฤษอย่างเดียว")
+        return {}
+
+
+def _symbols_from_thai(thai_rows):
+    """สร้างรายชื่อหุ้นจากไฟล์ไทยล้วน — ใช้เฉพาะโหมด fallback (ไฟล์อังกฤษโหลดไม่ได้
+    และไม่มีไฟล์เดิมในเครื่อง) แปลง industry/sector กลับเป็นอังกฤษเสมอเพื่อให้จับคู่
+    ดัชนีกลุ่ม ^XXX.BK ได้เหมือนเดิม · ตัวที่แปลไม่ออก (SET เพิ่มหมวดใหม่) ตกเป็น
+    "Unknown" ตามพฤติกรรมเดิมของช่องว่าง ไม่ปล่อยชื่อไทยหลุดไปทำให้กลุ่มแตก"""
+    symbols = []
+    for sym, d in thai_rows.items():
+        market = d.get("market", "")
+        if market not in ("SET", "mai", ""):
+            continue
+        ind_th, sec_th = d.get("industry_th", ""), d.get("sector_th", "")
+        clean_industry = _TH_INDUSTRY_EN.get(ind_th, "Unknown")
+        # ฝั่ง mai ใช้ "Industrial" (ไม่มี s) ต่างจาก SET ที่เป็น "Industrials"
+        if market == "mai" and clean_industry == "Industrials":
+            clean_industry = "Industrial"
+        clean_sector = _TH_SECTOR_EN.get(sec_th) if sec_th else None
+        if clean_sector is None:
+            clean_sector = (clean_industry + " -mai") if market == "mai" else "Unknown"
+        if market == "mai":
+            clean_industry = clean_industry + " -mai"
+        symbols.append({
+            "symbol":   sym,
+            "ticker":   f"{sym}.BK",
+            "name":     d.get("name_th") or sym,   # ไม่มีชื่ออังกฤษให้ใช้ในโหมดนี้
+            "name_th":  d.get("name_th", ""),
+            "market":   market,
+            "industry": clean_industry,
+            "sector":   clean_sector,
+        })
+    return symbols
+
+
+def load_set_symbols(base_dir=None):
+    path = os.path.join(base_dir, XLS_FILE) if base_dir else XLS_FILE
+    # ลองดาวน์โหลดใหม่ทุกครั้ง (มี backup ป้องกัน)
+    _try_download_xls(path)
+    # ไฟล์ไทย: ดึงคู่กันเสมอเพื่อเอา "ชื่อบริษัทภาษาไทย" มาเสริม (ไม่ critical —
+    # ล้มเหลวได้โดยไม่กระทบ) และเป็นแหล่งสำรองถ้าไฟล์อังกฤษใช้ไม่ได้เลย
+    thai_rows = _load_thai_listed(base_dir)
+
+    # fallback: ถ้าไม่มี .xls ให้หา .xlsx
+    if not os.path.exists(path):
+        alt = path.replace(".xls", ".xlsx")
+        if os.path.exists(alt):
+            path = alt
+        elif thai_rows:
+            # ไฟล์อังกฤษหายทั้งคู่แต่ไฟล์ไทยยังโหลดได้ — เดินต่อด้วยข้อมูลไทย ดีกว่า
+            # ล้มทั้งรอบ (แปลง industry/sector กลับเป็นอังกฤษให้แล้วใน _symbols_from_thai)
+            print(f"[XLS] ไม่พบ {os.path.basename(path)} — ใช้ไฟล์ไทย {XLS_FILE_TH} แทนทั้งชุด")
+            return _symbols_from_thai(thai_rows)
+        else:
+            raise FileNotFoundError(
+                f"ไม่พบไฟล์ {path}\n"
+                "โหลดจาก: https://www.set.or.th/dat/eod/listedcompany/static/listedCompanies_en_US.xls\n"
+                "หรือหน้าเว็บ SET: https://www.set.or.th/th/market/information/securities-list/main"
+            )
+
+    try:
+        df = _read_listed_table(path)
+    except Exception as e:
+        if thai_rows:
+            print(f"[XLS] อ่าน {os.path.basename(path)} ไม่สำเร็จ ({e}) — ใช้ไฟล์ไทย {XLS_FILE_TH} แทนทั้งชุด")
+            return _symbols_from_thai(thai_rows)
+        raise
 
     col_map = {}
     for col in df.columns:
@@ -178,6 +340,9 @@ def load_set_symbols(base_dir=None):
             "symbol":   sym,
             "ticker":   f"{sym}.BK",
             "name":     name     if name     not in _blank else sym,
+            # ชื่อไทยจากไฟล์ th_TH (symbol ตรงกัน 100% กับไฟล์อังกฤษ) — ค่าว่างถ้าโหลด
+            # ไฟล์ไทยไม่ได้ ฝั่ง UI ตกกลับไปใช้ชื่ออังกฤษเองเมื่อไม่มีค่า
+            "name_th":  (thai_rows.get(sym) or {}).get("name_th", ""),
             "market":   market,
             "industry": clean_industry,
             "sector":   clean_sector,
@@ -295,6 +460,9 @@ def process_stock(info_dict, close, volume, high=None, low=None):
             "symbol":           info_dict["symbol"],
             "ticker":           info_dict["ticker"],
             "name":             info_dict["name"],
+            # ชื่อบริษัทภาษาไทย (จาก listedCompanies_th_TH.xls) — ใช้ค้นหา/แสดงคู่ชื่ออังกฤษ
+            # .get() เพราะ info_dict อาจมาจากแหล่งเก่าที่ยังไม่มีคีย์นี้ (cache/ทดสอบ)
+            "name_th":          info_dict.get("name_th", ""),
             "market":           info_dict["market"],
             "industry":         info_dict["industry"],
             "sector":           info_dict["sector"],

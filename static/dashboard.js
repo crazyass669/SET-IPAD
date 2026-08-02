@@ -2848,9 +2848,12 @@ function renderStocksTable() {
   let stocks = [...DATA.stocks];
   if (industryFilter !== "ALL") stocks = stocks.filter(s => s.industry === industryFilter);
   if (sectorFilter   !== "ALL") stocks = stocks.filter(s => s.sector   === sectorFilter);
+  // name_th = ชื่อบริษัทภาษาไทยจาก listedCompanies_th_TH.xls (ดู set_data_fetcher.py)
+  // ค้นด้วยคำไทยได้เลย เช่น "ปูนซิเมนต์" เจอ SCC · ว่างได้ถ้าโหลดไฟล์ไทยไม่สำเร็จ
   if (stockSearch) stocks = stocks.filter(s =>
     s.symbol.toLowerCase().includes(stockSearch) ||
-    (s.name || '').toLowerCase().includes(stockSearch)
+    (s.name || '').toLowerCase().includes(stockSearch) ||
+    (s.name_th || '').toLowerCase().includes(stockSearch)
   );
   if (dqOnlyFilter) stocks = stocks.filter(s => s.dq && s.dq.rs_eligible === false);
   const dqChip = document.getElementById("dq-only-chip");
@@ -2890,7 +2893,7 @@ function renderStocksTable() {
       <tr data-sym="${s.symbol}">
         <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score??"-"}</span></td>
         <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}${dqBadge(s)}${insiderBadge(s.symbol)}${shortBadge(s.symbol)}${nvdrBadge(s.symbol)}</td>
-        <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
+        <td title="${_escHtml(s.name_th || s.name || '')}" style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
         <td style="font-size:11px">${s.industry||"—"}</td>
         <td style="font-size:11px">${s.sector||"—"}</td>
         <td class="r">${s.price?.toFixed(2)??"—"}</td>
@@ -6461,7 +6464,52 @@ const _FS_FCF_NOTE_HTML = `
   </div>
 </div>`;
 
-const _BT_NOTE_HTML_BY_ID = { 'dh-cli-note': _CLI_FIN_NOTE_HTML, 'fs-fcf-note': _FS_FCF_NOTE_HTML, 'scr-fcf-note': _FS_FCF_NOTE_HTML };
+// ============================================================
+// สอนใช้ rename_symbol.py / mark_delisted.py — เจอครั้งแรก 2026-08-02 ตอน BANPU
+// ควบรวม BPP + PSTC เปลี่ยนชื่อเป็น POWER พร้อมกัน (ดูการ์ด 🔍 เช็คหุ้นเข้าใหม่/ถูกถอด
+// ด้านล่างหน้านี้ — บั๊ก/เหตุการณ์จริงจะโผล่ตรงนั้นก่อน) เขียนสคริปต์ไว้กันต้องเขียน SQL มือทุกรอบ
+// ============================================================
+const _SYMBOL_EVENT_NOTE_HTML = `
+<div style="font-size:12px;line-height:1.75">
+  <div style="font-weight:700;font-size:13px;margin-bottom:6px">🧑‍💻 หุ้นเปลี่ยนชื่อย่อ/ถูกควบรวม — ต้องกดอะไรต่อ</div>
+  <div style="color:var(--text2);margin-bottom:10px">การ์ด 🔍 ด้านล่างเช็คได้แค่ว่า "มีตัวใหม่/ตัวหายไป" เทียบกับ SET.or.th เฉยๆ (report-only
+  ไม่แก้ไฟล์ให้อัตโนมัติ เพราะแยกไม่ออกเองว่าหายไปเพราะเพิกถอนจริง/แค่เปลี่ยนชื่อ/ควบรวม) —
+  <b>ต้องตรวจข่าว SET.or.th ก่อนเสมอ</b>ว่าเป็นเหตุการณ์ไหนใน 2 แบบข้างล่าง แล้วรันคำสั่งที่ตรงสถานการณ์
+  ผ่าน Command Prompt/Terminal ที่โฟลเดอร์ SET_Dashboard (หรือดับเบิลคลิกไฟล์ <code>.bat</code> คู่กันแทนพิมพ์คำสั่งเองก็ได้)</div>
+
+  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#1f6feb22;color:#58a6ff;font-weight:600;margin-bottom:6px">① เปลี่ยนชื่อย่อ (บริษัทเดิม หุ้นเดิม แค่เปลี่ยนตัวย่อ) — เช่น PSTC → POWER</div>
+  <div style="color:var(--text2);margin-bottom:4px">ใช้ <code>python rename_symbol.py &lt;ชื่อเก่า&gt; &lt;ชื่อใหม่&gt;</code> หรือดับเบิลคลิก <code>rename_symbol.bat</code>
+  แล้วพิมพ์ชื่อเก่า/ใหม่ตอนถาม</div>
+  <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:11.5px">
+    <code>python rename_symbol.py PSTC POWER</code><br>
+    <span style="color:var(--text2)">→ สำรอง set_prices.db + financials.db อัตโนมัติก่อนแก้ → ย้ายราคาทั้งหมด/งบ 3 แหล่ง (Yahoo+SET+Finnomena)/ปันผล
+    จาก PSTC ไปเป็น POWER → ถ้า POWER มีข้อมูลติดมาแล้วบางส่วน (เช่นระบบเริ่มดึงเองตั้งแต่วันเปลี่ยนชื่อ) จะเก็บของ POWER
+    ไว้ก่อนเมื่อวันที่ชนกัน ไม่ทับ → ลบ PSTC ทิ้งหลังย้ายเสร็จ</span>
+  </div>
+
+  <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:20px;background:#e3b34122;color:#e3b341;font-weight:600;margin-bottom:6px">② ถูกควบรวมหายไปเลย (ไม่มีชื่อใหม่ให้ย้ายข้อมูลไปหา) — เช่น BPP ถูก absorb เข้า BANPU</div>
+  <div style="color:var(--text2);margin-bottom:4px">ใช้ <code>python mark_delisted.py &lt;symbol&gt; "&lt;เหตุผล&gt;"</code> หรือดับเบิลคลิก <code>mark_delisted.bat</code></div>
+  <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:11.5px">
+    <code>python mark_delisted.py BPP "ควบรวมเข้า BANPU มีผลสมบูรณ์ตามกฎหมาย 31 ก.ค. 2569"</code><br>
+    <span style="color:var(--text2)">→ บันทึกลง delisted_log.json ทันที (ปกติต้องรอราคานิ่ง 180 วันให้ระบบเดาเหตุผลเอง — อันนี้บันทึก
+    เหตุผลจริงไว้ล่วงหน้าเลย) <b>ไม่ได้ลบราคา/งบเก่าออก</b> เก็บไว้ใช้ backtest ได้ตามปกติ ระบบจะกรองออกจาก universe
+    งบการเงินให้เองตอนราคานิ่งเกิน 180 วันอยู่ดี</span>
+  </div>
+
+  <table style="border-collapse:collapse;font-size:11.5px;margin-top:4px;width:100%">
+    <tr style="color:var(--text2)"><td style="padding:2px 12px 2px 0">สถานการณ์</td><td style="padding:2px 12px 2px 0">ใช้สคริปต์ไหน</td><td>ตัวอย่างจริงที่เจอ</td></tr>
+    <tr><td style="padding:2px 12px 2px 0">เปลี่ยนชื่อย่อ บริษัท/หุ้นเดิม</td><td style="padding:2px 12px 2px 0">① rename_symbol.py</td><td>PSTC → POWER (24 ก.ค. 69)</td></tr>
+    <tr><td style="padding:2px 12px 2px 0">ควบรวม ถูก absorb หายไปเลย</td><td style="padding:2px 12px 2px 0">② mark_delisted.py</td><td>BPP → BANPU (31 ก.ค. 69)</td></tr>
+    <tr><td style="padding:2px 12px 2px 0">แขวนชั่วคราวรอ relist (ไม่ได้หายถาวร)</td><td style="padding:2px 12px 2px 0">ไม่ต้องทำอะไร</td><td>BANPU พักเทรดรอกลับมา 3-4 ส.ค. 69 หลังควบรวม BPP</td></tr>
+  </table>
+
+  <div style="color:var(--text2);margin-top:8px;font-size:11px">💡 ราคายังขยับสดอยู่ในเครื่อง (เช็คได้จากตาราง "ความสด" ด้านบน) แปลว่าไม่ใช่เพิกถอนถาวรแน่ๆ — ถ้าไม่แน่ใจว่าเป็นแบบไหน
+  ถามได้เลยไม่ต้องเดาเอง<br>
+  ⚠ รันเสร็จแล้วต้อง <b>restart แอป</b> (หรือรอ cache หมดอายุ ~6 ชม.) แล้วกด "⚡ Quick Update" อีกรอบ ให้ RS/EMA/Stage
+  คำนวณจากประวัติเต็มใหม่ — ไม่งั้นหน้าเว็บยังโชว์ค่าเก่า/ตัวเก่าค้างอยู่</div>
+</div>`;
+
+const _BT_NOTE_HTML_BY_ID = { 'dh-cli-note': _CLI_FIN_NOTE_HTML, 'fs-fcf-note': _FS_FCF_NOTE_HTML, 'scr-fcf-note': _FS_FCF_NOTE_HTML, 'dh-symbol-event-note': _SYMBOL_EVENT_NOTE_HTML };
 
 function toggleBtNote(boxId) {
   const el = document.getElementById(boxId);
@@ -16620,11 +16668,11 @@ const DH_SOURCE_MAP = {
   nvdr:                 { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   insider:              { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   hedge_holdings:       { text: 'หน้า 🐋 Hedge Holdings — ปุ่ม "⟳ อัพเดท Hedge Holdings"', fn: 'startHedgeRefresh', fnLabel: '⟳ อัพเดท Hedge Holdings', gotoPage: 'hedge' },
-  set_universe:         { text: 'ต้องโหลด listedCompanies_en_US.xls จาก SET.or.th เองแล้ววางทับไฟล์เดิม — ไม่มีปุ่มในแอป' },
+  set_universe:         { text: '⚡ Quick Update / ⟳ Full Refresh ดาวน์โหลด listedCompanies_en_US.xls + _th_TH.xls (ชื่อไทย) จาก SET.or.th ใหม่ให้เองทุกรอบ — ไม่ต้องวางไฟล์เอง · โหลดมือได้ที่ set.or.th/th/market/information/securities-list/main ถ้าเน็ตบล็อก', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   drift_th:             { text: 'เช็คอัตโนมัติสัปดาห์ละครั้งท้าย Quick Update — กดเช็คมือได้เลยที่การ์ดด้านล่างในหน้านี้', fn: 'checkSetUniverseUpdates', fnLabel: '🔍 เช็คกับ SET.or.th' },
-  drift_us:             { text: 'เช็คอัตโนมัติสัปดาห์ละครั้งท้าย Quick Update — หรือกดเช็คมือที่หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม US', fn: 'checkUSIndexUpdates', fnLabel: '🔍 เช็คดัชนี US', gotoPage: 'financials' },
-  drift_hk:             { text: 'เช็คอัตโนมัติสัปดาห์ละครั้งท้าย Quick Update — หรือกดเช็คมือที่หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม HK', fn: 'checkHKIndexUpdates', fnLabel: '🔍 เช็คดัชนี HK', gotoPage: 'financials' },
-  drift_jp:             { text: 'เช็คอัตโนมัติสัปดาห์ละครั้งท้าย Quick Update — หรือกดเช็คมือที่หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม JP', fn: 'checkJPIndexUpdates', fnLabel: '🔍 เช็คดัชนี JP', gotoPage: 'financials' },
+  drift_us:             { text: 'เช็คอัตโนมัติสัปดาห์ละครั้งท้าย Quick Update — กดเช็คมือได้เลยที่นี่ หรือที่หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม US', driftMarket: 'US', fnLabel: '🔍 เช็คดัชนี US', gotoPage: 'financials' },
+  drift_hk:             { text: 'เช็คอัตโนมัติสัปดาห์ละครั้งท้าย Quick Update — กดเช็คมือได้เลยที่นี่ หรือที่หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม HK', driftMarket: 'HK', fnLabel: '🔍 เช็คดัชนี HK', gotoPage: 'financials' },
+  drift_jp:             { text: 'เช็คอัตโนมัติสัปดาห์ละครั้งท้าย Quick Update — กดเช็คมือได้เลยที่นี่ หรือที่หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม JP', driftMarket: 'JP', fnLabel: '🔍 เช็คดัชนี JP', gotoPage: 'financials' },
   us_index_membership:  { text: 'หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม US → "ดึงเฉพาะที่ขาด/เก่า"', fn: 'startUSIndexSync', fnLabel: '🔄 Sync ดัชนี US', gotoPage: 'financials' },
   hk_index_membership:  { text: 'หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม HK → "ดึงเฉพาะที่ขาด/เก่า"', fn: 'startHKIndexSync', fnLabel: '🔄 Sync ดัชนี HK', gotoPage: 'financials' },
   jp_index_membership:  { text: 'หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม JP → "ดึงเฉพาะที่ขาด/เก่า"', fn: 'startJPIndexSync', fnLabel: '🔄 Sync ดัชนี JP', gotoPage: 'financials' },
@@ -16665,18 +16713,47 @@ function _dhRunAction(fnName) {
   if (typeof fn === 'function') fn();
 }
 
-// เช็คดัชนี US/HK/JP (checkUSIndexUpdates ฯลฯ) เขียนผลลง DOM ที่อยู่ในแท็บ "ต่างประเทศ (DR)"
-// ของหน้างบการเงินเท่านั้น — เรียกตรงๆ จากปุ่มในหน้า Data Health (ที่ยังไม่ได้สลับไปหน้า/แท็บ
-// นั้น) แล้วผลจะเงียบหายเพราะ element ปลายทางถูกซ่อนอยู่ (display:none) ดูเหมือนปุ่ม
-// "กดแล้วไม่ทำงาน" ทั้งที่ backend ทำงานสำเร็จจริง — ฟังก์ชันนี้พาไปหน้า/แท็บ/ตลาดที่ถูกต้อง
-// ก่อนค่อยรันเช็ค ผลจะได้โผล่ให้เห็นจริง
-const _DH_FIN_INDEX_MARKET = { checkUSIndexUpdates: 'US', checkHKIndexUpdates: 'HK', checkJPIndexUpdates: 'JP' };
-function _dhRunFinIndexCheck(fnName) {
-  _dhGoto('financials');
-  setFinTab('dr', document.getElementById('fin-tab-dr-btn'));
-  const mk = _DH_FIN_INDEX_MARKET[fnName];
-  const mkBtnId = { US: 'fin-mir-us', HK: 'fin-mir-hk', JP: 'fin-mir-jp' }[mk];
-  _finMirBrowse(mk, document.getElementById(mkBtnId));
+// เช็ค drift ดัชนี US/HK/JP ตรงๆ ในหน้า Data Health (ไม่ต้องเด้งไปหน้างบการเงิน) — ยิง endpoint
+// เดียวกับ checkUSIndexUpdates/HK/JP (หน้างบการเงิน แท็บต่างประเทศ (DR)) แต่เขียนผลลง container
+// ของตัวเองที่อยู่ใต้ปุ่มในตาราง Data Health โดยตรง เดิมปุ่มนี้เรียก checkUSIndexUpdates ฯลฯ ตรงๆ
+// ซึ่งเขียนผลลง DOM id คงที่ในหน้างบการเงิน (เช่น us-idx-diff-result) — ถ้าไม่ได้สลับไปหน้านั้น
+// element ปลายทางจะซ่อนอยู่ (display:none) ทำให้ดูเหมือนกดแล้วไม่ทำงาน หน้างบการเงินเองยังมีปุ่ม
+// เดิม (checkUSIndexUpdates ฯลฯ) ใช้งานได้ตามปกติ ไม่ได้แตะ
+const _DH_DRIFT_CFG = {
+  US: { endpoint: '/api/us-index-check-updates', keys: ['SP500', 'DOW', 'NDX'], labels: FIN_IDX_LABEL },
+  HK: { endpoint: '/api/hk-index-check-updates', keys: ['HSI', 'HSCEI', 'HSTECH'], labels: FIN_HK_IDX_LABEL },
+  JP: { endpoint: '/api/jp-index-check-updates', keys: ['NIKKEI225'], labels: FIN_JP_IDX_LABEL },
+};
+// boxId: ระบุเมื่อผู้เรียกมี container ของตัวเอง — ปุ่มชุดนี้มี 2 ที่ในหน้า Data Health
+// (แถวในตารางสถานะ + การ์ด "🔍 เช็คหุ้นเข้าใหม่/ถูกถอด" ล่างสุด) ถ้าใช้ id เดียวกันทั้งคู่จะกลาย
+// เป็น duplicate id — getElementById คืนตัวแรกเสมอ กดปุ่มในการ์ดล่างแล้วผลไปโผล่ในตารางบนแทน
+async function _dhCheckIndexDrift(market, btn, boxId) {
+  const cfg = _DH_DRIFT_CFG[market];
+  if (!cfg) return;
+  const box = document.getElementById(boxId || `dh-drift-result-${market.toLowerCase()}`);
+  if (btn) btn.disabled = true;
+  if (box) { box.style.display = 'block'; box.innerHTML = '<span style="color:var(--text2)">กำลังเช็คกับ Wikipedia...</span>'; }
+  try {
+    const r = await _fetchTimeout(cfg.endpoint, 30000);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    if (box) _renderIndexDiff(box.id, cfg.keys, cfg.labels, d);
+  } catch (e) {
+    if (box) box.innerHTML = `<span style="color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</span>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// checkSetUniverseUpdates เขียนผลลง DOM ของการ์ด "🔍 เช็คหุ้นเข้าใหม่/ถูกถอด" ที่อยู่คนละ
+// การ์ดกับตารางสถานะด้านบน (อยู่หน้าเดียวกันแต่ไกลกัน) — ปุ่มในแถวตารางเองไม่มี id เลย
+// ไม่มีการเปลี่ยนแปลงให้เห็นตรงจุดที่กด ถ้าผู้ใช้ไม่เลื่อนจอลงไปดูจะดูเหมือน "กดแล้วไม่ทำงาน"
+// ทั้งที่ backend สำเร็จจริง — scroll ไปหาการ์ดปลายทางก่อนค่อยรันเช็ค
+const _DH_LOCAL_SCROLL_TARGET = { checkSetUniverseUpdates: 'dh-th-diff-btn' };
+function _dhRunLocalCheck(fnName) {
+  const id = _DH_LOCAL_SCROLL_TARGET[fnName];
+  const el = id && document.getElementById(id);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   const fn = window[fnName];
   if (typeof fn === 'function') fn();
 }
@@ -16685,10 +16762,10 @@ function _dhSourceCell(key) {
   const src = DH_SOURCE_MAP[key];
   if (!src) return '—';
   const btns = [];
-  // checkUSIndexUpdates/HK/JP เขียนผลลง DOM ในแท็บ "ต่างประเทศ (DR)" ของหน้างบการเงิน — เรียกผ่าน
-  // _dhRunFinIndexCheck ให้พาไปหน้า/แท็บ/ตลาดที่ถูกต้องก่อน ไม่งั้นผลจะเงียบหาย (ดูเหมือนกดไม่ทำงาน)
-  if (src.fn) {
-    const runner = _DH_FIN_INDEX_MARKET[src.fn] ? '_dhRunFinIndexCheck' : '_dhRunAction';
+  if (src.driftMarket) {
+    btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhCheckIndexDrift('${src.driftMarket}', this)">${src.fnLabel || 'เช็ค'}</button>`);
+  } else if (src.fn) {
+    const runner = _DH_LOCAL_SCROLL_TARGET[src.fn] ? '_dhRunLocalCheck' : '_dhRunAction';
     btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="${runner}('${src.fn}')">${src.fnLabel || 'อัพเดท'}</button>`);
   }
   if (src.gotoPage) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhGoto('${src.gotoPage}')">${src.gotoLabel || 'ไปหน้านั้น'}</button>`);
@@ -16697,7 +16774,8 @@ function _dhSourceCell(key) {
   if (src.fn2) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhRunAction('${src.fn2}')">${src.fnLabel2 || 'อัพเดท'}</button>`);
   if (src.gotoPage2) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhGoto('${src.gotoPage2}')">${src.gotoLabel2 || 'ไปหน้านั้น'}</button>`);
   const btnRow = btns.length ? `<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">${btns.join('')}</div>` : '';
-  return `<span>${src.text}</span>${btnRow}`;
+  const resultBox = src.driftMarket ? `<div id="dh-drift-result-${src.driftMarket.toLowerCase()}" style="display:none;margin-top:6px;font-size:11px"></div>` : '';
+  return `<span>${src.text}</span>${btnRow}${resultBox}`;
 }
 
 function _dhAgeText(item) {
@@ -16940,7 +17018,8 @@ async function checkSetUniverseUpdates() {
       <div>
         <div style="font-size:12px;font-weight:600;color:var(--red);margin-bottom:6px">🗑 มีในเครื่อง แต่ไม่อยู่ในลิสต์ SET.or.th แล้ว (${d.removed.length} ตัว)</div>
         <div style="font-size:11.5px">${d.removed.join(', ')}</div>
-        <div style="font-size:10.5px;color:var(--text2);margin-top:4px">อาจเปลี่ยนชื่อย่อ/ควบรวม/เพิกถอน — ตรวจก่อนสรุปว่าเป็นเพิกถอนจริง</div>
+        <div style="font-size:10.5px;color:var(--text2);margin-top:4px">อาจเปลี่ยนชื่อย่อ/ควบรวม/เพิกถอน — ตรวจก่อนสรุปว่าเป็นเพิกถอนจริง (เช่นเช็คข่าว SET.or.th)<br>
+          ถ้ายืนยันแล้ว: เปลี่ยนชื่อย่อ (เช่น PSTC→POWER) ใช้ <code>python rename_symbol.py &lt;เก่า&gt; &lt;ใหม่&gt;</code> (ย้ายราคา/งบ/ปันผลให้ต่อเนื่อง) · ถูกควบรวมหายไปเลย (เช่น BPP→BANPU) ใช้ <code>python mark_delisted.py &lt;symbol&gt; "เหตุผล"</code> — มี .bat ให้ดับเบิลคลิกทั้งคู่ที่ root โปรเจกต์</div>
       </div>` : '';
     box.innerHTML = (newHtml || remHtml) ? newHtml + remHtml
       : '<div class="empty" style="padding:8px">ตรงกับ SET.or.th ทั้งหมด ไม่มีอะไรต้องอัปเดต</div>';

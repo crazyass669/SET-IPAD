@@ -4670,10 +4670,23 @@ def data_health():
         missing_note="ยังไม่เคยดึง Hedge Holdings ในเครื่องนี้ — กดปุ่ม '⟳ อัพเดท Hedge Holdings' "
                       "ในหน้า 🐋 Hedge Holdings", optional=True))
 
-    # หุ้นเข้าใหม่/ถูกถอด
-    items.append(_dh_item(
+    # หุ้นเข้าใหม่/ถูกถอด — ไฟล์อังกฤษเป็นตัวหลัก (symbol/market/industry/sector ทั้งระบบ
+    # อ่านจากไฟล์นี้) ส่วนไฟล์ไทยให้แค่ "ชื่อบริษัทภาษาไทย" เสริม ไม่มีก็ไม่พัง — จึงไม่เอา
+    # มารวมตัดสินสถานะ แค่ต่อท้ายหมายเหตุถ้าหาย/ค้างเกิน 90 วัน (ดู set_data_fetcher.py)
+    _set_uni = _dh_item(
         "set_universe", "รายชื่อหุ้น SET (listedCompanies xls)", "หุ้นเข้าใหม่/ถูกถอด",
-        _dh_mtime(os.path.join(BASE_DIR, "listedCompanies_en_US.xls")), 45 * 24, 90 * 24))
+        _dh_mtime(os.path.join(BASE_DIR, "listedCompanies_en_US.xls")), 45 * 24, 90 * 24)
+    _th_xls_at = _dh_mtime(os.path.join(BASE_DIR, "listedCompanies_th_TH.xls"))
+    _th_age = _dh_age_hours(_th_xls_at)
+    _th_warn = None
+    if _th_age is None:
+        _th_warn = "⚠ ยังไม่มีไฟล์ชื่อไทย (_th_TH) — ตารางหุ้นไทยจะโชว์ชื่ออังกฤษอย่างเดียว"
+    elif _th_age >= 90 * 24:
+        _th_warn = f"⚠ ไฟล์ชื่อไทย (_th_TH) เก่า {_th_age/24:.0f} วัน — ชื่อไทยของหุ้นเข้าใหม่อาจยังไม่มี"
+    if _th_warn:
+        _prev = _set_uni.get("note")
+        _set_uni["note"] = f"{_prev} · {_th_warn}" if _prev else _th_warn
+    items.append(_set_uni)
 
     items.append(_dh_item(
         "us_index_membership", "สมาชิกดัชนี US (S&P500/DOW/NDX)", "หุ้นเข้าใหม่/ถูกถอด",
