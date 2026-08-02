@@ -250,6 +250,9 @@
   .static-mode #val-refresh-btn,
   .static-mode #val-refresh-monthly-btn,
   .static-mode #dr-quick-btn,
+  /* etf-live-btn ยิง /api/live-price ต่อตัวเหมือน dr-quick-btn — ไม่ได้ bake ไว้ใน
+     STATIC_MAP เลย กดแล้วได้ "พลาด 13/13" เสมอบนเว็บ/iPad */
+  .static-mode #etf-live-btn,
   .static-mode #cm-mode-fin,
   .static-mode #cm-fullfin-link,
   .static-mode #spop-btn-fin,

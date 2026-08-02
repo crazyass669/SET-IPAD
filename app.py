@@ -939,7 +939,8 @@ def _etf_do_rebuild():
         etf_list = [{k: s.get(k) for k in (
             "symbol", "name_th", "name_en", "underlying", "underlying_class", "category",
             "issuer", "mgmt_fee", "investment_policy", "div_yield", "nav", "nav_date",
-            "pnav_ratio", "mkt_cap", "is_lna")} for s in prev]
+            "pnav_ratio", "mkt_cap", "aum", "value_traded", "dividend", "xd_date",
+            "market_maker", "is_lna")} for s in prev]
 
     yf_tickers = [f"{e['symbol']}.BK" for e in etf_list]
     raw = yf.download(
@@ -989,6 +990,11 @@ def _etf_do_rebuild():
             vol_history = [int(v) for v in vol_s.tail(260).tolist()] if len(vol_s) else []
             vol_today   = int(vol_s.iloc[-1]) if len(vol_s) else None
             vol_avg20   = int(vol_s.tail(21).iloc[:-1].mean()) if len(vol_s) >= 21 else None
+            # มูลค่าซื้อขายเฉลี่ย 20 วัน (บาท) — ตัวชี้สภาพคล่องจริงของ ETF ไทยหลายตัวที่
+            # เทรดเบามาก (เช่น ABFTH/UBOT/UHERO) แต่ผลตอบแทนสวย ถ้าไม่โชว์ผู้ใช้จะไม่รู้ว่า
+            # ซื้อขายจริงแทบไม่ได้ — ประมาณจากราคาปิดล่าสุด x ปริมาณเฉลี่ย (ไม่แม่นเป๊ะเท่า
+            # value รายวันจริง แต่พอเพียงบอกระดับสภาพคล่อง)
+            value_avg20 = round(vol_avg20 * price) if vol_avg20 is not None else None
 
             n = min(30, len(close))
             ohlc30 = []
@@ -1030,6 +1036,12 @@ def _etf_do_rebuild():
 
             rs_raw = calc_rs_raw(ret_1m, ret_3m, ret_6m, ret_1y)
 
+            # Premium/Discount ต่อ NAV จริง — SET ให้แค่ pnavRatio ("P/NAV เท่า" ผลหาร
+            # ไม่ใช่ % ส่วนต่าง เช่น TDEX pnavRatio=1.29 แต่ premium จริง = -0.34%) คำนวณเองจาก
+            # ราคาปิด(yfinance) เทียบ nav(SET ณ nav_date, ปกติ T-1) แทน ไม่ใช้ pnavRatio ดิบ
+            nav_val = e.get("nav")
+            premium_pct = round((price - nav_val) / nav_val * 100, 2) if nav_val else None
+
             results.append({
                 "symbol":  e["symbol"],
                 "name_th": e.get("name_th"),
@@ -1041,10 +1053,16 @@ def _etf_do_rebuild():
                 "mgmt_fee": e.get("mgmt_fee"),
                 "investment_policy": e.get("investment_policy"),
                 "div_yield": e.get("div_yield"),
-                "nav":      e.get("nav"),
+                "nav":      nav_val,
                 "nav_date": e.get("nav_date"),
-                "pnav_ratio": e.get("pnav_ratio"),
-                "mkt_cap":  e.get("mkt_cap"),
+                "pnav_ratio": e.get("pnav_ratio"),  # P/NAV (เท่า) ดิบจาก SET — เก็บไว้อ้างอิง ไม่ใช่ % premium
+                "premium_pct": premium_pct,  # % premium/discount จริง — ใช้ตัวนี้แสดงผล/เรียง/heatmap
+                "mkt_cap":  e.get("mkt_cap"),  # หน่วยจดทะเบียน x ราคา — ไม่ใช่ขนาดกองทุนจริง ใช้ aum แทน
+                "aum":      e.get("aum"),  # มูลค่าทรัพย์สินสุทธิกองทุนจริง (บาท)
+                "value_traded": e.get("value_traded"),  # มูลค่าซื้อขายวันล่าสุด (บาท) จาก SET
+                "dividend": e.get("dividend"),  # เงินปันผลล่าสุด (บาท/หน่วย)
+                "xd_date":  e.get("xd_date"),
+                "market_maker": e.get("market_maker"),
                 "price":    round(price, 4),
                 "chg":      chg,
                 "ret_1w":   ret_1w,
@@ -1071,6 +1089,7 @@ def _etf_do_rebuild():
                 "vol_history":   vol_history,
                 "vol_today":     vol_today,
                 "vol_avg20":     vol_avg20,
+                "value_avg20":   value_avg20,
             })
         except Exception as ex:
             print(f"[ETF] {e['symbol']}: {ex}")
@@ -1116,8 +1135,11 @@ def get_etf_history(symbol):
 
 @app.route("/api/etf-full-refresh", methods=["POST"])
 def etf_full_refresh():
-    """ล้าง ETF cache ให้ /api/etf ดึงข้อมูลใหม่ทั้งหมดรอบถัดไป"""
-    _etf_cache.clear()
+    """บังคับให้ /api/etf ถือว่า cache หมดอายุแล้วดึงใหม่รอบถัดไป — ตั้ง ts=0 แทนการ
+    clear() ทั้งก้อน (เดิม clear() ทำลาย `prev` ที่ _etf_do_rebuild ใช้เป็น fallback ตอน
+    SET API ล่ม ทำให้ raise 'ไม่มี cache เก่า' แทนที่จะ fallback ได้ตามที่ตั้งใจไว้)"""
+    if _etf_cache.get("result"):
+        _etf_cache["ts"] = 0
     return jsonify({"ok": True})
 
 

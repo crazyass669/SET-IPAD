@@ -9891,7 +9891,7 @@ async function setCmTf(tf, btn) {
 function _cmStaticLimitNote() {
   const sub = document.getElementById('cm-sub');
   if (sub && !sub.textContent.includes('🌐')) {
-    sub.textContent += ' · 🌐 เวอร์ชันเว็บ: กราฟย้อนได้ ~1 ปี (หุ้นไทย) / ~100 วัน (DR)';
+    sub.textContent += ' · 🌐 เวอร์ชันเว็บ: กราฟย้อนได้ ~1 ปี (หุ้นไทย) / ~100 วัน (DR) / ~2 ปี (ETF)';
   }
 }
 
@@ -9938,6 +9938,8 @@ async function _fetchLongHistory() {
   try {
     const endpoint = _cmStock._isDR
       ? `/api/dr-history/${encodeURIComponent(_cmStock.symbol)}`
+      : _cmStock._isETF
+      ? `/api/etf-history/${encodeURIComponent(_cmStock.symbol)}`
       : _cmStock._isUSIdx
       ? `/api/us-history/${encodeURIComponent(_cmStock.symbol)}`
       : _cmStock._isHKIdx
@@ -17773,6 +17775,7 @@ function loadETFPage() {
       renderETFTable();
     })
     .catch(e => {
+      document.getElementById('etf-status').textContent = 'เกิดข้อผิดพลาด';
       document.getElementById('etf-table-wrap').innerHTML =
         `<div class="empty">เกิดข้อผิดพลาด: ${e.message}</div>`;
     });
@@ -17830,8 +17833,16 @@ async function etfQuickUpdate() {
       const r = await _fetchTimeout(`/api/live-price/${encodeURIComponent(s.symbol)}`, 15000);
       const d = await r.json();
       if (d.price != null && s.price) {
-        s.live_price = d.price;
-        s.live_chg   = +((d.price - s.price) / s.price * 100).toFixed(2);
+        // ตลาดปิด (นอกเวลาเทรด/วันหยุด) Yahoo คืนราคาปิดล่าสุดตัวเดิมซ้ำ — ตั้ง live_price
+        // เท่ากับ s.price เป๊ะ ถ้าตั้งไปตรงๆ จะขึ้น "⚡ Live +0.00%" เป็นขยะทุกครั้งที่กด
+        // นอกเวลาตลาด ทั้งที่ไม่มีอะไรใหม่จริง — โชว์เฉพาะตอนราคาขยับจริงเท่านั้น
+        if (Math.abs(d.price - s.price) > 1e-9) {
+          s.live_price = d.price;
+          s.live_chg   = +((d.price - s.price) / s.price * 100).toFixed(2);
+        } else {
+          delete s.live_price;
+          delete s.live_chg;
+        }
         ok++;
       } else fail++;
     } catch { fail++; }
@@ -17848,6 +17859,13 @@ function _updateETFCategoryCounts() {
     const n = cat === 'ALL' ? _etfData.length : _etfData.filter(s => _etfCategoryMatch(s, cat)).length;
     el.textContent = `(${n})`;
   });
+  // ปุ่ม "อื่นๆ" โผล่เฉพาะตอนมี ETF ที่ classify_category() (backend) จัดเข้า OTHER จริง —
+  // ปกติไม่ควรมีเลย ถ้าโผล่แปลว่า SET เปลี่ยน underlyingClassName เป็นค่าใหม่ที่ยังไม่รู้จัก
+  const otherBtn = document.getElementById('etf-cat-other-btn');
+  if (otherBtn) {
+    const nOther = _etfData.filter(s => _etfCategoryMatch(s, 'OTHER')).length;
+    otherBtn.style.display = nOther > 0 ? '' : 'none';
+  }
 }
 
 function _etfCategoryMatch(s, cat) {
@@ -17875,6 +17893,18 @@ function filterETF() {
   if (_etfData) renderETFTable();
 }
 
+// RS Score เป็น percentile (0–99) ของกลุ่ม non-L&I ทั้งหมด (~10 ตัว คละสินทรัพย์) —
+// ตัวเลขเดี่ยวๆ ตีความยากในกลุ่มเล็กขนาดนี้ (เช่น GLD ได้ 0 ทั้งที่ผลตอบแทน 1Y +24.8%
+// เพราะบังเอิญโหล่สุดเทียบหุ้นไทยขาขึ้นแรงกว่า) โชว์อันดับ "X/N" คู่กันให้ตีความง่ายขึ้นว่า
+// เป็นการเทียบสัมพัทธ์ในกลุ่มเล็ก ไม่ใช่คะแนนความแข็งแกร่งสัมบูรณ์
+function _etfRsRankText(s) {
+  if (s.rs_score == null || !_etfData) return '';
+  const cohort = _etfData.filter(x => !x.is_lna && x.rs_raw != null).sort((a, b) => b.rs_raw - a.rs_raw);
+  const idx = cohort.findIndex(x => x.symbol === s.symbol);
+  if (idx < 0) return '';
+  return `RS ${s.rs_score} — อันดับ ${idx + 1}/${cohort.length} ในกลุ่ม ETF ที่ไม่ใช่ L&I (คละสินทรัพย์ ไม่ใช่ผลตอบแทนสัมบูรณ์)`;
+}
+
 function _sortETF(arr) {
   return [...arr].sort((a, b) => {
     if (_etfSort === 'rs_desc')     return (b.rs_score ?? -1)   - (a.rs_score ?? -1);
@@ -17882,8 +17912,8 @@ function _sortETF(arr) {
     if (_etfSort === 'chg_asc')     return (a.chg ?? 999)       - (b.chg ?? 999);
     if (_etfSort === 'ret_1m_desc') return (b.ret_1m ?? -999)   - (a.ret_1m ?? -999);
     if (_etfSort === 'ret_1y_desc') return (b.ret_1y ?? -999)   - (a.ret_1y ?? -999);
-    if (_etfSort === 'pnav_desc')   return (b.pnav_ratio ?? -999) - (a.pnav_ratio ?? -999);
-    if (_etfSort === 'mkt_cap')     return (b.mkt_cap || 0)     - (a.mkt_cap || 0);
+    if (_etfSort === 'pnav_desc')   return (b.premium_pct ?? -999) - (a.premium_pct ?? -999);
+    if (_etfSort === 'mkt_cap')     return (b.aum || 0)          - (a.aum || 0);
     return a.symbol.localeCompare(b.symbol);
   });
 }
@@ -17906,8 +17936,8 @@ const ETF_HM_CFG = {
   ret_3m:     { getV:s=>s.ret_3m,     clr:v=>_heatColor(v,20), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>8?'#fff':'var(--text)', hint:'เขียว = ขึ้น · แดง = ลง (3 เดือน)' },
   ret_6m:     { getV:s=>s.ret_6m,     clr:v=>_heatColor(v,25), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>10?'#fff':'var(--text)', hint:'เขียว = ขึ้น · แดง = ลง (6 เดือน)' },
   ret_1y:     { getV:s=>s.ret_1y,     clr:v=>_heatColor(v,30), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>12?'#fff':'var(--text)', hint:'เขียว = ขึ้น · แดง = ลง (1 ปี)' },
-  rs_score:   { getV:s=>s.rs_score,   clr:v=>_heatColorRS(v),  fmt:v=>'RS '+Math.round(v), aFmt:v=>'avg RS '+Math.round(v), aPos:v=>v>=50, txt:v=>(v??50)>70||(v??50)<30?'#fff':'var(--text)', hint:'เขียว = RS สูง (แข็งแกร่งเทียบกลุ่ม ETF) · แดง = RS ต่ำ — ไม่รวม L&I' },
-  pnav_ratio: { getV:s=>s.pnav_ratio, clr:v=>_heatColor(v,3),  fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>1.5?'#fff':'var(--text)', hint:'เขียว = Premium (ราคา>NAV) · แดง = Discount (ราคา<NAV)' },
+  rs_score:   { getV:s=>s.rs_score,   clr:v=>_heatColorRS(v),  fmt:v=>'RS '+Math.round(v), aFmt:v=>'avg RS '+Math.round(v), aPos:v=>v>=50, txt:v=>(v??50)>70||(v??50)<30?'#fff':'var(--text)', hint:'เขียว = RS สูง · แดง = RS ต่ำ — เทียบสัมพัทธ์ในกลุ่ม ETF ที่ไม่ใช่ L&I เท่านั้น (~10 ตัว คละสินทรัพย์) ไม่ใช่ผลตอบแทนสัมบูรณ์' },
+  premium_pct: { getV:s=>s.premium_pct, clr:v=>_heatColor(v,3),  fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>1.5?'#fff':'var(--text)', hint:'เขียว = Premium (ราคา>NAV) · แดง = Discount (ราคา<NAV) — เทียบราคาปิดล่าสุดกับ NAV ล่าสุด (อาจเหลื่อมวัน 1 วัน)' },
 };
 
 function setEtfHmPeriod(key, btn) {
@@ -18008,7 +18038,11 @@ function renderETFTable() {
       s.symbol.toLowerCase().includes(_etfSearch) ||
       (s.name_th || '').toLowerCase().includes(_etfSearch) ||
       (s.name_en || '').toLowerCase().includes(_etfSearch) ||
-      (s.underlying || '').toLowerCase().includes(_etfSearch)
+      (s.underlying || '').toLowerCase().includes(_etfSearch) ||
+      (s.issuer || '').toLowerCase().includes(_etfSearch) ||
+      // ค้นคำที่อยู่แค่ในนโยบายการลงทุน เช่น "ทองคำ" (ชื่อกองจริงเป็นภาษาอังกฤษ/ทับศัพท์
+      // ไม่มีคำนี้เลย แต่ผู้ใช้คุ้นค้นด้วยคำไทยของสินทรัพย์อ้างอิงมากกว่า)
+      (s.investment_policy || '').toLowerCase().includes(_etfSearch)
     );
   }
   stocks = _sortETF(stocks);
@@ -18028,15 +18062,17 @@ function renderETFTable() {
     <th style="min-width:160px">ชื่อกองทุน</th>
     <th class="r" style="width:76px">ราคา</th>
     <th class="r" style="width:60px">CHG%</th>
-    <th class="r" style="width:42px" title="RS Score 0–99 — จัดอันดับเทียบภายในกลุ่ม ETF ที่ไม่ใช่ L&amp;I">RS</th>
+    <th class="r" style="width:42px" title="RS Score 0–99 — จัดอันดับเทียบภายในกลุ่ม ETF ที่ไม่ใช่ L&amp;I ด้วยกันเอง (คละสินทรัพย์ หุ้น/ทอง/พันธบัตร) ไม่ได้บอกผลตอบแทนสัมบูรณ์ — กองที่กำไรดีอาจได้ RS ต่ำถ้ากลุ่มอื่นแรงกว่า เพราะกลุ่มมีแค่ ~10 ตัว">RS</th>
     <th class="r" style="width:56px">1W%</th>
     <th class="r" style="width:56px">1M%</th>
     <th class="r" style="width:56px">3M%</th>
     <th class="r" style="width:56px">1Y%</th>
-    <th class="r" style="width:76px" title="ส่วนต่างราคาซื้อขายเทียบ NAV — บวก = Premium (แพงกว่ามูลค่าทรัพย์สินสุทธิ) ลบ = Discount">Premium/NAV</th>
+    <th class="r" style="width:76px" title="ส่วนต่างราคาปิดล่าสุดเทียบ NAV ล่าสุด (คำนวณเอง ไม่ใช่ P/NAV เท่าของ SET) — บวก = Premium (แพงกว่ามูลค่าทรัพย์สินสุทธิ) ลบ = Discount · NAV มักช้ากว่าราคา 1 วันทำการ">Premium/NAV</th>
     <th class="r" style="width:64px">NAV</th>
     <th class="r" style="width:64px">Div Yield</th>
     <th class="r" style="width:56px">Mgmt Fee</th>
+    <th class="r" style="width:64px" title="มูลค่าทรัพย์สินสุทธิกองทุน (AUM) — ไม่ใช่ market cap ของหน่วยจดทะเบียนที่อาจสูงกว่าเงินจริงที่บริหารอยู่มาก">AUM</th>
+    <th class="r" style="width:76px" title="มูลค่าซื้อขายเฉลี่ย 20 วันทำการ (ประมาณจากราคาปิด x ปริมาณเฉลี่ย) — บอกสภาพคล่องจริง ETF บางตัวเทรดเบามากจนซื้อขายจริงได้ยาก">สภาพคล่อง/วัน</th>
     <th style="width:110px">ประเภท</th>
     <th style="width:108px;text-align:center">Trend (100D)</th>
     <th style="width:136px;text-align:center">Pattern (30D)</th>
@@ -18052,10 +18088,11 @@ function renderETFTable() {
     const pct = v => v != null
       ? `<span class="${v >= 0 ? 'green' : 'red'}" style="font-size:11px">${v >= 0 ? '+' : ''}${v.toFixed(2)}%</span>`
       : '<span style="color:var(--text2);font-size:11px">—</span>';
+    const rsRank = _etfRsRankText(s);
     const rsNum = s.rs_score != null
-      ? `<span class="${rsColor(s.rs_score)}" style="font-weight:700;font-size:11px">${s.rs_score}</span>`
+      ? `<span class="${rsColor(s.rs_score)}" style="font-weight:700;font-size:11px" title="${rsRank}">${s.rs_score}</span>`
       : '<span style="color:var(--text2);font-size:11px">—</span>';
-    const catLbl = s.is_lna ? '⚡ L&I' : (ETF_CATEGORY_LABEL[s.category] || s.underlying_class || '—');
+    const catLbl = s.is_lna ? '⚡ L&I' : (ETF_CATEGORY_LABEL[s.category] || '—');
 
     return `<tr>
       <td>
@@ -18073,10 +18110,12 @@ function renderETFTable() {
       <td class="r">${pct(s.ret_1m)}</td>
       <td class="r">${pct(s.ret_3m)}</td>
       <td class="r">${pct(s.ret_1y)}</td>
-      <td class="r">${pct(s.pnav_ratio)}</td>
+      <td class="r">${pct(s.premium_pct)}</td>
       <td class="r" style="font-size:11px">${_drFmtPrice(s.nav)}</td>
       <td class="r" style="font-size:11px">${s.div_yield != null ? s.div_yield.toFixed(2) + '%' : '—'}</td>
       <td class="r" style="font-size:11px">${s.mgmt_fee != null ? s.mgmt_fee.toFixed(2) + '%' : '—'}</td>
+      <td class="r" style="font-size:11px">${_drFmtCap(s.aum)}</td>
+      <td class="r" style="font-size:11px">${_drFmtCap(s.value_avg20)}</td>
       <td style="font-size:10.5px;color:var(--text2)">${catLbl}</td>
       <td style="padding:4px 5px">
         <canvas class="dr-trend-cv" data-close='${JSON.stringify(s.close100||[])}' width="104" height="36" style="display:block;width:104px;height:36px"></canvas>
@@ -18094,10 +18133,15 @@ function renderETFTable() {
 function _renderETFDescription(s) {
   const box = document.getElementById('cm-desc-box');
   if (!box) return;
-  if (!s.investment_policy) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  if (!s.investment_policy && !s.market_maker) { box.style.display = 'none'; box.innerHTML = ''; return; }
   box.style.display = 'block';
-  box.innerHTML = `<div style="font-size:11px;color:var(--text2);margin-bottom:4px">📄 นโยบายการลงทุน (SET.or.th)</div>
-    <div style="font-size:12.5px;line-height:1.6">${s.investment_policy}</div>`;
+  box.innerHTML =
+    (s.investment_policy ? `<div style="font-size:11px;color:var(--text2);margin-bottom:4px">📄 นโยบายการลงทุน (SET.or.th)</div>
+    <div style="font-size:12.5px;line-height:1.6">${s.investment_policy}</div>` : '') +
+    // market maker เป็นตัวชี้คุณภาพสภาพคล่อง ETF ที่นักลงทุนใช้จริง (คอยดูแล spread ให้แคบ) —
+    // ตัดตัดสินทรัพย์ที่ไม่มี market maker ระบุไว้ก็มักเป็นตัวที่เทรดเบามาก (ดู value_avg20 คู่กัน)
+    (s.market_maker ? `<div style="font-size:11px;color:var(--text2);margin:10px 0 4px">🤝 Market Maker</div>
+    <div style="font-size:12.5px;line-height:1.6">${s.market_maker}</div>` : '');
 }
 
 function openETFChartModal(sym) {
@@ -18107,7 +18151,7 @@ function openETFChartModal(sym) {
   const titleEl = document.getElementById('cm-title');
   titleEl.textContent = `${s.symbol}  ${s.name_th || ''}`;
   titleEl.title = `${s.symbol}  ${s.name_th || ''}`;
-  const catLbl = s.is_lna ? '⚡ Leveraged/Inverse' : (ETF_CATEGORY_LABEL[s.category] || s.underlying_class || '—');
+  const catLbl = s.is_lna ? '⚡ Leveraged/Inverse' : (ETF_CATEGORY_LABEL[s.category] || '—');
   document.getElementById('cm-sub').textContent = `${catLbl} · ${s.underlying || ''} · ${s.issuer || ''}`;
   document.getElementById('cm-tv-link').href = `https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(s.symbol)}&interval=D`;
   const jittaLink = document.getElementById('cm-jitta-link');
@@ -18117,6 +18161,8 @@ function openETFChartModal(sym) {
     `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
   const cPct = v => v != null ? (v >= 0 ? '+' : '') + v.toFixed(2) + '%' : '—';
   const pCls = v => v == null ? '' : v >= 0 ? 'green' : 'red';
+  const athPctCls = v => v == null ? '' : v >= -5 ? 'green' : v >= -20 ? 'yellow' : 'red';
+  const fmtPx = v => v != null ? _drFmtPrice(v) : '—';
 
   document.getElementById('cm-metrics').innerHTML = [
     mk(_drFmtPrice(s.price) + _drLiveTag(s), 'ราคา'),
@@ -18124,14 +18170,29 @@ function openETFChartModal(sym) {
     mk(cPct(s.ret_1w), '1W%', pCls(s.ret_1w)),
     mk(cPct(s.ret_1m), '1M%', pCls(s.ret_1m)),
     mk(cPct(s.ret_3m), '3M%', pCls(s.ret_3m)),
+    mk(cPct(s.ret_6m), '6M%', pCls(s.ret_6m)),
+    mk(cPct(s.ret_1y), '1Y%', pCls(s.ret_1y)),
     mk(cPct(s.ret_ytd), 'YTD%', pCls(s.ret_ytd)),
+    // ต่อจากนี้เป็น field ที่ backend คำนวณไว้อยู่แล้ว (_etf_do_rebuild) แต่เดิมไม่เคยโผล่
+    // ใน UI เลยสักจุด — รูปแบบเดียวกับที่ DR ใช้ใน openDRChartModal (คงไว้ให้ตรงกัน)
+    `<span id="cm-extra-metrics" style="display:contents">` +
+      mk(fmtPx(s.high_52w), '52W High', 'text2') +
+      mk(fmtPx(s.low_52w),  '52W Low',  'text2') +
+      mk(fmtPx(s.ath),      'ATH',      'text2') +
+      mk(s.ath_pct != null ? (s.ath_pct >= 0 ? '+' : '') + s.ath_pct.toFixed(2) + '%' : '—', '% จาก ATH', athPctCls(s.ath_pct)) +
+    `</span>`,
     mk(_drFmtPrice(s.nav), `NAV${s.nav_date ? ' (' + s.nav_date.slice(0,10) + ')' : ''}`, 'text2'),
-    mk(cPct(s.pnav_ratio), 'Premium/NAV', pCls(s.pnav_ratio)),
+    mk(cPct(s.premium_pct), 'Premium/NAV', pCls(s.premium_pct)),
     mk(s.div_yield != null ? s.div_yield.toFixed(2) + '%' : '—', 'Div Yield', 'text2'),
     mk(s.mgmt_fee != null ? s.mgmt_fee.toFixed(2) + '%' : '—', 'ค่าธรรมเนียมจัดการ', 'text2'),
+    mk(s.dividend != null ? s.dividend.toFixed(4) + ' บาท' : '—', `ปันผลล่าสุด${s.xd_date ? ' (XD ' + s.xd_date.slice(0,10) + ')' : ''}`, 'text2'),
+    mk(_drFmtCap(s.aum), 'AUM', 'text2'),
+    mk(_drFmtCap(s.value_avg20), 'สภาพคล่อง/วัน (เฉลี่ย 20 วัน)', 'text2'),
+    mk(s.rs_score != null ? s.rs_score : '—', 'RS Score', s.rs_score != null ? rsColor(s.rs_score) : 'text2'),
+    mk(`${emaBadge(s.above_ema50)} ${emaBadge(s.above_ema200)}`, 'EMA50 / EMA200'),
   ].join('');
 
-  _cmStock = { ...s, symbol: s.symbol, price_history: null, _isETF: true, _isDR: false };
+  _cmStock = { ...s, symbol: s.symbol, _isETF: true, _isDR: false };
   _cmSyncPeerTearsheetButtons();
   _cmTf = '1y';
   _cmHistoryData = null;
@@ -18154,15 +18215,10 @@ function openETFChartModal(sym) {
   document.getElementById('chart-modal').classList.add('open');
   document.body.style.overflow = 'hidden';
 
-  const c100 = s.close100 || [];
-  if (c100.length) {
-    const today = new Date();
-    const initHistory = c100.map((price, i) => {
-      const d = new Date(today);
-      d.setDate(d.getDate() - (c100.length - 1 - i));
-      return [d.toISOString().slice(0, 10), price];
-    });
-    requestAnimationFrame(() => _drawChart(_cmStock, initHistory));
+  // price_history มาพร้อมวันที่จริงจาก backend อยู่แล้ว (ต่างจาก DR ที่มีแค่ close100
+  // ไม่มีวันที่ ต้องประมาณจากปฏิทิน) ใช้ตรงๆ เป็น preview ระหว่างรอ full history ยาวกว่า
+  if (s.price_history?.length) {
+    requestAnimationFrame(() => _drawChart(_cmStock, s.price_history));
   }
   _fetchETFFullHistory(sym);
 }
@@ -18180,18 +18236,33 @@ async function _fetchETFFullHistory(sym) {
 }
 
 // ── ETF ROTATION — RRG เทียบค่าเฉลี่ยกลุ่ม ETF (ตัด Leveraged/Inverse ออกจาก cohort) ──
+// benchmark เลือกได้ 2 แบบ: 'avg' (ค่าเฉลี่ยกลุ่ม ETF ทั้งหมด — เดิม แต่คละสินทรัพย์ หุ้น/
+// ทอง/พันธบัตร ทำให้ตำแหน่งใน quadrant ตีความยาก เช่น GLD/ABFTH ที่มีธรรมชาติต่างจากหุ้นมาก)
+// หรือ 'tdex' (เทียบกับ TDEX ตัวแทนหุ้นไทย SET50 ตรงๆ — เห็นชัดว่าชนะ/แพ้ตลาดหุ้นไทยจริงไหม)
 let _etfRotTf = 'long';
+let _etfRotBenchmark = 'avg';
 
 function _etfRotUpdateSubtitle() {
   const sub = document.getElementById('etfrot-subtitle');
   if (!sub) return;
-  sub.innerHTML = `RRG ของ ETF ไทยแต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่ม ETF ทั้งหมด</b> (ไม่รวม Leveraged/Inverse) · ` +
-    (_etfRotTf === 'short' ? 'แกน X = 1M% Y = 1W% (เทียบกลุ่ม)' : 'แกน X = 3M% Y = 1M% (เทียบกลุ่ม)');
+  const bmLabel = _etfRotBenchmark === 'tdex'
+    ? 'TDEX (ETF อ้างอิง SET50)'
+    : 'ค่าเฉลี่ยของกลุ่ม ETF ทั้งหมด (คละสินทรัพย์)';
+  sub.innerHTML = `RRG ของ ETF ไทยแต่ละตัว — เทียบกับ <b>${bmLabel}</b> (ไม่รวม Leveraged/Inverse) · ` +
+    (_etfRotTf === 'short' ? 'แกน X = 1M% Y = 1W% (เทียบ benchmark)' : 'แกน X = 3M% Y = 1M% (เทียบ benchmark)');
 }
 
 function setEtfRotTf(tf, btn) {
   _etfRotTf = tf;
   document.querySelectorAll('#etfrot-tf-long,#etfrot-tf-short').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  _etfRotUpdateSubtitle();
+  renderEtfRotation();
+}
+
+function setEtfRotBenchmark(bm, btn) {
+  _etfRotBenchmark = bm;
+  document.querySelectorAll('#etfrot-bm-avg,#etfrot-bm-tdex').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   _etfRotUpdateSubtitle();
   renderEtfRotation();
@@ -18217,12 +18288,19 @@ async function loadEtfRotation() {
 function renderEtfRotation() {
   if (!_etfData || !_etfData.length) return;
   const isShort = _etfRotTf === 'short';
-  const valid = _etfData.filter(s => !s.is_lna && (isShort
+  const useTdex = _etfRotBenchmark === 'tdex';
+  const tdex = useTdex ? _etfData.find(s => s.symbol === 'TDEX') : null;
+  // TDEX เองไม่ต้อง plot เป็นจุด (เทียบกับตัวเองจะติดอยู่ (0,0) เสมอ ไม่มีประโยชน์ และ
+  // จะบังจุดอื่นที่บังเอิญมาอยู่ตำแหน่งเดียวกันพอดี)
+  const valid = _etfData.filter(s => !s.is_lna && (!useTdex || s.symbol !== 'TDEX') && (isShort
     ? (s.ret_1m != null && s.ret_1w != null)
     : (s.ret_3m != null && s.ret_1m != null)));
   if (!valid.length) return;
   const avg = f => { const v = valid.filter(s => s[f] != null); return v.length ? v.reduce((a, s) => a + s[f], 0) / v.length : 0; };
-  const a3m = avg('ret_3m'), a1m = avg('ret_1m'), a1w = avg('ret_1w'), a6m = avg('ret_6m'), a1y = avg('ret_1y');
+  // ใช้ TDEX เป็นเส้นฐานแทนค่าเฉลี่ยกลุ่ม ถ้าเลือกโหมด 'tdex' — fallback ไปค่าเฉลี่ยกลุ่ม
+  // ถ้าหา TDEX ไม่เจอหรือ TDEX เองไม่มีค่าตอนนั้น (กันหน้าจอว่างเปล่าไปเลย)
+  const bm = f => useTdex && tdex && tdex[f] != null ? tdex[f] : avg(f);
+  const a3m = bm('ret_3m'), a1m = bm('ret_1m'), a1w = bm('ret_1w'), a6m = bm('ret_6m'), a1y = bm('ret_1y');
   const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
   const items = valid.map(s => ({
     name: s.symbol, region: s.category, ind: s.name_th,
@@ -18230,7 +18308,8 @@ function renderEtfRotation() {
     ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
   }));
   const info = document.getElementById('etfrot-info');
-  if (info) info.textContent = `${valid.length} ETF (ไม่รวม L&I) · benchmark = ค่าเฉลี่ยกลุ่ม` +
+  const bmName = useTdex && tdex ? 'TDEX (SET50)' : 'ค่าเฉลี่ยกลุ่ม';
+  if (info) info.textContent = `${valid.length} ETF (ไม่รวม L&I) · benchmark = ${bmName}` +
     (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
              : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
   drawRotationScatter(items, { canvasId: 'etf-rotation-map', legendId: 'etf-rot-legend', tf: _etfRotTf, onOpen: openETFChartModal, relative: true });

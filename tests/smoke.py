@@ -29,6 +29,7 @@ REQUIRED = [
     ("/api/nvdr",                  True,  None),
     ("/api/prices",                True,  None),
     ("/api/dr",                    True,  "stocks"),
+    ("/api/etf",                   True,  "stocks"),
 ]
 EXTERNAL = [  # ตรวจแบบผ่อนปรน — ล้มเหลวได้โดยไม่ FAIL (แหล่งข้อมูลนอก)
     ("/api/market-flow",  True, None),

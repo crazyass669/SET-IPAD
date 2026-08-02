@@ -2146,6 +2146,7 @@
     <button class="filter-btn" onclick="setETFCategory('BOND',this)" title="ETF อ้างอิงตราสารหนี้">💵 ตราสารหนี้ <span class="dr-region-count-badge" data-etf-cat="BOND"></span></button>
     <button class="filter-btn" onclick="setETFCategory('COMMODITY',this)" title="ETF อ้างอิงสินค้าโภคภัณฑ์ (เช่น ทองคำ)">🪙 โภคภัณฑ์ <span class="dr-region-count-badge" data-etf-cat="COMMODITY"></span></button>
     <button class="filter-btn" onclick="setETFCategory('LNI',this)" title="Leveraged/Inverse — ทวี/ผกผัน ความเสี่ยงสูง ไม่เข้า RS ranking/rotation cohort">⚡ L&amp;I <span class="dr-region-count-badge" data-etf-cat="LNI"></span></button>
+    <button class="filter-btn" id="etf-cat-other-btn" style="display:none" onclick="setETFCategory('OTHER',this)" title="ETF ที่ SET ยังไม่จัดเข้า 4 หมวดหลัก (ในประเทศ/ต่างประเทศ/ตราสารหนี้/โภคภัณฑ์)">📦 อื่นๆ <span class="dr-region-count-badge" data-etf-cat="OTHER"></span></button>
   </div>
 
   <!-- Sort -->
@@ -2157,7 +2158,7 @@
     <button class="filter-btn" onclick="setETFSort('ret_1m_desc',this)">1M% ↑</button>
     <button class="filter-btn" onclick="setETFSort('ret_1y_desc',this)">1Y% ↑</button>
     <button class="filter-btn" onclick="setETFSort('pnav_desc',this)" title="เรียงจาก Premium ต่อ NAV สูงสุด (ราคาแพงกว่ามูลค่าทรัพย์สินสุทธิมากที่สุด)">Premium ↑</button>
-    <button class="filter-btn" onclick="setETFSort('mkt_cap',this)">MKT CAP</button>
+    <button class="filter-btn" onclick="setETFSort('mkt_cap',this)" title="เรียงจากมูลค่าทรัพย์สินสุทธิกองทุน (AUM) สูงสุด">AUM</button>
     <button class="filter-btn" onclick="setETFSort('sym',this)">A–Z</button>
     <div class="dr-view-toggle">
       <button class="dr-view-btn active" id="etf-view-table" onclick="setETFView('table',this)">☰ Table</button>
@@ -2176,7 +2177,7 @@
     <button class="filter-btn" onclick="setEtfHmPeriod('ret_6m',this)">6M%</button>
     <button class="filter-btn" onclick="setEtfHmPeriod('ret_1y',this)">1Y%</button>
     <button class="filter-btn" onclick="setEtfHmPeriod('rs_score',this)" title="RS Score (0–99) — จัดอันดับเฉพาะกลุ่มไม่ใช่ L&amp;I">RS Score</button>
-    <button class="filter-btn" onclick="setEtfHmPeriod('pnav_ratio',this)" title="Premium/Discount ต่อ NAV">Premium/NAV</button>
+    <button class="filter-btn" onclick="setEtfHmPeriod('premium_pct',this)" title="Premium/Discount ต่อ NAV">Premium/NAV</button>
   </div>
   <div id="etf-hm-hint" style="display:none;font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
 
@@ -2969,6 +2970,10 @@
         <div class="filter-row" style="gap:0;margin:0">
           <button class="filter-btn active" id="etfrot-tf-long" onclick="setEtfRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
           <button class="filter-btn" id="etfrot-tf-short" onclick="setEtfRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+        </div>
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn active" id="etfrot-bm-avg" onclick="setEtfRotBenchmark('avg',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px" title="ค่าเฉลี่ยผลตอบแทนของ ETF ทุกตัวในกลุ่ม (ไม่รวม L&amp;I) — คละสินทรัพย์ หุ้น/ทอง/พันธบัตร">เทียบค่าเฉลี่ยกลุ่ม</button>
+          <button class="filter-btn" id="etfrot-bm-tdex" onclick="setEtfRotBenchmark('tdex',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px" title="เทียบกับ TDEX (ETF อ้างอิง SET50) แทนค่าเฉลี่ยคละสินทรัพย์ — เห็นชัดว่า ETF ตัวนั้นชนะ/แพ้ตลาดหุ้นไทยจริงไหม">เทียบ SET50 (TDEX)</button>
         </div>
         <span id="etfrot-refreshing" style="display:none;font-size:11px;color:var(--accent)">⟳ กำลังดึงข้อมูลชุดใหม่เบื้องหลัง...</span>
         <span id="etfrot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
