@@ -18750,6 +18750,7 @@ async function refreshMarketStats() {
         if (r2.ok) _valData = await r2.json();   // fetch ไม่สำเร็จ = คง _valData เดิมไว้
       } catch (e) { /* คง _valData เดิมไว้ */ }
       renderValuation();
+      renderMarketStatsExtra();   // ปันผล/market cap/breadth ถูกคงไว้ตอน rebuild — วาดใหม่ให้ตรงชุดข้อมูลใหม่
     }
     _showValDataMonth();   // อัพเดทป้ายเดือนข้อมูลให้ตรงหลัง refresh
   } catch(e) {
@@ -18836,30 +18837,68 @@ function renderMarketStatsExtra() {
   const box = document.getElementById('val-extra-box');
   if (!box || !_valData) return;
   const dy = _valData.div_yield, mc = _valData.mkt_cap, br = _valData.breadth;
-  if (!dy || !dy.dates || !dy.dates.length) { box.style.display = 'none'; return; }
+  const ok = s => !!(s && s.dates && s.dates.length && s.series);
+  // ไฟล์เก่า (rebuild จาก Table_PE/PBV อย่างเดียว) ไม่มีคีย์พวกนี้เลย — ซ่อนกล่องไปทั้งอัน
+  // แทนที่จะพังตอนอ่าน .series ของ undefined
+  if (!ok(dy) && !ok(mc) && !ok(br)) { box.style.display = 'none'; return; }
 
-  const toSeries = (stat, key) => stat.dates.map((d, i) => ({ d, v: stat.series[key][i] })).filter(o => o.v != null);
+  const toSeries = (stat, key) => (ok(stat) && stat.series[key])
+    ? stat.dates.map((d, i) => ({ d, v: stat.series[key][i] })).filter(o => o.v != null)
+    : [];
   const dySet = toSeries(dy, 'SET'), dyMai = toSeries(dy, 'mai');
   const mcSet = toSeries(mc, 'SET'), mcMai = toSeries(mc, 'mai');
-  const curMc = mcSet.length ? mcSet[mcSet.length - 1].v : null;
 
-  let breadthHtml = '<div style="font-size:12px;color:var(--text2)">ข้อมูลไม่พอ</div>';
-  if (br && br.dates && br.dates.length) {
+  const last = arr => arr.length ? arr[arr.length - 1] : null;
+  // %เปลี่ยนแปลงเทียบ n งวดก่อนหน้า — เทียบตามลำดับในซีรีส์ (ข้ามเดือนที่ไม่มีข้อมูลไปแล้ว)
+  const chgPct = (arr, back) => {
+    if (arr.length <= back) return null;
+    const a = arr[arr.length - 1 - back].v, b = arr[arr.length - 1].v;
+    return a ? (b - a) / a * 100 : null;
+  };
+  const chgHtml = (p, label) => p == null ? '' :
+    `<span style="color:${p >= 0 ? '#3ab464' : '#dc503c'};font-size:11px;margin-left:8px">${p >= 0 ? '+' : ''}${p.toFixed(2)}% ${label}</span>`;
+  // หน่วยในไฟล์ SET เป็น "ล้านบาท" — 20519190 -> 20.52 ล้านล้านบาท
+  const fmtMB = v => v == null ? '—'
+    : v >= 1e6 ? (v / 1e6).toFixed(2) + ' ล้านล้านบาท'
+    : (v / 1e3).toFixed(2) + ' พันล้านบาท';
+
+  // แถวสรุปค่าล่าสุด + MoM/YoY ใช้แทน _svgBand เมื่อยังไม่ถึง 8 งวด (ไม่งั้นกล่องจะขึ้นแค่
+  // "ข้อมูลไม่พอ" เฉยๆ ซึ่งเป็นสภาพปกติช่วงแรกที่เพิ่งเริ่มเก็บซีรีส์พวกนี้)
+  const latestRow = (arr, label, fmt) => {
+    const l = last(arr);
+    return `<div style="font-size:12px;margin:5px 0">
+      <b style="color:var(--text)">${label}</b>
+      <b style="margin-left:6px">${l ? fmt(l.v) : '—'}</b>
+      ${chgHtml(chgPct(arr, 1), 'MoM')}${chgHtml(chgPct(arr, 12), 'YoY')}
+      <span style="color:var(--muted);margin-left:8px">${l ? `ณ ${_thMonth(l.d)}` : ''} · เก็บมา ${arr.length} เดือน</span>
+    </div>`;
+  };
+  // ปันผลใช้แถบเทียบอดีตได้ (สูง = ถูก จึงส่ง lowerIsCheap=false) ส่วน Market Cap ไม่ใช้
+  // — โตขึ้นตามเวลาเป็นธรรมชาติ ถ้าเอาไปเข้าแถบ "ถูก/แพง" จุดจะติดแดงตลอดกาลโดยไม่มีความหมาย
+  const dyBlock = arr => arr.length >= 8 ? _svgBand(arr, arr === dySet ? 'SET' : 'mai', false) : '';
+
+  let breadthHtml = '<div style="font-size:12px;color:var(--text2)">ยังไม่มีข้อมูล</div>';
+  if (ok(br)) {
     const i = br.dates.length - 1;
     const s = br.series;
-    const netSet = (s.new_listed_SET[i] || 0) - (s.delisted_SET[i] || 0);
-    const netMai = (s.new_listed_mai[i] || 0) - (s.delisted_mai[i] || 0);
-    const netColor = n => n > 0 ? '#3ab464' : n < 0 ? '#dc503c' : 'var(--muted)';
-    const block = (label, listed, net, newC, delC) => `
+    const col = n => n > 0 ? '#3ab464' : n < 0 ? '#dc503c' : 'var(--muted)';
+    const block = (label, listedArr, newC, delC) => {
+      const cur = listedArr[i], prev = i > 0 ? listedArr[i - 1] : null;
+      const diff = (cur != null && prev != null) ? cur - prev : null;
+      return `
       <div>
         <div style="color:var(--muted);font-size:11px">จำนวนบริษัทจดทะเบียน ${label}</div>
-        <div style="font-size:18px;font-weight:700">${listed ?? '—'}</div>
-        <div style="font-size:11px;color:${netColor(net)}">${net > 0 ? '+' : ''}${net} เดือนนี้ (เข้าใหม่ ${newC ?? 0} / เพิกถอน ${delC ?? 0})</div>
+        <div style="font-size:18px;font-weight:700">${cur ?? '—'}
+          ${diff != null ? `<span style="font-size:11px;font-weight:600;color:${col(diff)}">${diff > 0 ? '+' : ''}${diff} จากเดือนก่อน</span>` : ''}
+        </div>
+        <div style="font-size:11px;color:var(--muted)">เดือนนี้: เข้าใหม่ <span style="color:#3ab464">${newC ?? 0}</span> · เพิกถอน <span style="color:#dc503c">${delC ?? 0}</span></div>
       </div>`;
-    breadthHtml = `<div style="display:flex;gap:24px;flex-wrap:wrap">
-      ${block('SET', s.listed_SET[i], netSet, s.new_listed_SET[i], s.delisted_SET[i])}
-      ${block('mai', s.listed_mai[i], netMai, s.new_listed_mai[i], s.delisted_mai[i])}
-    </div>`;
+    };
+    breadthHtml = `<div style="display:flex;gap:32px;flex-wrap:wrap">
+      ${block('SET', s.listed_SET, s.new_listed_SET[i], s.delisted_SET[i])}
+      ${block('mai', s.listed_mai, s.new_listed_mai[i], s.delisted_mai[i])}
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:8px">ผลต่าง "จากเดือนก่อน" อาจไม่เท่ากับ เข้าใหม่−เพิกถอน เพราะมีการย้ายตลาดระหว่าง SET↔mai ด้วย</div>`;
   }
 
   box.style.display = 'block';
@@ -18867,19 +18906,20 @@ function renderMarketStatsExtra() {
     <div class="card" style="padding:16px;margin-bottom:16px">
       <div style="font-weight:600;margin-bottom:4px;font-size:14px">อัตราเงินปันผลตอบแทนตลาด (Dividend Yield)</div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:10px">ยิ่งสูง = ตลาดยิ่ง "ถูก" เทียบพื้นฐานปันผล (ทิศทางตรงข้ามกับ P/E &amp; P/BV)</div>
-      ${_svgBand(dySet, 'SET', false)}
-      ${_svgBand(dyMai, 'mai', false)}
+      ${latestRow(dySet, 'SET', v => v.toFixed(2) + '%')}${dyBlock(dySet)}
+      ${latestRow(dyMai, 'mai', v => v.toFixed(2) + '%')}${dyBlock(dyMai)}
     </div>
     <div class="card" style="padding:16px;margin-bottom:16px">
       <div style="font-weight:600;margin-bottom:4px;font-size:14px">มูลค่าหลักทรัพย์ตามราคาตลาด (Market Cap)</div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">${curMc != null ? `SET ปัจจุบัน ${(curMc / 1e6).toFixed(2)} ล้านล้านบาท` : ''}</div>
-      ${_svgBand(mcSet, 'SET (ล้านบาท)', true)}
-      ${_svgBand(mcMai, 'mai (ล้านบาท)', true)}
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">ขนาดตลาดรวม — ดูทิศทาง/อัตราเติบโต ไม่ใช่ตัวชี้ถูก-แพง</div>
+      ${latestRow(mcSet, 'SET', fmtMB)}
+      ${latestRow(mcMai, 'mai', fmtMB)}
     </div>
     <div class="card" style="padding:16px;margin-bottom:16px">
       <div style="font-weight:600;margin-bottom:10px;font-size:14px">Breadth — จำนวนบริษัทจดทะเบียน</div>
       ${breadthHtml}
-    </div>`;
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin:-6px 0 16px">3 กล่องนี้มาจาก Market_Statistics_Month_th_TH.xls (ไม่ขึ้นกับปุ่มเลือกช่วงเวลาด้านล่าง — ใช้ข้อมูลเท่าที่เก็บสะสมไว้ทั้งหมด)</div>`;
 }
 
 async function loadValuationPage() {
@@ -19623,8 +19663,12 @@ function renderValuation() {
 
   // ── Chart title tooltips (inject into DOM elements) ──
   setTimeout(() => {
-    const peTitle = document.querySelector('#page-valuation .card:nth-child(3) div[style*="font-weight:600"]');
-    const pbvTitle = document.querySelector('#page-valuation .card:nth-child(4) div[style*="font-weight:600"]');
+    // ยิง id ตรงๆ — เดิมใช้ selector ตำแหน่ง (.card:nth-child(3)/(4)/:last-child) ซึ่งนับ
+    // ลูกของ parent ตัวไหนก็ได้ในหน้า: การ์ด P/BV ใน #val-summary กับการ์ดใน #val-extra-box
+    // ก็เข้าเงื่อนไขด้วย ทำให้ ⓘ "วิธีอ่านกราฟ P/E" ไปโผล่บนการ์ด Breadth และ ⓘ Zone
+    // Frequency หายไปเฉยๆ (ดูบั๊กเดียวกันที่เตือนไว้ใน loadValDailyBox)
+    const peTitle = document.getElementById('val-pe-chart-title');
+    const pbvTitle = document.getElementById('val-pbv-chart-title');
     if (peTitle && !peTitle.querySelector('.val-tip')) {
       peTitle.insertAdjacentHTML('beforeend',
         `<span class="val-tip" data-vtip="${TIPS.peChart.replace(/"/g,'&quot;')}">ⓘ</span>`);
@@ -19635,7 +19679,7 @@ function renderValuation() {
     }
 
     // Zone freq title
-    const freqTitle = document.querySelector('#page-valuation .card:last-child div[style*="font-weight:600"]');
+    const freqTitle = document.getElementById('val-zonefreq-title');
     if (freqTitle && !freqTitle.querySelector('.val-tip')) {
       freqTitle.insertAdjacentHTML('beforeend',
         `<span class="val-tip" data-vtip="${TIPS.zoneFreq.replace(/"/g,'&quot;')}">ⓘ</span>`);

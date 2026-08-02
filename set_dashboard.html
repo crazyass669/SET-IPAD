@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260802b">
+<link rel="stylesheet" href="static/dashboard.css?v=20260803a">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -2131,6 +2131,12 @@
       data-vtip="&lt;div class='tip-head'&gt;วิธี Rebuild ประวัติทั้งชุด (fallback)&lt;/div&gt;&lt;b&gt;1.&lt;/b&gt; เข้าเว็บ &lt;b&gt;SET.or.th&lt;/b&gt; → Statistics → P/E &amp;amp; P/BV&lt;br&gt;&lt;b&gt;2.&lt;/b&gt; ดาวน์โหลด &lt;b&gt;Table_PE.xls&lt;/b&gt; และ &lt;b&gt;Table_PBV.xls&lt;/b&gt;&lt;br&gt;&lt;b&gt;3.&lt;/b&gt; วางทับไฟล์เดิมในโฟลเดอร์ &lt;b&gt;SET_Dashboard&lt;/b&gt;&lt;br&gt;&lt;b&gt;4.&lt;/b&gt; กดปุ่ม ⟳ นี้ได้เลย — rebuild ประวัติ P/E &amp;amp; P/BV ทั้งชุดทับใหม่&lt;hr&gt;ใช้กรณีไฟล์ Market Statistics มีปัญหา หรืออยากได้ประวัติยาวตั้งแต่ต้น (ปกติใช้ปุ่มซ้ายมือพอ)">
       ⟳ Rebuild ประวัติ (Table_PE/PBV)
     </button>
+    <a href="https://www.set.or.th/th/market/statistics/market-statistics/main" target="_blank" rel="noopener"
+      style="font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border);
+             background:var(--bg-card2);color:#c8d0dc;cursor:pointer;display:flex;align-items:center;gap:6px;text-decoration:none"
+      title="เปิดหน้า Market Statistics ของ SET.or.th ในแท็บใหม่ เพื่อดาวน์โหลด Market_Statistics_Month_th_TH.xls">
+      🔗 เปิดหน้าดาวน์โหลด SET.or.th
+    </a>
     <span id="val-refresh-status" style="font-size:11px;color:var(--muted)"></span>
   </div>
   <div class="page-sub">P/E และ P/BV ย้อนหลัง เพื่อประเมิน Valuation Zone ของตลาด
@@ -2173,7 +2179,7 @@
 
   <!-- P/E Chart -->
   <div class="card" style="margin-bottom:16px;padding:16px">
-    <div style="font-weight:600;margin-bottom:4px;font-size:14px">P/E Ratio — SET Index</div>
+    <div id="val-pe-chart-title" style="font-weight:600;margin-bottom:4px;font-size:14px">P/E Ratio — SET Index</div>
     <div id="val-pe-info" style="font-size:12px;color:var(--muted);margin-bottom:10px"></div>
     <canvas id="val-pe-canvas" style="width:100%;height:260px"></canvas>
     <div style="display:flex;gap:16px;margin-top:8px;font-size:11px;flex-wrap:wrap">
@@ -2186,7 +2192,7 @@
 
   <!-- P/BV Chart SET -->
   <div class="card" style="margin-bottom:16px;padding:16px">
-    <div style="font-weight:600;margin-bottom:4px;font-size:14px">P/BV Ratio — SET Index</div>
+    <div id="val-pbv-chart-title" style="font-weight:600;margin-bottom:4px;font-size:14px">P/BV Ratio — SET Index</div>
     <div id="val-pbv-info" style="font-size:12px;color:var(--muted);margin-bottom:10px"></div>
     <canvas id="val-pbv-canvas" style="width:100%;height:260px"></canvas>
     <div style="display:flex;gap:16px;margin-top:8px;font-size:11px;flex-wrap:wrap">
@@ -2225,7 +2231,7 @@
 
   <!-- Zone frequency -->
   <div class="card" style="padding:16px;margin-bottom:16px">
-    <div style="font-weight:600;margin-bottom:12px;font-size:14px">สัดส่วนเวลาในแต่ละ Zone (ประวัติศาสตร์)</div>
+    <div id="val-zonefreq-title" style="font-weight:600;margin-bottom:12px;font-size:14px">สัดส่วนเวลาในแต่ละ Zone (ประวัติศาสตร์)</div>
     <div id="val-zone-freq" style="display:flex;gap:24px;flex-wrap:wrap"></div>
   </div>
 
@@ -4490,6 +4496,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260802g"></script>
+<script src="static/dashboard.js?v=20260803a"></script>
 </body>
 </html>

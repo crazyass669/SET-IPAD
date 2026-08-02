@@ -102,6 +102,21 @@ output = {
 }
 
 out_path = os.path.join(BASE_DIR, "set_market_stats.json")
+
+# ซีรีส์ที่มาจาก Market_Statistics_Month_th_TH.xls เท่านั้น (Table_PE/PBV.xls ไม่มี) —
+# ต้องคงไว้ เดิมสคริปต์นี้เขียนทับทั้งไฟล์ ทำให้ประวัติ ปันผล/มูลค่าหลักทรัพย์/breadth
+# ที่สะสมมาหลายปีหายทุกครั้งที่ rebuild (ดู import_market_stats_monthly.py)
+if os.path.exists(out_path):
+    try:
+        with open(out_path, encoding="utf-8") as f:
+            _old = json.load(f)
+        for _k in ("div_yield", "mkt_cap", "breadth"):
+            if _k in _old:
+                output[_k] = _old[_k]
+                print(f"คงซีรีส์เดิมไว้: {_k} ({len(_old[_k].get('dates', []))} เดือน)")
+    except Exception as e:
+        print(f"⚠️ อ่าน set_market_stats.json เดิมไม่ได้ ({e}) — เขียนใหม่ทั้งไฟล์")
+
 with open(out_path, "w", encoding="utf-8") as f:
     json.dump(output, f, ensure_ascii=False, indent=2)
 

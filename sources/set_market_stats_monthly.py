@@ -20,6 +20,7 @@ Table_PE/PBV.xls มีแค่ P/E-P/BV ระดับตลาด SET รว
 """
 import bisect
 import re
+from datetime import date as _date
 
 import numpy as np
 import pandas as pd
@@ -59,6 +60,10 @@ def _num(cell):
         return None
 
 
+def _int(v):
+    return None if v is None else int(round(v))
+
+
 def parse_annual_market_statistics(path):
     """คืน (records, year_ad)
     records: {"YYYY-MM": {"SET": {pe,pbv,div_yield,listed,new_listed,delisted,mkt_cap}, "mai": {...}}}
@@ -69,6 +74,12 @@ def parse_annual_market_statistics(path):
     if not m:
         raise ValueError(f"หาปีจากหัวไฟล์ไม่เจอ: {title!r}")
     year_ad = int(m.group(1)) - 543  # พ.ศ. -> ค.ศ.
+    # กันเคสโหลดไฟล์เวอร์ชันภาษาอังกฤษ (หัวไฟล์เป็น ค.ศ.) มาใส่ชื่อไทย — ลบ 543 แล้วจะได้
+    # ปี 1483 แล้ว upsert เดือนขยะเข้าไปต้นประวัติแบบเงียบๆ (ค่า P/E จริงแต่ผิดปี)
+    if not (1975 <= year_ad <= _date.today().year + 1):
+        raise ValueError(
+            f"ปีในหัวไฟล์ผิดปกติ: {title!r} -> ค.ศ. {year_ad} "
+            "(ต้องเป็นไฟล์เวอร์ชันภาษาไทย th_TH ที่หัวไฟล์เป็น พ.ศ.)")
 
     df = tables[1]
     header = df.iloc[0]
@@ -176,8 +187,11 @@ def merge_monthly(data, records):
         _upsert_point(data["div_yield"], ym, {"SET": s.get("div_yield"), "mai": mai.get("div_yield")})
         _upsert_point(data["mkt_cap"], ym, {"SET": s.get("mkt_cap"), "mai": mai.get("mkt_cap")})
         _upsert_point(data["breadth"], ym, {
-            "listed_SET": s.get("listed"), "new_listed_SET": s.get("new_listed"), "delisted_SET": s.get("delisted"),
-            "listed_mai": mai.get("listed"), "new_listed_mai": mai.get("new_listed"), "delisted_mai": mai.get("delisted"),
+            # จำนวนบริษัทเป็นจำนวนนับ — เก็บเป็น int ไม่ใช่ 636.0 ที่ _num คืนมา
+            "listed_SET": _int(s.get("listed")), "new_listed_SET": _int(s.get("new_listed")),
+            "delisted_SET": _int(s.get("delisted")),
+            "listed_mai": _int(mai.get("listed")), "new_listed_mai": _int(mai.get("new_listed")),
+            "delisted_mai": _int(mai.get("delisted")),
         })
 
     for key in ("pe", "pbv", "div_yield", "mkt_cap"):

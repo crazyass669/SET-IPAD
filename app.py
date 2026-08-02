@@ -5709,6 +5709,20 @@ def _run_refresh(period="max"):
 
 _MARKET_STATS_FILE = os.path.join(BASE_DIR, "set_market_stats.json")
 
+
+def _resolve_xls(name):
+    """หาไฟล์ .xls ต้นทางจาก SET — โฟลเดอร์โปรเจกต์ก่อน แล้วค่อยโฟลเดอร์ที่ผู้ใช้ดาวน์โหลดไว้
+    (ตั้ง env SET_XLS_DIR ได้ ไม่งั้น default ~/Downloads/dash) จะได้ไม่ต้องก๊อปไฟล์เข้ามาทุกเดือน
+    คืน (path, exists) — path เป็นตัวแรกที่เจอ ถ้าไม่เจอเลยคืน path ในโฟลเดอร์โปรเจกต์"""
+    cands = [os.path.join(BASE_DIR, name)]
+    extra = os.environ.get("SET_XLS_DIR") or os.path.join(os.path.expanduser("~"), "Downloads", "dash")
+    cands.append(os.path.join(extra, name))
+    for p in cands:
+        if os.path.exists(p):
+            return p, True
+    return cands[0], False
+
+
 @app.route("/api/market-stats")
 def market_stats():
     if not os.path.exists(_MARKET_STATS_FILE):
@@ -5759,10 +5773,10 @@ def refresh_market_stats():
     import pandas as pd
     from datetime import datetime as _dt
 
-    PE_FILE  = os.path.join(BASE_DIR, "Table_PE.xls")
-    PBV_FILE = os.path.join(BASE_DIR, "Table_PBV.xls")
+    PE_FILE,  pe_ok  = _resolve_xls("Table_PE.xls")
+    PBV_FILE, pbv_ok = _resolve_xls("Table_PBV.xls")
 
-    missing = [f for f in [PE_FILE, PBV_FILE] if not os.path.exists(f)]
+    missing = [f for f, ok in [(PE_FILE, pe_ok), (PBV_FILE, pbv_ok)] if not ok]
     if missing:
         return jsonify({"ok": False, "error": f"ไม่พบไฟล์: {', '.join(os.path.basename(f) for f in missing)}"}), 400
 
@@ -5834,6 +5848,7 @@ def refresh_market_stats():
 
     # check if newer than current
     old_latest = None
+    old = None
     if os.path.exists(_MARKET_STATS_FILE):
         try:
             with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
@@ -5851,6 +5866,11 @@ def refresh_market_stats():
         "pbv": {"dates": pbv_data["dates"], "series": pbv_data["series"],
                 "stats": {k: calc_stats(v) for k, v in pbv_data["series"].items()}},
     }
+    # ซีรีส์ที่มีเฉพาะใน Market_Statistics_Month_th_TH.xls (Table_PE/PBV ไม่มี) ต้องคงไว้ —
+    # เดิม rebuild ทับทั้งไฟล์ ทำให้ประวัติปันผล/มูลค่าหลักทรัพย์/breadth ที่สะสมมาหายทั้งชุด
+    for _k in ("div_yield", "mkt_cap", "breadth"):
+        if old and _k in old:
+            output[_k] = old[_k]
 
     _atomic_write_json(_MARKET_STATS_FILE, output)
 
@@ -5882,9 +5902,10 @@ def refresh_market_stats_monthly():
 
     from sources.set_market_stats_monthly import merge_monthly, parse_annual_market_statistics
 
-    SRC_FILE = os.path.join(BASE_DIR, "Market_Statistics_Month_th_TH.xls")
-    if not os.path.exists(SRC_FILE):
-        return jsonify({"ok": False, "error": "ไม่พบไฟล์: Market_Statistics_Month_th_TH.xls"}), 400
+    SRC_FILE, src_ok = _resolve_xls("Market_Statistics_Month_th_TH.xls")
+    if not src_ok:
+        return jsonify({"ok": False, "error": "ไม่พบไฟล์ Market_Statistics_Month_th_TH.xls "
+                                              f"(หาใน {BASE_DIR} และโฟลเดอร์ดาวน์โหลด)"}), 400
 
     try:
         records, year_ad = parse_annual_market_statistics(SRC_FILE)
@@ -5915,6 +5936,7 @@ def refresh_market_stats_monthly():
         "new_data": new_latest != old_latest,
         "months_in_file": len(records),
         "file_range": f"{min(records)} – {max(records)}",
+        "src_file": SRC_FILE,
         "pe_current":  pe_cur.get("current"),
         "pbv_current": pbv_cur.get("current"),
         "pe_zscore":   pe_cur.get("zscore"),
