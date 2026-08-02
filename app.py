@@ -119,7 +119,7 @@ _indices_job_state = {"running": False}
 from flask import Flask, jsonify, send_file, Response, request
 
 # สูตรคำนวณกลาง — ห้าม copy สูตรมาวางในไฟล์นี้ ให้ import จาก core.metrics เท่านั้น
-from core.metrics import calc_rs_raw, calc_ema, calc_return
+from core.metrics import calc_rs_raw, calc_ema, calc_return, calc_return_calendar
 
 # HTTP clients / static universe — แยกไว้ที่ sources/ (Phase 2 refactor)
 from sources.tradingview import INDEX_INFO, _yf_to_tv, _fetch_tv_bars
@@ -1009,13 +1009,17 @@ def _etf_do_rebuild():
                 except Exception:
                     pass
 
-            ret_1w = calc_return(close, 5)
-            ret_1m = calc_return(close, 21)
-            ret_3m = calc_return(close, 63)
-            ret_6m = calc_return(close, 126)
-            ret_1y = calc_return(close, 250)
-            ret_3y = calc_return(close, 756)
-            ret_5y = calc_return(close, 1260)
+            # ETF ไทยบางตัวเทรดไม่ครบทุกวันทำการ (เช่น UBOT/UHERO เบามาก) — นับ bar offset
+            # ตรงๆ แบบ calc_return จะได้หน้าต่างเวลายาวกว่าตั้งใจอย่างเงียบๆ (เจอจริง: "1M"
+            # กลายเป็นย้อนหลัง 1.5 เดือน) ใช้ calc_return_calendar (อิงวันปฏิทินจริงจาก index)
+            # แทน ให้เทียบกับ ETF อื่นในหน้า RRG ได้ตรงช่วงเวลาเดียวกัน
+            ret_1w = calc_return_calendar(close, 7)
+            ret_1m = calc_return_calendar(close, 30)
+            ret_3m = calc_return_calendar(close, 91)
+            ret_6m = calc_return_calendar(close, 182)
+            ret_1y = calc_return_calendar(close, 365)
+            ret_3y = calc_return_calendar(close, 1095)
+            ret_5y = calc_return_calendar(close, 1825)
 
             close_52w = close.iloc[-252:] if len(close) >= 252 else close
             high_52w = round(float(close_52w.max()), 4)

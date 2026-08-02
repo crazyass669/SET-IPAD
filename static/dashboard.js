@@ -1861,8 +1861,12 @@ function drawRotationScatter(sectors, opts = {}) {
   const sxMin = Math.min(...sxs), sxMax = Math.max(...sxs);
   const syMin = Math.min(...sys), syMax = Math.max(...sys);
   // cap ขึ้นกับ timeframe — short mode ใช้ range เล็กกว่า
-  const xCapLo = isShort ? -15 : -30, xCapHi = isShort ? 20 : 60;
-  const yCapLo = isShort ? -10 : -30, yCapHi = isShort ? 10 : 60;
+  // opts.caps ให้ cohort ที่กระจายตัวแคบกว่าหุ้นรายตัวมาก (เช่น ETF ~10 ตัว คละ
+  // สินทรัพย์ หุ้น/ทอง/พันธบัตร แกว่งไม่เกิน ±20% ทั้งที่ default cap ตั้งไว้ที่ ±60%
+  // สำหรับหุ้นรายตัว) override เป็น range แคบลงได้ — ไม่ระบุ = พฤติกรรมเดิมทุกหน้า
+  const capOverride = (opts.caps && opts.caps[isShort ? 'short' : 'long']) || null;
+  const xCapLo = capOverride?.xLo ?? (isShort ? -15 : -30), xCapHi = capOverride?.xHi ?? (isShort ? 20 : 60);
+  const yCapLo = capOverride?.yLo ?? (isShort ? -10 : -30), yCapHi = capOverride?.yHi ?? (isShort ? 10 : 60);
   const xLow  = Math.min(sxMin, symlog(xCapLo)) * 1.08;
   const xHigh = Math.max(sxMax * 1.20, symlog(xCapHi));
   const yLow  = Math.min(syMin, symlog(yCapLo)) * 1.08;
@@ -1900,7 +1904,8 @@ function drawRotationScatter(sectors, opts = {}) {
       name: s.name,
       count: s.count || 0,
       ret_1w: s.ret_1w, ret_1m: s.ret_1m, ret_3m: s.ret_3m, ret_6m: s.ret_6m, ret_1y: s.ret_1y,
-      avg_rs: s.avg_rs,
+      avg_rs: s.avg_rs, sub: s.ind,
+      lowLiq: !!s.lowLiq, liqText: s.liqText,
       color: nameToColor[s.name],
     };
   });
@@ -2072,9 +2077,12 @@ function drawRotationScatter(sectors, opts = {}) {
         ctx.fillStyle = hexAlpha(p.color, 0.2);
         ctx.beginPath(); ctx.arc(p.x, p.y, p.R, 0, Math.PI*2); ctx.fill();
         ctx.shadowBlur = 0;
-        // Stroke ring
+        // Stroke ring — เส้นประแทนเส้นทึบถ้าสภาพคล่องต่ำ (ตัวเลข return อาจเกิดจาก
+        // เทรดไม่กี่หน่วย ไม่ใช่แรงซื้อขายจริง) กันคนอ่านตำแหน่งบน RRG มั่นใจเกินจริง
         ctx.strokeStyle = p.color; ctx.lineWidth = 2;
+        if (p.lowLiq) ctx.setLineDash([3, 2]);
         ctx.beginPath(); ctx.arc(p.x, p.y, p.R, 0, Math.PI*2); ctx.stroke();
+        ctx.setLineDash([]);
         // Subtle inner fill gradient
         const grad = ctx.createRadialGradient(p.x-p.R*0.3, p.y-p.R*0.3, 0, p.x, p.y, p.R);
         grad.addColorStop(0, hexAlpha(p.color, 0.35));
@@ -2200,10 +2208,13 @@ function drawRotationScatter(sectors, opts = {}) {
                 <span class="rot-chip-sq" style="background:${p.color}"></span>${label}
               </div>`;
     }).join("")
+    // ข้อความเหตุผลที่ถูกตัดออก — default เดิม (กลุ่มสมาชิกน้อย) ใช้กับหน้า sector/rotation
+    // ที่แต่ละจุดคือ "กลุ่ม" จริงๆ ส่วนหน้า ETF แต่ละจุดคือตราสารเดี่ยว เหตุผลต่างกัน
+    // (ราคาขาดช่วง/ไม่มีค่าตอบแทนในกรอบเวลาที่เลือก) จึงให้ opts ระบุ label เองได้
     + (_rotExcluded.length
        ? `<div style="font-size:11px;color:var(--text2);font-style:italic;padding:4px 8px"
-               title="กลุ่มที่มีหุ้นน้อยกว่า 3 ตัว — ค่าเฉลี่ยไม่ represent จึงไม่แสดงบนแผนที่">
-            ⚠ ไม่แสดง ${_rotExcluded.length} กลุ่ม (ข้อมูลไม่พอ): ${_rotExcluded.join(", ")}
+               title="${opts.excludedTitle || 'กลุ่มที่มีหุ้นน้อยกว่า 3 ตัว — ค่าเฉลี่ยไม่ represent จึงไม่แสดงบนแผนที่'}">
+            ⚠ ไม่แสดง ${_rotExcluded.length} ${opts.excludedUnit || 'กลุ่ม'} (ข้อมูลไม่พอ): ${_rotExcluded.join(", ")}
           </div>`
        : "");
     legendEl.querySelectorAll(".rot-chip").forEach(chip => {
@@ -2238,19 +2249,28 @@ function drawRotationScatter(sectors, opts = {}) {
 
   function showTooltip(hit, e) {
     const fmt = v => v != null ? `<span style="color:${v>=0?'#3fb950':'#f85149'};font-weight:600">${v>0?'+':''}${v.toFixed(2)}%</span>` : '<span style="color:#6e7681">—</span>';
+    // relativeLabel ให้ caller ระบุชื่อ benchmark จริง (เช่น "TDEX (SET50)") — ค่า
+    // default เดิม "ค่าเฉลี่ยกลุ่ม" ยังคงพฤติกรรมเดิมของหน้าอื่นที่ไม่ได้ระบุ opts นี้
+    const relLabel = opts.relativeLabel || 'ค่าเฉลี่ยกลุ่ม';
+    // showCount=false (ETF: จุดคือตราสารตัวเดียว ไม่ใช่กลุ่ม) ซ่อนบรรทัด "N หุ้น" —
+    // เดิม hit.count undefined ก็ยังรอด (falsy) แต่ทำชัดเจนกว่าพึ่ง falsy เงียบๆ
+    const showCount = opts.showCount !== false;
+    const rsLabel = opts.rsLabel || 'Avg RS';
     tooltipDiv.innerHTML = `
-      <div style="font-weight:700;color:${hit.color};margin-bottom:6px;font-size:13px">${hit.name}</div>
-      ${isRelative ? `<div style="font-size:10px;color:#8b949e;margin:-4px 0 6px">ทุกค่า = ส่วนต่างจากค่าเฉลี่ยกลุ่ม (เทียบกลุ่ม)</div>` : ''}
+      <div style="font-weight:700;color:${hit.color};margin-bottom:${hit.sub ? '2px' : '6px'};font-size:13px">${hit.name}</div>
+      ${hit.sub ? `<div style="font-size:10px;color:#8b949e;margin-bottom:6px">${_escHtml(hit.sub)}</div>` : ''}
+      ${isRelative ? `<div style="font-size:10px;color:#8b949e;margin:-4px 0 6px">ทุกค่า = ส่วนต่างจาก ${relLabel}</div>` : ''}
       <div style="display:grid;grid-template-columns:auto 1fr;gap:1px 12px;font-size:11px;color:#8b949e">
         <span>1M</span>${fmt(hit.ret_1m)}
         <span>3M</span>${fmt(hit.ret_3m)}
         <span>6M</span>${fmt(hit.ret_6m)}
         <span>1Y</span>${fmt(hit.ret_1y)}
       </div>
-      ${(hit.avg_rs != null || hit.count) ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #21262d;font-size:11px;display:flex;gap:14px">
-        <span style="color:#8b949e">Avg RS <span style="color:#58a6ff;font-weight:700">${hit.avg_rs!=null?Math.round(hit.avg_rs):'—'}</span></span>
-        <span style="color:#8b949e">${hit.count} หุ้น</span>
+      ${(hit.avg_rs != null || (showCount && hit.count)) ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #21262d;font-size:11px;display:flex;gap:14px">
+        ${hit.avg_rs != null ? `<span style="color:#8b949e">${rsLabel} <span style="color:#58a6ff;font-weight:700">${Math.round(hit.avg_rs)}</span></span>` : ''}
+        ${(showCount && hit.count) ? `<span style="color:#8b949e">${hit.count} หุ้น</span>` : ''}
       </div>` : ''}
+      ${hit.lowLiq ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #21262d;font-size:10px;color:#e3b341">⚠ สภาพคล่องต่ำ (เฉลี่ย 20 วัน ${hit.liqText || '—'}/วัน)</div>` : ''}
     `;
     tooltipDiv.style.visibility = "hidden";
     tooltipDiv.style.display = "block";
@@ -17734,6 +17754,7 @@ function _drawDRCandles(canvas, ohlc) {
 // ============================================================
 let _etfData     = null;
 let _etfLoaded   = false;
+let _etfTs       = null;
 let _etfCategory = 'ALL';
 let _etfView     = 'table';
 let _etfSort     = 'rs_desc';
@@ -17765,6 +17786,7 @@ function loadETFPage() {
       if (d.error) throw new Error(d.error);
       _etfData   = d.stocks || [];
       _etfLoaded = true;
+      _etfTs     = d.ts;
       const ts = d.ts ? d.ts.replace('T', ' ').slice(0, 16) : '—';
       document.getElementById('etf-status').innerHTML =
         `อัปเดต: ${ts} &nbsp;|&nbsp; ${_etfData.length} ETF &nbsp;|&nbsp; cache 2 ชั่วโมง` +
@@ -17795,6 +17817,7 @@ function _etfPollRefresh(attempt) {
       _etfPollActive = false;
       _etfData = d.stocks;
       _etfLoaded = true;
+      _etfTs   = d.ts;
       const ts = d.ts ? d.ts.replace('T', ' ').slice(0, 16) : '—';
       const st = document.getElementById('etf-status');
       if (st) st.innerHTML =
@@ -18268,13 +18291,18 @@ function setEtfRotBenchmark(bm, btn) {
   renderEtfRotation();
 }
 
+// สภาพคล่องต่ำกว่านี้ (มูลค่าซื้อขายเฉลี่ย 20 วัน, บาท/วัน) ถือว่า return ที่คำนวณได้
+// อาจเกิดจากเทรดไม่กี่หน่วย ไม่ใช่แรงซื้อขายจริง — เตือนแทนตัดทิ้ง (cohort เหลือแค่
+// ~10 ตัว ตัดแล้วแผนที่โล่งเกินไป)
+const ETF_LOW_LIQ_BAHT = 100000;
+
 async function loadEtfRotation() {
   const gate = document.getElementById('etfrot-gate'), body = document.getElementById('etfrot-body');
   if (!_etfData || !_etfData.length) {
     gate.style.display = ''; gate.textContent = 'กำลังดึงข้อมูล ETF...'; body.style.display = 'none';
     try {
       const d = await (await _fetchTimeout('/api/etf', 60000)).json();
-      if (d.stocks) { _etfData = d.stocks; _etfLoaded = true; }
+      if (d.stocks) { _etfData = d.stocks; _etfLoaded = true; _etfTs = d.ts; }
       const rf = document.getElementById('etfrot-refreshing');
       if (rf) rf.style.display = d.refreshing ? '' : 'none';
       if (d.refreshing) _etfPollRefresh(0);
@@ -18282,6 +18310,7 @@ async function loadEtfRotation() {
   }
   if (!_etfData || !_etfData.length) { gate.style.display = ''; gate.textContent = 'ไม่มีข้อมูล ETF'; body.style.display = 'none'; return; }
   gate.style.display = 'none'; body.style.display = '';
+  _etfRotUpdateSubtitle();
   renderEtfRotation();
 }
 
@@ -18302,17 +18331,31 @@ function renderEtfRotation() {
   const bm = f => useTdex && tdex && tdex[f] != null ? tdex[f] : avg(f);
   const a3m = bm('ret_3m'), a1m = bm('ret_1m'), a1w = bm('ret_1w'), a6m = bm('ret_6m'), a1y = bm('ret_1y');
   const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
-  const items = valid.map(s => ({
-    name: s.symbol, region: s.category, ind: s.name_th,
-    ret_3m: rel(s.ret_3m, a3m), ret_1m: rel(s.ret_1m, a1m), ret_1w: rel(s.ret_1w, a1w),
-    ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
-  }));
+  const items = valid.map(s => {
+    const lowLiq = s.value_avg20 != null && s.value_avg20 < ETF_LOW_LIQ_BAHT;
+    const catLbl = ETF_CATEGORY_LABEL[s.category] || s.category || '';
+    return {
+      name: s.symbol, ind: [catLbl, s.name_th].filter(Boolean).join(' · '),
+      ret_3m: rel(s.ret_3m, a3m), ret_1m: rel(s.ret_1m, a1m), ret_1w: rel(s.ret_1w, a1w),
+      ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
+      avg_rs: s.rs_score,
+      lowLiq, liqText: lowLiq ? _drFmtCap(s.value_avg20) : undefined,
+    };
+  });
   const info = document.getElementById('etfrot-info');
   const bmName = useTdex && tdex ? 'TDEX (SET50)' : 'ค่าเฉลี่ยกลุ่ม';
-  if (info) info.textContent = `${valid.length} ETF (ไม่รวม L&I) · benchmark = ${bmName}` +
+  const tsLabel = _etfTs ? _etfTs.replace('T', ' ').slice(0, 16) : '—';
+  if (info) info.textContent = `${valid.length} ETF (ไม่รวม L&I) · benchmark = ${bmName} · ข้อมูล ณ ${tsLabel}` +
     (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
              : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
-  drawRotationScatter(items, { canvasId: 'etf-rotation-map', legendId: 'etf-rot-legend', tf: _etfRotTf, onOpen: openETFChartModal, relative: true });
+  drawRotationScatter(items, {
+    canvasId: 'etf-rotation-map', legendId: 'etf-rot-legend', tf: _etfRotTf, onOpen: openETFChartModal, relative: true,
+    relativeLabel: bmName, rsLabel: 'RS', showCount: false,
+    excludedTitle: 'ETF ที่ไม่มีค่า return ครบตามกรอบเวลาที่เลือก (ราคาขาดช่วง/ยังเทรดไม่ถึง)', excludedUnit: 'ตัว',
+    // cohort ETF ~10 ตัว คละสินทรัพย์ แกว่งแคบกว่าหุ้นรายตัวมาก — cap แกวกว้างเท่า default
+    // (±60%) ทำให้จุดทั้งหมดกองอยู่แถบแคบๆ กลางจอ (ดู PLAN/รีวิว 2026-08-03)
+    caps: { long: { xLo: -25, xHi: 15, yLo: -10, yHi: 10 }, short: { xLo: -10, xHi: 10, yLo: -6, yHi: 12 } },
+  });
 }
 
 // ============================================================

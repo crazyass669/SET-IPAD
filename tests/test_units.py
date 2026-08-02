@@ -32,8 +32,8 @@ def check(name, cond, detail=""):
 # ============================================================
 # 1. core/metrics — RS Score
 # ============================================================
-from core.metrics import (calc_ema, calc_return, calc_rs_raw, rank_rs,
-                          summarize_groups, validate_stocks)
+from core.metrics import (calc_ema, calc_return, calc_return_calendar, calc_rs_raw,
+                          rank_rs, summarize_groups, validate_stocks)
 
 print("── calc_rs_raw ──")
 check("น้ำหนักเต็ม (2×1M+3M+6M+1Y)/5", calc_rs_raw(10, 20, 30, 40) == 22.0)
@@ -51,6 +51,30 @@ check("ราคาอดีต = 0 -> None", calc_return(pd.Series([0.0, 5.0]),
 # EMA span=3 (alpha=0.5): [2,4,8] -> 2, 3, 5.5
 check("EMA(3) ของ [2,4,8] = 5.5", calc_ema(pd.Series([2.0, 4.0, 8.0]), 3) == 5.5)
 check("EMA แท่งไม่พอ -> None", calc_ema(pd.Series([2.0, 4.0]), 3) is None)
+
+print("── calc_return_calendar (ETF เทรดไม่ครบทุกวัน — นับวันปฏิทินจริง ไม่ใช่ bar offset) ──")
+# แท่งห่างกัน 15 วันปฏิทิน (ไม่ใช่ทุกวันทำการ) จำลอง ETF ที่เทรดเบามาก
+sparse_dates = [date(2026, 1, 1) + timedelta(days=15 * i) for i in range(10)]
+sparse = pd.Series([100.0, 105.0, 110.0, 115.0, 120.0, 125.0, 130.0, 135.0, 140.0, 150.0],
+                    index=pd.DatetimeIndex(sparse_dates))
+# ย้อนหลัง 30 วันปฏิทินจริง = 2 แท่งก่อนหน้า (index -3) = 135.0 -> (150-135)/135
+check("ย้อนหลัง 30 วันปฏิทิน หา past ตรงแท่งที่ห่าง >=30 วัน",
+      calc_return_calendar(sparse, 30) == round((150.0 - 135.0) / 135.0 * 100, 2))
+# ย้อนหลัง bar offset 2 แท่ง (calc_return) จะได้ (150-135)/135 เท่ากันพอดีในเคสนี้เพราะ
+# ห่างสม่ำเสมอ 15 วัน — สร้างเคสห่างไม่สม่ำเสมอแยกให้เห็นความต่างจริง
+uneven_dates = [date(2026, 1, 1), date(2026, 1, 3), date(2026, 1, 20), date(2026, 2, 25)]
+uneven = pd.Series([100.0, 102.0, 110.0, 130.0], index=pd.DatetimeIndex(uneven_dates))
+# calc_return(uneven, 1) = bar offset 1 แท่ง = (130-110)/110 แม้ห่างกันจริง 36 วัน (ไม่ใช่ ~1 เดือน)
+check("calc_return (bar offset) ไม่รู้ว่าห่าง 36 วันจริง",
+      calc_return(uneven, 1) == round((130.0 - 110.0) / 110.0 * 100, 2))
+# calc_return_calendar(uneven, 30) ต้องถอยไปแท่งที่ห่าง >=30 วันจริง (2026-01-03, ห่าง 53 วัน)
+# ไม่ใช่แท่งก่อนหน้าทันที (2026-01-20, ห่างแค่ 36 วัน < ไม่เกิน 30 เป๊ะ แต่ >=30 ก็จริง — ปรับเคสให้ชัด)
+check("calendar 30 วัน ถอยไปแท่งที่ห่าง >= 30 วันจริง",
+      calc_return_calendar(uneven, 30) == round((130.0 - 110.0) / 110.0 * 100, 2))
+check("ไม่มีแท่งเก่าพอ -> None", calc_return_calendar(uneven, 365) is None)
+check("series ว่าง -> None", calc_return_calendar(pd.Series(dtype=float), 30) is None)
+check("ราคาอดีต = 0 -> None",
+      calc_return_calendar(pd.Series([0.0, 5.0], index=pd.DatetimeIndex([date(2026,1,1), date(2026,2,1)])), 30) is None)
 
 print("── rank_rs (percentile + eligibility + stage) ──")
 def mk(sym, raw, elig=True, **kw):

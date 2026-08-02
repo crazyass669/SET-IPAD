@@ -9,7 +9,7 @@ pure functions ไม่มี I/O / ไม่รู้จัก Flask — ใ�
 
 ห้าม copy สูตรเหล่านี้ไปวางที่อื่น — import จากที่นี่เท่านั้น
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 
 # น้ำหนัก RS: 40% เดือนล่าสุด + 20% ต่อช่วง 3/6/12 เดือน
@@ -22,6 +22,28 @@ def calc_return(series, days):
         return None
     try:
         past = float(series.iloc[-(days + 1)])
+        now  = float(series.iloc[-1])
+        if past == 0:
+            return None
+        return round((now - past) / past * 100, 2)
+    except Exception:
+        return None
+
+
+def calc_return_calendar(series, calendar_days):
+    """% return ย้อนหลังตาม 'วันปฏิทิน' จริง (อิง index วันที่ของ series) แทน bar offset —
+    ใช้กับตราสารที่เทรดไม่ครบทุกวันทำการ (เช่น ETF ไทยบางตัวที่เบามาก) ที่ calc_return
+    (นับ bar offset ตรงๆ) จะได้หน้าต่างเวลายาวกว่าที่ตั้งใจอย่างเงียบๆ (เช่น "1M" กลาย
+    เป็นย้อนหลังจริง 1.5 เดือน) ทำให้เทียบกับตราสารอื่นที่เทรดครบทุกวันไม่ตรงกัน"""
+    if series.empty:
+        return None
+    try:
+        last_date = series.index[-1]
+        target_date = last_date - timedelta(days=calendar_days)
+        past_series = series[series.index <= target_date]
+        if past_series.empty:
+            return None
+        past = float(past_series.iloc[-1])
         now  = float(series.iloc[-1])
         if past == 0:
             return None
