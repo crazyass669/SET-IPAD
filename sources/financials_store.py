@@ -200,6 +200,40 @@ def upsert(base_dir, symbol, source, payload, is_dr=False):
         con.close()
 
 
+def get_names_bulk(base_dir, prefix, sources=("yahoo_q", "yahoo")):
+    """คืน {รหัสดิบ: ชื่อบริษัท} ของทุก symbol ใต้ namespace prefix (เช่น 'FINN:JP:') ที่มีชื่อ
+    จริงจาก payload — query เดียวจบ ไม่เปิด connection ต่อ ticker เหมือนเรียก get() วนลูป
+    (ใช้เติมชื่อบริษัทให้ <market>_index_metrics.json — ดู
+    sources/index_metrics_common.py::_compute_all_rows ตัวที่ dr_universe ไม่ได้ curate ไว้
+    ข้อมูลนี้มีอยู่แล้วในเครื่องจาก sync_mirror_yahoo_index ไม่ต้องยิง Yahoo เพิ่ม)
+    sources เรียงจากแหล่งที่เชื่อถือได้สุดก่อน (yahoo_q ทับ yahoo ถ้ามีทั้งคู่)"""
+    if not db_exists(base_dir):
+        return {}
+    con = _connect(base_dir)
+    try:
+        placeholders = ",".join("?" * len(sources))
+        rows = con.execute(
+            f"SELECT symbol, source, payload FROM financials WHERE symbol LIKE ? AND source IN ({placeholders})",
+            (prefix + "%", *sources)).fetchall()
+    finally:
+        con.close()
+    rank = {s: i for i, s in enumerate(sources)}
+    best = {}   # raw -> (rank, name)
+    for symbol, source, payload in rows:
+        raw = symbol[len(prefix):]
+        try:
+            data = json.loads(payload)
+        except (TypeError, ValueError):
+            continue
+        name = data.get("name")
+        if not name or name == raw:
+            continue
+        cur = best.get(raw)
+        if cur is None or rank[source] < cur[0]:
+            best[raw] = (rank[source], name)
+    return {raw: v[1] for raw, v in best.items()}
+
+
 def get(base_dir, symbol, source, is_dr=False, market=None):
     if not db_exists(base_dir):
         return None

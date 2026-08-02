@@ -3408,15 +3408,65 @@
     </div>
     <input id="jp-search" class="scr-input" style="width:150px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="renderJpTable()">
     <select id="jp-sector-filter" class="scr-input" style="width:170px;font-size:12px" onchange="renderJpTable()"><option value="ALL">ทุก Sector</option></select>
+    <button class="filter-btn" id="jp-mode-sectors" onclick="setJpMode(document.getElementById('jp-mode-sectors').classList.contains('active')?'stocks':'sectors')" title="สลับไปดูอันดับ Sector (RS/return เฉลี่ยแต่ละกลุ่ม)">🏭 จัดอันดับ Sector</button>
     <span id="jp-count" style="font-size:11px;color:var(--text2)"></span>
   </div>
 
   <div id="jp-breadth-strip" class="grid-4" style="margin-bottom:12px"></div>
 
+  <!-- % Above EMA ย้อนหลัง (เหมือนหน้า EMA Breadth ของหุ้นไทย/US/HK) -->
+  <div class="filter-row" id="jp-breadth-range-btns" style="margin-bottom:10px">
+    <button class="filter-btn active" onclick="setJpBreadthRange('1y',this)">1Y</button>
+    <button class="filter-btn" onclick="setJpBreadthRange('3y',this)">3Y</button>
+    <button class="filter-btn" onclick="setJpBreadthRange('5y',this)">5Y</button>
+    <button class="filter-btn" onclick="setJpBreadthRange('all',this)">All</button>
+  </div>
+  <div class="rotation-grid" style="grid-template-columns:1fr;gap:12px;margin-bottom:14px">
+    <div class="card" style="padding:12px 14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">% หุ้นเหนือ EMA50/EMA200 ย้อนหลัง — สุขภาพระยะกลาง-ยาวของดัชนี Nikkei 225
+        <span id="jp-bc-ema-now" style="font-weight:400;color:var(--text2);font-size:11px"></span>
+      </div>
+      <div id="jp-bc-ema-loading" style="color:var(--text2);font-size:11px">กำลังโหลด...</div>
+      <canvas id="jp-bc-ema" style="display:none;width:100%;height:170px"></canvas>
+    </div>
+    <div class="card" style="padding:12px 14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">52W New High − New Low ย้อนหลัง — ความแข็งแรงของ leadership
+        <span id="jp-bc-nhnl-now" style="font-weight:400;color:var(--text2);font-size:11px"></span>
+      </div>
+      <div id="jp-bc-nhnl-loading" style="color:var(--text2);font-size:11px">กำลังโหลด...</div>
+      <canvas id="jp-bc-nhnl" style="display:none;width:100%;height:170px"></canvas>
+    </div>
+    <div class="card" style="padding:12px 14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">McClellan Oscillator — โมเมนตัมระยะสั้นของแรงซื้อทั้งดัชนี Nikkei 225
+        <span id="jp-bc-mcc-now" style="font-weight:400;color:var(--text2);font-size:11px"></span>
+      </div>
+      <div id="jp-bc-mcc-loading" style="color:var(--text2);font-size:11px">กำลังโหลด...</div>
+      <canvas id="jp-bc-mcc" style="display:none;width:100%;height:170px"></canvas>
+    </div>
+  </div>
+
   <div class="card" style="padding:0;overflow-x:auto" id="jp-stocks-wrap">
     <table class="tbl" id="jp-stocks-tbl">
       <thead><tr id="jp-thead"></tr></thead>
       <tbody id="jp-stocks-tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="card" style="padding:0;overflow-x:auto;display:none" id="jp-sectors-wrap">
+    <table class="tbl" id="jp-sectors-tbl">
+      <thead><tr>
+        <th style="width:32px">#</th>
+        <th style="text-align:left">Sector</th>
+        <th class="r">หุ้น</th>
+        <th class="r" style="cursor:pointer" onclick="jpSectorSortBy('avg_rs')">RS เฉลี่ย</th>
+        <th class="r" style="cursor:pointer" onclick="jpSectorSortBy('ret_1d')">1D</th>
+        <th class="r" style="cursor:pointer" onclick="jpSectorSortBy('ret_1w')">1W</th>
+        <th class="r" style="cursor:pointer" onclick="jpSectorSortBy('ret_1m')">1M</th>
+        <th class="r" style="cursor:pointer" onclick="jpSectorSortBy('ret_3m')">3M</th>
+        <th class="r" style="cursor:pointer" onclick="jpSectorSortBy('ret_1y')">1Y</th>
+        <th class="r" style="cursor:pointer" onclick="jpSectorSortBy('pct_above_ema50')">% เหนือ EMA50</th>
+      </tr></thead>
+      <tbody id="jp-sectors-tbody"></tbody>
     </table>
   </div>
 </div>

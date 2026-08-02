@@ -31,6 +31,7 @@ except Exception:
 from core.store import _atomic_write_json
 from core import run_log
 from core import delisted_log
+from core import index_drift
 from core.net import ssl_context
 
 
@@ -1512,6 +1513,7 @@ def _run_jp_index_full_refresh():
     try:
         from sources import jp_index_metrics
         n_metrics = jp_index_metrics.build(BASE_DIR)
+        _jp_breadth_cache.clear()
         print(f"[JP Index] rebuilt metrics: {n_metrics} ticker")
     except Exception as e:
         print(f"[JP Index] metrics build error: {e}")
@@ -1531,6 +1533,17 @@ def jp_index_metrics_route():
     ต่างแค่ field เสริม in_nikkei225 สำหรับกรองตามดัชนี"""
     from sources import jp_index_metrics
     return jsonify(jp_index_metrics.load_local(BASE_DIR))
+
+
+@app.route("/api/jp-sector-ranks")
+def jp_sector_ranks():
+    """จัดอันดับ Sector ของสมาชิก Nikkei 225 ตาม RS/return เฉลี่ย — reuse
+    core.metrics.summarize_groups() ตัวเดียวกับหน้า Sectors ของหุ้นไทย/US/HK (ห้ามเขียนสูตรซ้ำ)
+    ไม่มี query param ?index= เหมือน US/HK เพราะ JP มีดัชนีเดียว (Nikkei 225)"""
+    from sources import jp_index_metrics
+    from core.metrics import summarize_groups
+    stocks = [s for s in jp_index_metrics.load_local(BASE_DIR).get("stocks", []) if s.get("in_nikkei225")]
+    return jsonify({"sectors": summarize_groups(stocks, "sector")})
 
 
 @app.route("/api/jp-history/<symbol>")
@@ -3518,7 +3531,9 @@ def _load_mirror_names_hk():
 
 def _run_hk_index_sync(min_age_days=None):
     try:
-        diff, live = hk_index_membership.sync_membership(BASE_DIR)
+        def _sync_cb(current, total, msg):
+            _update(current=current, total=total, message=msg)
+        diff, live = hk_index_membership.sync_membership(BASE_DIR, progress_cb=_sync_cb)
         _hk_index_diff_cache.clear()   # ลิสต์เปลี่ยน — ผลเช็คหุ้นใหม่เดิมไม่ตรงแล้ว
         added_n = sum(len(v["new"]) for v in diff.values())
         removed_n = sum(len(v["removed"]) for v in diff.values())
@@ -3792,6 +3807,7 @@ def _run_heatmap_live_update(region, index_key=None):
             from sources import jp_index_metrics as mod
             if not mod.update_live_prices(BASE_DIR, live_map, scope):
                 mod.build(BASE_DIR, live_map=live_map)
+            _jp_breadth_cache.clear()
         state["done"] = True
         # n_fetched/n_live — ให้ frontend โชว์ข้อความ "⚡ ราคาสด ณ HH:MM:SS · สำเร็จ N/M ตัว"
         # แบบเดียวกับปุ่ม "⚡ ราคาล่าสุด" ของ Watchlist (ดู wlRefreshLivePrices ใน dashboard.js)
@@ -4486,6 +4502,94 @@ def _dh_quality_item(key, label, status, note, last_at=None):
             "last_at": last_at, "age_hours": None, "status": status, "note": note}
 
 
+def _dh_drift_item(key, label, status_map):
+    """รายการ "ตรวจ drift อัตโนมัติ" (หุ้นเข้าใหม่/ถูกถอดเทียบแหล่งสด) — อ่านผลจาก
+    index_drift.read_status() (เขียนโดย _run_index_drift_checks ท้าย Quick Update
+    สัปดาห์ละครั้ง — ดู PLAN_universe_data_health.txt) ไม่ยิง Wikipedia/SET.or.th สดตรงนี้
+    (เบา อ่านไฟล์เฉยๆ) warn เมื่อเจอตัวเข้า/ออกที่ยัง sync มือไม่ตรง หรือผลเช็คเก่าเกิน
+    TTL*2 (แปลว่า Quick Update ไม่ได้รันช่วงนี้) red เมื่อรอบล่าสุด error (เช่น Wikipedia
+    เปลี่ยนโครงสร้างตาราง parse ไม่ออก)"""
+    d = status_map.get(key)
+    if not d:
+        return {"key": f"drift_{key.lower()}", "label": label, "category": "หุ้นเข้าใหม่/ถูกถอด",
+                "last_at": None, "age_hours": None, "status": "na",
+                "note": "ยังไม่เคยตรวจอัตโนมัติ — รอ Quick Update รอบถัดไป หรือกดปุ่มเช็คมือได้เลย"}
+    checked_at = _dh_parse(d.get("checked_at"))
+    age_h = _dh_age_hours(checked_at)
+    if d.get("error"):
+        status, note = "red", f"⚠ เช็คล้มเหลว: {d['error']}"
+    elif age_h is not None and age_h >= _INDEX_DRIFT_TTL_DAYS * 24 * 2:
+        status = "warn"
+        note = f"ผลเช็คเก่ากว่า {_INDEX_DRIFT_TTL_DAYS * 2} วัน — Quick Update อาจไม่ได้รันช่วงนี้"
+    elif d.get("new_count") or d.get("removed_count"):
+        parts = []
+        if d.get("new_count"):
+            new_sample = d.get("new_sample") or []
+            sample = ', '.join(new_sample[:8])
+            more = '…' if d["new_count"] > len(new_sample) else ''
+            parts.append(f"ใหม่ {d['new_count']} ตัว ({sample}{more})")
+        if d.get("removed_count"):
+            rem_sample = d.get("removed_sample") or []
+            sample = ', '.join(rem_sample[:8])
+            more = '…' if d["removed_count"] > len(rem_sample) else ''
+            parts.append(f"หายไป {d['removed_count']} ตัว ({sample}{more})")
+        status, note = "warn", "พบการเปลี่ยนแปลง — " + " · ".join(parts) + " (ต้อง sync มือให้ตรง)"
+    else:
+        status, note = "ok", "ตรงกับแหล่งสดล่าสุด ไม่มีตัวเข้า/ออก"
+    return {"key": f"drift_{key.lower()}", "label": label, "category": "หุ้นเข้าใหม่/ถูกถอด",
+            "last_at": d.get("checked_at"), "age_hours": age_h, "status": status, "note": note}
+
+
+def _dh_index_quality_item(key, label, market_code, membership_path, metrics_path, index_keys, bounds):
+    """เช็คคุณภาพ (ไม่ใช่แค่ mtime) ของสมาชิกดัชนีต่างประเทศ + metrics (US/HK/JP):
+    (1) จำนวนสมาชิกแต่ละดัชนีย่อยอยู่ในกรอบปกติไหม (bounds) — guard เดิมใน
+        <mkt>_index_membership.py เช็คแค่ "ต่ำกว่า 10/20 ตัว = พังชัดเจน" ถ้า Wikipedia
+        เปลี่ยน layout บางส่วนแล้ว parse ได้ เช่น 480/503 ตัว จะหลุดผ่าน guard เดิมไปเงียบๆ
+    (2) สมาชิกใน membership.json ที่หายไปจาก metrics.json (ราคาดึงไม่ได้/เพิ่งเข้าดัชนียัง
+        ไม่ backfill) — ปกติควรเป็น 0 หลัง Quick Update รอบถัดจาก sync
+    (3) จำนวนหุ้นที่ sector เป็น "Unknown"/ว่างใน metrics — ปกติควรเป็น 0 (เคสจริงที่เจอ:
+        FER ในดัชนี NDX sector เป็น Unknown เพราะ regex parse พลาดแถวที่ช่องว่างไม่สม่ำเสมอ
+        ดู sources/us_index_membership.py::_parse_ndx_sectors — แก้แล้วแต่เคสแบบนี้เกิดซ้ำ
+        กับตลาดอื่นได้ ควรมีระบบเฝ้าแทนที่จะรอเจอเอง)"""
+    problems = []
+    status = "ok"
+    try:
+        with open(membership_path, encoding="utf-8") as f:
+            mem = json.load(f)
+    except Exception as e:
+        return _dh_quality_item(key, label, "red", f"อ่าน membership ไม่ได้: {str(e)[:120]}")
+
+    union = set()
+    for k in index_keys:
+        n = len(mem.get(k, []))
+        union |= set(mem.get(k, []))
+        lo, hi = bounds.get(k, (0, 10 ** 9))
+        if not (lo <= n <= hi):
+            status = "warn"
+            problems.append(f"{k} {n} ตัว (ปกติ {lo}-{hi})")
+
+    try:
+        with open(metrics_path, encoding="utf-8") as f:
+            stocks = (json.load(f) or {}).get("stocks") or []
+    except Exception:
+        stocks = []
+    metric_syms = {s.get("symbol") for s in stocks}
+    missing = sorted(union - metric_syms)
+    if missing:
+        status = "warn"
+        more = '…' if len(missing) > 8 else ''
+        problems.append(f"หายจาก metrics {len(missing)} ตัว ({', '.join(missing[:8])}{more})")
+
+    unknown = [s.get("symbol") for s in stocks if not s.get("sector") or s.get("sector") == "Unknown"]
+    if unknown:
+        status = "red" if len(unknown) > 3 else "warn"
+        more = '…' if len(unknown) > 8 else ''
+        problems.append(f"sector Unknown {len(unknown)} ตัว ({', '.join(unknown[:8])}{more})")
+
+    note = " · ".join(problems) if problems else f"{len(union)} ตัว ({market_code}) ครบ ไม่มี sector Unknown"
+    return _dh_quality_item(key, label, status, note)
+
+
 def _dh_item(key, label, category, dt, warn_h, red_h,
              missing_note="ไม่พบไฟล์ / ยังไม่เคยอัพเดท", optional=False):
     age_h = _dh_age_hours(dt)
@@ -4582,6 +4686,17 @@ def data_health():
     items.append(_dh_item(
         "jp_index_membership", "สมาชิกดัชนี JP (Nikkei 225)", "หุ้นเข้าใหม่/ถูกถอด",
         _dh_mtime(os.path.join(BASE_DIR, "data", "jp_index_membership.json")), 45 * 24, 90 * 24))
+
+    # ตรวจ drift อัตโนมัติ (report-only, สัปดาห์ละครั้ง — piggyback ท้าย Quick Update ดู
+    # _run_index_drift_checks) ต่างจาก 4 item ด้านบนที่เช็คแค่ "mtime ของไฟล์" — รายการนี้
+    # เปรียบเทียบจริงกับแหล่งสด (SET.or.th/Wikipedia) แล้วเตือนถ้ามีตัวเข้า/ออกที่ sync
+    # มือยังไม่ตรง กันเคสไฟล์ local ค้างเงียบๆ นานเป็นเดือนโดยไม่มีใครสังเกต (ดู
+    # PLAN_universe_data_health.txt)
+    _drift_status = index_drift.read_status(BASE_DIR)
+    items.append(_dh_drift_item("TH", "ตรวจ drift หุ้นไทย (auto, เทียบ SET.or.th)", _drift_status))
+    items.append(_dh_drift_item("US", "ตรวจ drift ดัชนี US (auto, เทียบ Wikipedia)", _drift_status))
+    items.append(_dh_drift_item("HK", "ตรวจ drift ดัชนี HK (auto, เทียบ Wikipedia)", _drift_status))
+    items.append(_dh_drift_item("JP", "ตรวจ drift ดัชนี JP (auto, เทียบ Wikipedia)", _drift_status))
 
     # ราคา/metrics หุ้นดัชนี US/HK/JP — auto ผ่าน Quick Update/Index Max, เกณฑ์เดียวกับ
     # ราคาหุ้นไทย (30/72 ชม.) เพราะ upsert_bars() stamp 'updated_at' รอบเดียวกัน
@@ -4835,6 +4950,29 @@ def data_health():
     except Exception as e:
         items.append(_dh_quality_item("q_breadth", "วันล่าสุดในข้อมูล breadth (เว็บมือถือ)",
                                       "red", f"อ่านไฟล์ไม่ได้: {str(e)[:120]}"))
+
+    # ความครบ/คุณภาพดัชนี US/HK/JP (membership vs metrics, sector Unknown) — เพิ่มหลังเจอเคส
+    # FER (NDX) sector Unknown จาก regex parse พลาด 2026-08-02 (ดู _dh_index_quality_item)
+    items.append(_dh_index_quality_item(
+        "q_us_index", "ความครบ/คุณภาพดัชนี US (membership + metrics)", "US",
+        os.path.join(_DATA_DIR, "us_index_membership.json"),
+        os.path.join(_DATA_DIR, "us_index_metrics.json"),
+        ("SP500", "DOW", "NDX"),
+        {"SP500": (495, 515), "DOW": (28, 32), "NDX": (98, 108)}))
+
+    items.append(_dh_index_quality_item(
+        "q_hk_index", "ความครบ/คุณภาพดัชนี HK (membership + metrics)", "HK",
+        os.path.join(_DATA_DIR, "hk_index_membership.json"),
+        os.path.join(_DATA_DIR, "hk_index_metrics.json"),
+        ("HSI", "HSCEI", "HSTECH"),
+        {"HSI": (75, 90), "HSCEI": (45, 55), "HSTECH": (25, 35)}))
+
+    items.append(_dh_index_quality_item(
+        "q_jp_index", "ความครบ/คุณภาพดัชนี JP (membership + metrics)", "JP",
+        os.path.join(_DATA_DIR, "jp_index_membership.json"),
+        os.path.join(_DATA_DIR, "jp_index_metrics.json"),
+        ("NIKKEI225",),
+        {"NIKKEI225": (215, 232)}))
 
     summary = {"ok": 0, "warn": 0, "red": 0, "na": 0}
     for it in items:
@@ -5933,6 +6071,33 @@ def hk_market_breadth():
         return jsonify({"error": str(e)}), 500
 
 
+_jp_breadth_cache: dict = {}
+
+@app.route("/api/jp-breadth")
+def jp_market_breadth():
+    """Market Breadth รายวันของหุ้น JP (% above EMA50/200) จาก jp_prices.db —
+    reuse services.breadth.compute_breadth ตัวเดียวกับหุ้นไทย/US/HK, แค่สลับ store module
+    รับ query param ?range=1y|3y|5y|all (default 1y) — cache แยกต่อ range ใน memory,
+    clear ทั้งหมดหลัง JP Index refresh/gap-update"""
+    from services.breadth import RANGE_DAYS
+    rng = request.args.get("range", "1y")
+    if rng not in RANGE_DAYS:
+        rng = "1y"
+    if _jp_breadth_cache.get(rng):
+        return jsonify(_jp_breadth_cache[rng])
+    try:
+        from services.breadth import compute_breadth
+        from core import jp_store
+        data = compute_breadth(BASE_DIR, days=RANGE_DAYS[rng], store=jp_store)
+        if not data:
+            return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณากด 📈 JP Index Max ก่อน"}), 404
+        _jp_breadth_cache[rng] = data
+        return jsonify(data)
+    except Exception as e:
+        print(f"[JPBreadth] {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
+
+
 _market_internals_cache: dict = {}
 
 @app.route("/api/market-internals")
@@ -5968,6 +6133,72 @@ def market_internals():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+_INDEX_DRIFT_TTL_DAYS = 6   # เช็คสัปดาห์ละครั้งพอ — Wikipedia/SET.or.th ไม่เปลี่ยน
+                             # constituents บ่อยกว่านั้น และ Quick Update รันวันละหลายรอบ
+                             # (มือ + GitHub Actions) ไม่อยากยิงซ้ำทุกรอบโดยไม่จำเป็น
+
+
+def _run_index_drift_checks():
+    """เช็ค "หุ้นเข้าใหม่/ถูกถอด" ของทุก universe (TH/US/HK/JP) แบบ report-only เบาๆ
+    (ไม่แก้ไฟล์ local ให้ — เหมือนปุ่มเช็คมือที่มีอยู่แล้ว) แล้วบันทึกผลลง
+    index_drift_status.json ผ่าน core/index_drift.py ให้ /api/data-health อ่านต่อแบบเบา
+    โดยไม่ต้องยิง Wikipedia/SET.or.th สดทุกครั้งที่เปิดแอป (ดู PLAN_universe_data_health.txt)
+
+    เช็คเฉพาะ universe ที่ผลล่าสุดเก่ากว่า _INDEX_DRIFT_TTL_DAYS วัน (หรือยังไม่เคยเช็ค)
+    แต่ละ universe ห่อ try/except แยกกัน — ตัวหนึ่งพัง (เช่น Wikipedia เปลี่ยนโครงสร้างตาราง)
+    ไม่บล็อกตัวอื่น และไม่ทำให้ Quick Update ทั้งรอบ error (เรียกผ่าน _sub_step อยู่แล้ว)"""
+    status = index_drift.read_status(BASE_DIR)
+
+    def _stale(key):
+        prev = status.get(key)
+        if not prev or not prev.get("checked_at"):
+            return True
+        try:
+            last = _dh_dt.strptime(prev["checked_at"], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return True
+        return (_dh_dt.now() - last).days >= _INDEX_DRIFT_TTL_DAYS
+
+    if _stale("TH"):
+        try:
+            from set_data_fetcher import load_set_symbols
+            live_syms = {s["symbol"] for s in load_set_symbols(BASE_DIR)}
+            local_syms = set(_financials_universe())
+            new_syms = sorted(live_syms - local_syms)
+            removed_syms = sorted(local_syms - live_syms)
+            index_drift.record_check(BASE_DIR, "TH", len(new_syms), len(removed_syms), new_syms, removed_syms)
+        except Exception as e:
+            index_drift.record_check(BASE_DIR, "TH", 0, 0, error=str(e)[:200])
+
+    def _check_wiki_index(key, membership_mod, mirror_market):
+        try:
+            mirror_syms = factor_snapshot.get_mirror_symbols(BASE_DIR).get(mirror_market, [])
+            result, _live = membership_mod.diff_membership(BASE_DIR, **{f"mirror_{mirror_market.lower()}": mirror_syms})
+            new_n = sum(len(v) for v in result["new"].values())
+            rem_n = sum(len(v) for v in result["removed"].values())
+            new_sample = sorted({s for lst in result["new"].values() for s in lst})
+            rem_sample = sorted({s for lst in result["removed"].values() for s in lst})
+            index_drift.record_check(BASE_DIR, key, new_n, rem_n, new_sample, rem_sample)
+        except Exception as e:
+            index_drift.record_check(BASE_DIR, key, 0, 0, error=str(e)[:200])
+
+    if _stale("US"):
+        _check_wiki_index("US", us_index_membership, "US")
+    if _stale("HK"):
+        _check_wiki_index("HK", hk_index_membership, "HK")
+    if _stale("JP"):
+        try:
+            from sources import jp_index_membership
+            result, _live = jp_index_membership.diff_membership(BASE_DIR)
+            new_n = sum(len(v) for v in result["new"].values())
+            rem_n = sum(len(v) for v in result["removed"].values())
+            new_sample = sorted({s for lst in result["new"].values() for s in lst})
+            rem_sample = sorted({s for lst in result["removed"].values() for s in lst})
+            index_drift.record_check(BASE_DIR, "JP", new_n, rem_n, new_sample, rem_sample)
+        except Exception as e:
+            index_drift.record_check(BASE_DIR, "JP", 0, 0, error=str(e)[:200])
 
 
 def _run_quick():
@@ -6039,6 +6270,7 @@ def _run_quick():
             n_jp, live_jp, _scope_jp = _run_jp_index_gap_update(progress_cb=_jp_cb)
             from sources import jp_index_metrics
             jp_index_metrics.build(BASE_DIR, live_map=live_jp)
+            _jp_breadth_cache.clear()
             print(f"[QuickUpdate] JP Index: gap-updated {n_jp} ticker, metrics rebuilt")
         _sub_step("JP Index", 97, "อัพเดทราคา JP Index...", _jp_index)
 
@@ -6057,6 +6289,11 @@ def _run_quick():
         # อัพเดท Thai Bond Flow — ThaiBMA คืนประวัติเต็มทุกครั้ง (ไม่เสี่ยงข้อมูลหาย
         # แบบ S50) แต่เดิมพึ่งแค่คนเปิดหน้าเว็บ เลยมักค้างจนกว่าจะมีคนเข้าไปดู
         _sub_step("Bond Flow", 99, "อัพเดท Bond Flow...", _fetch_flow_bond_data)
+
+        # เช็ค drift หุ้นเข้าใหม่/ถูกถอดสัปดาห์ละครั้ง (TH/US/HK/JP) — report-only, บันทึกผล
+        # ให้ Data Health อ่านต่อ (ดู _run_index_drift_checks ด้านบน + index_drift.py)
+        _sub_step("ตรวจ drift หุ้นเข้า/ออก", 99, "ตรวจหุ้นเข้าใหม่/ถูกถอด (TH/US/HK/JP)...",
+                  _run_index_drift_checks)
 
         if failed_steps:
             summary = "Quick Update เสร็จแล้ว (⚠️ ล้มเหลว: " + ", ".join(failed_steps) + ")"
@@ -7083,7 +7320,7 @@ if __name__ == "__main__":
         tc = app.test_client()
         for ep in ("/api/market-flow", "/api/breadth?range=1y",
                    "/api/market-internals", "/api/financials-analytics",
-                   "/api/us-breadth?range=1y", "/api/hk-breadth?range=1y"):
+                   "/api/us-breadth?range=1y", "/api/hk-breadth?range=1y", "/api/jp-breadth?range=1y"):
             try:
                 t0 = _t.time()
                 tc.get(ep)

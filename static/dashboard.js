@@ -363,7 +363,7 @@ async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = nul
         // หน้า "หุ้น US/HK", Heatmap, Rotation จะยังโชว์ข้อมูลเก่าจนกว่าจะ F5 เอง
         _usData = null; _usSectorRanks = {}; _usBreadthCacheByRange = {};
         _hkData = null; _hkSectorRanks = {}; _hkBreadthCacheByRange = {};
-        _jpData = null;
+        _jpData = null; _jpSectorRanks = null; _jpBreadthCacheByRange = {};
         _hmData = {}; _hkHmData = {}; _jpHmData = null;
         loadData();
         // if already on a data page, reload it immediately
@@ -10081,7 +10081,9 @@ function openUsChartModal(symbol) {
       (s.ath_pct != null ? mk((s.ath_pct > 0 ? '+' : '') + s.ath_pct.toFixed(2) + '%', '% จาก ATH', s.ath_pct >= -5 ? 'green' : s.ath_pct >= -20 ? 'yellow' : 'red') : '') +
     `</span>`,
     mk(stageBadge(s.stage), 'Stage'),
-    mk(_drFmtCap(s.mkt_cap), 'MKT CAP', 'text2'),
+    // us/hk/jp_index_metrics.json ไม่เก็บ mkt_cap เลย (ดู comment เดียวกันใน /api/tearsheet,
+    // /api/factor-screener) — ซ่อน tile นี้แทนโชว์ "—" ค้างทุกตัว (แบบเดียวกับ ATH ด้านบน)
+    ...(s.mkt_cap != null ? [mk(_drFmtCap(s.mkt_cap), 'MKT CAP', 'text2')] : []),
   ].join('');
 
   _cmStock = { ...s, price_history: s.price_history, _isDR: false, _isUSIdx: true };
@@ -10169,7 +10171,9 @@ function openHkChartModal(symbol) {
       (s.ath_pct != null ? mk((s.ath_pct > 0 ? '+' : '') + s.ath_pct.toFixed(2) + '%', '% จาก ATH', s.ath_pct >= -5 ? 'green' : s.ath_pct >= -20 ? 'yellow' : 'red') : '') +
     `</span>`,
     mk(stageBadge(s.stage), 'Stage'),
-    mk(_drFmtCap(s.mkt_cap), 'MKT CAP', 'text2'),
+    // us/hk/jp_index_metrics.json ไม่เก็บ mkt_cap เลย (ดู comment เดียวกันใน /api/tearsheet,
+    // /api/factor-screener) — ซ่อน tile นี้แทนโชว์ "—" ค้างทุกตัว (แบบเดียวกับ ATH ด้านบน)
+    ...(s.mkt_cap != null ? [mk(_drFmtCap(s.mkt_cap), 'MKT CAP', 'text2')] : []),
   ].join('');
 
   _cmStock = { ...s, price_history: s.price_history, _isDR: false, _isUSIdx: false, _isHKIdx: true };
@@ -10251,7 +10255,9 @@ function openJpChartModal(symbol) {
       (s.ath_pct != null ? mk((s.ath_pct > 0 ? '+' : '') + s.ath_pct.toFixed(2) + '%', '% จาก ATH', s.ath_pct >= -5 ? 'green' : s.ath_pct >= -20 ? 'yellow' : 'red') : '') +
     `</span>`,
     mk(stageBadge(s.stage), 'Stage'),
-    mk(_drFmtCap(s.mkt_cap), 'MKT CAP', 'text2'),
+    // us/hk/jp_index_metrics.json ไม่เก็บ mkt_cap เลย (ดู comment เดียวกันใน /api/tearsheet,
+    // /api/factor-screener) — ซ่อน tile นี้แทนโชว์ "—" ค้างทุกตัว (แบบเดียวกับ ATH ด้านบน)
+    ...(s.mkt_cap != null ? [mk(_drFmtCap(s.mkt_cap), 'MKT CAP', 'text2')] : []),
   ].join('');
 
   _cmStock = { ...s, price_history: s.price_history, _isDR: false, _isUSIdx: false, _isHKIdx: false, _isJPIdx: true };
@@ -12487,7 +12493,7 @@ function loadUsSectorRanks() {
   const idx = _usIndex;   // capture ตอนยิง fetch — กัน response เขียนผิดช่องถ้าผู้ใช้สลับ
                            // ดัชนี (setUsIndex) ระหว่างรอ response กลับมา
   const tbody = document.getElementById('us-sectors-tbody');
-  if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
+  if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
   _fetchTimeout(`/api/us-sector-ranks?index=${idx}`, 30000, 'หมดเวลารอ Sector Ranking หุ้น US (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
@@ -12495,7 +12501,7 @@ function loadUsSectorRanks() {
       if (idx === _usIndex) renderUsSectorTable();
     })
     .catch(e => {
-      if (idx === _usIndex && tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
+      if (idx === _usIndex && tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
     });
 }
 
@@ -12521,7 +12527,7 @@ function renderUsSectorTable() {
       <td class="r">${pct(s.ret_3m)}</td>
       <td class="r">${pct(s.ret_1y)}</td>
       <td class="r">${s.pct_above_ema50 != null ? s.pct_above_ema50 + '%' : '—'}</td>
-    </tr>`).join('') || `<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--text2)">ไม่มีข้อมูล</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--text2)">ไม่มีข้อมูล</td></tr>`;
 }
 
 // คลิกแถว sector → กลับไปหน้าตารางหุ้น กรองเฉพาะ sector นั้น
@@ -12809,7 +12815,7 @@ function loadHkSectorRanks() {
   if (_hkSectorRanks[_hkIndex]) { renderHkSectorTable(); return; }
   const idx = _hkIndex;   // เหตุผลเดียวกับ loadUsSectorRanks — กัน race ตอนสลับดัชนีระหว่างรอ
   const tbody = document.getElementById('hk-sectors-tbody');
-  if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
+  if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
   _fetchTimeout(`/api/hk-sector-ranks?index=${idx}`, 30000, 'หมดเวลารอ Sector Ranking หุ้น HK (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
@@ -12817,7 +12823,7 @@ function loadHkSectorRanks() {
       if (idx === _hkIndex) renderHkSectorTable();
     })
     .catch(e => {
-      if (idx === _hkIndex && tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
+      if (idx === _hkIndex && tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
     });
 }
 
@@ -12843,7 +12849,7 @@ function renderHkSectorTable() {
       <td class="r">${pct(s.ret_3m)}</td>
       <td class="r">${pct(s.ret_1y)}</td>
       <td class="r">${s.pct_above_ema50 != null ? s.pct_above_ema50 + '%' : '—'}</td>
-    </tr>`).join('') || `<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--text2)">ไม่มีข้อมูล</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--text2)">ไม่มีข้อมูล</td></tr>`;
 }
 
 function _openHkSector(name) {
@@ -12914,7 +12920,7 @@ function jpSortBy(key) {
 }
 
 function loadJpStocksPage() {
-  if (_jpData) { renderJpTable(); return; }
+  if (_jpData) { renderJpTable(); loadJpBreadthChart(); return; }
   const tbody = document.getElementById('jp-stocks-tbody');
   if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
   _fetchTimeout('/api/jp-index-metrics', 30000, 'หมดเวลารอข้อมูลหุ้น JP (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
@@ -12928,6 +12934,7 @@ function loadJpStocksPage() {
       }
       _rebuildJpSectorFilter();
       renderJpTable();
+      loadJpBreadthChart();
     })
     .catch(e => {
       if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
@@ -13055,6 +13062,128 @@ function _renderJpBreadth() {
     tile('RS ≥ 80', rs80, `${(rs80 / n * 100).toFixed(0)}% ของดัชนี`, '#3fb950') +
     tile('Stage 2', s2, `${(s2 / n * 100).toFixed(0)}% กำลังขาขึ้น`, '#3fb950') +
     tile('ใกล้ 52W High', nearHigh, 'ห่าง high ≤ 3%', '#58a6ff');
+}
+
+// ── JP % ABOVE EMA ย้อนหลัง — เหมือน US/HK (reuse drawIndexBreadthChart/_bcSetup/_bcAxes/_bcLine) ──
+let _jpBreadthData = null;
+let _jpBreadthRange = '1y';
+let _jpBreadthCacheByRange = {};
+let _jpBreadthLoading = false;
+
+function setJpBreadthRange(range, btn) {
+  if (_jpBreadthRange === range) return;
+  _jpBreadthRange = range;
+  document.querySelectorAll('#jp-breadth-range-btns .filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  loadJpBreadthChart();
+}
+
+async function loadJpBreadthChart() {
+  const rng = _jpBreadthRange;
+  const cached = _jpBreadthCacheByRange[rng];
+  if (cached) { _jpBreadthData = cached; drawJpBreadthChart(); return; }
+  if (_jpBreadthLoading) return;
+  _jpBreadthLoading = true;
+  ['jp-bc-ema', 'jp-bc-nhnl', 'jp-bc-mcc'].forEach(id => {
+    const loading = document.getElementById(id + '-loading');
+    const canvas  = document.getElementById(id);
+    if (loading) { loading.style.display = 'block'; loading.textContent = 'กำลังโหลด...'; }
+    if (canvas)  canvas.style.display = 'none';
+  });
+  try {
+    const r = await _fetchTimeout('/api/jp-breadth?range=' + encodeURIComponent(rng), 30000,
+      'หมดเวลารอ Market Breadth หุ้น JP (เกิน 30 วิ) — ลองใหม่อีกครั้ง');
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    _jpBreadthCacheByRange[rng] = d;
+    if (rng === _jpBreadthRange) {
+      _jpBreadthData = d;
+      drawJpBreadthChart();
+    }
+  } catch (e) {
+    ['jp-bc-ema', 'jp-bc-nhnl', 'jp-bc-mcc'].forEach(id => {
+      const el = document.getElementById(id + '-loading');
+      if (el) el.textContent = 'โหลดไม่สำเร็จ: ' + e.message;
+    });
+  } finally {
+    _jpBreadthLoading = false;
+    if (_jpBreadthRange !== rng && !_jpBreadthCacheByRange[_jpBreadthRange]) loadJpBreadthChart();
+  }
+}
+
+function drawJpBreadthChart() {
+  drawIndexBreadthChart('jp', _jpBreadthData);
+}
+
+// ── JP Sector Ranking (mode toggle บนหน้า "หุ้น JP") ──────────────────────
+// อ่าน /api/jp-sector-ranks ซึ่ง reuse core.metrics.summarize_groups() ตัวเดียวกับ
+// หน้า Sectors ของหุ้นไทย/US/HK — ไม่มี ?index= เพราะ JP มีดัชนีเดียว (Nikkei 225)
+let _jpMode = 'stocks';
+let _jpSectorRanks = null;    // [...] (ไม่ต้องแยก cache ตามดัชนีเหมือน US/HK เพราะมีดัชนีเดียว)
+let _jpSectorSort = { key: 'avg_rs', dir: 1 };
+
+function setJpMode(mode) {
+  _jpMode = mode;
+  const btn = document.getElementById('jp-mode-sectors');
+  if (btn) btn.classList.toggle('active', mode === 'sectors');
+  document.getElementById('jp-stocks-wrap').style.display  = mode === 'sectors' ? 'none' : '';
+  document.getElementById('jp-sectors-wrap').style.display = mode === 'sectors' ? '' : 'none';
+  if (mode === 'sectors') loadJpSectorRanks();
+  else renderJpTable();
+}
+
+function jpSectorSortBy(key) {
+  if (_jpSectorSort.key === key) _jpSectorSort.dir *= -1;
+  else _jpSectorSort = { key, dir: 1 };
+  renderJpSectorTable();
+}
+
+function loadJpSectorRanks() {
+  if (_jpSectorRanks) { renderJpSectorTable(); return; }
+  const tbody = document.getElementById('jp-sectors-tbody');
+  if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
+  _fetchTimeout('/api/jp-sector-ranks', 30000, 'หมดเวลารอ Sector Ranking หุ้น JP (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
+    .then(r => r.json())
+    .then(d => {
+      _jpSectorRanks = d.sectors || [];
+      renderJpSectorTable();
+    })
+    .catch(e => {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
+    });
+}
+
+function renderJpSectorTable() {
+  const rows = [...(_jpSectorRanks || [])];
+  rows.sort((a, b) => {
+    const av = a[_jpSectorSort.key], bv = b[_jpSectorSort.key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1; if (bv == null) return -1;
+    return (bv - av) * _jpSectorSort.dir;
+  });
+  const tbody = document.getElementById('jp-sectors-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = rows.map((s, i) => `
+    <tr style="cursor:pointer" onclick="_openJpSector('${s.name.replace(/'/g,"\\'")}')">
+      <td class="text2">${i + 1}</td>
+      <td><strong>${s.name}</strong></td>
+      <td class="r text2">${s.count}</td>
+      <td class="r"><span class="${rsColor(s.avg_rs)}" style="font-weight:700">${s.avg_rs ?? '—'}</span></td>
+      <td class="r">${pct(s.ret_1d)}</td>
+      <td class="r">${pct(s.ret_1w)}</td>
+      <td class="r">${pct(s.ret_1m)}</td>
+      <td class="r">${pct(s.ret_3m)}</td>
+      <td class="r">${pct(s.ret_1y)}</td>
+      <td class="r">${s.pct_above_ema50 != null ? s.pct_above_ema50 + '%' : '—'}</td>
+    </tr>`).join('') || `<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--text2)">ไม่มีข้อมูล</td></tr>`;
+}
+
+// คลิกแถว sector → กลับไปหน้าตารางหุ้น กรองเฉพาะ sector นั้น
+function _openJpSector(name) {
+  setJpMode('stocks');
+  const sel = document.getElementById('jp-sector-filter');
+  if (sel) { sel.value = name; _jpSector = name; }
+  renderJpTable();
 }
 
 // ============================================================
@@ -14282,21 +14411,22 @@ function _peerApplyHash() {
 window.addEventListener('hashchange', _peerApplyHash);
 window.addEventListener('DOMContentLoaded', () => { if (location.hash.startsWith('#peer/')) _peerApplyHash(); });
 
-// URL hash deep-link: #stock/us/AAPL — เปิดหน้าหุ้น US แล้วเด้ง popup รายละเอียด (chart-modal)
-// ให้เองทันที (ใช้โดยปุ่ม "เปิดแท็บใหม่" เช่น hedgeOpenDetail ใน Hedge Holdings — หุ้นจาก
-// Dataroma เป็น US เท่านั้น จึงรองรับแค่ us/hk ไม่มี th)
+// URL hash deep-link: #stock/us/AAPL — เปิดหน้าหุ้น US/HK/JP แล้วเด้ง popup รายละเอียด
+// (chart-modal) ให้เองทันที (ใช้โดยปุ่ม "เปิดแท็บใหม่" เช่น hedgeOpenDetail ใน Hedge
+// Holdings — หุ้นจาก Dataroma เป็น US เท่านั้นตอนนี้ จึงยังไม่มีที่เรียก jp/ จริง แต่รองรับ
+// ไว้ให้ครบเผื่อจุดเรียกอื่นในอนาคต ไม่มี th เพราะหน้าหุ้นไทยไม่ได้ผูกกับ pageId นี้)
 async function _stockApplyHash() {
-  // ดูคอมเมนต์เดียวกันใน _finApplyHash — หน้าหุ้น US/HK ก็ถูกซ่อนด้วย .static-mode เช่นกัน
-  // (/api/us-index-metrics, /api/hk-index-metrics ไม่ได้ bake ไว้เลย)
+  // ดูคอมเมนต์เดียวกันใน _finApplyHash — หน้าหุ้น US/HK/JP ก็ถูกซ่อนด้วย .static-mode เช่นกัน
+  // (/api/us-index-metrics, /api/hk-index-metrics, /api/jp-index-metrics ไม่ได้ bake ไว้เลย)
   if (IS_STATIC) return;
-  const m = location.hash.match(/^#stock\/(us|hk)\/([^/]+)$/);
+  const m = location.hash.match(/^#stock\/(us|hk|jp)\/([^/]+)$/);
   if (!m) return;
   const [, mktRaw, symRaw] = m;
   const sym = decodeURIComponent(symRaw).toUpperCase();
-  // เช็ค/โหลด _usData|_hkData ให้เสร็จก่อนเรียก showPage เสมอ — ถ้าโหลดทีหลัง
-  // showPage จะไปเรียก loadUsStocksPage/loadHkStocksPage ที่ยิง fetch เส้นเดียวกัน
-  // ซ้ำอีกรอบ (เพราะตอนนั้น _usData/_hkData ยังว่างอยู่)
-  const pageId = mktRaw === 'us' ? 'us-stocks' : 'hk-stocks';
+  // เช็ค/โหลด _usData|_hkData|_jpData ให้เสร็จก่อนเรียก showPage เสมอ — ถ้าโหลดทีหลัง
+  // showPage จะไปเรียก loadUsStocksPage/loadHkStocksPage/loadJpStocksPage ที่ยิง fetch
+  // เส้นเดียวกันซ้ำอีกรอบ (เพราะตอนนั้น _usData/_hkData/_jpData ยังว่างอยู่)
+  const pageId = mktRaw === 'us' ? 'us-stocks' : mktRaw === 'hk' ? 'hk-stocks' : 'jp-stocks';
   if (mktRaw === 'us') {
     if (!_usData) {
       // เช็ค d.error/d.stocks ก่อนเก็บ — ถ้า server ตอบ error object (เช่นยังไม่เคยกด
@@ -14311,7 +14441,7 @@ async function _stockApplyHash() {
     }
     showPage(pageId, document.querySelector(`.nav-btn[onclick*="${pageId}"]`));
     openUsChartModal(sym);
-  } else {
+  } else if (mktRaw === 'hk') {
     const hkSym = sym.endsWith('.HK') ? sym : `${sym}.HK`;
     if (!_hkData) {
       try {
@@ -14322,6 +14452,17 @@ async function _stockApplyHash() {
     }
     showPage(pageId, document.querySelector(`.nav-btn[onclick*="${pageId}"]`));
     openHkChartModal(hkSym);
+  } else {
+    const jpSym = sym.endsWith('.T') ? sym : `${sym}.T`;
+    if (!_jpData) {
+      try {
+        const d = await (await fetch('/api/jp-index-metrics')).json();
+        if (!d.error && d.stocks) _jpData = d;
+      } catch (e) { /* เช็ค found ใน openJpChartModal จะแจ้งเตือนเอง */ }
+      if (_jpData) _rebuildJpSectorFilter();   // เหตุผลเดียวกับฝั่ง US/HK ด้านบน
+    }
+    showPage(pageId, document.querySelector(`.nav-btn[onclick*="${pageId}"]`));
+    openJpChartModal(jpSym);
   }
 }
 window.addEventListener('hashchange', _stockApplyHash);
@@ -16480,6 +16621,10 @@ const DH_SOURCE_MAP = {
   insider:              { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   hedge_holdings:       { text: 'หน้า 🐋 Hedge Holdings — ปุ่ม "⟳ อัพเดท Hedge Holdings"', fn: 'startHedgeRefresh', fnLabel: '⟳ อัพเดท Hedge Holdings', gotoPage: 'hedge' },
   set_universe:         { text: 'ต้องโหลด listedCompanies_en_US.xls จาก SET.or.th เองแล้ววางทับไฟล์เดิม — ไม่มีปุ่มในแอป' },
+  drift_th:             { text: 'เช็คอัตโนมัติสัปดาห์ละครั้งท้าย Quick Update — กดเช็คมือได้เลยที่การ์ดด้านล่างในหน้านี้', fn: 'checkSetUniverseUpdates', fnLabel: '🔍 เช็คกับ SET.or.th' },
+  drift_us:             { text: 'เช็คอัตโนมัติสัปดาห์ละครั้งท้าย Quick Update — หรือกดเช็คมือที่หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม US', fn: 'checkUSIndexUpdates', fnLabel: '🔍 เช็คดัชนี US', gotoPage: 'financials' },
+  drift_hk:             { text: 'เช็คอัตโนมัติสัปดาห์ละครั้งท้าย Quick Update — หรือกดเช็คมือที่หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม HK', fn: 'checkHKIndexUpdates', fnLabel: '🔍 เช็คดัชนี HK', gotoPage: 'financials' },
+  drift_jp:             { text: 'เช็คอัตโนมัติสัปดาห์ละครั้งท้าย Quick Update — หรือกดเช็คมือที่หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม JP', fn: 'checkJPIndexUpdates', fnLabel: '🔍 เช็คดัชนี JP', gotoPage: 'financials' },
   us_index_membership:  { text: 'หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม US → "ดึงเฉพาะที่ขาด/เก่า"', fn: 'startUSIndexSync', fnLabel: '🔄 Sync ดัชนี US', gotoPage: 'financials' },
   hk_index_membership:  { text: 'หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม HK → "ดึงเฉพาะที่ขาด/เก่า"', fn: 'startHKIndexSync', fnLabel: '🔄 Sync ดัชนี HK', gotoPage: 'financials' },
   jp_index_membership:  { text: 'หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม JP → "ดึงเฉพาะที่ขาด/เก่า"', fn: 'startJPIndexSync', fnLabel: '🔄 Sync ดัชนี JP', gotoPage: 'financials' },

@@ -16,6 +16,7 @@ import pandas as pd
 
 from core.metrics import rank_rs
 from set_data_fetcher import process_stock, sanitize
+from sources import financials_store
 from sources.dr_universe import load_dr_universe
 
 
@@ -24,6 +25,16 @@ def _series(ohlc, key):
         return None
     idx = pd.to_datetime(ohlc["dates"])
     return pd.Series(ohlc[key], index=idx, dtype=float)
+
+
+def _raw_ticker(ticker):
+    """ตัด suffix แบบ yfinance ('.HK'/'.T') ให้เหลือรหัสดิบ — ใช้ lookup namespace mirror
+    'FINN:{ex}:{raw}' ใน financials.db (เก็บรหัสดิบไม่มี suffix เสมอ ดู _mirror_sym ใน app.py)
+    US ไม่มี suffix อยู่แล้วคืนค่าเดิม"""
+    for suf in (".HK", ".T"):
+        if ticker.endswith(suf):
+            return ticker[:-len(suf)]
+    return ticker
 
 
 def _compute_all_rows(base_dir, cfg, callback=None):
@@ -39,11 +50,17 @@ def _compute_all_rows(base_dir, cfg, callback=None):
     sector_map = {}
     for k in cfg["sector_keys_order"]:
         sector_map.update(membership_local.get(k, {}))
+    # industry_key — คีย์แยกต่างหากสำหรับ industry ละเอียดกว่า sector (เช่น HK ที่ดึงทั้ง
+    # sector/industry จริงจาก yfinance — ดู hk_index_membership._fetch_sector_map) ถ้าไม่ตั้ง
+    # (US/JP) industry จะเท่ากับ sector เหมือนเดิม
+    industry_map = (membership_local.get(cfg["industry_key"], {})
+                     if cfg.get("industry_key") else sector_map)
     if cfg.get("sector_fallback_dr"):
         for e in load_dr_universe(base_dir):
             yf_t = (e.get("yf") or "").upper()
-            if yf_t.endswith(".HK") and yf_t not in sector_map and e.get("ind"):
-                sector_map[yf_t] = e["ind"]
+            if yf_t.endswith(".HK") and e.get("ind"):
+                sector_map.setdefault(yf_t, e["ind"])
+                industry_map.setdefault(yf_t, e["ind"])
 
     # ชื่อบริษัทจริง — เอาจาก DR universe ที่ curate ไว้แล้ว ที่เหลือ fallback เป็น
     # ticker เฉยๆ (ไม่คุ้มไปดึงชื่อจาก Yahoo สดทีละตัวสำหรับแค่ title กราฟ)
@@ -53,6 +70,12 @@ def _compute_all_rows(base_dir, cfg, callback=None):
         yf_t = (e.get("yf") or "").upper()
         if yf_t and name_pred(yf_t):
             name_map[yf_t] = e.get("name")
+
+    # ตัวที่ dr_universe ไม่ได้ curate ไว้ (ส่วนใหญ่) — เติมชื่อจาก financials.db mirror
+    # (namespace 'FINN:{market}:{raw}', payload Yahoo ที่ sync ไว้แล้วตอน Quick Update/
+    # Index Max ผ่าน sync_mirror_yahoo_index) ไม่ต้องยิง Yahoo เพิ่ม เดิมปล่อยเป็น ticker
+    # เฉยๆ ทำให้ตาราง/chart modal โชว์แค่รหัสหุ้นล้วนๆ ส่วนใหญ่ของ US/HK/JP
+    mirror_names = financials_store.get_names_bulk(base_dir, f"FINN:{cfg['market_code']}:")
 
     store = cfg["store"]
     tickers = sorted(set().union(*sets.values()))
@@ -70,9 +93,10 @@ def _compute_all_rows(base_dir, cfg, callback=None):
         volume = _series(ohlc, "volumes")
         high = _series(ohlc, "highs")
         low = _series(ohlc, "lows")
+        name = name_map.get(ticker) or mirror_names.get(_raw_ticker(ticker)) or ticker
         info = {
-            "symbol": ticker, "ticker": ticker, "name": name_map.get(ticker, ticker),
-            "market": cfg["market_code"], "industry": sector_map.get(ticker, "Unknown"),
+            "symbol": ticker, "ticker": ticker, "name": name,
+            "market": cfg["market_code"], "industry": industry_map.get(ticker, "Unknown"),
             "sector": sector_map.get(ticker, "Unknown"),
         }
         row = process_stock(info, close, volume, high=high, low=low)
@@ -115,8 +139,12 @@ def build(base_dir, cfg, callback=None, live_map=None):
       sector_keys_order    — tuple key ของ sector map ใน membership local เรียงจาก
                              ทับก่อน->ทับทีหลัง (ตัวหลังชนะ — ดู cfg ของ US ที่ต้องให้
                              GICS (SP500/DOW) ทับ ICB (NDX) เพราะหุ้นเมกะแคปอยู่ทั้งคู่)
-      sector_fallback_dr   — True ถ้าต้องเติม sector จาก dr_universe (field 'ind') สำหรับ
-                             ตัวที่ยังไม่มี sector (HSTECH ไม่มี sector จาก Wikipedia)
+      industry_key         — (optional) key ของ industry map ใน membership local ที่ละเอียด
+                             กว่า sector (เช่น HK ใช้ "industry" จาก yfinance คู่กับ "sector" —
+                             ดู hk_index_metrics.py) ไม่ตั้ง = industry เท่ากับ sector (US/JP)
+      sector_fallback_dr   — True ถ้าต้องเติม sector/industry จาก dr_universe (field 'ind')
+                             สำหรับตัวที่ yfinance/Wikipedia ดึงไม่ได้ (ใช้ setdefault — ไม่ทับ
+                             ค่าที่มีอยู่แล้ว)
       name_map_predicate   — fn(yf_ticker_upper) -> bool บอกว่า dr_universe entry นี้
                              เป็นของตลาดนี้หรือไม่ (ใช้เอาชื่อบริษัทมาเติม)
       market_code          — "US"/"HK" ฯลฯ ใส่ใน info['market']

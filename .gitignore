@@ -109,6 +109,10 @@ rotation_state.json
 # universe filter เดิมถ้าไฟล์หาย (แค่เสียประวัติวันที่ตรวจพบครั้งแรก)
 delisted_log.json
 
+# ผลเช็คหุ้นเข้าใหม่/ถูกถอดล่าสุด (core/index_drift.py) — local-only, regenerate
+# ได้เสมอจากรอบ Quick Update ถัดไป (แค่เขียนทับค่าล่าสุด ไม่สะสมประวัติ)
+index_drift_status.json
+
 # DR universe auto-sync overlay (สร้างใหม่ได้เสมอจาก SET API)
 dr_universe_auto.json
 
@@ -134,6 +138,13 @@ logs/
 data/us_index_metrics.json
 data/jp_index_metrics.json
 data/hk_index_metrics.json
+
+# heatmap เลิกใช้ market cap ทำขนาดกล่อง treemap แล้ว (เปลี่ยนเป็น grid ขนาดเท่ากันจัดกลุ่ม
+# ตาม sector แทน — ดู _hmGridHtml ใน dashboard.js) ไฟล์ cache พวกนี้ไม่มีโค้ดไหนอ่าน/เขียน
+# อีกแล้ว เก็บไว้เผื่ออนาคตกลับมาใช้ market cap ก็ regenerate ใหม่ได้ ไม่ต้อง commit
+data/us_heatmap_mktcap_cache.json
+data/hk_heatmap_mktcap_cache.json
+data/jp_heatmap_mktcap_cache.json
 
 # Backtest results (local-only เหมือน financials.db)
 backtest_screener_results_*.json

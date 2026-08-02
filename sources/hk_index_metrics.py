@@ -15,9 +15,14 @@ _CFG = dict(
     membership=hk_index_membership,
     store=hk_store,
     index_keys=hk_index_membership.INDEXES,   # ("HSI","HSCEI","HSTECH")
-    sector_keys_order=("HSI_sector", "HSCEI_sector"),
-    # HSTECH ไม่มี sector จาก Wikipedia (bullet list ไม่มีคอลัมน์ industry) — เติมจาก
-    # dr_universe.py (field 'ind') สำหรับตัวที่ทับซ้อนบางส่วน ที่เหลือปล่อย "Unknown"
+    # sector/industry มาจาก yfinance (Yahoo taxonomy) ไม่ใช่ Wikipedia — HSI wiki table มีแค่
+    # Sub-index หยาบ 4 กลุ่ม (หุ้น HSI-only กองรวมเป็น "Commerce & Industry" ก้อนเดียว) และ
+    # HSCEI Industry column ก็ไม่ครอบคลุมตัวที่อยู่แค่ HSTECH — ดู
+    # hk_index_membership._fetch_sector_map (เติมตอน sync_membership, ครบ 105/105 ตอนทดสอบ)
+    sector_keys_order=("sector",),
+    industry_key="industry",
+    # เผื่อ yfinance บางตัวดึงไม่ได้ชั่วคราว (rate-limit) — เติมจาก dr_universe.py (field 'ind')
+    # เป็น fallback สุดท้ายเท่านั้น (setdefault ใน index_metrics_common ไม่ทับของจริงจาก yfinance)
     sector_fallback_dr=True,
     # ticker HK ใน dr_universe เป็นรูปแบบ yfinance "NNNN.HK" ตรงกับ ticker ในดัชนี HK พอดี
     name_map_predicate=lambda yf_t: yf_t.endswith(".HK"),
