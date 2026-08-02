@@ -14563,11 +14563,11 @@ function setFinView(view, btn) {
 // ไม่เคย sync ในเครื่อง จะ fallback ไปดึงสดจาก network (yfinance/Finnomena) ซึ่งฝั่ง backend
 // มี timeout ต่อ request ย่อยอยู่แล้วแต่รวมหลายรอบ (income/balance/cashflow/info) อาจกินเวลา
 // นาทีกว่า — ถ้าไม่ตั้ง timeout ฝั่งนี้ด้วย spinner จะค้างเงียบๆ โดยผู้ใช้ไม่รู้ว่ากำลังรออะไรอยู่
-async function _fetchTimeout(url, ms = 25000, errMsg) {
+async function _fetchTimeout(url, ms = 25000, errMsg, options) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
-    return await fetch(url, { signal: ctrl.signal });
+    return await fetch(url, { ...options, signal: ctrl.signal });
   } catch (e) {
     if (e.name === 'AbortError') throw new Error(errMsg || 'หมดเวลารอข้อมูล (เกิน 25 วิ) — หุ้นนี้อาจยังไม่เคย sync ในเครื่อง กำลังลองดึงสดจากแหล่งข้อมูลแต่ช้าเกินไป ลองใหม่อีกครั้งหรือเปลี่ยนแหล่งข้อมูล');
     throw e;
@@ -20641,7 +20641,7 @@ async function syncInsiderData() {
   btn.disabled = true;
   btn.textContent = '⟳ กำลัง sync...';
   try {
-    const r = await _fetchTimeout('/api/insider-sync', 200000, 'หมดเวลารอ sync ข้อมูล SEC').then(r => r.json());
+    const r = await _fetchTimeout('/api/insider-sync', 200000, 'หมดเวลารอ sync ข้อมูล SEC', { method: 'POST' }).then(r => r.json());
     if (!r.ok) throw new Error(r.error || 'sync ไม่สำเร็จ');
     _insData = null;
     await fetchInsiderData();   // เขียนทับ ins-status ด้วยข้อความ "อัพเดท ..." — ต่อท้ายผลสรุป sync ให้เห็นด้วย

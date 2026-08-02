@@ -7292,7 +7292,7 @@ if __name__ == "__main__":
     if not _wait_port_free(port):
         print(f"[!] พอร์ต {port} มี server อื่นรันอยู่แล้ว — ไม่ start ซ้อน")
         print(f"    ปิดตัวเก่าก่อน (Task Manager -> python) หรือใช้ตัวที่รันอยู่ได้เลย")
-        sys.exit(1)
+         
 
     local_ip = get_local_ip()
 

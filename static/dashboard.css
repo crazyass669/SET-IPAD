@@ -450,7 +450,11 @@
   .modal-stat { text-align: center; min-width: 65px; }
   .modal-stat-val { font-size: 14px; font-weight: 700; }
   .modal-stat-lbl { font-size: 10px; color: var(--text2); margin-top: 2px; }
-  .modal-body { overflow-y: auto; }
+  /* overflow-x เพิ่มเข้ามา 2026-08-02 — ตารางในบาง modal (เช่น sector modal
+     .tbl-clickable ~10 คอลัมน์) กว้างเกิน .modal max-width:920px ได้ง่าย
+     เดิมไม่มี overflow-x ใดๆ เลย (ไม่ใช่แค่โดน media query กัน แบบ #tbl-stocks/
+     DR ที่เจอมาก่อนหน้านี้) เนื้อหาที่ล้นเลยทะลุกรอบ modal ออกไปตรงๆ */
+  .modal-body { overflow-y: auto; overflow-x: auto; }
   .tbl-clickable tbody tr { cursor: default; }
 
   /* RESPONSIVE */
@@ -943,20 +947,28 @@
    ด้วย <div style="overflow-x:auto"> ของตัวเองอยู่แล้ว ไม่ใช่ .card —
    ถ้าไม่แก้ตรงนี้ให้ครอบคลุมด้วย จะโดนบั๊กเดียวกันทันทีที่คอลัมน์เยอะขึ้น
 
-   แยกเป็น media query กว้างกว่าบล็อคทัชข้างบน (1366px แทน 1024px) เพราะ
-   ไอแพดแนวนอน (landscape) กว้างเกิน 1024px ได้ (เช่น 12.9" Pro = 1366px)
-   หลุด breakpoint เดิมไปเลย ตารางเลยกลับไปล้นแบบไม่มี wrapper อีกครั้ง
-   ทั้งที่แนวตั้งใช้ได้ปกติ — ใช้ breakpoint แยกเฉพาะจุดนี้แทนที่จะขยาย
+   เดิมจำกัดไว้แค่ @media (max-width: 1366px) โดยคิดว่าจอโน้ตบุ๊ก/เดสก์ท็อปปกติ
+   กว้างพอไม่ต้องพึ่ง fix นี้ — ผิด: ตาราง "หุ้นทั้งหมด" มี ~19 คอลัมน์ +
+   sparkline canvas ที่ไม่บีบเล็กกว่าค่าหนึ่ง ความกว้างที่ต้องการจริงเกิน
+   1900px ได้ง่ายๆ ซึ่งกว้างกว่าพื้นที่เนื้อหาจริงของโน้ตบุ๊กจอ maximize
+   เต็มจอได้เหมือนกัน (ยิ่งเจอกับ Windows display scaling 125%/150% ยิ่งลด
+   พื้นที่ CSS px ลงไปอีก) พอกว้างกว่า breakpoint ตารางเลยทะลุขอบ .card
+   ออกไปตรงๆ โดยไม่มี scrollbar ให้เลื่อน (เจอจริงบน laptop จอ maximize
+   2026-08-02) — เอา 2 กฎนี้ออกมาจาก media query ให้ใช้เสมอทุกขนาดจอแทน
+   ไม่มีผลเสียตอนตารางพอดีจอ (overflow-x:auto ไม่ทำอะไรถ้าไม่มีอะไรล้น) */
+.tbl {
+  width: auto;
+  min-width: 100%;
+}
+.card:has(table.tbl) {
+  overflow-x: auto;
+}
+
+/* breakpoint 1366px ยังใช้กับกฎที่เกี่ยวกับจอสัมผัส/ไอแพดโดยเฉพาะ (ไม่ใช่
+   scroll ของตาราง) — ไอแพดแนวนอน (landscape) กว้างเกิน 1024px ได้ (เช่น
+   12.9" Pro = 1366px) เลยใช้ breakpoint แยกเฉพาะจุดนี้แทนที่จะขยาย
    บล็อคทัชทั้งก้อน กัน nav-bar/touch-target ไปกระทบโน้ตบุ๊กจอเล็กโดยไม่ตั้งใจ */
 @media (max-width: 1366px) {
-  .tbl {
-    width: auto;
-    min-width: 100%;
-  }
-  .card:has(table.tbl) {
-    overflow-x: auto;
-  }
-
   /* ซ่อนปุ่ม "เทียบเพื่อน"/"ดูสรุปเต็ม" ใน popup กราฟหุ้นรายตัว บนมือถือ/
      ไอแพด — สองหน้านี้ (Peer Compare, Tearsheet) เป็นตาราง/เลย์เอาต์กว้าง
      ที่ยังใช้งานไม่ได้จริงบนจอสัมผัส เลยซ่อนทางเข้าจาก popup ไว้ก่อน
