@@ -64,6 +64,11 @@ _DR_CACHE_TTL = 4 * 3600
 _dr_diff_cache: dict = {}
 _DR_DIFF_CACHE_TTL = 6 * 3600
 
+# ETF cache — เก็บราคา+metadata ETF ที่จดทะเบียนบน SET โดยตรงไว้ 2 ชั่วโมง (universe
+# เล็กแค่ ~13 ตัว rebuild เร็ว ไม่ต้องมี quick-update แบบ delta-merge เหมือน DR)
+_etf_cache: dict = {}
+_ETF_CACHE_TTL = 2 * 3600
+
 # US index (S&P500/Dow/Nasdaq100) diff-check cache — เทียบ Wikipedia กับไฟล์ local ไว้ 6 ชั่วโมง
 _us_index_diff_cache: dict = {}
 _US_INDEX_DIFF_CACHE_TTL = 6 * 3600
@@ -114,11 +119,12 @@ _indices_job_state = {"running": False}
 from flask import Flask, jsonify, send_file, Response, request
 
 # สูตรคำนวณกลาง — ห้าม copy สูตรมาวางในไฟล์นี้ ให้ import จาก core.metrics เท่านั้น
-from core.metrics import calc_rs_raw, calc_ema
+from core.metrics import calc_rs_raw, calc_ema, calc_return
 
 # HTTP clients / static universe — แยกไว้ที่ sources/ (Phase 2 refactor)
 from sources.tradingview import INDEX_INFO, _yf_to_tv, _fetch_tv_bars
 from sources.dr_universe import _DR_STATIC, is_latest_bar_stable, region_today_date, load_dr_universe, sync_dr_universe
+from sources.etf_universe import fetch_etf_list_live
 from sources import sec_store
 from sources import financials_store
 from sources import factor_snapshot
@@ -135,6 +141,7 @@ BACKUP_FILE  = os.path.join(BASE_DIR, "set_data_backup.json")
 HTML_FILE    = os.path.join(BASE_DIR, "set_dashboard.html")
 HISTORY_FILE = os.path.join(BASE_DIR, "set_history.json")
 DR_CACHE_FILE = os.path.join(BASE_DIR, "dr_cache.json")
+ETF_CACHE_FILE = os.path.join(BASE_DIR, "etf_cache.json")
 WATCHLIST_FILE = os.path.join(BASE_DIR, "data", "watchlist.json")
 TOKEN_FILE = os.path.join(BASE_DIR, ".dashboard_token")
 
@@ -199,6 +206,27 @@ def _save_dr_cache_to_file(result):
     except Exception as e:
         print(f"[DR] Failed to save cache: {e}")
 
+def _load_etf_cache_from_file():
+    """โหลด ETF cache จากไฟล์ตอน server เริ่มทำงาน"""
+    if not os.path.exists(ETF_CACHE_FILE):
+        return
+    try:
+        with open(ETF_CACHE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        file_ts = os.path.getmtime(ETF_CACHE_FILE)
+        _etf_cache["result"] = data
+        _etf_cache["ts"] = file_ts
+        print(f"[ETF] Loaded cache: {len(data.get('stocks', []))} ETFs from etf_cache.json")
+    except Exception as e:
+        print(f"[ETF] Failed to load cache: {e}")
+
+def _save_etf_cache_to_file(result):
+    try:
+        _atomic_write_json(ETF_CACHE_FILE, result)
+        print(f"[ETF] Saved cache: {len(result.get('stocks', []))} ETFs -> etf_cache.json")
+    except Exception as e:
+        print(f"[ETF] Failed to save cache: {e}")
+
 # History: อ่านจาก SQLite ผ่าน core.store (point query ~6ms) — ไม่มี in-memory
 # cache 434MB อีกต่อไป และไม่ต้องมี mtime invalidation (query ตรงทุกครั้ง)
 from core import store as price_store
@@ -224,8 +252,9 @@ def _require_dashboard_token():
             return jsonify({"error": "missing/invalid dashboard token"}), 403
 
 
-# โหลด DR cache จากไฟล์ตอน import (ใช้ได้ทั้ง __main__ และ WSGI)
+# โหลด DR/ETF cache จากไฟล์ตอน import (ใช้ได้ทั้ง __main__ และ WSGI)
 _load_dr_cache_from_file()
+_load_etf_cache_from_file()
 
 # ============================================================
 # Refresh state — shared between threads
@@ -831,6 +860,265 @@ def _dr_do_rebuild():
     _dr_cache.update(result=result, ts=time.time())
     _save_dr_cache_to_file(result)
     return result
+
+
+# ============================================================
+# ETF (SET-listed) — ต่างจาก DR ตรงที่เป็นตราสารจดทะเบียนบน SET เอง ไม่ใช่หุ้นต่างประเทศ
+# universe เล็ก (~13 ตัว) ดึงรายชื่อ+metadata สดจาก SET API ทุกรอบ (ไม่ curate มือแบบ DR)
+# ============================================================
+
+def _etf_light(result, refreshing=False):
+    """ตัด dates/closes เต็มออกเหมือน _dr_light — ใช้ /api/etf-history แยกตอนเปิดกราฟเต็ม"""
+    out = {"stocks": [{k: v for k, v in s.items() if k not in ("dates", "closes")}
+                      for s in result.get("stocks", [])],
+           "ts": result.get("ts"),
+           "warnings": result.get("warnings") or []}
+    if refreshing:
+        out["refreshing"] = True
+    return out
+
+
+_etf_rebuild_lock = threading.Lock()
+
+
+def _kick_etf_rebuild():
+    if _etf_rebuild_lock.locked():
+        return
+
+    def _bg():
+        try:
+            _rebuild_etf_cache()
+            print("[ETF] background refresh เสร็จ")
+        except Exception as e:
+            print(f"[ETF] background refresh ล้มเหลว: {e}")
+
+    threading.Thread(target=_bg, daemon=True).start()
+
+
+@app.route("/api/etf")
+def get_etf_data():
+    """ดึงราคา+metadata ETF ที่จดทะเบียนบน SET ทั้งหมด — cache 2 ชั่วโมง
+    stale-while-revalidate เหมือน /api/dr — ?fresh=1 บังคับทำสดแบบ blocking"""
+    fresh = request.args.get("fresh") == "1"
+    cached = _etf_cache.get("result")
+    if not fresh and cached and cached.get("stocks") and _etf_cache.get("ts"):
+        age = time.time() - _etf_cache["ts"]
+        if age < _ETF_CACHE_TTL:
+            return jsonify(_etf_light(cached))
+        _kick_etf_rebuild()
+        return jsonify(_etf_light(cached, refreshing=True))
+
+    try:
+        result = _rebuild_etf_cache()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify(_etf_light(result))
+
+
+def _rebuild_etf_cache():
+    with _etf_rebuild_lock:
+        if (_etf_cache.get("result") and _etf_cache.get("ts")
+                and time.time() - _etf_cache["ts"] < 120):
+            return _etf_cache["result"]
+        return _etf_do_rebuild()
+
+
+def _etf_do_rebuild():
+    import yfinance as yf
+    import pandas as pd
+    from datetime import datetime as _dt
+
+    try:
+        etf_list = fetch_etf_list_live()
+    except Exception as e:
+        # SET API ล่ม — fallback ใช้ metadata รอบก่อนจาก cache (ราคาจะดึงใหม่ต่อไป)
+        print(f"[ETF] ดึงรายชื่อ/metadata จาก SET API ไม่สำเร็จ (ใช้ของเก่า): {e}")
+        prev = (_etf_cache.get("result") or {}).get("stocks", [])
+        if not prev:
+            raise ValueError(f"ดึงรายชื่อ ETF ไม่สำเร็จและไม่มี cache เก่า: {e}")
+        etf_list = [{k: s.get(k) for k in (
+            "symbol", "name_th", "name_en", "underlying", "underlying_class", "category",
+            "issuer", "mgmt_fee", "investment_policy", "div_yield", "nav", "nav_date",
+            "pnav_ratio", "mkt_cap", "is_lna")} for s in prev]
+
+    yf_tickers = [f"{e['symbol']}.BK" for e in etf_list]
+    raw = yf.download(
+        yf_tickers, period="max", auto_adjust=True, progress=False,
+        group_by="ticker", threads=True,
+    )
+    is_multi = len(yf_tickers) > 1
+
+    def _series(yticker, field):
+        try:
+            s = raw[yticker][field] if is_multi else raw[field]
+            return s.dropna()
+        except (KeyError, TypeError):
+            return pd.Series(dtype=float)
+
+    results = []
+    price_failed = []
+    for e in etf_list:
+        yticker = f"{e['symbol']}.BK"
+        try:
+            close  = _series(yticker, "Close")
+            open_s = _series(yticker, "Open")
+            high_s = _series(yticker, "High")
+            low_s  = _series(yticker, "Low")
+            vol_s  = _series(yticker, "Volume")
+            if len(close) < 2:
+                price_failed.append(e["symbol"])
+                continue
+
+            price = float(close.iloc[-1])
+            prev  = float(close.iloc[-2])
+            chg   = round((price - prev) / prev * 100, 2) if prev else None
+
+            close100 = [round(float(x), 4) for x in close.tail(100).tolist()]
+            dates_all  = [str(d)[:10] for d in close.index.tolist()]
+            closes_all = [round(float(x), 6) for x in close.tolist()]
+
+            ema50  = calc_ema(close, 50)
+            ema200 = calc_ema(close, 200)
+            above_ema50  = bool(price > ema50)  if ema50  is not None else None
+            above_ema200 = bool(price > ema200) if ema200 is not None else None
+            _hist_bars = min(len(close), 500)
+            price_history = [
+                [d, round(float(p), 4 if p < 1 else 2)]
+                for d, p in zip(dates_all[-_hist_bars:], close.tail(_hist_bars).tolist())
+            ]
+            vol_history = [int(v) for v in vol_s.tail(260).tolist()] if len(vol_s) else []
+            vol_today   = int(vol_s.iloc[-1]) if len(vol_s) else None
+            vol_avg20   = int(vol_s.tail(21).iloc[:-1].mean()) if len(vol_s) >= 21 else None
+
+            n = min(30, len(close))
+            ohlc30 = []
+            for i in range(-n, 0):
+                try:
+                    o = float(open_s.iloc[i]) if len(open_s) >= abs(i) else price
+                    h = float(high_s.iloc[i]) if len(high_s) >= abs(i) else price
+                    l = float(low_s.iloc[i])  if len(low_s)  >= abs(i) else price
+                    c = float(close.iloc[i])
+                    v = float(vol_s.iloc[i])  if len(vol_s)  >= abs(i) else 0
+                    ohlc30.append([round(o,4), round(h,4), round(l,4), round(c,4), int(v)])
+                except Exception:
+                    pass
+
+            ret_1w = calc_return(close, 5)
+            ret_1m = calc_return(close, 21)
+            ret_3m = calc_return(close, 63)
+            ret_6m = calc_return(close, 126)
+            ret_1y = calc_return(close, 250)
+            ret_3y = calc_return(close, 756)
+            ret_5y = calc_return(close, 1260)
+
+            close_52w = close.iloc[-252:] if len(close) >= 252 else close
+            high_52w = round(float(close_52w.max()), 4)
+            low_52w  = round(float(close_52w.min()), 4)
+            ath      = round(float(close.max()), 4)
+            ath_pct  = round((price - ath) / ath * 100, 2) if ath else None
+
+            try:
+                cur_year  = _dt.now().year
+                close_ytd = close[close.index >= pd.Timestamp(f"{cur_year}-01-01")]
+                if len(close_ytd) > 0:
+                    first_ytd = float(close_ytd.iloc[0])
+                    ret_ytd = round((price - first_ytd) / first_ytd * 100, 2) if first_ytd else None
+                else:
+                    ret_ytd = None
+            except Exception:
+                ret_ytd = None
+
+            rs_raw = calc_rs_raw(ret_1m, ret_3m, ret_6m, ret_1y)
+
+            results.append({
+                "symbol":  e["symbol"],
+                "name_th": e.get("name_th"),
+                "name_en": e.get("name_en"),
+                "underlying": e.get("underlying"),
+                "category": e.get("category"),
+                "is_lna":  bool(e.get("is_lna")),
+                "issuer":  e.get("issuer"),
+                "mgmt_fee": e.get("mgmt_fee"),
+                "investment_policy": e.get("investment_policy"),
+                "div_yield": e.get("div_yield"),
+                "nav":      e.get("nav"),
+                "nav_date": e.get("nav_date"),
+                "pnav_ratio": e.get("pnav_ratio"),
+                "mkt_cap":  e.get("mkt_cap"),
+                "price":    round(price, 4),
+                "chg":      chg,
+                "ret_1w":   ret_1w,
+                "ret_1m":   ret_1m,
+                "ret_3m":   ret_3m,
+                "ret_6m":   ret_6m,
+                "ret_1y":   ret_1y,
+                "ret_3y":   ret_3y,
+                "ret_5y":   ret_5y,
+                "ret_ytd":  ret_ytd,
+                "high_52w": high_52w,
+                "low_52w":  low_52w,
+                "ath":      ath,
+                "ath_pct":  ath_pct,
+                "rs_raw":   round(rs_raw, 4) if rs_raw is not None else None,
+                "rs_score": None,
+                "close100": close100,
+                "ohlc30":   ohlc30,
+                "dates":    dates_all,
+                "closes":   closes_all,
+                "above_ema50":  above_ema50,
+                "above_ema200": above_ema200,
+                "price_history": price_history,
+                "vol_history":   vol_history,
+                "vol_today":     vol_today,
+                "vol_avg20":     vol_avg20,
+            })
+        except Exception as ex:
+            print(f"[ETF] {e['symbol']}: {ex}")
+            price_failed.append(e["symbol"])
+
+    # RS rank เฉพาะกลุ่ม non-L&I (Leveraged/Inverse มี beta ผิดธรรมชาติ เทียบกันไม่ได้)
+    valid_rs = [r for r in results if r.get("rs_raw") is not None and not r["is_lna"]]
+    valid_rs.sort(key=lambda x: x["rs_raw"])
+    n_rs = len(valid_rs)
+    for i, r in enumerate(valid_rs):
+        r["rs_score"] = int(round(i / n_rs * 99)) if n_rs > 0 else None
+
+    warnings = []
+    if price_failed:
+        warnings.append(f"ดึงราคาไม่สำเร็จ {len(price_failed)} ตัว: " + ", ".join(price_failed))
+
+    result = {"stocks": results, "ts": _dt.now().isoformat(), "warnings": warnings}
+    _etf_cache.update(result=result, ts=time.time())
+    _save_etf_cache_to_file(result)
+    return result
+
+
+@app.route("/api/etf-history/<symbol>")
+def get_etf_history(symbol):
+    """คืน dates+closes เต็ม สำหรับกราฟ full-history ใน chart modal — เสิร์ฟจาก
+    _etf_cache ก่อน (ไม่ fetch ซ้ำ) fallback yfinance ตรงถ้า cache ไม่มี"""
+    cached = _etf_cache.get("result")
+    if cached:
+        for s in cached.get("stocks", []):
+            if s.get("symbol") == symbol:
+                return jsonify({"dates": s.get("dates", []), "closes": s.get("closes", [])})
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(f"{symbol}.BK").history(period="max", auto_adjust=True)
+        if hist.empty:
+            return jsonify({"error": "ไม่มีข้อมูล"}), 404
+        dates  = [str(d)[:10] for d in hist.index.tolist()]
+        closes = [round(float(x), 6) for x in hist["Close"].tolist()]
+        return jsonify({"dates": dates, "closes": closes})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/etf-full-refresh", methods=["POST"])
+def etf_full_refresh():
+    """ล้าง ETF cache ให้ /api/etf ดึงข้อมูลใหม่ทั้งหมดรอบถัดไป"""
+    _etf_cache.clear()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/dr/check-updates")
@@ -7388,8 +7676,9 @@ if __name__ == "__main__":
 
     local_ip = get_local_ip()
 
-    # โหลด DR cache จากไฟล์ก่อนเริ่ม server
+    # โหลด DR/ETF cache จากไฟล์ก่อนเริ่ม server
     _load_dr_cache_from_file()
+    _load_etf_cache_from_file()
 
     print("=" * 50)
     print("  SET Dashboard Server")

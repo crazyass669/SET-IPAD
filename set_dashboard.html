@@ -50,6 +50,7 @@
   <button class="nav-btn" onclick="showPage('band',this)">Val. Band</button>
   <button class="nav-btn nav-btn-highlight" onclick="showPage('watchlist',this)">⭐ Watchlist</button>
   <button class="nav-btn" onclick="showPage('dr',this)">DR/DRx</button>
+  <button class="nav-btn" onclick="showPage('etf',this)" title="ETF ไทย — ราคา/NAV/Premium-Discount/RS ของ ETF ที่จดทะเบียนบน SET โดยตรง (ดัชนีในประเทศ/ต่างประเทศ/ตราสารหนี้/สินค้าโภคภัณฑ์/Leveraged-Inverse)">🏦 ETF ไทย</button>
   <button class="nav-btn" onclick="showPage('valuation',this)">Valuation</button>
   <button class="nav-btn" onclick="showPage('insider',this)">Insider</button>
   <button class="nav-btn" onclick="showPage('flow',this)" title="Capital Flow — net buy/sell สถาบัน/ต่างชาติ/รายย่อย">Capital Flow</button>
@@ -2115,6 +2116,81 @@
   </div>
 </div>
 
+<!-- PAGE: ETF (SET-listed) -->
+<div id="page-etf" class="page">
+  <div class="page-title">🏦 ETF ไทย</div>
+  <div class="page-sub">ราคา, NAV, Premium/Discount, ผลตอบแทน ของ ETF ที่จดทะเบียนซื้อขายบน SET โดยตรง</div>
+
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+    <button class="filter-btn" id="etf-live-btn" onclick="etfQuickUpdate()">⚡ อัพเดทราคาล่าสุด
+      <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:250px">
+        <strong>ราคาล่าสุดระหว่างวัน (เร็ว)</strong><br>
+        ดึงเฉพาะราคาสดของทั้ง 13 ตัวจาก Yahoo (fast_info) ไม่โหลดประวัติ/ไม่ยิง SET.or.th — เร็วมาก ไม่ต้องรอ cache 2 ชั่วโมงหมดอายุ<br><br>
+        <span style="color:var(--text2)">ราคาสดจะโชว์คู่กับราคาปิดล่าสุดที่นิ่งแล้ว (แบบเดียวกับ DR) — CHG% หลักยังอิงราคาปิดจนกว่าจะกด "รีเฟรชราคา" เต็ม</span>
+      </div></span>
+    </button>
+    <button class="filter-btn" id="etf-refresh-btn" onclick="reloadETFPage()">🔄 รีเฟรชราคา
+      <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:260px">
+        <strong>รีเฟรชข้อมูลใหม่ทั้งหมด</strong><br>
+        ดึงรายชื่อ/NAV/Premium-Discount/ค่าธรรมเนียมจาก SET.or.th สดใหม่ + ราคาย้อนหลังทั้งชุด (universe เล็ก ~13 ตัว เร็ว ไม่ต้องรอนาน)
+      </div></span>
+    </button>
+    <span id="etf-live-note" style="font-size:11px;color:var(--text2)"></span>
+  </div>
+
+  <!-- Category filter -->
+  <div class="filter-row" id="etf-category-btns" style="margin-bottom:8px">
+    <button class="filter-btn active" onclick="setETFCategory('ALL',this)">ทั้งหมด <span class="dr-region-count-badge" data-etf-cat="ALL"></span></button>
+    <button class="filter-btn" onclick="setETFCategory('TH_EQ',this)" title="ETF อ้างอิงดัชนีหุ้นไทย">🇹🇭 ดัชนีในประเทศ <span class="dr-region-count-badge" data-etf-cat="TH_EQ"></span></button>
+    <button class="filter-btn" onclick="setETFCategory('FOREIGN',this)" title="ETF อ้างอิงดัชนีต่างประเทศ">🌏 ดัชนีต่างประเทศ <span class="dr-region-count-badge" data-etf-cat="FOREIGN"></span></button>
+    <button class="filter-btn" onclick="setETFCategory('BOND',this)" title="ETF อ้างอิงตราสารหนี้">💵 ตราสารหนี้ <span class="dr-region-count-badge" data-etf-cat="BOND"></span></button>
+    <button class="filter-btn" onclick="setETFCategory('COMMODITY',this)" title="ETF อ้างอิงสินค้าโภคภัณฑ์ (เช่น ทองคำ)">🪙 โภคภัณฑ์ <span class="dr-region-count-badge" data-etf-cat="COMMODITY"></span></button>
+    <button class="filter-btn" onclick="setETFCategory('LNI',this)" title="Leveraged/Inverse — ทวี/ผกผัน ความเสี่ยงสูง ไม่เข้า RS ranking/rotation cohort">⚡ L&amp;I <span class="dr-region-count-badge" data-etf-cat="LNI"></span></button>
+  </div>
+
+  <!-- Sort -->
+  <div class="filter-row" id="etf-sort-btns" style="margin-bottom:8px">
+    <span style="font-size:11px;color:var(--text2);align-self:center">เรียงโดย:</span>
+    <button class="filter-btn active" onclick="setETFSort('rs_desc',this)" title="เรียงจาก RS Score สูงสุดไปต่ำสุด (เฉพาะกลุ่มไม่ใช่ L&amp;I)">RS ↑</button>
+    <button class="filter-btn" onclick="setETFSort('chg_desc',this)">CHG% ↑</button>
+    <button class="filter-btn" onclick="setETFSort('chg_asc',this)">CHG% ↓</button>
+    <button class="filter-btn" onclick="setETFSort('ret_1m_desc',this)">1M% ↑</button>
+    <button class="filter-btn" onclick="setETFSort('ret_1y_desc',this)">1Y% ↑</button>
+    <button class="filter-btn" onclick="setETFSort('pnav_desc',this)" title="เรียงจาก Premium ต่อ NAV สูงสุด (ราคาแพงกว่ามูลค่าทรัพย์สินสุทธิมากที่สุด)">Premium ↑</button>
+    <button class="filter-btn" onclick="setETFSort('mkt_cap',this)">MKT CAP</button>
+    <button class="filter-btn" onclick="setETFSort('sym',this)">A–Z</button>
+    <div class="dr-view-toggle">
+      <button class="dr-view-btn active" id="etf-view-table" onclick="setETFView('table',this)">☰ Table</button>
+      <button class="dr-view-btn" id="etf-view-cards" onclick="setETFView('cards',this)">⊞ Cards</button>
+      <button class="dr-view-btn" id="etf-view-heatmap" onclick="setETFView('heatmap',this)">▦ Heatmap</button>
+    </div>
+  </div>
+
+  <!-- Heatmap metric selector -->
+  <div class="filter-row" id="etf-hm-period-row" style="display:none;margin-bottom:8px">
+    <span style="font-size:11px;color:var(--text2);align-self:center">สี:</span>
+    <button class="filter-btn active" onclick="setEtfHmPeriod('chg',this)">CHG%</button>
+    <button class="filter-btn" onclick="setEtfHmPeriod('ret_1w',this)">1W%</button>
+    <button class="filter-btn" onclick="setEtfHmPeriod('ret_1m',this)">1M%</button>
+    <button class="filter-btn" onclick="setEtfHmPeriod('ret_3m',this)">3M%</button>
+    <button class="filter-btn" onclick="setEtfHmPeriod('ret_6m',this)">6M%</button>
+    <button class="filter-btn" onclick="setEtfHmPeriod('ret_1y',this)">1Y%</button>
+    <button class="filter-btn" onclick="setEtfHmPeriod('rs_score',this)" title="RS Score (0–99) — จัดอันดับเฉพาะกลุ่มไม่ใช่ L&amp;I">RS Score</button>
+    <button class="filter-btn" onclick="setEtfHmPeriod('pnav_ratio',this)" title="Premium/Discount ต่อ NAV">Premium/NAV</button>
+  </div>
+  <div id="etf-hm-hint" style="display:none;font-size:11px;color:var(--text2);margin-bottom:10px">เขียว = ขึ้น · แดง = ลง</div>
+
+  <!-- Search -->
+  <input class="search-box" id="etf-search" placeholder="ค้นหา Symbol หรือชื่อกองทุน เช่น TDEX, GLD, ทองคำ..." oninput="filterETF()" style="margin-bottom:12px">
+
+  <div class="card">
+    <div id="etf-status" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
+    <div id="etf-table-wrap" style="overflow-x:auto">
+      <div class="dr-loading"><span class="dr-load-spin"></span>กำลังโหลด กรุณารอสักครู่...</div>
+    </div>
+  </div>
+</div>
+
 <!-- PAGE: VALUATION -->
 <div id="page-valuation" class="page">
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px">
@@ -2759,7 +2835,8 @@
     <button class="filter-btn active" id="sr-tab-th" onclick="setSrMarket('TH',this)" style="border-radius:6px 0 0 6px;min-width:100px">🇹🇭 ไทย (DR)</button>
     <button class="filter-btn" id="sr-tab-us" onclick="setSrMarket('US',this)" style="border-radius:0;min-width:90px">🇺🇸 US</button>
     <button class="filter-btn" id="sr-tab-hk" onclick="setSrMarket('HK',this)" style="border-radius:0;min-width:90px">🇭🇰 HK</button>
-    <button class="filter-btn" id="sr-tab-jp" onclick="setSrMarket('JP',this)" style="border-radius:0 6px 6px 0;min-width:90px">🇯🇵 JP</button>
+    <button class="filter-btn" id="sr-tab-jp" onclick="setSrMarket('JP',this)" style="border-radius:0;min-width:90px">🇯🇵 JP</button>
+    <button class="filter-btn" id="sr-tab-etf" onclick="setSrMarket('ETF',this)" style="border-radius:0 6px 6px 0;min-width:100px">🏦 ETF</button>
   </div>
 
   <div id="sr-mkt-th">
@@ -2880,6 +2957,30 @@
       <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
         🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
         🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
+      </div>
+    </div>
+  </div>
+
+  <div id="sr-mkt-etf" style="display:none">
+    <div class="page-sub" id="etfrot-subtitle">RRG ของ ETF ไทยแต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่ม ETF ทั้งหมด</b> (ไม่รวม Leveraged/Inverse) · แกน X = 3M% Y = 1M% (เทียบกลุ่ม)</div>
+    <div id="etfrot-gate" class="empty" style="display:none;padding:24px"></div>
+    <div id="etfrot-body" style="display:none">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0 12px">
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn active" id="etfrot-tf-long" onclick="setEtfRotTf('long',this)" style="border-radius:6px 0 0 6px;font-size:12px;padding:5px 12px">3M / 1M (มาตรฐาน)</button>
+          <button class="filter-btn" id="etfrot-tf-short" onclick="setEtfRotTf('short',this)" style="border-radius:0 6px 6px 0;font-size:12px;padding:5px 12px">1M / 1W (เร็ว)</button>
+        </div>
+        <span id="etfrot-refreshing" style="display:none;font-size:11px;color:var(--accent)">⟳ กำลังดึงข้อมูลชุดใหม่เบื้องหลัง...</span>
+        <span id="etfrot-info" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
+      </div>
+      <div class="card" style="padding:8px">
+        <canvas id="etf-rotation-map" style="width:100%;display:block"></canvas>
+      </div>
+      <div id="etf-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
+      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
+        🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
+        🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่<br>
+        <span style="color:var(--yellow)">⚠ ตัด ETF ประเภท Leveraged/Inverse ออกจาก cohort — beta ผิดธรรมชาติ เทียบกับตัวอื่นไม่ได้</span>
       </div>
     </div>
   </div>

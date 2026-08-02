@@ -159,6 +159,7 @@ if (IS_STATIC) {
     '/api/data':                  'data/set_data.json',
     '/api/indices':               'data/indices_data.json',
     '/api/dr':                    'data/dr_data.json',
+    '/api/etf':                   'data/etf_data.json',
     '/api/nvdr':                  'data/nvdr_data.json',
     '/api/short-sales':           'data/short_sales.json',
     '/api/market-stats':          'data/market_stats.json',
@@ -471,6 +472,10 @@ function confirmRefresh(period) {
 }
 function startQuickUpdate() {
   fetch('/api/dr-quick-update', { method: 'POST' }).catch(() => {});
+  // ETF universe เล็ก (~13 ตัว) full-refresh เร็วพอจะยิงตรงๆ แทน incremental job แบบ DR —
+  // แค่ล้าง cache เบื้องหลัง รอบถัดไปที่ /api/etf ถูกเรียก (เปิดหน้า ETF หรือ Rotation
+  // แท็บ ETF) จะได้ข้อมูลสดแทนของเก่าอัตโนมัติ
+  fetch('/api/etf-full-refresh', { method: 'POST' }).catch(() => {});
   _startJob("/api/quick-update", "quick-update-btn", "⚡ Quick Update", null, checkDataHealthBadge);
 }
 
@@ -3602,6 +3607,7 @@ function showPage(id, btn) {
   if (id === "heatmap")        setHmMarket(_hmMarket);
   if (id === "stock-rotation") setSrMarket(_srMarket);
   if (id === "dr")             loadDRPage();
+  if (id === "etf")            loadETFPage();
   if (id === "financials")     initFinPage();
   if (id === "us-stocks")      loadUsStocksPage();
   if (id === "hk-stocks")      loadHkStocksPage();
@@ -9961,6 +9967,14 @@ function _cmSyncPeerTearsheetButtons() {
   const peerBtn = document.getElementById('cm-peer-btn');
   const tsBtn = document.getElementById('cm-tearsheet-btn');
   if (!peerBtn || !tsBtn) return;
+  // ETF: ไม่มี "underlying company" เดี่ยวให้ route ไป Tearsheet และไม่มี cohort sector
+  // ให้เทียบเพื่อน — ปิดทั้งคู่เสมอ (popup นี้เองคือหน้ารายละเอียดเต็มของ ETF แล้ว)
+  if (_cmStock?._isETF) {
+    [peerBtn, tsBtn].forEach(btn => { btn.disabled = true; btn.style.opacity = '0.4'; btn.style.cursor = 'not-allowed'; });
+    peerBtn.title = 'ETF ไม่มี sector cohort ให้เทียบเพื่อน';
+    tsBtn.title = 'ETF ไม่มี "บริษัทเดี่ยว" ให้ดู Tearsheet — ดูรายละเอียดในหน้าต่างนี้แทน';
+    return;
+  }
   const isDr = !!_cmStock?._isDR;
   const nonCohort = isDr && _cmStock.region !== 'US' && _cmStock.region !== 'HK';
   // Peer ปิดเมื่อ nonCohort, Tearsheet เปิดเสมอ (lite รองรับทุกตลาด DR แล้ว) — หุ้น JP
@@ -12362,16 +12376,18 @@ function renderJpRotation() { _rotRender('jp'); }
 let _srMarket = 'TH';
 function setSrMarket(mkt, btn) {
   _srMarket = mkt;
-  document.querySelectorAll('#sr-tab-th,#sr-tab-us,#sr-tab-hk,#sr-tab-jp').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#sr-tab-th,#sr-tab-us,#sr-tab-hk,#sr-tab-jp,#sr-tab-etf').forEach(b => b.classList.remove('active'));
   (btn || document.getElementById('sr-tab-' + mkt.toLowerCase()))?.classList.add('active');
   document.getElementById('sr-mkt-th').style.display = mkt === 'TH' ? '' : 'none';
   document.getElementById('sr-mkt-us').style.display = mkt === 'US' ? '' : 'none';
   document.getElementById('sr-mkt-hk').style.display = mkt === 'HK' ? '' : 'none';
   document.getElementById('sr-mkt-jp').style.display = mkt === 'JP' ? '' : 'none';
+  document.getElementById('sr-mkt-etf').style.display = mkt === 'ETF' ? '' : 'none';
   if (mkt === 'TH') loadDRRotation();
   if (mkt === 'US') loadUsRotation();
   if (mkt === 'HK') loadHkRotation();
   if (mkt === 'JP') loadJpRotation();
+  if (mkt === 'ETF') loadEtfRotation();
 }
 
 function loadUsStocksPage() {
@@ -17707,6 +17723,517 @@ function _drawDRCandles(canvas, ohlc) {
       ctx.fillRect(cx - cw/2, volTop + volH - bh, cw, bh);
     });
   }
+}
+
+// ============================================================
+// ETF (SET-listed) — ต่างจาก DR ตรงที่เป็นตราสารจดทะเบียนบน SET เอง universe เล็ก
+// (~13 ตัว) reuse CSS classes ของ DR (.dr-card/.dr-tbl/...) และ canvas draw functions
+// (_drawDRSparkline/_drawDRCandles) ตรงๆ — เขียนแค่ data-layer/render ใหม่
+// ============================================================
+let _etfData     = null;
+let _etfLoaded   = false;
+let _etfCategory = 'ALL';
+let _etfView     = 'table';
+let _etfSort     = 'rs_desc';
+let _etfSearch   = '';
+
+const ETF_CATEGORY_LABEL = {
+  TH_EQ: '🇹🇭 ดัชนีในประเทศ', FOREIGN: '🌏 ดัชนีต่างประเทศ',
+  BOND: '💵 ตราสารหนี้', COMMODITY: '🪙 โภคภัณฑ์', OTHER: 'อื่นๆ',
+};
+
+function _etfLogoUrl(sym) {
+  return `https://media.set.or.th/common/logo/company/${encodeURIComponent(sym)}.png`;
+}
+
+function _etfWarningsHtml(d) {
+  if (!d.warnings || !d.warnings.length) return '';
+  return `<br><span style="color:var(--yellow)">⚠ ${d.warnings.join(' · ')}</span>`;
+}
+
+function loadETFPage() {
+  if (_etfLoaded && _etfData) { renderETFTable(); return; }
+  document.getElementById('etf-status').textContent = 'กำลังดึงข้อมูล...';
+  document.getElementById('etf-table-wrap').innerHTML =
+    '<div class="dr-loading"><span class="dr-load-spin"></span>กำลังโหลดข้อมูล ETF...</div>';
+
+  _fetchTimeout('/api/etf', 60000)
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) throw new Error(d.error);
+      _etfData   = d.stocks || [];
+      _etfLoaded = true;
+      const ts = d.ts ? d.ts.replace('T', ' ').slice(0, 16) : '—';
+      document.getElementById('etf-status').innerHTML =
+        `อัปเดต: ${ts} &nbsp;|&nbsp; ${_etfData.length} ETF &nbsp;|&nbsp; cache 2 ชั่วโมง` +
+        (d.refreshing ? ' &nbsp;|&nbsp; <span style="color:var(--accent)">⟳ กำลังดึงข้อมูลชุดใหม่เบื้องหลัง...</span>' : '') +
+        _etfWarningsHtml(d);
+      if (d.refreshing) _etfPollRefresh(0);
+      _updateETFCategoryCounts();
+      renderETFTable();
+    })
+    .catch(e => {
+      document.getElementById('etf-table-wrap').innerHTML =
+        `<div class="empty">เกิดข้อผิดพลาด: ${e.message}</div>`;
+    });
+}
+
+let _etfPollActive = false;
+function _etfPollRefresh(attempt) {
+  if (attempt === 0) {
+    if (_etfPollActive) return;
+    _etfPollActive = true;
+  }
+  if (attempt >= 6) { _etfPollActive = false; return; }
+  setTimeout(() => {
+    _fetchTimeout('/api/etf', 30000).then(r => r.json()).then(d => {
+      if (!d.stocks || !d.stocks.length) { _etfPollActive = false; return; }
+      if (d.refreshing) { _etfPollRefresh(attempt + 1); return; }
+      _etfPollActive = false;
+      _etfData = d.stocks;
+      _etfLoaded = true;
+      const ts = d.ts ? d.ts.replace('T', ' ').slice(0, 16) : '—';
+      const st = document.getElementById('etf-status');
+      if (st) st.innerHTML =
+        `อัปเดต: ${ts} &nbsp;|&nbsp; ${_etfData.length} ETF &nbsp;|&nbsp; cache 2 ชั่วโมง <span style="color:var(--green)">✓ ข้อมูลชุดใหม่แล้ว</span>` +
+        _etfWarningsHtml(d);
+      _updateETFCategoryCounts();
+      const rf = document.getElementById('etfrot-refreshing');
+      if (rf) rf.style.display = 'none';
+      if (document.getElementById('page-etf')?.classList.contains('active')) renderETFTable();
+      if (document.getElementById('page-stock-rotation')?.classList.contains('active') && _srMarket === 'ETF') renderEtfRotation();
+    }).catch(() => _etfPollRefresh(attempt + 1));
+  }, 30000);
+}
+
+function reloadETFPage() {
+  fetch('/api/etf-full-refresh', { method: 'POST' }).catch(() => {});
+  _etfLoaded = false;
+  _etfData   = null;
+  loadETFPage();
+}
+
+// ราคาสดระหว่างวัน — เรียก /api/live-price/<symbol> (fast_info, ไม่โหลดประวัติ/ไม่ยิง
+// SET.or.th) ต่อ ETF ทั้ง 13 ตัวแบบขนาน เร็วกว่ารอ cache 2 ชั่วโมงหมดอายุ แบบเดียวกับปุ่ม
+// "⚡ ราคาล่าสุด" ของ Watchlist (ดู wlRefreshLivePrices) — เก็บผลใน live_price/live_chg
+// เทียบกับ s.price (ราคาปิดล่าสุดที่นิ่งแล้วใน cache) แสดงคู่กันผ่าน _drLiveTag()
+// เดียวกับที่ DR ใช้ (ไม่แก้ s.chg/CHG% หลัก — ต้องกด "รีเฟรชราคา" เต็มถึงจะนิ่งเป็นทางการ)
+async function etfQuickUpdate() {
+  if (!_etfData || !_etfData.length) { loadETFPage(); return; }
+  const btn  = document.getElementById('etf-live-btn');
+  const note = document.getElementById('etf-live-note');
+  if (btn) { btn.disabled = true; btn.textContent = '⚡ กำลังดึง...'; }
+  if (note) note.textContent = '';
+  let ok = 0, fail = 0;
+  await Promise.all(_etfData.map(async (s) => {
+    try {
+      const r = await _fetchTimeout(`/api/live-price/${encodeURIComponent(s.symbol)}`, 15000);
+      const d = await r.json();
+      if (d.price != null && s.price) {
+        s.live_price = d.price;
+        s.live_chg   = +((d.price - s.price) / s.price * 100).toFixed(2);
+        ok++;
+      } else fail++;
+    } catch { fail++; }
+  }));
+  if (btn) { btn.disabled = false; btn.textContent = '⚡ อัพเดทราคาล่าสุด'; }
+  if (note) note.textContent = `ราคาสด ณ ${new Date().toLocaleTimeString('th-TH')} · สำเร็จ ${ok}/${_etfData.length} ตัว${fail ? ` (พลาด ${fail})` : ''}`;
+  renderETFTable();
+}
+
+function _updateETFCategoryCounts() {
+  if (!_etfData) return;
+  document.querySelectorAll('#etf-category-btns .dr-region-count-badge').forEach(el => {
+    const cat = el.dataset.etfCat;
+    const n = cat === 'ALL' ? _etfData.length : _etfData.filter(s => _etfCategoryMatch(s, cat)).length;
+    el.textContent = `(${n})`;
+  });
+}
+
+function _etfCategoryMatch(s, cat) {
+  if (cat === 'ALL') return true;
+  if (cat === 'LNI') return !!s.is_lna;
+  return s.category === cat && !s.is_lna;
+}
+
+function setETFCategory(c, btn) {
+  _etfCategory = c;
+  document.querySelectorAll('#etf-category-btns .filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (_etfData) renderETFTable();
+}
+
+function setETFSort(s, btn) {
+  _etfSort = s;
+  document.querySelectorAll('#etf-sort-btns .filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (_etfData) renderETFTable();
+}
+
+function filterETF() {
+  _etfSearch = document.getElementById('etf-search').value.toLowerCase().trim();
+  if (_etfData) renderETFTable();
+}
+
+function _sortETF(arr) {
+  return [...arr].sort((a, b) => {
+    if (_etfSort === 'rs_desc')     return (b.rs_score ?? -1)   - (a.rs_score ?? -1);
+    if (_etfSort === 'chg_desc')    return (b.chg ?? -999)      - (a.chg ?? -999);
+    if (_etfSort === 'chg_asc')     return (a.chg ?? 999)       - (b.chg ?? 999);
+    if (_etfSort === 'ret_1m_desc') return (b.ret_1m ?? -999)   - (a.ret_1m ?? -999);
+    if (_etfSort === 'ret_1y_desc') return (b.ret_1y ?? -999)   - (a.ret_1y ?? -999);
+    if (_etfSort === 'pnav_desc')   return (b.pnav_ratio ?? -999) - (a.pnav_ratio ?? -999);
+    if (_etfSort === 'mkt_cap')     return (b.mkt_cap || 0)     - (a.mkt_cap || 0);
+    return a.symbol.localeCompare(b.symbol);
+  });
+}
+
+function setETFView(v, btn) {
+  _etfView = v;
+  document.querySelectorAll('#page-etf .dr-view-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const periodRow = document.getElementById('etf-hm-period-row');
+  const hint      = document.getElementById('etf-hm-hint');
+  if (periodRow) periodRow.style.display = v === 'heatmap' ? '' : 'none';
+  if (hint)      hint.style.display      = v === 'heatmap' ? '' : 'none';
+  if (_etfData) renderETFTable();
+}
+
+const ETF_HM_CFG = {
+  chg:        { getV:s=>s.live_chg ?? s.chg, isLive:s=>s.live_chg!=null, clr:v=>_heatColor(v,10), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>4?'#fff':'var(--text)', hint:'เขียว = ขึ้น · แดง = ลง · ⚡ = ราคาสด (กด "อัพเดทราคาล่าสุด" แล้ว)' },
+  ret_1w:     { getV:s=>s.ret_1w,     clr:v=>_heatColor(v,10), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>4?'#fff':'var(--text)', hint:'เขียว = ขึ้น · แดง = ลง (1 สัปดาห์)' },
+  ret_1m:     { getV:s=>s.ret_1m,     clr:v=>_heatColor(v,15), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>6?'#fff':'var(--text)', hint:'เขียว = ขึ้น · แดง = ลง (1 เดือน)' },
+  ret_3m:     { getV:s=>s.ret_3m,     clr:v=>_heatColor(v,20), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>8?'#fff':'var(--text)', hint:'เขียว = ขึ้น · แดง = ลง (3 เดือน)' },
+  ret_6m:     { getV:s=>s.ret_6m,     clr:v=>_heatColor(v,25), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>10?'#fff':'var(--text)', hint:'เขียว = ขึ้น · แดง = ลง (6 เดือน)' },
+  ret_1y:     { getV:s=>s.ret_1y,     clr:v=>_heatColor(v,30), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>12?'#fff':'var(--text)', hint:'เขียว = ขึ้น · แดง = ลง (1 ปี)' },
+  rs_score:   { getV:s=>s.rs_score,   clr:v=>_heatColorRS(v),  fmt:v=>'RS '+Math.round(v), aFmt:v=>'avg RS '+Math.round(v), aPos:v=>v>=50, txt:v=>(v??50)>70||(v??50)<30?'#fff':'var(--text)', hint:'เขียว = RS สูง (แข็งแกร่งเทียบกลุ่ม ETF) · แดง = RS ต่ำ — ไม่รวม L&I' },
+  pnav_ratio: { getV:s=>s.pnav_ratio, clr:v=>_heatColor(v,3),  fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>1.5?'#fff':'var(--text)', hint:'เขียว = Premium (ราคา>NAV) · แดง = Discount (ราคา<NAV)' },
+};
+
+function setEtfHmPeriod(key, btn) {
+  _etfHmPeriod = key;
+  document.querySelectorAll('#etf-hm-period-row .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (_etfData) renderETFTable();
+}
+let _etfHmPeriod = 'chg';
+
+function _renderETFHeatmap(stocks) {
+  const wrap = document.getElementById('etf-table-wrap');
+  const cfg  = ETF_HM_CFG[_etfHmPeriod] || ETF_HM_CFG.chg;
+  const hintEl = document.getElementById('etf-hm-hint');
+  if (hintEl) hintEl.textContent = cfg.hint;
+  if (!stocks.length) { wrap.innerHTML = '<div class="empty">ไม่พบ ETF ที่ตรงกับเงื่อนไข</div>'; return; }
+
+  const groups = {};
+  stocks.forEach(s => {
+    const key = s.is_lna ? 'LNI' : (s.category || 'OTHER');
+    (groups[key] = groups[key] || []).push(s);
+  });
+  const order = ['TH_EQ', 'FOREIGN', 'BOND', 'COMMODITY', 'LNI', 'OTHER'];
+  const label = { ...ETF_CATEGORY_LABEL, LNI: '⚡ Leveraged/Inverse' };
+
+  wrap.innerHTML = order.filter(k => groups[k]?.length).map(key => {
+    const list = groups[key];
+    const sorted = [...list].sort((a, b) => (cfg.getV(b) ?? -999) - (cfg.getV(a) ?? -999));
+    const withVal = sorted.filter(s => cfg.getV(s) != null);
+    const avg = withVal.length ? withVal.reduce((s, x) => s + cfg.getV(x), 0) / withVal.length : null;
+    const cells = sorted.map(s => {
+      const v      = cfg.getV(s);
+      const bg     = cfg.clr(v);
+      const txt    = cfg.txt(v);
+      const lbl    = v != null ? cfg.fmt(v) : '—';
+      const isLive = cfg.isLive ? cfg.isLive(s) : false;
+      const tip = isLive
+        ? `${s.symbol} — ${s.name_th || ''} — ⚡ ราคาสด ${lbl} (เทียบราคาปิดล่าสุด)`
+        : `${s.symbol} — ${s.name_th || ''} — ${lbl}`;
+      return `<div class="hm-cell" style="background:${bg};color:${txt}" title="${tip}" onclick="openETFChartModal('${s.symbol}')">
+        <span style="font-size:11px;font-weight:700;line-height:1">${isLive ? '⚡' : ''}${s.symbol.slice(0,8)}</span>
+        <span style="font-size:10px;line-height:1;opacity:0.92">${lbl}</span>
+      </div>`;
+    }).join('');
+    const avgClass = avg != null ? (cfg.aPos(avg) ? 'green' : 'red') : 'text2';
+    const avgDisp  = avg != null ? cfg.aFmt(avg) : '—';
+    return `
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px;display:flex;align-items:center;gap:8px">
+          ${label[key] || key}
+          <span class="${avgClass}">${avgDisp}</span>
+          <span class="text2" style="font-size:10px">${list.length} ETF</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:2px">${cells}</div>
+      </div>`;
+  }).join('');
+}
+
+function _etfCardGrid(stocks) {
+  return stocks.map(s => {
+    const chgCls  = s.chg >= 0 ? 'green' : 'red';
+    const chgStr  = s.chg != null ? (s.chg >= 0 ? '+' : '') + s.chg.toFixed(2) + '%' : '—';
+    const color   = _drSymColor(s.symbol);
+    const initials = s.symbol.slice(0, 4);
+    const logoUrl = _etfLogoUrl(s.symbol);
+    const logoHtml = `<img src="${logoUrl}" class="dr-card-logo-img" onerror="_drLogoFallback(this)"><div class="dr-card-logo" style="background:${color};display:none">${initials}</div>`;
+    const cPct = v => v != null ? `<span class="${v>=0?'green':'red'}">${v>=0?'+':''}${v.toFixed(2)}%</span>` : '—';
+    const rsDisp = s.rs_score != null ? `<span class="${rsColor(s.rs_score)}" style="font-weight:700">RS ${s.rs_score}</span>` : '';
+    return `<div class="dr-card" onclick="openETFChartModal('${s.symbol}')" style="cursor:pointer">
+      <div class="dr-card-header">
+        ${logoHtml}
+        <div>
+          <div class="dr-card-sym" style="color:var(--blue)">${s.symbol}</div>
+          <span class="dr-card-exch">${s.is_lna ? '⚡ L&I' : (ETF_CATEGORY_LABEL[s.category] || '')}</span>
+        </div>
+        ${rsDisp ? `<div style="margin-left:auto;font-size:11px">${rsDisp}</div>` : ''}
+        <a class="tv-link" href="https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(s.symbol)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="ดูใน TradingView" style="margin-left:${rsDisp?'6px':'auto'}">↗</a>
+      </div>
+      <div class="dr-card-name">${s.name_th || s.symbol}</div>
+      <div class="dr-card-price-row">
+        <span class="dr-card-price">${_drFmtPrice(s.price)}</span>
+        <span class="dr-card-chg ${chgCls}">${chgStr}</span>
+      </div>
+      ${_drLiveTag(s)}
+      <div style="display:flex;gap:6px;font-size:10px;color:var(--text2);margin:3px 0 2px">
+        <span>1M ${cPct(s.ret_1m)}</span><span>3M ${cPct(s.ret_3m)}</span><span>1Y ${cPct(s.ret_1y)}</span>
+      </div>
+      <canvas class="dr-card-chart dr-trend-cv" data-close='${JSON.stringify(s.close100||[])}' width="200" height="52"></canvas>
+    </div>`;
+  }).join('');
+}
+
+function renderETFTable() {
+  if (!_etfData) return;
+  let stocks = _etfData.filter(s => _etfCategoryMatch(s, _etfCategory));
+  if (_etfSearch) {
+    stocks = stocks.filter(s =>
+      s.symbol.toLowerCase().includes(_etfSearch) ||
+      (s.name_th || '').toLowerCase().includes(_etfSearch) ||
+      (s.name_en || '').toLowerCase().includes(_etfSearch) ||
+      (s.underlying || '').toLowerCase().includes(_etfSearch)
+    );
+  }
+  stocks = _sortETF(stocks);
+
+  const wrap = document.getElementById('etf-table-wrap');
+  if (!stocks.length) { wrap.innerHTML = '<div class="empty">ไม่พบ ETF ที่ตรงกับเงื่อนไข</div>'; return; }
+
+  if (_etfView === 'cards') {
+    wrap.innerHTML = `<div class="dr-card-grid">${_etfCardGrid(stocks)}</div>`;
+    requestAnimationFrame(() => _drawAllDRCharts());
+    return;
+  }
+  if (_etfView === 'heatmap') { _renderETFHeatmap(stocks); return; }
+
+  const thead = `<thead><tr>
+    <th style="width:100px">Symbol</th>
+    <th style="min-width:160px">ชื่อกองทุน</th>
+    <th class="r" style="width:76px">ราคา</th>
+    <th class="r" style="width:60px">CHG%</th>
+    <th class="r" style="width:42px" title="RS Score 0–99 — จัดอันดับเทียบภายในกลุ่ม ETF ที่ไม่ใช่ L&amp;I">RS</th>
+    <th class="r" style="width:56px">1W%</th>
+    <th class="r" style="width:56px">1M%</th>
+    <th class="r" style="width:56px">3M%</th>
+    <th class="r" style="width:56px">1Y%</th>
+    <th class="r" style="width:76px" title="ส่วนต่างราคาซื้อขายเทียบ NAV — บวก = Premium (แพงกว่ามูลค่าทรัพย์สินสุทธิ) ลบ = Discount">Premium/NAV</th>
+    <th class="r" style="width:64px">NAV</th>
+    <th class="r" style="width:64px">Div Yield</th>
+    <th class="r" style="width:56px">Mgmt Fee</th>
+    <th style="width:110px">ประเภท</th>
+    <th style="width:108px;text-align:center">Trend (100D)</th>
+    <th style="width:136px;text-align:center">Pattern (30D)</th>
+  </tr></thead>`;
+
+  const rows = stocks.map(s => {
+    const chgCls = s.chg >= 0 ? 'green' : 'red';
+    const chgStr = s.chg != null ? (s.chg >= 0 ? '+' : '') + s.chg.toFixed(2) + '%' : '—';
+    const color    = _drSymColor(s.symbol);
+    const initials = s.symbol.slice(0, 4);
+    const logoUrl  = _etfLogoUrl(s.symbol);
+    const logoHtml = `<img src="${logoUrl}" class="dr-logo-img" onerror="_drLogoFallback(this)"><div class="dr-logo" style="background:${color};display:none">${initials}</div>`;
+    const pct = v => v != null
+      ? `<span class="${v >= 0 ? 'green' : 'red'}" style="font-size:11px">${v >= 0 ? '+' : ''}${v.toFixed(2)}%</span>`
+      : '<span style="color:var(--text2);font-size:11px">—</span>';
+    const rsNum = s.rs_score != null
+      ? `<span class="${rsColor(s.rs_score)}" style="font-weight:700;font-size:11px">${s.rs_score}</span>`
+      : '<span style="color:var(--text2);font-size:11px">—</span>';
+    const catLbl = s.is_lna ? '⚡ L&I' : (ETF_CATEGORY_LABEL[s.category] || s.underlying_class || '—');
+
+    return `<tr>
+      <td>
+        <div class="dr-sym-cell" onclick="openETFChartModal('${s.symbol}')" style="cursor:pointer" title="ดูรายละเอียด ${s.symbol}">
+          ${logoHtml}
+          <span class="dr-sym-text" style="color:var(--blue)">${s.symbol}</span>
+          <a class="tv-link" href="https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(s.symbol)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="ดูใน TradingView">↗</a>
+        </div>
+      </td>
+      <td style="font-size:11px">${s.name_th || s.symbol}${s.issuer ? '<br><span style="font-size:10px;color:var(--text2)">' + s.issuer + '</span>' : ''}</td>
+      <td class="r" style="font-size:12px;font-weight:600">${_drFmtPrice(s.price)}${_drLiveTag(s)}</td>
+      <td class="r ${chgCls}" style="font-size:12px;font-weight:600">${chgStr}</td>
+      <td class="r">${rsNum}</td>
+      <td class="r">${pct(s.ret_1w)}</td>
+      <td class="r">${pct(s.ret_1m)}</td>
+      <td class="r">${pct(s.ret_3m)}</td>
+      <td class="r">${pct(s.ret_1y)}</td>
+      <td class="r">${pct(s.pnav_ratio)}</td>
+      <td class="r" style="font-size:11px">${_drFmtPrice(s.nav)}</td>
+      <td class="r" style="font-size:11px">${s.div_yield != null ? s.div_yield.toFixed(2) + '%' : '—'}</td>
+      <td class="r" style="font-size:11px">${s.mgmt_fee != null ? s.mgmt_fee.toFixed(2) + '%' : '—'}</td>
+      <td style="font-size:10.5px;color:var(--text2)">${catLbl}</td>
+      <td style="padding:4px 5px">
+        <canvas class="dr-trend-cv" data-close='${JSON.stringify(s.close100||[])}' width="104" height="36" style="display:block;width:104px;height:36px"></canvas>
+      </td>
+      <td style="padding:4px 5px">
+        <canvas class="dr-candle-cv" data-ohlc='${JSON.stringify(s.ohlc30||[])}' width="130" height="36" style="display:block;width:130px;height:36px"></canvas>
+      </td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `<table class="tbl dr-tbl">${thead}<tbody>${rows}</tbody></table>`;
+  requestAnimationFrame(() => _drawAllDRCharts());
+}
+
+function _renderETFDescription(s) {
+  const box = document.getElementById('cm-desc-box');
+  if (!box) return;
+  if (!s.investment_policy) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = 'block';
+  box.innerHTML = `<div style="font-size:11px;color:var(--text2);margin-bottom:4px">📄 นโยบายการลงทุน (SET.or.th)</div>
+    <div style="font-size:12.5px;line-height:1.6">${s.investment_policy}</div>`;
+}
+
+function openETFChartModal(sym) {
+  const s = (_etfData || []).find(x => x.symbol === sym);
+  if (!s) return;
+
+  const titleEl = document.getElementById('cm-title');
+  titleEl.textContent = `${s.symbol}  ${s.name_th || ''}`;
+  titleEl.title = `${s.symbol}  ${s.name_th || ''}`;
+  const catLbl = s.is_lna ? '⚡ Leveraged/Inverse' : (ETF_CATEGORY_LABEL[s.category] || s.underlying_class || '—');
+  document.getElementById('cm-sub').textContent = `${catLbl} · ${s.underlying || ''} · ${s.issuer || ''}`;
+  document.getElementById('cm-tv-link').href = `https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(s.symbol)}&interval=D`;
+  const jittaLink = document.getElementById('cm-jitta-link');
+  if (jittaLink) jittaLink.style.display = 'none';   // Jitta วิเคราะห์บริษัท ไม่ใช้กับ ETF/กองทุน
+
+  const mk = (val, lbl, cls = '') =>
+    `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
+  const cPct = v => v != null ? (v >= 0 ? '+' : '') + v.toFixed(2) + '%' : '—';
+  const pCls = v => v == null ? '' : v >= 0 ? 'green' : 'red';
+
+  document.getElementById('cm-metrics').innerHTML = [
+    mk(_drFmtPrice(s.price) + _drLiveTag(s), 'ราคา'),
+    mk(cPct(s.chg),    '1D%', pCls(s.chg)),
+    mk(cPct(s.ret_1w), '1W%', pCls(s.ret_1w)),
+    mk(cPct(s.ret_1m), '1M%', pCls(s.ret_1m)),
+    mk(cPct(s.ret_3m), '3M%', pCls(s.ret_3m)),
+    mk(cPct(s.ret_ytd), 'YTD%', pCls(s.ret_ytd)),
+    mk(_drFmtPrice(s.nav), `NAV${s.nav_date ? ' (' + s.nav_date.slice(0,10) + ')' : ''}`, 'text2'),
+    mk(cPct(s.pnav_ratio), 'Premium/NAV', pCls(s.pnav_ratio)),
+    mk(s.div_yield != null ? s.div_yield.toFixed(2) + '%' : '—', 'Div Yield', 'text2'),
+    mk(s.mgmt_fee != null ? s.mgmt_fee.toFixed(2) + '%' : '—', 'ค่าธรรมเนียมจัดการ', 'text2'),
+  ].join('');
+
+  _cmStock = { ...s, symbol: s.symbol, price_history: null, _isETF: true, _isDR: false };
+  _cmSyncPeerTearsheetButtons();
+  _cmTf = '1y';
+  _cmHistoryData = null;
+  _cmVolumeData  = null;
+  _cmLivePrice = null; _cmLivePriceSym = null;
+  _cmFinLoaded = null;
+  // ETF ไม่มีงบการเงิน/สมาชิกดัชนี/factsheet SET รูปแบบหุ้น — ซ่อนปุ่มที่ไม่เกี่ยวข้องทั้งหมด
+  ['cm-mode-stocks', 'cm-mode-fin', 'cm-factsheet-link', 'cm-set-link'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  const fullFinBtn = document.getElementById('cm-fullfin-link');
+  if (fullFinBtn) fullFinBtn.style.display = 'none';
+  _loadPriceAnalytics(sym, 'cm-lts', () => _cmStock?.symbol === sym, `${sym}.BK`);
+  _renderETFDescription(s);
+  setCmMode('chart');
+  document.querySelectorAll('#chart-modal .filter-btn').forEach(b => b.classList.remove('active'));
+  const tfBtn = document.getElementById('cm-tf-1y');
+  if (tfBtn) tfBtn.classList.add('active');
+  document.getElementById('chart-modal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  const c100 = s.close100 || [];
+  if (c100.length) {
+    const today = new Date();
+    const initHistory = c100.map((price, i) => {
+      const d = new Date(today);
+      d.setDate(d.getDate() - (c100.length - 1 - i));
+      return [d.toISOString().slice(0, 10), price];
+    });
+    requestAnimationFrame(() => _drawChart(_cmStock, initHistory));
+  }
+  _fetchETFFullHistory(sym);
+}
+
+async function _fetchETFFullHistory(sym) {
+  if (IS_STATIC) { _cmStaticLimitNote(); return; }
+  try {
+    const r = await _fetchTimeout(`/api/etf-history/${encodeURIComponent(sym)}`, 25000);
+    const d = await r.json();
+    if (d.error || !d.dates) return;
+    const hist = d.dates.map((date, i) => [date, d.closes[i]]);
+    _cmHistoryData = hist;
+    if (_cmStock?.symbol === sym) _drawChart(_cmStock, hist);
+  } catch (e) { console.error('ETF history fetch error:', e); }
+}
+
+// ── ETF ROTATION — RRG เทียบค่าเฉลี่ยกลุ่ม ETF (ตัด Leveraged/Inverse ออกจาก cohort) ──
+let _etfRotTf = 'long';
+
+function _etfRotUpdateSubtitle() {
+  const sub = document.getElementById('etfrot-subtitle');
+  if (!sub) return;
+  sub.innerHTML = `RRG ของ ETF ไทยแต่ละตัว — เทียบกับ <b>ค่าเฉลี่ยของกลุ่ม ETF ทั้งหมด</b> (ไม่รวม Leveraged/Inverse) · ` +
+    (_etfRotTf === 'short' ? 'แกน X = 1M% Y = 1W% (เทียบกลุ่ม)' : 'แกน X = 3M% Y = 1M% (เทียบกลุ่ม)');
+}
+
+function setEtfRotTf(tf, btn) {
+  _etfRotTf = tf;
+  document.querySelectorAll('#etfrot-tf-long,#etfrot-tf-short').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  _etfRotUpdateSubtitle();
+  renderEtfRotation();
+}
+
+async function loadEtfRotation() {
+  const gate = document.getElementById('etfrot-gate'), body = document.getElementById('etfrot-body');
+  if (!_etfData || !_etfData.length) {
+    gate.style.display = ''; gate.textContent = 'กำลังดึงข้อมูล ETF...'; body.style.display = 'none';
+    try {
+      const d = await (await _fetchTimeout('/api/etf', 60000)).json();
+      if (d.stocks) { _etfData = d.stocks; _etfLoaded = true; }
+      const rf = document.getElementById('etfrot-refreshing');
+      if (rf) rf.style.display = d.refreshing ? '' : 'none';
+      if (d.refreshing) _etfPollRefresh(0);
+    } catch (e) { gate.textContent = 'โหลดข้อมูล ETF ไม่สำเร็จ: ' + e.message; return; }
+  }
+  if (!_etfData || !_etfData.length) { gate.style.display = ''; gate.textContent = 'ไม่มีข้อมูล ETF'; body.style.display = 'none'; return; }
+  gate.style.display = 'none'; body.style.display = '';
+  renderEtfRotation();
+}
+
+function renderEtfRotation() {
+  if (!_etfData || !_etfData.length) return;
+  const isShort = _etfRotTf === 'short';
+  const valid = _etfData.filter(s => !s.is_lna && (isShort
+    ? (s.ret_1m != null && s.ret_1w != null)
+    : (s.ret_3m != null && s.ret_1m != null)));
+  if (!valid.length) return;
+  const avg = f => { const v = valid.filter(s => s[f] != null); return v.length ? v.reduce((a, s) => a + s[f], 0) / v.length : 0; };
+  const a3m = avg('ret_3m'), a1m = avg('ret_1m'), a1w = avg('ret_1w'), a6m = avg('ret_6m'), a1y = avg('ret_1y');
+  const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
+  const items = valid.map(s => ({
+    name: s.symbol, region: s.category, ind: s.name_th,
+    ret_3m: rel(s.ret_3m, a3m), ret_1m: rel(s.ret_1m, a1m), ret_1w: rel(s.ret_1w, a1w),
+    ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
+  }));
+  const info = document.getElementById('etfrot-info');
+  if (info) info.textContent = `${valid.length} ETF (ไม่รวม L&I) · benchmark = ค่าเฉลี่ยกลุ่ม` +
+    (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
+             : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
+  drawRotationScatter(items, { canvasId: 'etf-rotation-map', legendId: 'etf-rot-legend', tf: _etfRotTf, onOpen: openETFChartModal, relative: true });
 }
 
 // ============================================================

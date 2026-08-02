@@ -11,6 +11,7 @@ set_data.json
 set_dr_data.json
 set_history.json
 dr_cache.json
+etf_cache.json
 set_market_stats.json
 *.json.tmp
 
