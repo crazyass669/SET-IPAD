@@ -1916,6 +1916,13 @@
       </div>
       <input id="hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderHeatmap(_hmData[_hmIndex])">
       <button class="filter-btn" id="hm-refresh-btn" onclick="usHmLiveUpdate()" title="ดึงราคาล่าสุดจาก Yahoo สด (gap-update เฉพาะดัชนีที่กำลังดูอยู่ เช่น Dow 30 ตัว — ไม่ใช่ทั้ง union US) แล้วคำนวณราคา Live ระหว่างวัน — ปุ่มนี้เท่านั้นที่ไปดึงข้อมูลใหม่จริง กด ทุกครั้งที่ต้องการราคาล่าสุด แล้วดูผลที่ปุ่มเมตริก 👁 Live ด้านล่าง">⚡ อัพเดทราคา</button>
+      <span class="scr-tip-icon" style="font-size:11px;width:17px;height:17px;vertical-align:middle">🕐<div class="scr-tip-box" style="width:270px">
+        <strong>เวลาซื้อขายตลาดสหรัฐฯ</strong><br>
+        09:30–16:00 น. (Eastern Time)<br>
+        ≈ 20:30–03:00 น. ไทย (ช่วง DST, มี.ค.–พ.ย.)<br>
+        ≈ 21:30–04:00 น. ไทย (นอกช่วง DST, พ.ย.–มี.ค.)<br><br>
+        ราคา Live เริ่มไหลได้ตั้งแต่ pre-market ~04:00 ET — นอกช่วงนี้ (ตลาดปิด) กด ⚡ แล้วจะได้ 0 ราคาสด ปกติ ไม่ใช่บั๊ก ใช้ราคาปิดแทนได้เลย
+      </div></span>
       <button class="filter-btn" onclick="_hmOpenTradingView()" title="เปิด Heatmap ของดัชนีที่เลือกอยู่บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
       <span id="hm-note" style="font-size:11px;color:var(--text2)"></span>
     </div>
@@ -1950,6 +1957,12 @@
       </div>
       <input id="hk-hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderHkHeatmap(_hkHmData[_hkHmIndex])">
       <button class="filter-btn" id="hk-hm-refresh-btn" onclick="hkHmLiveUpdate()" title="ดึงราคาล่าสุดจาก Yahoo สด (gap-update เฉพาะดัชนีที่กำลังดูอยู่ ไม่ใช่ทั้ง union HK) แล้วคำนวณราคา Live ระหว่างวัน — ปุ่มนี้เท่านั้นที่ไปดึงข้อมูลใหม่จริง กด ทุกครั้งที่ต้องการราคาล่าสุด แล้วดูผลที่ปุ่มเมตริก 👁 Live ด้านล่าง">⚡ รีเฟรช</button>
+      <span class="scr-tip-icon" style="font-size:11px;width:17px;height:17px;vertical-align:middle">🕐<div class="scr-tip-box" style="width:270px">
+        <strong>เวลาซื้อขายตลาดฮ่องกง</strong><br>
+        09:30–16:00 น. (Hong Kong Time)<br>
+        ≈ 08:30–15:00 น. ไทย (ไม่มี DST — คงที่ทั้งปี)<br><br>
+        หลังปิดตลาด (หลัง 15:00 น. ไทย) กด ⚡ แล้วจะได้ 0 ราคาสด ปกติ ไม่ใช่บั๊ก — ราคาปิดที่ได้คือราคาทางการล่าสุดอยู่แล้ว
+      </div></span>
       <button class="filter-btn" onclick="_hkHmOpenTradingView()" title="เปิด Heatmap ของดัชนีที่เลือกอยู่บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
       <span id="hk-hm-note" style="font-size:11px;color:var(--text2)"></span>
     </div>
@@ -1979,6 +1992,12 @@
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
       <input id="jp-hm-search" class="scr-input" style="width:130px;font-size:12px" placeholder="🔍 ค้นหา symbol..." oninput="_renderJpHeatmap(_jpHmData)">
       <button class="filter-btn" id="jp-hm-refresh-btn" onclick="jpHmLiveUpdate()" title="ดึงราคาล่าสุดจาก Yahoo สด (gap-update เฉพาะดัชนี JP) แล้วคำนวณราคา Live ระหว่างวัน — ปุ่มนี้เท่านั้นที่ไปดึงข้อมูลใหม่จริง กด ทุกครั้งที่ต้องการราคาล่าสุด แล้วดูผลที่ปุ่มเมตริก 👁 Live ด้านล่าง">⚡ รีเฟรช</button>
+      <span class="scr-tip-icon" style="font-size:11px;width:17px;height:17px;vertical-align:middle">🕐<div class="scr-tip-box" style="width:270px">
+        <strong>เวลาซื้อขายตลาดญี่ปุ่น</strong><br>
+        09:00–15:00 น. (Japan Time)<br>
+        ≈ 07:00–13:00 น. ไทย (ไม่มี DST — คงที่ทั้งปี)<br><br>
+        หลังปิดตลาด (หลัง 13:00 น. ไทย) กด ⚡ แล้วจะได้ 0 ราคาสด ปกติ ไม่ใช่บั๊ก — ราคาปิดที่ได้คือราคาทางการล่าสุดอยู่แล้ว
+      </div></span>
       <button class="filter-btn" onclick="window.open('https://www.tradingview.com/heatmap/stock/#%7B%22dataSource%22%3A%22NI225%22%2C%22blockColor%22%3A%22change%22%2C%22blockSize%22%3A%22market_cap_basic%22%2C%22grouping%22%3A%22sector%22%7D','_blank','noopener')" title="เปิด Heatmap Nikkei 225 บน TradingView.com (แท็บใหม่) — treemap ขนาดกล่อง=market cap ของจริง">📊 TradingView Heatmap</button>
       <span id="jp-hm-note" style="font-size:11px;color:var(--text2)"></span>
     </div>
