@@ -6881,10 +6881,7 @@ def short_sales_daily_update():
             if daily and daily[-1].get("date") == trade_date:
                 daily[-1] = snap
             else:
-                daily.append(snap)
-                # เก็บแค่ 365 วัน
-                if len(daily) > 365:
-                    stocks[sym]["daily"] = daily[-365:]
+                daily.append(snap)  # สะสมไปเรื่อยๆ ไม่ตัดทิ้ง (เหมือนราคาหุ้น)
             updated += 1
 
         # ── อัปเดตยอดสะสมรายงวด YTD จาก API เดียวกัน (fromDate/toDate) ──
@@ -7489,9 +7486,7 @@ def nvdr_daily_update():
             if daily and daily[-1].get("date") == trade_date:
                 daily[-1] = snap
             else:
-                daily.append(snap)
-                if len(daily) > 365:
-                    stocks[sym]["daily"] = daily[-365:]
+                daily.append(snap)  # สะสมไปเรื่อยๆ ไม่ตัดทิ้ง (เหมือนราคาหุ้น)
             updated += 1
 
         data["stocks"]     = stocks

@@ -21422,20 +21422,43 @@ function drawShortTrendChart(daily) {
   ctx.lineJoin = 'round';
   ctx.stroke();
 
-  // dots + date labels (แสดงทุก N จุด)
-  const step = Math.max(1, Math.floor(points.length / 8));
+  // dots
   points.forEach((p, i) => {
     const x = toX(i), y = toY(p.val);
     ctx.beginPath();
     ctx.arc(x, y, i === points.length-1 ? 4 : 2.5, 0, Math.PI*2);
     ctx.fillStyle = i === points.length-1 ? '#ff8080' : '#e05252';
     ctx.fill();
-    if (i % step === 0 || i === points.length-1) {
-      ctx.fillStyle = '#607080';
-      ctx.font = '9px sans-serif';
-      ctx.textAlign = i === 0 ? 'left' : i === points.length-1 ? 'right' : 'center';
-      ctx.fillText(p.date.slice(5), x, H - 6); // MM-DD
+  });
+
+  // date labels (แสดงทุก N จุด) — บังคับให้จุดสุดท้ายโชว์เสมอ แต่ถ้า label
+  // ก่อนหน้าอยู่ใกล้กันเกินไป (ระยะพิกเซลน้อยกว่า minGapPx) ให้ตัดอันก่อนหน้าทิ้ง
+  // กันข้อความทับกัน (เจอกับ dataset ยาว เช่น 115 snapshots)
+  const step = Math.max(1, Math.floor(points.length / 8));
+  const labelIdx = [];
+  for (let i = 0; i < points.length; i += step) labelIdx.push(i);
+  if (labelIdx[labelIdx.length - 1] !== points.length - 1) labelIdx.push(points.length - 1);
+
+  const minGapPx = 34;
+  const shownIdx = [];
+  labelIdx.forEach((i, idx) => {
+    const x = toX(i);
+    const isLast = idx === labelIdx.length - 1;
+    if (shownIdx.length === 0) { shownIdx.push(i); return; }
+    const prevX = toX(shownIdx[shownIdx.length - 1]);
+    if (x - prevX < minGapPx) {
+      if (isLast) shownIdx.pop(); // ให้จุดสุดท้ายชนะ ตัดอันก่อนหน้าที่ชนกันทิ้ง
+      else return;
     }
+    shownIdx.push(i);
+  });
+
+  shownIdx.forEach(i => {
+    const x = toX(i);
+    ctx.fillStyle = '#607080';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = i === 0 ? 'left' : i === points.length-1 ? 'right' : 'center';
+    ctx.fillText(points[i].date.slice(5), x, H - 6); // MM-DD
   });
 
   // trend arrow (เพิ่ม/ลด) — ลด = ดี (short cover), เพิ่ม = ระวัง
