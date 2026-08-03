@@ -6814,13 +6814,40 @@ def _load_short_data():
     return _short_data_cache
 
 
+def _merge_daily_tail(daily_list, tail_rows, field_names):
+    """แทรก tail_rows ([date, v1, v2, ...]) เข้า daily_list เฉพาะวันที่ยังไม่มี (ไม่ทับของเดิม)
+    แล้ว sort ตาม date — field_names กำหนดชื่อ key ของ v1, v2, ... ตามลำดับ"""
+    existing = {d.get("date") for d in daily_list}
+    for row in tail_rows:
+        date = row[0]
+        if not date or date in existing:
+            continue
+        daily_list.append({"date": date, **dict(zip(field_names, row[1:]))})
+        existing.add(date)
+    daily_list.sort(key=lambda d: d["date"])
+    return daily_list
+
+
+_SHORT_SALES_GITHUB_RAW_URL = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main/data/short_sales.json"
+
+
+def _fetch_short_sales_github_fallback():
+    """ดึง data/short_sales.json ที่ GitHub Actions bake+commit ไว้ — มี daily_tail แค่ 21
+    วันล่าสุดต่อหุ้น (ไม่ใช่ประวัติเต็มเหมือน market/s50/bond flow) ใช้เติมช่องว่างสั้นๆ บนเครื่อง
+    local เท่านั้น — ไม่มี pct_vol/pct_value (bake ตัดทิ้งไปแล้ว) วันที่เติมจาก fallback จะไม่มี
+    2 field นี้ ไม่กระทบวันอื่นที่ได้จากดึงสดจริง"""
+    import urllib.request as _ur
+    ctx = ssl_context()
+    req = _ur.Request(_SHORT_SALES_GITHUB_RAW_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with _ur.urlopen(req, context=ctx, timeout=15) as r:
+        data = json.loads(r.read().decode("utf-8", "ignore"))
+    return {sym: v.get("daily_tail") or [] for sym, v in (data.get("stocks") or {}).items()}
+
+
 def short_sales_daily_update():
     """ดึงข้อมูล short sales วันนี้จาก API แล้ว append ลง short_sales_data.json"""
     import urllib.request as _ur
     from datetime import datetime as _dt
-
-    if not os.path.exists(_SHORT_DATA_FILE):
-        return
 
     try:
         ctx = ssl_context()
@@ -6849,10 +6876,26 @@ def short_sales_daily_update():
                 f"response keys: {list(resp.keys())}"
             )
 
-        with open(_SHORT_DATA_FILE, encoding="utf-8") as f:
-            data = json.load(f)
+        if os.path.exists(_SHORT_DATA_FILE):
+            with open(_SHORT_DATA_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = {"stocks": {}}
 
-        stocks = data.get("stocks", {})
+        stocks = data.setdefault("stocks", {})
+
+        # เติมช่องว่างจาก GitHub fallback (~21 วันล่าสุด) ก่อนอัพเดทวันนี้ — ไม่ทับของเดิม
+        try:
+            for sym, tail in _fetch_short_sales_github_fallback().items():
+                s = stocks.setdefault(sym, {
+                    "period_vol": 0, "period_local_vol": 0, "period_nvdr_vol": 0,
+                    "period_value": 0, "period_pct_value": 0, "short_pos": 0,
+                    "short_pos_local": 0, "short_pos_nvdr": 0, "short_pos_pct": 0, "daily": [],
+                })
+                _merge_daily_tail(s.setdefault("daily", []), tail, ["short_pos", "short_pos_pct"])
+        except Exception as e:
+            print(f"[short-sales] GitHub fallback ไม่ได้ ({e})")
+
         updated = 0
         for item in resp.get("shortSales", []):
             sym = item.get("symbol")
@@ -7098,9 +7141,24 @@ def _fetch_flow_set_official():
             "foreign": mb("foreign"), "retail": mb("individual"), "set": set_close}
 
 
+_MARKET_FLOW_GITHUB_RAW_URL = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main/market_flow_data.json"
+
+
+def _fetch_flow_market_github_fallback():
+    """ดึง market_flow_data.json ที่ GitHub Actions commit ไว้ (cron รันวันละ 4 รอบ) มา
+    เติมวันที่ขาดบนเครื่อง local — เผื่อกรณี siamchart โดนบล็อค/ล่มพร้อมกับ SET API ไม่ผ่าน
+    วันนั้นพอดีตอนเครื่อง local รัน (เหมือน s50: _fetch_flow_s50_github_fallback)"""
+    import urllib.request as _ur
+    ctx = ssl_context()
+    req = _ur.Request(_MARKET_FLOW_GITHUB_RAW_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with _ur.urlopen(req, context=ctx, timeout=15) as r:
+        data = json.loads(r.read().decode("utf-8", "ignore"))
+    return data.get("rows") or []
+
+
 def _fetch_flow_data():
-    """รวมข้อมูล Capital Flow จากไฟล์สะสม + siamchart + SET API — คำนวณ chg,
-    บันทึกไฟล์สะสม (atomic) และอัพเดท _flow_cache — ล้มเฉพาะเมื่อไม่มีข้อมูลเลยจริงๆ"""
+    """รวมข้อมูล Capital Flow จากไฟล์สะสม + GitHub fallback + siamchart + SET API —
+    คำนวณ chg, บันทึกไฟล์สะสม (atomic) และอัพเดท _flow_cache — ล้มเฉพาะเมื่อไม่มีข้อมูลเลยจริงๆ"""
     rows_by_date = {}
     try:
         with open(_MARKET_FLOW_FILE, encoding="utf-8") as f:
@@ -7110,6 +7168,15 @@ def _fetch_flow_data():
                                                 ("date", "fund", "foreign", "retail", "set")}
     except Exception:
         pass
+
+    # เติมเฉพาะวันที่ขาดบนเครื่อง (ไม่ทับของเดิม — ไฟล์ local อาจถูกแก้ไขมือไว้แล้ว)
+    try:
+        for r0 in _fetch_flow_market_github_fallback():
+            if r0.get("date") and r0["date"] not in rows_by_date:
+                rows_by_date[r0["date"]] = {k: r0.get(k) for k in
+                                            ("date", "fund", "foreign", "retail", "set")}
+    except Exception as e:
+        print(f"[Flow] GitHub fallback ไม่ได้ ({e})")
 
     sources = []
     try:
@@ -7292,10 +7359,25 @@ _flow_bond_cache: dict = {}
 _BOND_FLOW_FILE = os.path.join(BASE_DIR, "bond_flow_data.json")
 
 
+_BOND_FLOW_GITHUB_RAW_URL = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main/bond_flow_data.json"
+
+
+def _fetch_flow_bond_github_fallback():
+    """ดึง bond_flow_data.json ที่ GitHub Actions commit ไว้ (cron รันวันละ 4 รอบ) มา
+    เติมวันที่ขาดบนเครื่อง local — เผื่อกรณี ThaiBMA ล่ม/เปลี่ยนหน้าตอนเครื่อง local รันพอดี
+    (เหมือน s50: _fetch_flow_s50_github_fallback)"""
+    import urllib.request as _ur
+    ctx = ssl_context()
+    req = _ur.Request(_BOND_FLOW_GITHUB_RAW_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with _ur.urlopen(req, context=ctx, timeout=15) as r:
+        data = json.loads(r.read().decode("utf-8", "ignore"))
+    return data.get("rows") or []
+
+
 def _fetch_flow_bond_data():
-    """รวมข้อมูล Thai Bond flow จากไฟล์สะสม + ThaiBMA (merge by date เหมือน SET/S50 flow —
-    เดิมเขียนทับไฟล์ทั้งไฟล์ด้วยผลลัพธ์ ThaiBMA ตรงๆ ถ้าวันไหน ThaiBMA ส่งประวัติสั้นลง
-    (เช่นเหลือแค่ YTD) ข้อมูลย้อนหลังที่สะสมไว้จะหายถาวร — ตอนนี้ merge เข้าไฟล์เดิมแทน)"""
+    """รวมข้อมูล Thai Bond flow จากไฟล์สะสม + GitHub fallback + ThaiBMA (merge by date
+    เหมือน SET/S50 flow — เดิมเขียนทับไฟล์ทั้งไฟล์ด้วยผลลัพธ์ ThaiBMA ตรงๆ ถ้าวันไหน ThaiBMA
+    ส่งประวัติสั้นลง (เช่นเหลือแค่ YTD) ข้อมูลย้อนหลังที่สะสมไว้จะหายถาวร — ตอนนี้ merge เข้าไฟล์เดิมแทน)"""
     import urllib.request as _ur
     ctx = ssl_context()
     headers = {
@@ -7313,6 +7395,14 @@ def _fetch_flow_bond_data():
                     rows_by_date[r0["date"]] = r0
     except Exception:
         pass
+
+    # เติมเฉพาะวันที่ขาดบนเครื่อง (ไม่ทับของเดิม)
+    try:
+        for r0 in _fetch_flow_bond_github_fallback():
+            if r0.get("date") and r0["date"] not in rows_by_date:
+                rows_by_date[r0["date"]] = r0
+    except Exception as e:
+        print(f"[Bond Flow] GitHub fallback ไม่ได้ ({e})")
 
     sources = []
     try:
@@ -7444,6 +7534,20 @@ def _fetch_nvdr_outstanding():
     return d.get("date", "")[:10], d.get("outstandings", [])
 
 
+_NVDR_GITHUB_RAW_URL = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main/data/nvdr_data.json"
+
+
+def _fetch_nvdr_github_fallback():
+    """ดึง data/nvdr_data.json ที่ GitHub Actions bake+commit ไว้ — daily_tail 21 วันล่าสุด/หุ้น
+    (ครบทุก field ที่ local snap ใช้ ต่างจาก short sales) ใช้เติมช่องว่างสั้นๆ บนเครื่อง local"""
+    import urllib.request as _ur
+    ctx = ssl_context()
+    req = _ur.Request(_NVDR_GITHUB_RAW_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with _ur.urlopen(req, context=ctx, timeout=15) as r:
+        data = json.loads(r.read().decode("utf-8", "ignore"))
+    return {sym: v.get("daily_tail") or [] for sym, v in (data.get("stocks") or {}).items()}
+
+
 def nvdr_daily_update():
     """อัพเดท NVDR data ประจำวัน — เรียกตอน Quick Update"""
     from datetime import datetime as _dt
@@ -7462,7 +7566,17 @@ def nvdr_daily_update():
         else:
             data = {"updated_at": None, "stocks": {}}
 
-        stocks = data.get("stocks", {})
+        stocks = data.setdefault("stocks", {})
+
+        # เติมช่องว่างจาก GitHub fallback (~21 วันล่าสุด) ก่อนอัพเดทวันนี้ — ไม่ทับของเดิม
+        try:
+            for sym, tail in _fetch_nvdr_github_fallback().items():
+                s = stocks.setdefault(sym, {"nvdr_pct": 0, "nvdr_shares": 0,
+                                             "paid_up_shares": 0, "daily": []})
+                _merge_daily_tail(s.setdefault("daily", []), tail, ["nvdr_pct", "nvdr_shares"])
+        except Exception as e:
+            print(f"[nvdr] GitHub fallback ไม่ได้ ({e})")
+
         updated = 0
         for item in items:
             sym  = item.get("symbol")
