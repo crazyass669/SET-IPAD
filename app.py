@@ -4816,6 +4816,41 @@ def _dh_quality_item(key, label, status, note, last_at=None):
             "last_at": last_at, "age_hours": None, "status": status, "note": note}
 
 
+def _dh_gap_check_item(key, label, path, lookback_days=60, warn_n=4, red_n=10):
+    """เช็คจำนวน "วันทำการ (จ-ศ)" ที่หายไปกลางช่วง lookback_days วันล่าสุดในไฟล์ rows-by-date
+    (market/s50/bond flow) — เกณฑ์อื่นในหน้านี้เช็คแค่ mtime/จำนวนแถวรวม ไม่จับ "รูขาดกลางชุด"
+    (เช่น TFEX/ThaiBMA ใช้ไม่ได้ติดกันหลายวันช่วงที่ไม่มีใครเปิดแอปพอดี) นับหยาบๆ ไม่รู้จักวันหยุด
+    นักขัตฤกษ์ไทย (ปกติ ~15-16 วัน/ปี ≈ 2-3 วันใน 60 วัน) จึงตั้ง threshold หลวมพอให้วันหยุดยาว
+    ไม่ขึ้นเตือนเอง ไม่นับ 2 วันทำการล่าสุด (ข้อมูลอาจยังไม่ post)"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            rows = json.load(f).get("rows") or []
+    except Exception as e:
+        return _dh_quality_item(key, label, "red", f"อ่านไฟล์ไม่ได้: {str(e)[:120]}")
+    dates = {r.get("date") for r in rows if r.get("date")}
+    if not dates:
+        return _dh_quality_item(key, label, "red", "ไม่มีข้อมูลวันที่ในไฟล์เลย")
+
+    today = _dh_dt.now().date()
+    cutoff = today - timedelta(days=2)
+    d = today - timedelta(days=lookback_days)
+    missing = []
+    while d <= cutoff:
+        if d.weekday() < 5 and d.isoformat() not in dates:
+            missing.append(d.isoformat())
+        d += timedelta(days=1)
+
+    n = len(missing)
+    status = "red" if n >= red_n else ("warn" if n >= warn_n else "ok")
+    if n == 0:
+        note = f"ครบดี — ไม่พบวันทำการที่ขาดใน {lookback_days} วันล่าสุด"
+    else:
+        more = "…" if n > 6 else ""
+        note = (f"ขาด {n} วันทำการใน {lookback_days} วันล่าสุด: "
+                f"{', '.join(missing[:6])}{more} (เผื่อวันหยุดยาวไทยแล้ว ~{warn_n} วัน)")
+    return _dh_quality_item(key, label, status, note, last_at=max(dates))
+
+
 def _dh_drift_item(key, label, status_map):
     """รายการ "ตรวจ drift อัตโนมัติ" (หุ้นเข้าใหม่/ถูกถอดเทียบแหล่งสด) — อ่านผลจาก
     index_drift.read_status() (เขียนโดย _run_index_drift_checks ท้าย Quick Update
@@ -5300,6 +5335,16 @@ def data_health():
         os.path.join(_DATA_DIR, "jp_index_metrics.json"),
         ("NIKKEI225",),
         {"NIKKEI225": (215, 232)}))
+
+    # รูขาดข้อมูลกลางชุด (ไม่ใช่แค่ "สดแค่ไหน") — market/s50/bond flow เป็นไฟล์สะสมที่ผูกกับ
+    # "วันไหนมีใครเปิดแอป/Actions รันติดพอดี" ถ้าขาดหลายวันติดกันจะไม่โผล่ในเกณฑ์ mtime ด้านบนเลย
+    # (ไฟล์ยังถูกเขียนทุกวันจากวันที่มีข้อมูล แค่วันกลางๆ หาย) ดู _dh_gap_check_item
+    items.append(_dh_gap_check_item(
+        "q_market_flow_gap", "รูขาดข้อมูล Capital Flow (60 วันล่าสุด)", _MARKET_FLOW_FILE))
+    items.append(_dh_gap_check_item(
+        "q_s50_flow_gap", "รูขาดข้อมูล S50 Futures Flow (60 วันล่าสุด)", _S50_FLOW_FILE))
+    items.append(_dh_gap_check_item(
+        "q_bond_flow_gap", "รูขาดข้อมูล Bond Flow (60 วันล่าสุด)", _BOND_FLOW_FILE))
 
     summary = {"ok": 0, "warn": 0, "red": 0, "na": 0}
     for it in items:
@@ -6828,7 +6873,25 @@ def _merge_daily_tail(daily_list, tail_rows, field_names):
     return daily_list
 
 
-_SHORT_SALES_GITHUB_RAW_URL = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main/data/short_sales.json"
+# True เมื่อรันบน GitHub Actions เอง (run_static_update.py) — ใช้ 2 ที่: (1) กันยิง fallback
+# ย้อนกลับไปหาไฟล์ตัวเองที่เพิ่งดึงมาจาก checkout (เสียเวลาเปล่า) (2) กันไม่ให้เครื่อง local
+# เขียนทับ market/s50/bond_flow_data.json ที่ Actions commit อยู่แล้ว — เดิม local เขียน+
+# auto-push ชน commit ของ Actions เป็นระยะ (2026-08 เจอ conflict จริงบน bond/s50 flow)
+_IS_GITHUB_ACTIONS = bool(os.environ.get("GITHUB_ACTIONS"))
+_GITHUB_RAW_BASE = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main"
+
+
+def _fetch_github_raw_json(rel_path, timeout=8):
+    """ดึงไฟล์ JSON จาก GitHub raw (repo/branch เดียวกับที่ Actions commit ไว้) ใช้เติมช่องว่าง
+    ข้อมูลบนเครื่อง local เท่านั้น — คืน None เฉยๆ ถ้ารันบน CI เอง (เนื้อหาจะเหมือนของที่เพิ่ง
+    checkout อยู่แล้ว ไม่มีประโยชน์) ผู้เรียกต้อง handle ทั้ง None และ exception (network ล้ม)"""
+    if _IS_GITHUB_ACTIONS:
+        return None
+    import urllib.request as _ur
+    ctx = ssl_context()
+    req = _ur.Request(f"{_GITHUB_RAW_BASE}/{rel_path}", headers={"User-Agent": "Mozilla/5.0"})
+    with _ur.urlopen(req, context=ctx, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "ignore"))
 
 
 def _fetch_short_sales_github_fallback():
@@ -6836,12 +6899,8 @@ def _fetch_short_sales_github_fallback():
     วันล่าสุดต่อหุ้น (ไม่ใช่ประวัติเต็มเหมือน market/s50/bond flow) ใช้เติมช่องว่างสั้นๆ บนเครื่อง
     local เท่านั้น — ไม่มี pct_vol/pct_value (bake ตัดทิ้งไปแล้ว) วันที่เติมจาก fallback จะไม่มี
     2 field นี้ ไม่กระทบวันอื่นที่ได้จากดึงสดจริง"""
-    import urllib.request as _ur
-    ctx = ssl_context()
-    req = _ur.Request(_SHORT_SALES_GITHUB_RAW_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with _ur.urlopen(req, context=ctx, timeout=15) as r:
-        data = json.loads(r.read().decode("utf-8", "ignore"))
-    return {sym: v.get("daily_tail") or [] for sym, v in (data.get("stocks") or {}).items()}
+    data = _fetch_github_raw_json("data/short_sales.json")
+    return {sym: v.get("daily_tail") or [] for sym, v in ((data or {}).get("stocks") or {}).items()}
 
 
 def short_sales_daily_update():
@@ -7141,24 +7200,21 @@ def _fetch_flow_set_official():
             "foreign": mb("foreign"), "retail": mb("individual"), "set": set_close}
 
 
-_MARKET_FLOW_GITHUB_RAW_URL = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main/market_flow_data.json"
-
-
 def _fetch_flow_market_github_fallback():
     """ดึง market_flow_data.json ที่ GitHub Actions commit ไว้ (cron รันวันละ 4 รอบ) มา
     เติมวันที่ขาดบนเครื่อง local — เผื่อกรณี siamchart โดนบล็อค/ล่มพร้อมกับ SET API ไม่ผ่าน
     วันนั้นพอดีตอนเครื่อง local รัน (เหมือน s50: _fetch_flow_s50_github_fallback)"""
-    import urllib.request as _ur
-    ctx = ssl_context()
-    req = _ur.Request(_MARKET_FLOW_GITHUB_RAW_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with _ur.urlopen(req, context=ctx, timeout=15) as r:
-        data = json.loads(r.read().decode("utf-8", "ignore"))
-    return data.get("rows") or []
+    data = _fetch_github_raw_json("market_flow_data.json")
+    return (data or {}).get("rows") or []
 
 
 def _fetch_flow_data():
     """รวมข้อมูล Capital Flow จากไฟล์สะสม + GitHub fallback + siamchart + SET API —
-    คำนวณ chg, บันทึกไฟล์สะสม (atomic) และอัพเดท _flow_cache — ล้มเฉพาะเมื่อไม่มีข้อมูลเลยจริงๆ"""
+    คำนวณ chg แล้วอัพเดท _flow_cache เสมอ · บันทึกไฟล์สะสม (atomic) เฉพาะตอนรันบน GitHub
+    Actions เท่านั้น — เครื่อง local ไม่เขียนไฟล์ 3 ไฟล์ flow (market/s50/bond) นี้อีกแล้ว
+    กัน auto-push ยิงทับ/ชน commit ของ Actions (ดู _IS_GITHUB_ACTIONS) เครื่อง local ยังได้
+    ข้อมูลสดครบเหมือนเดิมผ่าน _flow_cache ในหน่วยความจำ แค่ไม่ persist ลงไฟล์ที่ push ขึ้น repo
+    ล้มเฉพาะเมื่อไม่มีข้อมูลเลยจริงๆ"""
     rows_by_date = {}
     try:
         with open(_MARKET_FLOW_FILE, encoding="utf-8") as f:
@@ -7204,7 +7260,7 @@ def _fetch_flow_data():
 
     result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
               "sources": sources or ["ไฟล์สะสม (ดึงใหม่ไม่สำเร็จทั้งสองแหล่ง)"]}
-    if sources:   # ได้ของใหม่จริงค่อยเขียนไฟล์
+    if sources and _IS_GITHUB_ACTIONS:   # ได้ของใหม่จริง + รันบน Actions ค่อยเขียนไฟล์ (เจ้าของไฟล์เดียว)
         _atomic_write_json(_MARKET_FLOW_FILE,
                            {"rows": rows, "updated_at": result["fetched_at"]})
     _flow_cache["data"] = result
@@ -7282,24 +7338,18 @@ def _fetch_flow_tfex_today():
     return {"date": date, "fund": inst_net, "foreign": for_net, "retail": loc_net}
 
 
-_S50_GITHUB_RAW_URL = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main/s50_flow_data.json"
-
-
 def _fetch_flow_s50_github_fallback():
     """ดึง s50_flow_data.json ที่ GitHub Actions commit ไว้ (cron รันวันละ 3 รอบ:
     06:00/13:10/18:30 ICT) มาใช้เติมวันที่ขาดบนเครื่อง — TFEX ให้แค่ "วันล่าสุดวันเดียว"
     ถ้าเครื่อง local ไม่ได้เปิดแอป/กด Quick Update พอดีตอน TFEX ยังโชว์วันนั้นอยู่ วันนั้น
     จะหายถาวร แต่ GitHub Actions มีโอกาสจับติดมากกว่าเพราะรันถี่กว่า 3 เท่า"""
-    import urllib.request as _ur
-    ctx = ssl_context()
-    req = _ur.Request(_S50_GITHUB_RAW_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with _ur.urlopen(req, context=ctx, timeout=15) as r:
-        data = json.loads(r.read().decode("utf-8", "ignore"))
-    return data.get("rows") or []
+    data = _fetch_github_raw_json("s50_flow_data.json")
+    return (data or {}).get("rows") or []
 
 
 def _fetch_flow_s50_data():
-    """รวมข้อมูล S50 Futures flow จากไฟล์สะสม + GitHub fallback + TFEX (วันล่าสุด) — เหมือน SET flow"""
+    """รวมข้อมูล S50 Futures flow จากไฟล์สะสม + GitHub fallback + TFEX (วันล่าสุด) — เหมือน SET flow
+    (เขียนไฟล์สะสมเฉพาะตอนรันบน Actions เท่านั้น — ดู _fetch_flow_data)"""
     rows_by_date = {}
     try:
         with open(_S50_FLOW_FILE, encoding="utf-8") as f:
@@ -7331,7 +7381,7 @@ def _fetch_flow_s50_data():
     rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
     result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
               "sources": sources or ["ไฟล์สะสม (ดึงใหม่ไม่สำเร็จ)"]}
-    if sources:
+    if sources and _IS_GITHUB_ACTIONS:
         _atomic_write_json(_S50_FLOW_FILE, {"rows": rows, "updated_at": result["fetched_at"]})
     _flow_s50_cache["data"] = result
     _flow_s50_cache["ts"] = time.time()
@@ -7359,25 +7409,19 @@ _flow_bond_cache: dict = {}
 _BOND_FLOW_FILE = os.path.join(BASE_DIR, "bond_flow_data.json")
 
 
-_BOND_FLOW_GITHUB_RAW_URL = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main/bond_flow_data.json"
-
-
 def _fetch_flow_bond_github_fallback():
     """ดึง bond_flow_data.json ที่ GitHub Actions commit ไว้ (cron รันวันละ 4 รอบ) มา
     เติมวันที่ขาดบนเครื่อง local — เผื่อกรณี ThaiBMA ล่ม/เปลี่ยนหน้าตอนเครื่อง local รันพอดี
     (เหมือน s50: _fetch_flow_s50_github_fallback)"""
-    import urllib.request as _ur
-    ctx = ssl_context()
-    req = _ur.Request(_BOND_FLOW_GITHUB_RAW_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with _ur.urlopen(req, context=ctx, timeout=15) as r:
-        data = json.loads(r.read().decode("utf-8", "ignore"))
-    return data.get("rows") or []
+    data = _fetch_github_raw_json("bond_flow_data.json")
+    return (data or {}).get("rows") or []
 
 
 def _fetch_flow_bond_data():
     """รวมข้อมูล Thai Bond flow จากไฟล์สะสม + GitHub fallback + ThaiBMA (merge by date
     เหมือน SET/S50 flow — เดิมเขียนทับไฟล์ทั้งไฟล์ด้วยผลลัพธ์ ThaiBMA ตรงๆ ถ้าวันไหน ThaiBMA
-    ส่งประวัติสั้นลง (เช่นเหลือแค่ YTD) ข้อมูลย้อนหลังที่สะสมไว้จะหายถาวร — ตอนนี้ merge เข้าไฟล์เดิมแทน)"""
+    ส่งประวัติสั้นลง (เช่นเหลือแค่ YTD) ข้อมูลย้อนหลังที่สะสมไว้จะหายถาวร — ตอนนี้ merge เข้าไฟล์เดิมแทน
+    เขียนไฟล์สะสมเฉพาะตอนรันบน Actions เท่านั้น — ดู _fetch_flow_data)"""
     import urllib.request as _ur
     ctx = ssl_context()
     headers = {
@@ -7424,7 +7468,7 @@ def _fetch_flow_bond_data():
     rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
     result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
               "sources": sources or ["ไฟล์สะสม (ดึงใหม่ไม่สำเร็จ)"]}
-    if sources:
+    if sources and _IS_GITHUB_ACTIONS:
         _atomic_write_json(_BOND_FLOW_FILE, {"rows": rows, "updated_at": result["fetched_at"]})
     _flow_bond_cache["data"] = result
     _flow_bond_cache["ts"] = time.time()
@@ -7534,18 +7578,11 @@ def _fetch_nvdr_outstanding():
     return d.get("date", "")[:10], d.get("outstandings", [])
 
 
-_NVDR_GITHUB_RAW_URL = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main/data/nvdr_data.json"
-
-
 def _fetch_nvdr_github_fallback():
     """ดึง data/nvdr_data.json ที่ GitHub Actions bake+commit ไว้ — daily_tail 21 วันล่าสุด/หุ้น
     (ครบทุก field ที่ local snap ใช้ ต่างจาก short sales) ใช้เติมช่องว่างสั้นๆ บนเครื่อง local"""
-    import urllib.request as _ur
-    ctx = ssl_context()
-    req = _ur.Request(_NVDR_GITHUB_RAW_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with _ur.urlopen(req, context=ctx, timeout=15) as r:
-        data = json.loads(r.read().decode("utf-8", "ignore"))
-    return {sym: v.get("daily_tail") or [] for sym, v in (data.get("stocks") or {}).items()}
+    data = _fetch_github_raw_json("data/nvdr_data.json")
+    return {sym: v.get("daily_tail") or [] for sym, v in ((data or {}).get("stocks") or {}).items()}
 
 
 def nvdr_daily_update():
