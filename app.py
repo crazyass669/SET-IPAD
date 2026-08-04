@@ -6682,6 +6682,7 @@ def _run_quick():
             from sources import sec_store as _sec_store
             _sec_store.sync_insider_trades(BASE_DIR)
             _sec_store.sync_major_changes(BASE_DIR)
+            _sec_store.bake_backup(BASE_DIR)   # no-op นอก CI — ดู sec_store.bake_backup
             _invalidate_flow_signals()   # insider เป็น 1 ใน 3 ชั้นของสัญญาณรวม
         _sub_step("Insider/ผู้ถือหุ้นใหญ่", 91, "อัพเดท Insider/ผู้ถือหุ้นใหญ่...", _insider)
 
@@ -6907,13 +6908,53 @@ def _fetch_github_raw_json(rel_path, timeout=8):
         return json.loads(r.read().decode("utf-8", "ignore"))
 
 
+# ~1 ปีเทรดดิ้ง — เพดานความลึกของไฟล์สำรอง short_sales/nvdr ที่ commit ขึ้น GitHub (ดู
+# _bake_history_backup) ตั้ง bound ไว้ ไม่ปล่อยยาวไม่จำกัดตามไฟล์สะสม local เพราะจะบวม repo
+# ซ้ำปัญหาเดิมที่เพิ่งย้าย indices_cache.json/short_sales_data.json/nvdr_data.json ออกจาก git
+# ไปใช้ actions/cache แทนแล้ว (ดู .gitignore comment) — 260 วันยังให้ backup ยาวกว่า 21 วันเดิม
+# ของ /api/short-sales, /api/nvdr ถึง 12 เท่า ในขนาดไฟล์ที่ยัง commit รายวันได้โดยไม่หนักเกินไป
+_HISTORY_BACKUP_DEPTH = 260
+
+
+def _bake_history_backup(accumulator_path, backup_rel_path, field_names, label):
+    """เขียนไฟล์สำรอง "ประวัติยาว" (สูงสุด _HISTORY_BACKUP_DEPTH วันล่าสุด/หุ้น) ไปที่ data/ จาก
+    ไฟล์สะสม local (accumulator_path — ไม่ถูกตัดเหมือน /api/short-sales, /api/nvdr ที่ตัดแค่ 21
+    วันไว้ให้หน้าเว็บ/iPad โหลดเร็ว) แยกไฟล์จาก data/short_sales.json, data/nvdr_data.json (ตัวที่
+    bake จาก endpoint สดสำหรับหน้าเว็บ) โดยเจตนา — ไฟล์นี้มีไว้กู้คืนกรณี actions/cache ของไฟล์สะสม
+    หาย ไม่ใช่ตัวที่หน้าเว็บ/iPad อ่านจริง เขียนเฉพาะตอนรันบน GitHub Actions เท่านั้น (เหมือน 3
+    ไฟล์ flow — กันเครื่อง local เขียนชน commit ของ Actions ดู _IS_GITHUB_ACTIONS)"""
+    if not _IS_GITHUB_ACTIONS:
+        return
+    try:
+        with open(accumulator_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"[{label}] อ่านไฟล์สะสมไม่ได้ ({e}) — ข้าม bake backup")
+        return
+    out = {}
+    for sym, v in (data.get("stocks") or {}).items():
+        daily = v.get("daily") or []
+        out[sym] = [[d.get("date")] + [d.get(fn) for fn in field_names]
+                    for d in daily[-_HISTORY_BACKUP_DEPTH:]]
+    backup_path = os.path.join(BASE_DIR, "data", backup_rel_path)
+    _atomic_write_json(backup_path, {
+        "updated_at": time.strftime("%Y-%m-%d %H:%M"),
+        "depth_days": _HISTORY_BACKUP_DEPTH,
+        "fields": field_names,
+        "stocks": out,
+    })
+    print(f"[{label}] bake backup: {len(out)} stocks -> data/{backup_rel_path}")
+
+
 def _fetch_short_sales_github_fallback():
-    """ดึง data/short_sales.json ที่ GitHub Actions bake+commit ไว้ — มี daily_tail แค่ 21
-    วันล่าสุดต่อหุ้น (ไม่ใช่ประวัติเต็มเหมือน market/s50/bond flow) ใช้เติมช่องว่างสั้นๆ บนเครื่อง
-    local เท่านั้น — ไม่มี pct_vol/pct_value (bake ตัดทิ้งไปแล้ว) วันที่เติมจาก fallback จะไม่มี
-    2 field นี้ ไม่กระทบวันอื่นที่ได้จากดึงสดจริง"""
-    data = _fetch_github_raw_json("data/short_sales.json")
-    return {sym: v.get("daily_tail") or [] for sym, v in ((data or {}).get("stocks") or {}).items()}
+    """ดึง data/short_sales_backup.json ที่ GitHub Actions bake+commit ไว้ (สูงสุด
+    _HISTORY_BACKUP_DEPTH ~260 วันล่าสุดต่อหุ้น — ดู _bake_history_backup) มาเติมช่องว่าง
+    บนเครื่อง local — ลึกกว่า data/short_sales.json เดิม (21 วัน) ถึง 12 เท่า ไม่มี
+    pct_vol/pct_value (backup ไม่เก็บ 2 field นี้เหมือนไฟล์เดิม) วันที่เติมจาก fallback จะไม่มี
+    2 field นี้ ไม่กระทบวันอื่นที่ได้จากดึงสดจริง — ถ้ายังไม่เคยมีไฟล์นี้ (deploy ใหม่ ยังไม่ผ่าน
+    Actions รอบแรก) คืน {} เฉยๆ ไม่ error"""
+    data = _fetch_github_raw_json("data/short_sales_backup.json")
+    return (data or {}).get("stocks") or {}
 
 
 def short_sales_daily_update():
@@ -7106,6 +7147,8 @@ def short_sales_daily_update():
         data["stocks"]          = stocks
         data["last_api_update"] = trade_date
         _atomic_write_json(_SHORT_DATA_FILE, data)
+        _bake_history_backup(_SHORT_DATA_FILE, "short_sales_backup.json",
+                              ["short_pos", "short_pos_pct"], "short-sales")
 
         global _short_data_cache, _short_data_ts
         _short_data_cache = None  # invalidate cache
@@ -7592,10 +7635,12 @@ def _fetch_nvdr_outstanding():
 
 
 def _fetch_nvdr_github_fallback():
-    """ดึง data/nvdr_data.json ที่ GitHub Actions bake+commit ไว้ — daily_tail 21 วันล่าสุด/หุ้น
-    (ครบทุก field ที่ local snap ใช้ ต่างจาก short sales) ใช้เติมช่องว่างสั้นๆ บนเครื่อง local"""
-    data = _fetch_github_raw_json("data/nvdr_data.json")
-    return {sym: v.get("daily_tail") or [] for sym, v in ((data or {}).get("stocks") or {}).items()}
+    """ดึง data/nvdr_backup.json ที่ GitHub Actions bake+commit ไว้ (สูงสุด
+    _HISTORY_BACKUP_DEPTH ~260 วันล่าสุดต่อหุ้น — ดู _bake_history_backup) มาเติมช่องว่างบน
+    เครื่อง local — ลึกกว่า data/nvdr_data.json เดิม (21 วัน) ถึง 12 เท่า ถ้ายังไม่เคยมีไฟล์นี้
+    (deploy ใหม่ ยังไม่ผ่าน Actions รอบแรก) คืน {} เฉยๆ ไม่ error"""
+    data = _fetch_github_raw_json("data/nvdr_backup.json")
+    return (data or {}).get("stocks") or {}
 
 
 def nvdr_daily_update():
@@ -7656,6 +7701,8 @@ def nvdr_daily_update():
         data["stocks"]     = stocks
         data["updated_at"] = trade_date
         _atomic_write_json(_NVDR_DATA_FILE, data)
+        _bake_history_backup(_NVDR_DATA_FILE, "nvdr_backup.json",
+                              ["nvdr_pct", "nvdr_shares"], "nvdr")
         global _nvdr_data_cache
         _nvdr_data_cache = None
         _invalidate_flow_signals()   # NVDR เป็น 1 ใน 3 ชั้นของสัญญาณรวม

@@ -10,6 +10,7 @@ SEC กรองผลค้นหาตาม "วันที่ยื่น�
 ผู้บริหารมีสิทธิ์ยื่นช้ากว่าวันเทรดจริงได้หลายวัน ทำให้รายการที่ trade_date เก่า
 โผล่มาทีหลังได้ — SYNC_OVERLAP_DAYS จึงต้องกว้างพอจะจับรายการยื่นช้าเหล่านี้ทัน
 """
+import json
 import os
 import sqlite3
 from datetime import datetime, timedelta
@@ -17,6 +18,17 @@ from datetime import datetime, timedelta
 DB_FILE = "sec_filings.db"
 SYNC_OVERLAP_DAYS = 21     # ย้อนดึงซ้ำทุกรอบ กันรายการยื่นช้าตกหล่น
 INITIAL_BACKFILL_DAYS = 180
+
+# ── สำรองประวัติเต็มขึ้น GitHub ────────────────────────────────────────────
+# sec_filings.db อยู่ใน .gitignore (ผ่าน actions/cache เหมือน short_sales_data.json/
+# nvdr_data.json) ถ้า cache หาย (eviction 7 วัน/เกิน 10GB) sync_insider_trades()/
+# sync_major_changes() จะเห็นว่าไม่เคย sync มาก่อน (ไม่มี meta) แล้ว backfill แค่
+# INITIAL_BACKFILL_DAYS (180 วัน) — แต่ DB สะสมจริงมีย้อนหลังหลายปี (ตรวจ 2026-08:
+# insider ~3 ปี, major-changes ~4 ปี) ถ้าไม่มีไฟล์สำรองนี้ ประวัติเก่ากว่า 180 วันจะ
+# หายถาวรทันทีที่ cache miss (ดู restore_from_backup_if_missing/bake_backup)
+_IS_GITHUB_ACTIONS = bool(os.environ.get("GITHUB_ACTIONS"))
+_GITHUB_RAW_BASE = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main"
+_BACKUP_REL_PATH = "data/sec_filings_backup.json"
 
 
 def _db_path(base_dir):
@@ -315,8 +327,70 @@ def _extract_symbol(company_str):
     return _ex(company_str)
 
 
+def _fetch_backup_json(base_dir):
+    """อ่าน data/sec_filings_backup.json — บน CI อ่านจาก checkout ตรงๆ (เร็ว ไม่พึ่ง
+    network) บนเครื่อง local ยิง raw.githubusercontent คืน None เงียบๆ ถ้าไม่มีไฟล์/
+    ยิงไม่สำเร็จ (deploy ใหม่ยังไม่ผ่าน Actions รอบแรก หรือเน็ตล้ม — ไม่ raise เพราะ
+    backup เป็นแค่ตัวเสริม ไม่ควรบล็อค sync สดตามปกติ)"""
+    if _IS_GITHUB_ACTIONS:
+        try:
+            with open(os.path.join(base_dir, *_BACKUP_REL_PATH.split("/")), encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    try:
+        import urllib.request as _ur
+        from core.net import ssl_context
+        ctx = ssl_context()
+        req = _ur.Request(f"{_GITHUB_RAW_BASE}/{_BACKUP_REL_PATH}", headers={"User-Agent": "Mozilla/5.0"})
+        with _ur.urlopen(req, context=ctx, timeout=8) as r:
+            return json.loads(r.read().decode("utf-8", "ignore"))
+    except Exception:
+        return None
+
+
+def restore_from_backup_if_missing(base_dir):
+    """ถ้ายังไม่มี sec_filings.db เลย (เครื่องใหม่ หรือ actions/cache หาย) กู้คืนประวัติ
+    เต็มจาก data/sec_filings_backup.json ก่อน — sync สดตามปกติ (เรียกต่อจากนี้) จะ
+    backfill ได้แค่ INITIAL_BACKFILL_DAYS (180 วัน) ถ้าไม่กู้คืนก่อน ประวัติเก่ากว่านั้น
+    จะหายถาวร ไม่ทำอะไรถ้า DB มีอยู่แล้ว (กันเขียนทับของเดิมที่อาจใหม่กว่า backup)"""
+    if db_exists(base_dir):
+        return
+    data = _fetch_backup_json(base_dir)
+    if not data:
+        return
+    insider = data.get("insider_trades") or []
+    major = data.get("major_changes") or []
+    if insider:
+        upsert_insider_trades(base_dir, insider)
+    if major:
+        upsert_major_changes(base_dir, major)
+    print(f"[sec_store] กู้คืนจาก backup: insider {len(insider)} แถว, major {len(major)} แถว")
+
+
+def bake_backup(base_dir):
+    """เขียนไฟล์สำรอง "ประวัติเต็ม" ไป data/sec_filings_backup.json จาก sec_filings.db
+    (sync สดปกติดึงย้อนหลังได้แค่ 180 วันตอน backfill ครั้งแรก แต่ DB สะสมในเครื่องนี้
+    มีมากกว่านั้นมาก — ดูคอมเมนต์บนสุดของไฟล์) เขียนเฉพาะตอนรันบน GitHub Actions
+    เท่านั้น (กันเครื่อง local เขียนชน commit ของ Actions — เหมือน pattern ของ market/
+    s50/bond flow และ short_sales/nvdr backup ใน app.py)"""
+    if not _IS_GITHUB_ACTIONS or not db_exists(base_dir):
+        return
+    insider = query_insider_trades(base_dir, days=3650)
+    major = query_major_changes(base_dir, days=3650)
+    path = os.path.join(base_dir, *_BACKUP_REL_PATH.split("/"))
+    tmp = path + ".tmp"
+    payload = {"updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+               "insider_trades": insider, "major_changes": major}
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    os.replace(tmp, path)
+    print(f"[sec_store] bake backup: insider {len(insider)} แถว, major {len(major)} แถว -> {_BACKUP_REL_PATH}")
+
+
 def sync_insider_trades(base_dir):
     """ดึงข้อมูลใหม่จาก SEC มา upsert เข้า DB สะสม คืนจำนวน record ที่ดึงมารอบนี้"""
+    restore_from_backup_if_missing(base_dir)
     init_db(base_dir)
     last_synced = _get_meta(base_dir, "insider_last_synced_at")
     date_to = datetime.now()
@@ -331,6 +405,7 @@ def sync_insider_trades(base_dir):
 
 
 def sync_major_changes(base_dir):
+    restore_from_backup_if_missing(base_dir)
     init_db(base_dir)
     last_synced = _get_meta(base_dir, "major_last_synced_at")
     date_to = datetime.now()

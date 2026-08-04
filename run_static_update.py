@@ -220,6 +220,7 @@ try:
     from sources import sec_store
     n1 = sec_store.sync_insider_trades(BASE_DIR)
     n2 = sec_store.sync_major_changes(BASE_DIR)
+    sec_store.bake_backup(BASE_DIR)   # เขียน data/sec_filings_backup.json (เฉพาะบน CI — ดู bake_backup)
     log(f"✅ sync เสร็จ: insider {n1} แถว, major-changes {n2} แถว")
 except Exception as e:
     log(f"⚠️ sync sec_filings.db ล้ม: {e}")
