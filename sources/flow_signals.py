@@ -128,6 +128,7 @@ def build_flow_signals(base_dir, insider_days=90):
     db = os.path.join(base_dir, "sec_filings.db")
     if os.path.exists(db):
         con = sqlite3.connect(db)
+        con.execute("PRAGMA busy_timeout=5000")
         try:
             cutoff = (datetime.now() - timedelta(days=insider_days)).strftime("%Y-%m-%d")
             for sym, action, qty, price in con.execute(

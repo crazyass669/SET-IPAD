@@ -6,8 +6,9 @@ local data/us_index_membership.json — เป็นคู่ปุ่ม "เ�
 import json
 import os
 import re
-import ssl
 import urllib.request
+
+from core.net import ssl_context
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
 INDEXES = ("SP500", "DOW", "NDX")
@@ -17,7 +18,7 @@ _INDEXES = INDEXES   # ชื่อเดิม — คงไว้กันโ�
 def _fetch_wikitext(title):
     url = f"https://en.wikipedia.org/w/index.php?title={title}&action=raw"
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    ctx = ssl.create_default_context()
+    ctx = ssl_context()
     with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
         return r.read().decode("utf-8", "ignore")
 

@@ -521,13 +521,27 @@ function startStaticBake() {
   _startJob("/api/run-static-bake", "static-bake-btn", "🧱 Bake ไฟล์ static ทั้งหมด", null, checkDataHealthBadge);
 }
 
-async function restartServer() {
-  if (!confirm('ยืนยันการ Restart Server?\n\nหน้าเว็บจะ reload อัตโนมัติหลัง server พร้อม')) return;
+async function restartServer(force) {
+  if (!force && !confirm('ยืนยันการ Restart Server?\n\nหน้าเว็บจะ reload อัตโนมัติหลัง server พร้อม')) return;
   const btn = document.getElementById('restart-btn');
   btn.disabled = true; btn.textContent = '↺ กำลัง Restart...';
   try {
-    await fetch('/api/restart', {method:'POST'});
-  } catch(e) { /* server ปิดก่อน response — ปกติ */ }
+    const r = await fetch('/api/restart', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({force: !!force}),
+    });
+    // server ปฏิเสธเพราะมี job (Refresh/Update ฯลฯ) กำลังรันอยู่ — restart ตอนนี้จะตัด
+    // งานทิ้งกลางคัน ถามผู้ใช้ก่อนว่ายืนยันจะทำต่อไหม
+    if (r.status === 409) {
+      const j = await r.json().catch(() => ({}));
+      btn.disabled = false; btn.textContent = '↺ Restart';
+      if (confirm((j.error || 'มี job กำลังรันอยู่') + '\n\nยืนยัน Restart ทันทีและตัดงานทิ้งหรือไม่?')) {
+        return restartServer(true);
+      }
+      return;
+    }
+  } catch(e) { /* server ปิดก่อน response — ปกติเมื่อ restart จริง */ }
   // รอ server ขึ้นมาใหม่
   const status = document.getElementById('updated-at');
   if (status) status.textContent = 'รอ server restart...';
@@ -548,6 +562,21 @@ async function restartServer() {
   }
   btn.disabled = false; btn.textContent = '↺ Restart';
   alert('Server ไม่ตอบสนอง — ลองรีโหลดหน้าเอง');
+}
+
+async function resetStuckJob() {
+  if (!confirm('ปลดล็อก job flag ที่ค้างอยู่?\n\nใช้เมื่อปุ่ม Refresh/Update ต่างๆ ตอบ "กำลังทำงานอยู่" (409) นานผิดปกติ\nไม่ยกเลิกงานที่ยังรันจริงอยู่ (ทำไม่ได้) แค่ปลดให้กดปุ่มใหม่ได้')) return;
+  const btn = document.getElementById('job-reset-btn');
+  btn.disabled = true; btn.textContent = '🔓 กำลังปลดล็อก...';
+  try {
+    const r = await fetch('/api/job-reset', {method: 'POST'});
+    const j = await r.json();
+    alert(j.was_running ? 'ปลดล็อกแล้ว — ลองกดปุ่มที่ต้องการใหม่ได้เลย' : 'ไม่มี job ค้างอยู่');
+  } catch (e) {
+    alert('ปลดล็อกไม่สำเร็จ: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '🔓 ปลดล็อก Job';
+  }
 }
 
 function renderAll() {

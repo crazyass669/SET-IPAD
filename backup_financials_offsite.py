@@ -19,6 +19,7 @@ bias fix), sec_filings.db (insider/ผู้ถือหุ้นใหญ่) �
 import io
 import json
 import os
+import sqlite3
 import sys
 import shutil
 import time
@@ -39,6 +40,25 @@ FILES = [
 ]
 
 
+def _backup_db_file(src, dest):
+    """คัดลอก SQLite DB ด้วย Online Backup API แทน shutil.copy2 — financials.db/
+    set_prices.db/sec_filings.db เปิด WAL mode ทั้งหมด (ดู core/store.py,
+    sources/financials_store.py, sources/sec_store.py) และแอปหลัก/scheduled task
+    อาจกำลังเขียนอยู่ตอนสำรอง copy2 ก็อปไบต์ไฟล์ .db ดิบตรงๆ โดยไม่รู้จัก -wal เลย
+    เสี่ยงได้ snapshot ที่ขาด commit ล่าสุด หรือแย่กว่านั้นคือไฟล์ torn เปิดไม่ขึ้นอีกเลย
+    backup() ของ sqlite3 ใช้ Online Backup API จริง ได้ snapshot consistent เสมอ
+    แม้กำลังมีคนเขียนพร้อมกัน (pattern เดียวกับ financials_store.backup_db)"""
+    src_con = sqlite3.connect(src)
+    try:
+        dst_con = sqlite3.connect(dest)
+        try:
+            src_con.backup(dst_con)
+        finally:
+            dst_con.close()
+    finally:
+        src_con.close()
+
+
 def _backup_one(fname, required, dest_dir):
     src = os.path.join(BASE, fname)
     if not os.path.exists(src):
@@ -53,7 +73,10 @@ def _backup_one(fname, required, dest_dir):
     size_mb = os.path.getsize(src) / 1024 / 1024
     print(f"[Backup] กำลังคัดลอก {fname} ({size_mb:.0f} MB) -> {dest} ...", flush=True)
     t0 = time.time()
-    shutil.copy2(src, dest)
+    if ext == ".db":
+        _backup_db_file(src, dest)
+    else:
+        shutil.copy2(src, dest)
     elapsed = time.time() - t0
     print(f"[Backup] เสร็จใน {elapsed:.0f} วินาที", flush=True)
 

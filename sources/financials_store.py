@@ -1011,8 +1011,8 @@ _finn_ids_lock = threading.Lock()
 
 def _finn_get(path, timeout=30):
     import urllib.request as _ur
-    import ssl as _ssl
-    ctx = _ssl.create_default_context()
+    from core.net import ssl_context
+    ctx = ssl_context()
     hdr = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0",
            "Accept": "application/json",
            "Referer": "https://www.finnomena.com/stock/"}
@@ -1532,8 +1532,13 @@ def _new_yahoo_session():
     """requests.Session() เดียวใช้ร่วมกันทุก thread ในหนึ่งรอบ batch sync — yfinance ต้องขอ
     'crumb' (token คู่กับ cookie) ก่อนยิง query จริงทุกครั้ง ถ้าไม่ reuse session แต่ละ
     thread/ticker จะขอ crumb ของตัวเอง ยิ่งยิงขนานเยอะยิ่งเพิ่มโอกาสโดน Yahoo มองว่า
-    ผิดปกติแล้วเพิกถอน crumb ทั้ง IP (ต้นเหตุ HTTP 401 "Invalid Crumb" ที่เจอบ่อยตอน sync ก้อนใหญ่)"""
-    session = requests.Session()
+    ผิดปกติแล้วเพิกถอน crumb ทั้ง IP (ต้นเหตุ HTTP 401 "Invalid Crumb" ที่เจอบ่อยตอน sync ก้อนใหญ่)
+
+    ใช้ _TimeoutSession จาก sources.yahoo (ไม่ใช่ requests.Session() เปล่าๆ) — กัน socket
+    ค้างถาวรเมื่อ Yahoo ไม่ตอบระหว่าง batch sync (ทำให้ ThreadPoolExecutor ไม่ยอมจบ,
+    _state["running"] ค้าง True ตลอดไป ปุ่มงานหนักอื่นคืน 409 จนกว่าจะ restart server)"""
+    from sources.yahoo import _TimeoutSession
+    session = _TimeoutSession()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     })

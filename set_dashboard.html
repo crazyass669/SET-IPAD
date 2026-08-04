@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260803b">
+<link rel="stylesheet" href="static/dashboard.css?v=20260804a">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -99,6 +99,15 @@
         <b>↺ Restart Server</b><br>
         รีสตาร์ท Flask process<br>
         โหลดโค้ดใหม่ / ล้าง cache
+      </div>
+    </div>
+    <div class="btn-wrap">
+      <button class="refresh-btn" id="job-reset-btn" onclick="resetStuckJob()"
+        style="background:#8b5a2b;color:#fff">🔓 ปลดล็อก Job</button>
+      <div class="btn-note" style="width:180px">
+        <b>🔓 ปลดล็อก Job ค้าง</b><br>
+        ใช้เมื่อปุ่ม Refresh/Update ค้าง "409 กำลังทำงานอยู่" นานผิดปกติ<br>
+        ไม่ต้อง Restart ทั้ง server
       </div>
     </div>
   </div>
@@ -4621,6 +4630,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260803b"></script>
+<script src="static/dashboard.js?v=20260804a"></script>
 </body>
 </html>

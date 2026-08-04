@@ -198,8 +198,18 @@ def _r4(x):
     return None if f != f else round(f, 4)   # f != f => NaN
 
 
-def upsert_bars(base_dir, all_data_map):
-    """เขียนแท่งราคาลง SQLite (INSERT OR REPLACE) ใน transaction เดียว
+_UPSERT_CHUNK_ROWS = 20000  # commit ทุกๆ N แถว แทน transaction เดียวทั้งก้อน (ดูเหตุผลด้านล่าง)
+
+
+def upsert_bars(base_dir, all_data_map, chunk_rows=_UPSERT_CHUNK_ROWS):
+    """เขียนแท่งราคาลง SQLite (INSERT OR REPLACE) แบ่ง commit เป็นช่วงละ chunk_rows แถว
+    แทน transaction เดียวทั้งก้อน — Full Refresh ~900 ตัว x 10 ปี ได้หลักล้านแถว ถ้าถือ
+    write lock ยาวเดียวจบ writer อื่น (busy_timeout=5000ms) จะเจอ "database is locked"
+    ทันที และถ้า process ตาย/ไฟดับกลางทาง (หรือกด Restart) จะ rollback ทิ้งทั้งก้อนเสีย
+    เวลาทำใหม่ 30-60 นาที — แบ่ง commit เป็นช่วงทำให้ lock hold time สั้นลงมาก และ resume
+    ได้จากจุดที่ commit ไปแล้ว (ticker+date เป็น PRIMARY KEY — แท่งที่ commit แล้วจะไม่ถูก
+    มองเป็น gap อีกในรอบ Quick Update ถัดไป แม้รอบนี้โดนขัดจังหวะกลางคัน)
+
     all_data_map: {ticker -> {'close','volume'[,'open','high','low','adj_close']: pd.Series}}
     ทุก series ควร align index เดียวกับ close (ดู _extract_ohlcav ใน sources/yahoo.py)
     — open/high/low/adj_close เป็น optional; ถ้าไม่มีจะเขียน NULL (แถวเก่าก่อนเพิ่ม OHLC)"""
@@ -221,10 +231,19 @@ def upsert_bars(base_dir, all_data_map):
                            round(float(close.iloc[i]), 4),
                            _r4(adj.iloc[i]) if adj is not None else None,
                            int(vol.iloc[i]) if vol.iloc[i] == vol.iloc[i] else 0)
-        con.executemany(
-            "INSERT OR REPLACE INTO prices"
-            "(ticker,date,open,high,low,close,adj_close,volume) VALUES (?,?,?,?,?,?,?,?)",
-            rows())
+
+        sql = ("INSERT OR REPLACE INTO prices"
+               "(ticker,date,open,high,low,close,adj_close,volume) VALUES (?,?,?,?,?,?,?,?)")
+        buf = []
+        for row in rows():
+            buf.append(row)
+            if len(buf) >= chunk_rows:
+                con.executemany(sql, buf)
+                con.commit()
+                buf.clear()
+        if buf:
+            con.executemany(sql, buf)
+            con.commit()
         con.execute("INSERT OR REPLACE INTO meta VALUES ('updated_at', ?)",
                     (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
         con.commit()

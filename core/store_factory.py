@@ -73,9 +73,13 @@ def make_store(db_file):
             con.close()
         return dict(rows)
 
-    def upsert_bars(base_dir, all_data_map):
+    def upsert_bars(base_dir, all_data_map, chunk_rows=20000):
         """all_data_map: {ticker -> {'close','volume'[,'open','high','low','adj_close']: pd.Series}}
-        ทุก series align index เดียวกับ close (ดู _extract_ohlcav ใน sources/yahoo.py)"""
+        ทุก series align index เดียวกับ close (ดู _extract_ohlcav ใน sources/yahoo.py)
+
+        commit เป็นช่วงละ chunk_rows แถวแทน transaction เดียวทั้งก้อน — ลด lock hold time
+        กัน writer อื่นเจอ "database is locked" (busy_timeout=5000ms) และกันเสีย full
+        refresh ทั้งรอบถ้าโดนขัดจังหวะกลางคัน (ดูเหตุผลเต็มใน core/store.py::upsert_bars)"""
         init_db(base_dir)
         con = _connect(base_dir)
         try:
@@ -94,10 +98,19 @@ def make_store(db_file):
                                round(float(close.iloc[i]), 4),
                                _r4(adj.iloc[i]) if adj is not None else None,
                                int(vol.iloc[i]) if vol.iloc[i] == vol.iloc[i] else 0)
-            con.executemany(
-                "INSERT OR REPLACE INTO prices"
-                "(ticker,date,open,high,low,close,adj_close,volume) VALUES (?,?,?,?,?,?,?,?)",
-                rows())
+
+            sql = ("INSERT OR REPLACE INTO prices"
+                   "(ticker,date,open,high,low,close,adj_close,volume) VALUES (?,?,?,?,?,?,?,?)")
+            buf = []
+            for row in rows():
+                buf.append(row)
+                if len(buf) >= chunk_rows:
+                    con.executemany(sql, buf)
+                    con.commit()
+                    buf.clear()
+            if buf:
+                con.executemany(sql, buf)
+                con.commit()
             con.execute("INSERT OR REPLACE INTO meta VALUES ('updated_at', ?)",
                         (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
             con.commit()

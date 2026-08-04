@@ -11,9 +11,10 @@
 import json
 import os
 import re
-import ssl
 import urllib.parse
 import urllib.request
+
+from core.net import ssl_context
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
 INDEXES = ("NIKKEI225",)
@@ -41,7 +42,7 @@ _SECTOR_JA_TO_EN = {
 def _fetch_wikitext(title, lang="ja"):
     url = f"https://{lang}.wikipedia.org/w/index.php?title={urllib.parse.quote(title)}&action=raw"
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    ctx = ssl.create_default_context()
+    ctx = ssl_context()
     with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
         return r.read().decode("utf-8", "ignore")
 

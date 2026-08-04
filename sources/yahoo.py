@@ -4,6 +4,26 @@ import time
 
 import yfinance as yf
 
+REQUEST_TIMEOUT = 15  # วินาที — ป้องกัน socket ค้างถาวรเมื่อ Yahoo ไม่ตอบ (เจอจริง: thread
+# ค้างไม่มีกำหนดทำให้ _state["running"] ค้าง True ตลอดไป ทุกปุ่มงานหนักคืน 409 จนกว่าจะ restart)
+
+
+class _TimeoutSession:
+    """wrap requests.Session ให้ทุก request มี timeout เริ่มต้นถ้าผู้เรียก (yfinance
+    ภายใน) ไม่ได้ส่ง timeout มาเอง — ไม่แก้ logic อื่นของ Session เลย"""
+
+    def __new__(cls):
+        import requests
+        session = requests.Session()
+        _orig_request = session.request
+
+        def _request(method, url, **kwargs):
+            kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+            return _orig_request(method, url, **kwargs)
+
+        session.request = _request
+        return session
+
 
 # ============================================================
 # 3. Batch downloader — ดึง 100 ตัวต่อครั้ง
@@ -170,8 +190,7 @@ def fetch_company_info(ticker):
     valuation คร่าวๆ ใช้กับหุ้น mirror US/HK ที่ไม่ใช่สมาชิกดัชนีหลัก ตอน on-demand fetch
     (ดู sources/mirror_ondemand.py) — เบา ยิงครั้งเดียวต่อ ticker ไม่ parallel เหมือน
     fetch_market_caps_parallel (นั่นออกแบบไว้สำหรับหลายร้อยตัวพร้อมกัน)"""
-    import requests
-    session = requests.Session()
+    session = _TimeoutSession()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     })
@@ -191,11 +210,10 @@ def fetch_company_info(ticker):
 def fetch_market_caps_parallel(tickers, callback=None, workers=3):
     """ดึง market_cap + P/E + P/BV + Div Yield — sequential per-ticker เพื่อใช้ crumb เดียวกัน"""
     import random
-    import requests
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as _FutTimeout
 
     # สร้าง session เดียวร่วมกัน เพื่อให้ crumb ไม่หมดอายุระหว่างการดึง
-    session = requests.Session()
+    session = _TimeoutSession()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     })

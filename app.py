@@ -184,6 +184,10 @@ logging.getLogger().addHandler(_log_handler)
 logging.getLogger().setLevel(logging.INFO)
 
 _dr_refresh_state = {"running": False, "error": None, "done": False}
+# กัน race: 2 request ยิง /api/dr-quick-update พร้อมกัน (เดิม check-then-set ไม่มี lock
+# ต่างจาก _state/_indices_job_state ที่ห่อ with _lock: ครบ — เจอได้จริงตอนเปิดหลายแท็บ/
+# iPad+PC พร้อมกันกด Quick Update DR ชนกันยิง Yahoo ซ้อน)
+_dr_refresh_lock = threading.Lock()
 
 def _load_dr_cache_from_file():
     """โหลด DR cache จากไฟล์ตอน server เริ่มทำงาน"""
@@ -1172,11 +1176,14 @@ def dr_quick_update():
     import pandas as pd
     from datetime import datetime as _dt
 
-    if _dr_refresh_state["running"]:
-        return jsonify({"status": "running"})
+    with _dr_refresh_lock:
+        if _dr_refresh_state["running"]:
+            return jsonify({"status": "running"})
+        _dr_refresh_state["running"] = True
 
     cached = _dr_cache.get("result")
     if not cached or not cached.get("stocks"):
+        _dr_refresh_state["running"] = False
         return jsonify({"error": "ยังไม่มี DR cache — กรุณาโหลดหน้า DR ก่อน"}), 400
     # เก็บ ts ของ cache ตอนเริ่ม — ถ้า background full rebuild (_dr_do_rebuild, ดู
     # _kick_dr_rebuild) แทนที่ _dr_cache["result"] ด้วย object ใหม่เสร็จก่อนเราเขียนจบ
@@ -1184,7 +1191,9 @@ def dr_quick_update():
     _ts_at_start = _dr_cache.get("ts")
 
     def _do_quick():
-        _dr_refresh_state.update(running=True, error=None, done=False, n_total=None, n_updated=None)
+        # running ตั้งเป็น True แล้วตอนเช็ค TOCTOU ด้านบน (atomic ใต้ _dr_refresh_lock) —
+        # ที่นี่แค่ reset field อื่นของรอบใหม่
+        _dr_refresh_state.update(error=None, done=False, n_total=None, n_updated=None)
         try:
             _universe = load_dr_universe(BASE_DIR)
             yf_tickers = list({s["yf"] for s in _universe})
@@ -1945,6 +1954,7 @@ def _hedge_us_covered():
     try:
         import sqlite3
         con = sqlite3.connect(os.path.join(BASE_DIR, "financials.db"))
+        con.execute("PRAGMA busy_timeout=5000")
         try:
             covered |= {_hedge_norm(r[0]) for r in
                         con.execute("SELECT symbol FROM mirror_ondemand WHERE market='US'")}
@@ -4084,6 +4094,9 @@ _HM_LIVE_STATE = {
     "HK": {"running": False, "error": None, "done": False},
     "JP": {"running": False, "error": None, "done": False},
 }
+# กัน race check-then-set ต่อ region (เดิมไม่มี lock — กดปุ่ม Live ซ้ำเร็วๆ/หลายแท็บ
+# พร้อมกันในภูมิภาคเดียวกันชนกันยิง Yahoo ซ้อนได้ ก่อน running ถูกตั้งจริง)
+_hm_live_lock = threading.Lock()
 
 # ดัชนีย่อยที่ยอมให้กรอง (query param ?index=) ต่อ region — ใช้ตอนผู้ใช้กดปุ่ม Live ขณะ
 # ดูอยู่แค่แท็บเดียว (เช่น Dow 30 ตัว) จะได้ไม่ต้องไล่ยิง Yahoo ทั้ง union ของ region นั้น
@@ -4163,9 +4176,10 @@ def heatmap_live_update(region):
     if index_key not in _HM_REGION_INDEXES.get(region, ()):
         index_key = None   # ค่าที่ไม่รู้จัก/ไม่ส่งมา -> ดึงทั้ง union เหมือนเดิม
     state = _HM_LIVE_STATE[region]
-    if state["running"]:
-        return jsonify({"status": "running"})
-    state.update(running=True, error=None, done=False, n_fetched=None, n_live=None)
+    with _hm_live_lock:
+        if state["running"]:
+            return jsonify({"status": "running"})
+        state.update(running=True, error=None, done=False, n_fetched=None, n_live=None)
     threading.Thread(target=_run_heatmap_live_update, args=(region, index_key), daemon=True).start()
     return jsonify({"status": "started"})
 
@@ -4249,14 +4263,13 @@ def _news_from_google(query, lang_th):
     อย่าง HoonVision/ข่าวหุ้น/ทันหุ้น), False ใช้ feed อังกฤษ (สำนักสากล)"""
     import urllib.parse
     import urllib.request as _ur
-    import ssl as _ssl
     import xml.etree.ElementTree as _ET
     from email.utils import parsedate_to_datetime
     from datetime import timezone as _dt_timezone
     loc = "hl=th&gl=TH&ceid=TH:th" if lang_th else "hl=en-US&gl=US&ceid=US:en"
     url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&{loc}"
     req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"})
-    ctx = _ssl.create_default_context()
+    ctx = ssl_context()
     with _ur.urlopen(req, context=ctx, timeout=20) as r:
         xml = r.read().decode("utf-8", "ignore")
     rows = []
@@ -4695,9 +4708,24 @@ def indices_refresh():
         _indices_job_state["running"] = False
 
 
+def _any_job_running():
+    """เช็คว่ามี background job (Refresh/Quick Update/Heatmap Live/Indices ฯลฯ) กำลังรันอยู่ไหม
+    — ใช้ก่อน restart กัน os._exit(0) ตัดงานหนัก (Full Refresh ใช้เวลา 20 นาที - 1.5 ชม.)
+    ทิ้งกลางคันโดยผู้ใช้ไม่รู้ตัว (เดิม /api/restart ไม่เช็คอะไรเลย)"""
+    if _state["running"] or _dr_refresh_state["running"] or _indices_job_state["running"]:
+        return True
+    return any(s["running"] for s in _HM_LIVE_STATE.values())
+
+
 @app.route("/api/restart", methods=["POST"])
 def restart_server():
-    """Restart Flask process (Windows-safe: spawn new process then exit)"""
+    """Restart Flask process (Windows-safe: spawn new process then exit)
+    ปฏิเสธถ้ามี job กำลังรันอยู่ เว้นแต่ส่ง {"force": true} มา (ผู้ใช้ยืนยันแล้วว่ายอมตัดทิ้ง)"""
+    force = bool((request.get_json(silent=True) or {}).get("force"))
+    if _any_job_running() and not force:
+        return jsonify({"error": "มี job กำลังรันอยู่ (Refresh/Update ฯลฯ) — restart ตอนนี้จะตัดงานทิ้งกลางคัน",
+                        "job_running": True}), 409
+
     def _do_restart():
         time.sleep(0.8)
         script = os.path.abspath(__file__)
@@ -4706,6 +4734,33 @@ def restart_server():
         os._exit(0)
     threading.Thread(target=_do_restart, daemon=True).start()
     return jsonify({"ok": True})
+
+
+@app.route("/api/job-reset", methods=["POST"])
+def job_reset():
+    """ปลดล็อก job flag ที่ค้าง — ใช้เมื่อปุ่มงานหนัก (Refresh/Quick Update/Heatmap Live ฯลฯ)
+    คืน 409 "กำลังทำงานอยู่" ตลอดแม้รอนานแล้ว เพราะ thread เดิมค้าง (เช่น socket ไปหา Yahoo
+    ไม่ตอบไม่มีกำหนด — ก่อนหน้านี้ไม่มี timeout เลย) แต่ไม่มี exception มา trigger `finally:
+    _update(running=False)` ให้
+
+    ไม่สามารถ "ยกเลิก" thread ที่ค้างจริงๆ ได้ (Python ทำไม่ได้) แค่ reset flag ให้กดปุ่มใหม่ได้
+    — ถ้า thread เดิมยังทำงานอยู่จริงและเขียนไฟล์สำเร็จช้าๆ ทีหลัง อาจชนกับรอบใหม่ที่เพิ่งกด
+    แต่ดีกว่าต้องปิด server ทิ้งทั้งตัวเมื่อ job ค้าง"""
+    with _lock:
+        was_running = _state["running"]
+        _state.update(running=False, done=True,
+                      error="ยกเลิกโดยผู้ใช้ (job ค้างนานเกินไป)" if was_running else _state.get("error"))
+    _dr_refresh_state["running"] = False
+    for region_state in _HM_LIVE_STATE.values():
+        region_state["running"] = False
+    with _indices_job_lock:
+        _indices_job_state["running"] = False
+    # หมายเหตุ: _dr_rebuild_lock/_etf_rebuild_lock (threading.Lock ของ /api/dr,
+    # /api/etf background rebuild) ตั้งใจไม่แตะที่นี่ — force-release lock ที่
+    # thread อื่นอาจกำลังถือจริงและเขียนไฟล์ cache อยู่จะทำให้ 2 thread เขียนไฟล์
+    # เดียวกันพร้อมกัน อันตรายกว่าปล่อยให้รอ (ตอนนี้ยิง yfinance มี timeout แล้ว
+    # จึงไม่ควรค้างถาวรอีกต่อไป)
+    return jsonify({"ok": True, "was_running": was_running})
 
 
 @app.route("/api/status")
@@ -7904,7 +7959,7 @@ if __name__ == "__main__":
     if not _wait_port_free(port):
         print(f"[!] พอร์ต {port} มี server อื่นรันอยู่แล้ว — ไม่ start ซ้อน")
         print(f"    ปิดตัวเก่าก่อน (Task Manager -> python) หรือใช้ตัวที่รันอยู่ได้เลย")
-         
+        sys.exit(1)
 
     local_ip = get_local_ip()
 
@@ -7945,11 +8000,17 @@ if __name__ == "__main__":
 
     try:
         from waitress import serve
-        print("  Server: waitress (production WSGI, 12 threads)\n")
+        # 24 threads (เดิม 12) — endpoint หนักบางตัว (financials-analytics ~15-23 วิ,
+        # /api/progress SSE ที่เปิดค้างได้นานถึง 20 นาทีต่อแท็บที่เปิดดูระหว่าง Full
+        # Refresh) กิน thread ค้างได้นาน เปิดหลายแท็บ/หลายเครื่องพร้อมกันชนโควตาเดิม
+        # จนทั้งเว็บค้างได้ทั้งที่ process ยังไม่ตาย — waitress thread เบา ไม่ใช่ process
+        # เพิ่มแล้วไม่มี cost อะไรตอนใช้งานปกติ
+        THREADS = 24
+        print(f"  Server: waitress (production WSGI, {THREADS} threads)\n")
         logging.getLogger("waitress").setLevel(logging.INFO)
         # channel_timeout สูงเพื่อ SSE /api/progress ที่เปิดค้างระหว่าง
         # Full Refresh (10+ นาที)
-        serve(app, host="0.0.0.0", port=port, threads=12, channel_timeout=1200)
+        serve(app, host="0.0.0.0", port=port, threads=THREADS, channel_timeout=1200)
     except ImportError:
         print("  Server: Flask dev (ติดตั้ง waitress เพื่อใช้ production server)\n")
         app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
