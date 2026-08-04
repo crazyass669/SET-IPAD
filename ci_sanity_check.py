@@ -19,6 +19,24 @@ from datetime import date, timedelta
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
+def _distinct_tail_dates(d):
+    """นับจำนวน "วัน" ที่ยังมีอยู่ใน daily_tail ของทั้งไฟล์ (union ข้ามหุ้น) — ใช้กับไฟล์ bake
+    data/short_sales.json, data/nvdr_data.json ที่เก็บ 21 snapshot ล่าสุดต่อหุ้น ปกติได้ ~25-26
+    วัน (หุ้นแต่ละตัวมีวันไม่ตรงกันเป๊ะ) แล้วนิ่งอยู่แถวนั้น
+
+    ทำไมต้องนับ "ความลึก" แยกจากการนับ "จำนวนหุ้น": ไฟล์สะสม short_sales_data.json/
+    nvdr_data.json อยู่ใน .gitignore ฝั่ง CI จึงพึ่ง actions/cache ถ้า cache miss รอบนั้นจะเริ่ม
+    จากศูนย์ — แต่ SET API ยังคืนหุ้นครบ ~900 ตัวเหมือนเดิม เกณฑ์ที่นับ len(stocks) เลยได้
+    ratio 100% ผ่านฉลุยทั้งที่ประวัติเหลือวันเดียว (แถวสองรายการนั้นยัง [skip] เพราะ .gitignore
+    ทำให้ไม่มี HEAD เดิมให้เทียบด้วยซ้ำ) ตัวนี้จับตรงจุดนั้น"""
+    dates = set()
+    for v in (d.get("stocks") or {}).values():
+        for t in (v.get("daily_tail") or []):
+            if t and t[0]:
+                dates.add(t[0])
+    return len(dates)
+
+
 # (path, ฟังก์ชันดึงจำนวนรายการจาก dict ที่ json.load ได้, สัดส่วนต่ำสุดที่ยอมรับ)
 CHECKS = [
     ("data/set_data.json",      lambda d: len(d.get("stocks", [])),        0.80),
@@ -28,6 +46,10 @@ CHECKS = [
     ("market_flow_data.json",   lambda d: len(d.get("rows", [])),          0.95),
     ("s50_flow_data.json",      lambda d: len(d.get("rows", [])),          0.95),
     ("bond_flow_data.json",     lambda d: len(d.get("rows", [])),          0.95),
+    # ความลึกประวัติของไฟล์ bake ที่ commit จริง (เว็บ/iPad + ตัว fallback ของเครื่อง local
+    # อ่านจาก 2 ไฟล์นี้) — 0.70 เผื่อวันเก่าหลุดออก/วันใหม่เข้าตามปกติ แต่ยังจับเคสหดฮวบ
+    ("data/short_sales.json",   _distinct_tail_dates,                      0.70),
+    ("data/nvdr_data.json",     _distinct_tail_dates,                      0.70),
 ]
 
 # ── freshness check ─────────────────────────────────────────────────────────

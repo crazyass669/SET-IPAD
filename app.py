@@ -6873,8 +6873,8 @@ def _merge_daily_tail(daily_list, tail_rows, field_names):
     return daily_list
 
 
-# True เมื่อรันบน GitHub Actions เอง (run_static_update.py) — ใช้ 2 ที่: (1) กันยิง fallback
-# ย้อนกลับไปหาไฟล์ตัวเองที่เพิ่งดึงมาจาก checkout (เสียเวลาเปล่า) (2) กันไม่ให้เครื่อง local
+# True เมื่อรันบน GitHub Actions เอง (run_static_update.py) — ใช้ 2 ที่: (1) ให้
+# _fetch_github_raw_json อ่านไฟล์จาก checkout แทนยิง network (2) กันไม่ให้เครื่อง local
 # เขียนทับ market/s50/bond_flow_data.json ที่ Actions commit อยู่แล้ว — เดิม local เขียน+
 # auto-push ชน commit ของ Actions เป็นระยะ (2026-08 เจอ conflict จริงบน bond/s50 flow)
 _IS_GITHUB_ACTIONS = bool(os.environ.get("GITHUB_ACTIONS"))
@@ -6882,11 +6882,24 @@ _GITHUB_RAW_BASE = "https://raw.githubusercontent.com/crazyass669/SET-IPAD/main"
 
 
 def _fetch_github_raw_json(rel_path, timeout=8):
-    """ดึงไฟล์ JSON จาก GitHub raw (repo/branch เดียวกับที่ Actions commit ไว้) ใช้เติมช่องว่าง
-    ข้อมูลบนเครื่อง local เท่านั้น — คืน None เฉยๆ ถ้ารันบน CI เอง (เนื้อหาจะเหมือนของที่เพิ่ง
-    checkout อยู่แล้ว ไม่มีประโยชน์) ผู้เรียกต้อง handle ทั้ง None และ exception (network ล้ม)"""
+    """อ่านไฟล์ JSON "เวอร์ชันที่อยู่บน GitHub" มาเติมช่องว่างข้อมูล — บนเครื่อง local ยิง
+    raw.githubusercontent, บน CI อ่านไฟล์เดียวกันจาก checkout ตรงๆ (เนื้อหาชุดเดียวกันเพราะ
+    checkout มาจาก GitHub อยู่แล้ว แต่เร็วกว่าและไม่พึ่ง network)
+
+    *** ห้ามเปลี่ยนสาขา CI ให้ return None เฉยๆ *** — ดูเผินๆ เหมือน no-op เพราะ market/s50/
+    bond_flow_data.json ถูก commit ไว้และ caller อ่านไฟล์นั้นเป็นขั้นแรกอยู่แล้ว แต่ short_sales/
+    nvdr ตรงข้าม: ไฟล์สะสม short_sales_data.json/nvdr_data.json อยู่ใน .gitignore ฝั่ง CI จึง
+    พึ่ง actions/cache อย่างเดียว ถ้า cache miss (eviction 7 วัน/เกิน 10GB) ไฟล์ bake ที่ commit
+    ไว้ (data/short_sales.json ~21 วัน/หุ้น) คือทางเดียวที่กู้ประวัติกลับมาได้ ไม่งั้นรอบนั้นจะ
+    สะสมได้วันเดียวแล้ว bake ทับของเดิม = ประวัติหายทั้ง repo (บั๊ก 2026-07-17 เวอร์ชันใหม่)
+
+    ผู้เรียกต้อง handle ทั้ง None (ไม่มีไฟล์) และ exception (network ล้ม/ไฟล์ JSON เสีย)"""
     if _IS_GITHUB_ACTIONS:
-        return None
+        try:
+            with open(os.path.join(BASE_DIR, *rel_path.split("/")), encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return None
     import urllib.request as _ur
     ctx = ssl_context()
     req = _ur.Request(f"{_GITHUB_RAW_BASE}/{rel_path}", headers={"User-Agent": "Mozilla/5.0"})
