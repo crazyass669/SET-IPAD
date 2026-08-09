@@ -143,6 +143,7 @@ HISTORY_FILE = os.path.join(BASE_DIR, "set_history.json")
 DR_CACHE_FILE = os.path.join(BASE_DIR, "dr_cache.json")
 ETF_CACHE_FILE = os.path.join(BASE_DIR, "etf_cache.json")
 WATCHLIST_FILE = os.path.join(BASE_DIR, "data", "watchlist.json")
+PRICE_ALERTS_FILE = os.path.join(BASE_DIR, "data", "price_alerts.json")
 TOKEN_FILE = os.path.join(BASE_DIR, ".dashboard_token")
 
 # ── CSRF token: ทุก endpoint ที่ mutate (POST /api/*) ต้องแนบ header นี้มาด้วย —
@@ -2155,6 +2156,39 @@ def start_dr_description_sync():
             def cb(current, total, msg):
                 _update(current=current, total=total, message=msg)
             result = dr_descriptions.sync_all(BASE_DIR, force=force, callback=cb)
+            _update(done=True,
+                    message=f"เสร็จแล้ว! ดึงใหม่ {result['ok']} · ข้าม {result['skipped']} (มีอยู่แล้ว ไม่เก่า)"
+                            + (f" · ล้มเหลว {result['fail']}" if result["fail"] else ""))
+        except Exception as e:
+            _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        finally:
+            _update(running=False)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/dr-description-sync-index", methods=["POST"])
+def start_dr_description_sync_index():
+    """ดึงคำอธิบายบริษัท (Yahoo Finance + แปลไทย) ของหุ้นสมาชิกดัชนีหลัก US
+    (S&P500/Dow/Nasdaq100) + HK (HSI/HSCEI/HSTECH) + JP (Nikkei225) ทั้งชุด — เสริมปุ่ม
+    DR sync ที่ครอบคลุมแค่ DR universe 318 ตัว ให้ครอบคลุมหุ้น mirror ที่คนเปิดดูบ่อยด้วย
+    (local-only ปุ่มกด — ผลลัพธ์ dr_descriptions.json ค่อย bake ขึ้น GitHub ทีหลังตอน push ปกติ)"""
+    force = False
+    if request.is_json:
+        body = request.json or {}
+        force = bool(body.get("force"))
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None, current=0, total=0,
+                      message="กำลังเริ่มดึงคำอธิบายบริษัทดัชนีหลัก US/HK/JP...")
+
+    def _run():
+        try:
+            def cb(current, total, msg):
+                _update(current=current, total=total, message=msg)
+            result = dr_descriptions.sync_index_universe(BASE_DIR, force=force, callback=cb)
             _update(done=True,
                     message=f"เสร็จแล้ว! ดึงใหม่ {result['ok']} · ข้าม {result['skipped']} (มีอยู่แล้ว ไม่เก่า)"
                             + (f" · ล้มเหลว {result['fail']}" if result["fail"] else ""))
@@ -5297,6 +5331,18 @@ def data_health():
         _dh_mtime(os.path.join(BASE_DIR, "dr_descriptions.json")), 180 * 24, 365 * 24,
         missing_note="ยังไม่เคยดึงคำอธิบาย DR", optional=True))
 
+    try:
+        _idx_covered, _idx_total = dr_descriptions.index_universe_coverage(BASE_DIR)
+        _idx_pct = (_idx_covered / _idx_total * 100) if _idx_total else 0
+        _idx_status = "ok" if _idx_pct >= 90 else ("warn" if _idx_pct >= 50 else "red")
+        items.append(_dh_quality_item(
+            "dr_descriptions_index", "คำอธิบายบริษัทดัชนีหลัก US/HK/JP (Nikkei/HSI/S&P500 ฯลฯ)",
+            _idx_status, f"{_idx_covered}/{_idx_total} ตัว ({_idx_pct:.0f}%) มีคำแปลไทยแล้ว"))
+    except Exception as e:
+        items.append(_dh_quality_item(
+            "dr_descriptions_index", "คำอธิบายบริษัทดัชนีหลัก US/HK/JP (Nikkei/HSI/S&P500 ฯลฯ)",
+            "red", f"เช็คไม่ได้: {str(e)[:120]}"))
+
     # ── คุณภาพข้อมูล (เปิดไฟล์อ่านจริง ไม่ใช่แค่ mtime) ────────────────────
     # ทุก item ข้างบนวัดแค่ "ถูกเขียนล่าสุดเมื่อไหร่" — ไฟล์ที่ถูกเขียนทับด้วยข้อมูล
     # ว่าง/พร่อง (source เปลี่ยนรูปแบบ, parser คืน list ว่าง) จะยังขึ้นเขียวสนิท
@@ -7918,6 +7964,35 @@ def save_watchlist():
     os.makedirs(os.path.dirname(WATCHLIST_FILE), exist_ok=True)
     _atomic_write_json(WATCHLIST_FILE, syms)
     return jsonify({"ok": True, "count": len(syms)})
+
+
+# ============================================================
+# Price alert sync ข้ามเครื่อง — เก็บเป็นไฟล์ data/price_alerts.json ให้ git push/pull
+# พาไปด้วยได้เหมือน /api/watchlist ด้านบน (alert เดิมอยู่แค่ localStorage ต่อเครื่อง จึง
+# ไม่เคยติดไปตอนย้ายเครื่อง) frontend merge แบบ union ด้วย "id" เอง (ดู _alertsSyncFromServer
+# ใน dashboard.js) ฝั่ง backend แค่เก็บ/คืนทั้งก้อนตามที่ frontend ส่งมาเหมือน watchlist
+# ============================================================
+@app.route("/api/price-alerts", methods=["GET"])
+def get_price_alerts():
+    if not os.path.exists(PRICE_ALERTS_FILE):
+        return jsonify([])
+    try:
+        with open(PRICE_ALERTS_FILE, encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify([])
+
+
+@app.route("/api/price-alerts", methods=["POST"])
+def save_price_alerts():
+    body = request.get_json(silent=True) or {}
+    alerts = body.get("alerts")
+    if (not isinstance(alerts, list) or len(alerts) > 500
+            or not all(isinstance(a, dict) and isinstance(a.get("id"), str) for a in alerts)):
+        return jsonify({"error": "invalid alerts"}), 400
+    os.makedirs(os.path.dirname(PRICE_ALERTS_FILE), exist_ok=True)
+    _atomic_write_json(PRICE_ALERTS_FILE, alerts)
+    return jsonify({"ok": True, "count": len(alerts)})
 
 
 # ============================================================

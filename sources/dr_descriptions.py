@@ -53,6 +53,11 @@ def _translate_th(text):
     return GoogleTranslator(source="en", target="th").translate(chunk)
 
 
+def _find_dr_entry(base_dir, sym):
+    from sources.dr_universe import load_dr_universe
+    return next((s for s in load_dr_universe(base_dir) if s["sym"] == sym), None)
+
+
 def resolve_yf_ticker(base_dir, sym, market=None):
     """หา yfinance ticker ของ symbol
       TH/SET -> symbol + '.BK' ตรงๆ เสมอ (หุ้นไทยไม่มีทางชนกับ DR universe — เช็คก่อนเลย
@@ -67,8 +72,7 @@ def resolve_yf_ticker(base_dir, sym, market=None):
     sym = sym.upper().strip()
     if market in ("TH", "SET"):
         return sym + ".BK", False
-    from sources.dr_universe import load_dr_universe
-    entry = next((s for s in load_dr_universe(base_dir) if s["sym"] == sym), None)
+    entry = _find_dr_entry(base_dir, sym)
     if entry:
         return entry["yf"], entry.get("etf", False)
     if market == "US":
@@ -78,6 +82,22 @@ def resolve_yf_ticker(base_dir, sym, market=None):
     if market == "JP":
         return sym + ".T", False
     return None, False
+
+
+def _store_key(sym, market=None):
+    """คีย์ใน store — ปกติใช้ sym ตัวเปล่า ยกเว้นรหัสหุ้น "ตัวเลขล้วน" ของตลาด HK/JP ที่ชน
+    กันข้ามตลาดได้ (เช่น 1801 = Taisei ที่ JP และ Innovent Biologics ที่ HK — พิสูจน์แล้วว่า
+    ชนจริง ทำให้คำอธิบายของอีกตลาดถูกเขียนทับ/ข้ามไปเงียบๆ แล้วแต่ลำดับที่กด sync/เปิดดู)
+    ใส่ prefix ตลาดกันชนเฉพาะเคสนี้ — เช็ครูปแบบ sym (ตัวเลขล้วน) แทนการเช็ค DR universe
+    ตรงๆ เพราะหุ้น DR ที่ curate ไว้ใช้ ticker ตัวอักษรเสมอ (ไม่มีทางเป็นตัวเลขล้วน) การเช็ค
+    แบบนี้จึงให้ผลเหมือนกันทุกกรณี แต่ไม่ต้องอ่าน DR universe ซ้ำ และให้ frontend คำนวณ
+    คีย์เดียวกันได้เองโดยไม่ต้องรู้จัก DR universe เลย (ดู _drDescKey ใน dashboard.js —
+    ใช้ตอนหน้างบการเงินเต็มเปิดหุ้น DR ที่เทรดเป็น HKD/JPY ด้วย ซึ่ง sym เป็น ticker ตัวอักษร
+    จึงไม่ถูก prefix เหมือนกับฝั่ง backend)"""
+    sym = sym.upper().strip()
+    if market in ("HK", "JP") and sym.isdigit():
+        return f"{market}:{sym}"
+    return sym
 
 
 def fetch_one(base_dir, sym, market=None, force=False, max_age_days=180):
@@ -96,8 +116,9 @@ def fetch_one(base_dir, sym, market=None, force=False, max_age_days=180):
     # หา yf ticker เสมอไม่ว่า cache hit/miss — ใช้ต่อฝั่ง frontend สำหรับลิงก์ TradingView
     # (เช่น MICRON -> MU ที่เดาจาก currency อย่างเดียวไม่ได้ ต้องพึ่ง DR universe)
     yf_ticker, is_etf = resolve_yf_ticker(base_dir, sym, market=market)
+    key = _store_key(sym, market=market)
 
-    cached = store.get(sym)
+    cached = store.get(key)
     if (not force and cached and cached.get("th")
             and cached.get("fetched_ts") and (now - cached["fetched_ts"]) < max_age):
         return {**cached, "yf": yf_ticker}, None
@@ -122,55 +143,46 @@ def fetch_one(base_dir, sym, market=None, force=False, max_age_days=180):
             "fetched_ts": now,
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
-        store[sym] = record
+        store[key] = record
         _save_all(base_dir, store)
         return {**record, "yf": yf_ticker}, None
     except Exception as e:
         return None, str(e)
 
 
-def sync_all(base_dir, symbols=None, force=False, max_age_days=180, callback=None):
-    """ดึง longBusinessSummary จาก yfinance + แปลไทย สำหรับหุ้น DR ทั้งหมด (ข้าม ETF —
-    ไม่มี business description) เซฟทีละตัวกันดับกลางทางแล้วเสียของเดิม (resume ได้)
-
-    force=False: ข้ามตัวที่มีอยู่แล้วและอายุไม่เกิน max_age_days
-    """
+def _run_sync(base_dir, targets, force, max_age_days, callback):
+    """ลูปดึง+แปล description ของ targets ([{"sym":..., "yf":...}]) ใช้ร่วมกันระหว่าง
+    sync_all (DR universe) และ sync_index_universe (สมาชิกดัชนีหลัก US/HK/JP) — เซฟทีละตัว
+    กันดับกลางทางแล้วเสียของเดิม (resume ได้)"""
     import yfinance as yf
-    from sources.dr_universe import load_dr_universe
-
-    universe = load_dr_universe(base_dir)
-    if symbols:
-        wanted = set(symbols)
-        universe = [s for s in universe if s["sym"] in wanted]
-    universe = [s for s in universe if not s.get("etf")]
 
     store = load_all(base_dir)
     now = time.time()
     max_age = max_age_days * 86400
 
     todo = []
-    for s in universe:
-        cached = store.get(s["sym"])
+    for t in targets:
+        cached = store.get(t["sym"])
         if (not force and cached and cached.get("th")
                 and cached.get("fetched_ts") and (now - cached["fetched_ts"]) < max_age):
             continue
-        todo.append(s)
+        todo.append(t)
 
-    skipped = len(universe) - len(todo)
+    skipped = len(targets) - len(todo)
     total = len(todo)
     ok = fail = 0
 
-    for i, s in enumerate(todo):
+    for i, t in enumerate(todo):
         if callback:
-            callback(i, total, f"กำลังดึงคำอธิบายบริษัท {s['sym']} ({i + 1}/{total})")
+            callback(i, total, f"กำลังดึงคำอธิบายบริษัท {t['sym']} ({i + 1}/{total})")
         try:
-            info = yf.Ticker(s["yf"]).info
+            info = yf.Ticker(t["yf"]).info
             en = (info.get("longBusinessSummary") or "").strip()
             if not en:
                 fail += 1
                 continue
             th = _translate_th(en)
-            store[s["sym"]] = {
+            store[t["sym"]] = {
                 "en": en,
                 "th": th,
                 "sector": info.get("sector"),
@@ -182,9 +194,67 @@ def sync_all(base_dir, symbols=None, force=False, max_age_days=180, callback=Non
             ok += 1
             _save_all(base_dir, store)
         except Exception as e:
-            print(f"[dr-desc] {s['sym']}: {e}")
+            print(f"[dr-desc] {t['sym']}: {e}")
             fail += 1
 
     if callback:
         callback(total, total, "เสร็จแล้ว")
-    return {"ok": ok, "fail": fail, "skipped": skipped, "total": len(universe)}
+    return {"ok": ok, "fail": fail, "skipped": skipped, "total": len(targets)}
+
+
+def sync_all(base_dir, symbols=None, force=False, max_age_days=180, callback=None):
+    """ดึง longBusinessSummary จาก yfinance + แปลไทย สำหรับหุ้น DR ทั้งหมด (ข้าม ETF —
+    ไม่มี business description)
+
+    force=False: ข้ามตัวที่มีอยู่แล้วและอายุไม่เกิน max_age_days
+    """
+    from sources.dr_universe import load_dr_universe
+
+    universe = load_dr_universe(base_dir)
+    if symbols:
+        wanted = set(symbols)
+        universe = [s for s in universe if s["sym"] in wanted]
+    universe = [s for s in universe if not s.get("etf")]
+    targets = [{"sym": s["sym"], "yf": s["yf"]} for s in universe]
+    return _run_sync(base_dir, targets, force, max_age_days, callback)
+
+
+def _index_universe_targets(base_dir):
+    """รวม constituents ของดัชนีหลัก US (S&P500/Dow/Nasdaq100) + HK (HSI/HSCEI/HSTECH) +
+    JP (Nikkei 225) เป็น [{"sym":..., "yf":...}] — ต่างจาก DR universe (318 ตัว curate มือ)
+    ครอบคลุมหุ้น mirror ทั่วไปที่คนเปิดดูบ่อยแต่ไม่ได้อยู่ใน DR universe เลย
+    "sym" ใช้เป็น store key ตรงๆ (ผ่าน _store_key: HK/JP ใส่ prefix ตลาดกันรหัสตัวเลข
+    4 หลักชนกัน เช่น 1801 = Taisei(JP)/Innovent(HK) — ดู _drDescKey ฝั่ง dashboard.js
+    ที่ต้องคำนวณคีย์แบบเดียวกันตอน lookup)"""
+    from sources import us_index_membership as usm
+    from sources import hk_index_membership as hkm
+    from sources import jp_index_membership as jpm
+
+    out = {}
+    for t in usm.all_tickers(base_dir):
+        out[t] = {"sym": t, "yf": t}
+    for t in hkm.all_tickers(base_dir):
+        sym = t[:-3] if t.endswith(".HK") else t
+        key = _store_key(sym, market="HK")
+        out[key] = {"sym": key, "yf": t}
+    for t in jpm.all_tickers(base_dir):
+        sym = t[:-2] if t.endswith(".T") else t
+        key = _store_key(sym, market="JP")
+        out[key] = {"sym": key, "yf": t}
+    return list(out.values())
+
+
+def sync_index_universe(base_dir, force=False, max_age_days=180, callback=None):
+    """ดึง+แปล description ของหุ้นสมาชิกดัชนีหลัก US/HK/JP ทั้งชุด (S&P500/Dow/Nasdaq100/
+    HSI/HSCEI/HSTECH/Nikkei225) — เสริม sync_all ที่ครอบคลุมแค่ DR universe ที่ curate ไว้"""
+    targets = _index_universe_targets(base_dir)
+    return _run_sync(base_dir, targets, force, max_age_days, callback)
+
+
+def index_universe_coverage(base_dir):
+    """คืน (covered, total) ของหุ้นสมาชิกดัชนีหลัก US/HK/JP ที่มีคำแปลไทยอยู่ในแคชแล้ว —
+    ใช้แสดงในหน้า Data Health (ดู app.py data_health())"""
+    targets = _index_universe_targets(base_dir)
+    store = load_all(base_dir)
+    covered = sum(1 for t in targets if (store.get(t["sym"]) or {}).get("th"))
+    return covered, len(targets)

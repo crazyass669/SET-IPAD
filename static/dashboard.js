@@ -9883,11 +9883,23 @@ function exportScreenerCSV() {
 // ============================================================
 // WATCHLIST SYNC ข้ามเครื่อง — localStorage แยกต่อเครื่อง จึงให้คัดลอก/วางเป็น
 // ข้อความ (WL:PTT,KBANK,DR:AAPL,...) ส่งผ่าน LINE/โน้ตหาตัวเองได้ ไม่ต้องมี server
+// ต่อท้ายด้วย |AL:SYM>cond>price>note;... เก็บ price alert (set_price_alerts) ที่ยัง
+// ไม่ triggered ของหุ้นในลิสต์นี้ไปด้วย เพราะ alert เก็บใน localStorage ล้วนๆ ไม่เคย sync
+// ขึ้น server เหมือน watchlist เอง (ดู memory ของบทสนทนาที่รายงานว่าย้ายเครื่องแล้วราคา
+// แจ้งเตือนหาย) — ตัด ; > | ออกจาก note กันข้อความหลุด delimiter
 // ============================================================
 function wlExport() {
   if (!watchlist.length) { alert('Watchlist ยังว่างอยู่'); return; }
-  const code = 'WL:' + watchlist.join(',');
-  const done = () => alert(`คัดลอกแล้ว (${watchlist.length} ตัว) — เอาไปกด "📥 วางจากเครื่องอื่น" บนอีกเครื่องได้เลย
+  const activeAlerts = _loadAlerts().filter(a => !a.triggered && watchlist.includes(a.symbol));
+  const alertPart = activeAlerts.length
+    ? '|AL:' + activeAlerts.map(a => {
+        const note = (a.note || '').replace(/[;>|]/g, ' ').trim();
+        return `${a.symbol}>${a.condition}>${a.targetPrice}>${note}`;
+      }).join(';')
+    : '';
+  const code = 'WL:' + watchlist.join(',') + alertPart;
+  const alertNote = activeAlerts.length ? ` + แจ้งเตือน ${activeAlerts.length} รายการ` : '';
+  const done = () => alert(`คัดลอกแล้ว (${watchlist.length} ตัว${alertNote}) — เอาไปกด "📥 วางจากเครื่องอื่น" บนอีกเครื่องได้เลย
 
 ${code}`);
   if (navigator.clipboard?.writeText) {
@@ -9900,13 +9912,36 @@ ${code}`);
 function wlImport() {
   const raw = prompt('วางข้อความ watchlist ที่คัดลอกมาจากอีกเครื่อง (ขึ้นต้นด้วย WL:)');
   if (!raw) return;
-  const body = raw.trim().replace(/^WL:/i, '');
-  const syms = body.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+  const [wlPart, alertPart] = raw.trim().replace(/^WL:/i, '').split(/\|AL:/i);
+  const syms = wlPart.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
   if (!syms.length) { alert('ไม่พบรายชื่อหุ้นในข้อความ'); return; }
   const before = watchlist.length;
   syms.forEach(s => { if (!watchlist.includes(s)) watchlist.push(s); });
   _wlSave();
-  alert(`นำเข้าแล้ว ${watchlist.length - before} ตัวใหม่ (รวมทั้งหมด ${watchlist.length} ตัว — ตัวที่มีอยู่แล้วไม่ซ้ำ)`);
+
+  let newAlerts = 0;
+  if (alertPart) {
+    const alerts = _loadAlerts();
+    alertPart.split(';').map(e => e.trim()).filter(Boolean).forEach(entry => {
+      const [symbol, condition, priceStr, ...noteParts] = entry.split('>');
+      const targetPrice = parseFloat(priceStr);
+      if (!symbol || (condition !== 'above' && condition !== 'below') || !targetPrice) return;
+      const note = noteParts.join('>').trim();
+      const dup = alerts.some(a => a.symbol === symbol && a.condition === condition && a.targetPrice === targetPrice && !a.triggered);
+      if (dup) return;
+      alerts.unshift({
+        id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
+        symbol, condition, targetPrice, note,
+        createdAt: new Date().toISOString(),
+        triggered: false, triggeredAt: null, triggeredPrice: null,
+      });
+      newAlerts++;
+    });
+    if (newAlerts) { _saveAlerts(alerts); _updateBellBadge(); if (_alertPanelOpen) renderAlertPanel(); }
+  }
+
+  const alertMsg = newAlerts ? ` + แจ้งเตือน ${newAlerts} รายการ` : '';
+  alert(`นำเข้าแล้ว ${watchlist.length - before} ตัวใหม่${alertMsg} (รวมทั้งหมด ${watchlist.length} ตัว — ตัวที่มีอยู่แล้วไม่ซ้ำ)`);
   if (document.getElementById('page-watchlist')?.classList.contains('active')) renderWatchlist();
 }
 
@@ -10416,6 +10451,16 @@ function openJpChartModal(symbol) {
 let _drDescData = null;
 let _drDescLoading = null;
 
+// รหัสหุ้น "ตัวเลขล้วน" ของ HK/JP ชนกันข้ามตลาดได้ (เช่น 1801 = Taisei ที่ JP และ
+// Innovent Biologics ที่ HK) ต้องคำนวณคีย์ตรงกับ _store_key ฝั่ง sources/dr_descriptions.py
+// เป๊ะ — เช็คว่า sym เป็นตัวเลขล้วนแทนที่จะเช็ค market อย่างเดียว เพราะ market='HK'/'JP'
+// เกิดได้ทั้งจากหน้า index HK/JP (sym = รหัสตัวเลข ต้อง prefix กันชน) และจากหน้างบการเงิน
+// เต็มตอนเปิดหุ้น DR ที่ curate ไว้แต่เทรดเป็น HKD/JPY (sym = ticker ตัวอักษรเช่น "BABA"
+// ไม่ชนกับใคร ห้าม prefix ไม่งั้นจะหาไม่เจอเพราะ backend เก็บด้วยคีย์เปล่า)
+function _drDescKey(sym, market) {
+  return (market === 'HK' || market === 'JP') && /^\d+$/.test(sym) ? `${market}:${sym}` : sym;
+}
+
 // เว็บ static (มือถือ/ไอแพด ไม่มี backend): โหลดไฟล์ bake ทั้งก้อนครั้งเดียว
 function _ensureDRDescriptions() {
   if (_drDescData) return Promise.resolve(_drDescData);
@@ -10431,14 +10476,15 @@ function _ensureDRDescriptions() {
 // (≤180 วัน) ตอบทันทีจากไฟล์ในเครื่อง, cache miss ดึง+แปลสดตอนนั้นเลย ไม่ต้อง sync
 // ทั้งชุดล่วงหน้า (ต่างจาก _ensureDRDescriptions ที่โหลดทั้งก้อนแบบ static)
 function _fetchOneDRDescription(sym, market) {
-  if (_drDescData && _drDescData[sym]) return Promise.resolve(_drDescData[sym]);
+  const key = _drDescKey(sym, market);
+  if (_drDescData && _drDescData[key]) return Promise.resolve(_drDescData[key]);
   // market: 'US'/'HK' — ใช้เดา yfinance ticker เฉพาะตอน sym ไม่อยู่ใน DR universe
   // ที่ curate ไว้ (หุ้น mirror ทั่วไป) ไม่จำเป็นสำหรับหุ้น DR ที่มี yf ticker แม็บอยู่แล้ว
   const q = market ? `?market=${encodeURIComponent(market)}` : '';
   return _fetchTimeout(`/api/dr-description/${encodeURIComponent(sym)}${q}`, 20000).then(r => r.json()).then(d => {
     if (d.error) return null;
     _drDescData = _drDescData || {};
-    _drDescData[sym] = d;
+    _drDescData[key] = d;
     return d;
   }).catch(() => null);
 }
@@ -10476,7 +10522,7 @@ function _renderDRDescription(sym, market, guardSym = sym) {
     box.innerHTML = _drDescHtml(d, 'cm-desc-text');
   };
   if (IS_STATIC) {
-    _ensureDRDescriptions().then(data => draw(data[sym]));
+    _ensureDRDescriptions().then(data => draw(data[_drDescKey(sym, market)]));
   } else {
     _fetchOneDRDescription(sym, market).then(draw);
   }
@@ -10506,7 +10552,7 @@ function _loadFinDescription(sym, market) {
     box.innerHTML = _drDescHtml(d, 'fin-desc-text');
   };
   if (IS_STATIC) {
-    _ensureDRDescriptions().then(data => draw(data[sym]));
+    _ensureDRDescriptions().then(data => draw(data[_drDescKey(sym, market)]));
   } else {
     _fetchOneDRDescription(sym, market).then(draw);
   }
@@ -10671,6 +10717,14 @@ function _patchLineChart(canvasId, series, liveVal, isPE) {
 
 function startDRDescriptionSync() {
   _startJob('/api/dr-description-sync', 'dr-desc-sync-btn', '📖 ดึงคำอธิบายบริษัท DR (local)', null, () => {
+    _drDescData = null;   // บังคับโหลดใหม่รอบถัดไปที่เปิด modal
+  });
+}
+
+// ครอบคลุมหุ้นสมาชิกดัชนีหลัก US (S&P500/Dow/Nasdaq100) + HK (HSI/HSCEI/HSTECH) +
+// JP (Nikkei225) ทั้งชุด — ต่างจาก startDRDescriptionSync ที่ครอบคลุมแค่ DR universe 318 ตัว
+function startDRDescriptionSyncIndex() {
+  _startJob('/api/dr-description-sync-index', 'dr-desc-sync-index-btn', '📖 ดึงคำอธิบายบริษัท Nikkei/HSI/S&P500 ฯลฯ (local)', null, () => {
     _drDescData = null;   // บังคับโหลดใหม่รอบถัดไปที่เปิด modal
   });
 }
@@ -15278,8 +15332,8 @@ function _finFmt(v) {
   const abs = Math.abs(v), sign = v < 0 ? '-' : '';
   if (abs >= 1e12) return sign + (abs/1e12).toFixed(2) + 'T';
   if (abs >= 1e9)  return sign + (abs/1e9).toFixed(2) + 'B';
-  if (abs >= 1e6)  return sign + (abs/1e6).toFixed(1) + 'M';
-  if (abs >= 1e3)  return sign + (abs/1e3).toFixed(0) + 'K';
+  if (abs >= 1e6)  return sign + (abs/1e6).toFixed(2) + 'M';
+  if (abs >= 1e3)  return sign + (abs/1e3).toFixed(2) + 'K';
   return sign + abs.toFixed(2);
 }
 
@@ -15790,6 +15844,59 @@ function _finTrendSectionImpl(d, source, idPrefix = '') {
 let _finFullShowAll = false;   // false = เฉพาะรายการหลัก, true = ทุก field
 let _finViewMode = 'table';    // 'table' = ตารางตัวเลข, 'chart' = กราฟแนวโน้มรายบรรทัด
 
+function _median(vals) {
+  if (!vals.length) return null;
+  const sorted = [...vals].sort((a, b) => a - b);
+  const n = sorted.length, mid = Math.floor(n / 2);
+  return n % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// context ของตาราง Ratios ที่ render อยู่ล่าสุด — เก็บไว้ให้ renderFinCustomAvg() คำนวณ
+// เฉลี่ย/มัธยฐานตามช่วงปีที่ผู้ใช้กรอกเองได้ โดยไม่ต้อง fetch ข้อมูลใหม่
+let _finRatiosCustomCtx = null;
+
+function _finCustomAvgHtml() {
+  const years = (_finRatiosCustomCtx.allColsFull || []).map(c => +c.slice(0, 4));
+  if (!years.length) return '';   // ไม่มีคอลัมน์ปีเลย — Math.min/max(...[]) จะได้ Infinity/-Infinity
+  const lo = Math.min(...years), hi = Math.max(...years);
+  return `
+  <div style="margin-top:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card2)">
+    <div style="font-size:11px;color:var(--text2);margin-bottom:6px">🔎 คำนวณเฉลี่ย/มัธยฐานเฉพาะช่วงปีที่กรอกเอง (ข้อมูลมีปี ${lo}–${hi})</div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <input class="scr-input" type="number" id="fin-avg-from" placeholder="ปีเริ่ม" value="${lo}" style="width:90px" onkeydown="if(event.key==='Enter')renderFinCustomAvg()">
+      <span style="color:var(--text2);font-size:12px">ถึง</span>
+      <input class="scr-input" type="number" id="fin-avg-to" placeholder="ปีสิ้นสุด" value="${hi}" style="width:90px" onkeydown="if(event.key==='Enter')renderFinCustomAvg()">
+      <button class="filter-btn" style="font-size:11px;padding:5px 10px" onclick="renderFinCustomAvg()">คำนวณ</button>
+    </div>
+    <div id="fin-custom-avg-result" style="margin-top:8px"></div>
+  </div>`;
+}
+
+function renderFinCustomAvg() {
+  const box = document.getElementById('fin-custom-avg-result');
+  if (!box || !_finRatiosCustomCtx) return;
+  const fromEl = document.getElementById('fin-avg-from'), toEl = document.getElementById('fin-avg-to');
+  const from = parseInt(fromEl.value, 10), to = parseInt(toEl.value, 10);
+  if (!from || !to || from > to) { box.innerHTML = `<div style="color:var(--red);font-size:12px">กรอกปีเริ่ม/ปีสิ้นสุดให้ถูกต้อง (ปีเริ่ม ≤ ปีสิ้นสุด)</div>`; return; }
+  const { rat, allColsFull } = _finRatiosCustomCtx;
+  const pickedCols = allColsFull.filter(c => { const y = +c.slice(0, 4); return y >= from && y <= to; });
+  const rows = FIN_FINN_RATIO_GROUP.flatMap(g => g.rows).map(r => {
+    const vals = pickedCols.map(c => (rat[r.key] || {})[c]).filter(v => v != null && !isNaN(v));
+    const mean = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+    const med = _median(vals);
+    const fmt = v => v == null ? '—' : _finFmt(v);
+    return `<tr><td style="font-size:12px;padding:4px 8px;white-space:nowrap">${_finLabel(r.key)}</td>
+      <td class="r" style="font-size:12px">${fmt(mean)}</td>
+      <td class="r" style="font-size:12px;font-weight:600">${fmt(med)}</td>
+      <td class="r" style="font-size:11px;color:var(--text2)">${vals.length}</td></tr>`;
+  }).join('');
+  box.innerHTML = !pickedCols.length ? `<div style="color:var(--text2);font-size:12px">ไม่มีข้อมูลในช่วงปีที่เลือก</div>` : `
+    <div style="overflow-x:auto"><table class="tbl" style="min-width:320px">
+      <thead><tr><th>รายการ</th><th class="r">เฉลี่ย (${from}–${to})</th><th class="r">มัธยฐาน (${from}–${to})</th><th class="r">n ปี</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
 // กลุ่ม field เฉพาะของ Finnomena (ratios/valuation รายไตรมาส) — hl:1 = โชว์ทั้งสองโหมด
 const FIN_FINN_RATIO_GROUP = [{ group: 'อัตราส่วนการเงิน (Finnomena)', rows: [
   { key: 'Gross Margin', hl: 1 }, { key: 'Net Margin', hl: 1 }, { key: 'ROA', hl: 1 },
@@ -15856,7 +15963,16 @@ function _finRowChart(label, colLabels, vals, isRatioKey) {
   </div>`;
 }
 
-function _finFullTable(title, cols, colLabels, groups, rows, getVal, isRatio, showAll, noPctCols, hideGroupHdr, pctOffset) {
+// cols ของตารางงบเรียงเก่า->ใหม่เสมอ (ใช้คำนวณ QoQ/YoY แบบ i-1) ทำให้ปีล่าสุดอยู่ขวาสุด
+// นอกจอตอนเปิดหน้าครั้งแรก — เลื่อนสกอลแนวนอนของทุกตารางไปขวาสุดให้เห็นปีล่าสุดก่อน
+// ผู้ใช้ค่อยสกอเมาส์ (ลาก/สไลด์) ไปทางซ้ายเองถ้าอยากดูปีเก่า
+function _finScrollTablesToLatest() {
+  document.querySelectorAll('#fin-result div[style*="overflow-x:auto"]').forEach(el => {
+    el.scrollLeft = el.scrollWidth;
+  });
+}
+
+function _finFullTable(title, cols, colLabels, groups, rows, getVal, isRatio, showAll, noPctCols, hideGroupHdr, pctOffset, showAvg, avgCols) {
   const skipPct = noPctCols || new Set();
   const offset = pctOffset || 1;   // 1 = เทียบคอลัมน์ก่อนหน้า (QoQ/รายปี) · 4 = เทียบไตรมาสเดียวกันปีก่อน (YoY)
   // หา index คอลัมน์ "ก่อนหน้า" ของแต่ละคอลัมน์ไว้ล่วงหน้า — offset=1 (QoQ/รายปี) ใช้ i-1
@@ -15874,7 +15990,9 @@ function _finFullTable(title, cols, colLabels, groups, rows, getVal, isRatio, sh
     return bestDiff <= 45 * 86400000 ? best : -1;   // ยอมรับคลาดเคลื่อนได้ไม่เกิน 45 วัน
   });
   const isChart = _finViewMode === 'chart';
-  const headerCells = colLabels.map(c => `<th class="r" style="min-width:90px;white-space:nowrap">${c}</th>`).join('');
+  const headerCells = colLabels.map(c => `<th class="r" style="min-width:90px;white-space:nowrap">${c}</th>`).join('')
+    + (showAvg && !isChart ? `<th class="r" style="min-width:90px;white-space:nowrap;color:var(--blue);border-left:1px solid var(--border)" title="ค่าเฉลี่ยเลขคณิตของทุกปีที่มีข้อมูล ไม่ผูกกับตัวกรอง เฉพาะรายการหลัก/ทุก field — ปีวิกฤตสุดขั้ว (เช่น COVID) จะลากค่านี้ไปไกลจากผลงานปกติของหุ้นได้">เฉลี่ย (ทั้งหมด)</th>
+       <th class="r" style="min-width:90px;white-space:nowrap;color:var(--blue)" title="ค่ามัธยฐาน (median) ของทุกปีที่มีข้อมูล — ทนทานต่อปีวิกฤตสุดขั้วมากกว่าค่าเฉลี่ย เพราะไม่ถูกลากด้วยค่าที่สุดโต่ง">มัธยฐาน (ทั้งหมด)</th>` : '');
   let bodyHtml = '';
   let shown = 0;
   groups.forEach(g => {
@@ -15890,9 +16008,10 @@ function _finFullTable(title, cols, colLabels, groups, rows, getVal, isRatio, sh
     //                หัวกลุ่มย่อยไม่จำเป็น รกตา — ซ่อนทั้งหมด แต่คงไว้ในโหมด Yahoo ที่ข้อมูลเยอะ
     const showGroupHdr = dataRows.length > 1 && groups.length > 1 && !hideGroupHdr;   // มีหลายแถว+หลายกลุ่มถึงจะมีหัวกลุ่ม
     if (showGroupHdr) {
+      const colspan = cols.length + 1 + (showAvg && !isChart ? 2 : 0);
       bodyHtml += isChart
         ? `<div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--blue);background:var(--card2);padding:6px 8px;margin-top:6px">${g.group}</div>`
-        : `<tr><td colspan="${cols.length+1}" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--blue);background:var(--card2);padding:6px 8px">${g.group}</td></tr>`;
+        : `<tr><td colspan="${colspan}" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--blue);background:var(--card2);padding:6px 8px">${g.group}</td></tr>`;
     }
     dataRows.forEach(r => {
       const vals = cols.map(c => getVal(r.key, c));
@@ -15915,7 +16034,22 @@ function _finFullTable(title, cols, colLabels, groups, rows, getVal, isRatio, sh
         const cellCls = skipPct.has(i) ? '' : cls;
         return `<td class="r ${cellCls}" style="font-size:12px;white-space:nowrap;vertical-align:top">${text}${pctHtml}</td>`;
       }).join('');
-      bodyHtml += `<tr${r.hl ? ' style="font-weight:600"' : ''}><td style="font-size:12px;padding:5px 8px;white-space:nowrap">${_finLabel(r.key)}</td>${cells}</tr>`;
+      let avgCell = '';
+      if (showAvg) {
+        // โชว์ทั้งเฉลี่ยเลขคณิตและมัธยฐานคู่กัน (แทนที่จะเลือกใช้แบบใดแบบหนึ่ง) — เห็นชัดเจน
+        // เวลาสองค่านี้ต่างกันมาก (เช่นหุ้นกลุ่มโดน COVID หนักอย่าง AAV/AOT/MINT) ว่ามีปีวิกฤต
+        // สุดขั้วปนอยู่ในประวัติ ต่างจากหุ้นปกติที่เฉลี่ย/มัธยฐานควรใกล้เคียงกัน
+        // คำนวณจาก avgCols (ทุกปีที่มีข้อมูลจริงเสมอ) ไม่ใช่ cols ที่ตารางกำลังแสดง — กัน
+        // toggle "เฉพาะรายการหลัก" (ตัดเหลือ 10 ปี) ทำให้ค่าเปลี่ยนไปมาโดยไม่ตั้งใจ
+        const avgVals = (avgCols || cols).map(c => getVal(r.key, c));
+        const numericVals = avgVals.filter(v => v != null && !isNaN(v));
+        const mean = numericVals.length ? numericVals.reduce((a, b) => a + b, 0) / numericVals.length : null;
+        const med = _median(numericVals);
+        const fmt = v => v == null ? '—' : (isRatio(r.key) ? v.toFixed(2) : _finFmt(v));
+        avgCell = `<td class="r" style="font-size:12px;white-space:nowrap;vertical-align:top;color:var(--blue);border-left:1px solid var(--border)">${fmt(mean)}</td>
+          <td class="r" style="font-size:12px;white-space:nowrap;vertical-align:top;font-weight:600;color:var(--blue)">${fmt(med)}</td>`;
+      }
+      bodyHtml += `<tr${r.hl ? ' style="font-weight:600"' : ''}><td style="font-size:12px;padding:5px 8px;white-space:nowrap">${_finLabel(r.key)}</td>${cells}${avgCell}</tr>`;
     });
   });
   if (!shown) return '';
@@ -15942,7 +16076,11 @@ function _finFullTable(title, cols, colLabels, groups, rows, getVal, isRatio, sh
 // childNodes[0] (text node แรกของ cell) เท่านั้น
 function exportFinCSV() {
   const box = document.getElementById('fin-result');
-  const tables = box ? [...box.querySelectorAll('table.tbl')] : [];
+  // ตัดตารางในกล่อง "คำนวณเฉลี่ย/มัธยฐานเอง" (_finCustomAvgHtml) ออก — โครงสร้าง DOM
+  // ของมันไม่มี div ชื่อเรื่องแบบตารางงบทั่วไป (ดู title lookup ด้านล่างที่ทึกทักว่า
+  // overflowWrap.parentElement.firstElementChild คือ div ชื่อเรื่องเสมอ) รวมเข้าไปจะได้
+  // บล็อกชื่อเรื่องเพี้ยนปนอยู่ใน CSV
+  const tables = box ? [...box.querySelectorAll('table.tbl')].filter(t => !t.closest('#fin-custom-avg-result')) : [];
   if (!tables.length) { alert('ยังไม่มีข้อมูลงบการเงินให้ export'); return; }
   const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const blocks = tables.map(table => {
@@ -15976,6 +16114,8 @@ function _renderFinancialsFull(d, source) {
     // QoQ อย่างเดียวหลอกตากับหุ้นมีฤดูกาล (เช่นค้าปลีก Q4 สูงกว่า Q3 ทุกปีเป็นปกติ ไม่ได้
     // แปลว่าธุรกิจโต) — เพิ่มตัวเลือก YoY (เทียบไตรมาสเดียวกันปีก่อน) เฉพาะตารางรายไตรมาส
     const pctOffset = isQ && _finPctMode === 'yoy' ? 4 : 1;
+    const isFinnY = source === 'finnomena_y';                          // Finnomena รายปี (รวมจากไตรมาส 16 ปี)
+    const isFinn = source === 'finnomena_q' || isFinnY;                // ใช้ badge/ตาราง ratio+valuation ของ Finnomena
     const toggleHtml = `
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
       <div class="filter-row" style="gap:0;margin:0">
@@ -15993,8 +16133,6 @@ function _renderFinancialsFull(d, source) {
       </div>` : ''}
       <button class="filter-btn" style="margin-left:auto;font-size:11px;padding:5px 10px" onclick="exportFinCSV()" title="ดาวน์โหลดตารางงบการเงินที่แสดงอยู่เป็น CSV">⬇ CSV</button>
     </div>`;
-    const isFinnY = source === 'finnomena_y';                          // Finnomena รายปี (รวมจากไตรมาส 16 ปี)
-    const isFinn = source === 'finnomena_q' || isFinnY;                // ใช้ badge/ตาราง ratio+valuation ของ Finnomena
     const inc = d.income || {}, bal = d.balance || {}, cf = d.cashflow || {};
     const rat = d.ratios || {}, val = d.valuation || {};
     // คอลัมน์ของตารางงบ (income/balance/cashflow/ratios) อิงวันที่ของ "งบจริง" เท่านั้น —
@@ -16005,7 +16143,8 @@ function _renderFinancialsFull(d, source) {
     // ไตรมาส/รายปีลึก: default โชว์งวดล่าสุด — "ทุก field" โชว์ทั้งหมด (ไตรมาส ~65 งวด / รายปี 16 ปี)
     const deepAnnual = isFinnY;
     const _slice = isQ ? (_finFullShowAll ? -999 : -8) : (deepAnnual ? (_finFullShowAll ? -999 : -10) : -6);
-    const cols = [...allDates].sort().slice(_slice);
+    const allColsFull = [...allDates].sort();     // ชุดวันที่เต็ม ไม่ตัดตาม _slice — ใช้เป็นฐานคำนวณเฉลี่ย/มัธยฐานของตาราง Ratios
+    const cols = allColsFull.slice(_slice);
     const colLabels = cols.map(c => isQ ? c.slice(0, 7) : c.slice(0, 4));
     // valuation ใช้ชุดวันที่ของตัวเอง (ยาวกว่า) เพื่อให้โชว์งวดราคาล่าสุดครบ ไม่มีคอลัมน์ว่าง
     const valDates = new Set();
@@ -16095,6 +16234,9 @@ function _renderFinancialsFull(d, source) {
         <a href="${setUrl}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="ดูหน้าหุ้นบน SET.or.th">🌐 SET</a>`;
     }
 
+    // ผูก context ให้ renderFinCustomAvg() คำนวณช่วงปีที่ผู้ใช้กรอกเองได้ (เฉพาะตาราง Ratios
+    // ของ Finnomena) — ต้องตั้งก่อน render กล่องคำนวณด้านล่าง เพราะฟังก์ชันนั้นอ่านจาก global
+    _finRatiosCustomCtx = isFinn ? { rat, allColsFull } : null;
     document.getElementById('fin-result').innerHTML = `
     <div class="card" style="margin-top:12px">
       ${_finTab === 'dr' && !IS_STATIC ? `
@@ -16122,10 +16264,12 @@ function _renderFinancialsFull(d, source) {
       ${_finFullTable('📊 งบกำไรขาดทุน (Income Statement)', cols, colLabels, FIN_YAHOO_GROUPS.income,   null, (key,c) => (inc[key]||{})[c],  isRatio, _finFullShowAll, null, isFinn, pctOffset)}
       ${_finFullTable('📋 งบดุล (Balance Sheet)',           cols, colLabels, FIN_YAHOO_GROUPS.balance,  null, (key,c) => (bal[key]||{})[c],  isRatio, _finFullShowAll, null, isFinn, pctOffset)}
       ${_finFullTable('💵 กระแสเงินสด (Cash Flow)',          cols, colLabels, FIN_YAHOO_GROUPS.cashflow, null, (key,c) => (cf[key]||{})[c],   isRatio, _finFullShowAll, null, isFinn, pctOffset)}
-      ${isFinn ? _finFullTable('📐 อัตราส่วนการเงิน (Ratios)', cols, colLabels, FIN_FINN_RATIO_GROUP, null, (key,c) => (rat[key]||{})[c], () => false, true, null, false, pctOffset) : ''}
+      ${isFinn ? _finFullTable('📐 อัตราส่วนการเงิน (Ratios)', cols, colLabels, FIN_FINN_RATIO_GROUP, null, (key,c) => (rat[key]||{})[c], () => false, true, null, false, pctOffset, true, allColsFull) : ''}
+      ${isFinn ? _finCustomAvgHtml() : ''}
       ${isFinn ? _finFullTable('💰 มูลค่า / Valuation', valCols, valColLabels, FIN_FINN_VAL_GROUP, null, (key,c) => (val[key]||{})[c], () => false, true, null, false, pctOffset) : ''}
       <div style="font-size:10px;color:var(--text2);margin-top:16px">${disclaimer}</div>
     </div>`;
+    _finScrollTablesToLatest();
     _loadFinDescription(d.sym, _finTab === 'dr' ? tvMarket : 'TH');
     if (_finTab === 'dr' && !IS_STATIC) _loadFinTVLink(d.sym, tvMarket);
     if (_finTab === 'set') _loadPriceAnalyticsFin(d.sym);
@@ -16164,6 +16308,7 @@ function _renderFinancialsFull(d, source) {
     </div>
     ${_finFullTable('🧾 งบการเงิน (Company Highlight)', cols, colLabels, FIN_SET_GROUPS, null, getVal, isRatio, true, noPctCols)}
   </div>`;
+  _finScrollTablesToLatest();
   _loadPriceAnalyticsFin(d.sym);
 }
 
@@ -16763,6 +16908,7 @@ const DH_SOURCE_MAP = {
   mirror_names:         { text: 'หน้า Data Health — การ์ด "อัพเดทงบไตรมาส" ปุ่ม "🏷️ ดึงชื่อหุ้น mirror ใหม่" (ทำหลัง mirror ได้หุ้นใหม่)', fn: 'startBuildMirrorNames', fnLabel: '🏷️ ดึงชื่อหุ้น mirror ใหม่' },
   dr_universe:          { text: 'อัตโนมัติทุกครั้งที่เปิดหน้า DR/DRx', gotoPage: 'dr', gotoLabel: 'ไปหน้า DR/DRx' },
   dr_descriptions:      { text: 'หน้า DR/DRx — ปุ่ม "📖 ดึงคำอธิบายบริษัท DR"', fn: 'startDRDescriptionSync', fnLabel: '📖 ดึงคำอธิบาย DR', gotoPage: 'dr' },
+  dr_descriptions_index:{ text: 'หน้า DR/DRx — ปุ่ม "📖 ดึงคำอธิบายบริษัท Nikkei/HSI/S&P500 ฯลฯ"', fn: 'startDRDescriptionSyncIndex', fnLabel: '📖 ดึงคำอธิบายดัชนีหลัก', gotoPage: 'dr' },
   q_set_data:           { text: 'ชุดเดียวกับ "ราคา/RS/เทคนิค (หุ้นไทย)" — ⚡ Quick Update / ⟳ Full Refresh', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   q_bake_set_data:      { text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py)', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
   q_breadth:            { text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py)', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
@@ -19942,12 +20088,21 @@ function drawValChart(canvasId, dates, vals, thresholds, stats) {
   }
   ctx.stroke();
 
-  // X axis labels
+  // X axis labels — เอาจุดแรกของแต่ละปี (year boundary) แทน step ตาม index คงที่เดิม เพราะ
+  // ชุดข้อมูลรายไตรมาสที่มีปีไม่ครบ 4 ไตรมาส (เจอกับหลายหุ้น) ทำให้ step แบบเดิมสุ่มไปตกที่
+  // ปีเดียวกันซ้ำๆ ติดกัน (เช่น "2023 2023 2024 2024 2024 2025 2025") อ่านแล้วดูเหมือนบัค
+  const yearStarts = [];
+  let lastYear = null;
+  for (let i = 0; i < dates.length; i++) {
+    const y = dates[i].slice(0, 4);
+    if (y !== lastYear) { yearStarts.push(i); lastYear = y; }
+  }
   ctx.fillStyle = 'rgba(255,255,255,0.4)';
   ctx.font = '10px sans-serif';
   ctx.textAlign = 'center';
-  const step = Math.max(1, Math.floor(dates.length / 8));
-  for (let i = 0; i < dates.length; i += step) {
+  const labelStep = Math.max(1, Math.ceil(yearStarts.length / 8));
+  for (let k = 0; k < yearStarts.length; k += labelStep) {
+    const i = yearStarts[k];
     ctx.fillText(dates[i].slice(0,4), scaleX(i), H - 8);
   }
 
@@ -21911,7 +22066,50 @@ function _loadAlerts() {
 }
 function _saveAlerts(arr) {
   localStorage.setItem(ALERT_STORAGE_KEY, JSON.stringify(arr));
+  _alertsPush(arr);
 }
+
+// ============================================================
+// PRICE ALERT SYNC ข้ามเครื่อง — เก็บเป็นไฟล์ data/price_alerts.json ให้ git push/pull
+// พาไปเครื่องอื่นได้เหมือน watchlist (ดู /api/price-alerts ใน app.py) merge แบบ union ด้วย
+// "id" เท่านั้น ไม่มีการลบข้ามเครื่องอัตโนมัติ (เหมือน watchlist — ดู _wlSyncFromServer)
+// ยกเว้นสถานะ triggered ที่ทำเป็น ratchet ทางเดียว (ใครทริกก่อนถือว่าทริกแล้วทุกเครื่อง)
+// กันเด้ง popup ซ้ำตอน sync กลับมาหาเครื่องที่ยังไม่เห็นว่าทริกไปแล้ว
+// ============================================================
+function _alertsPush(arr) {
+  fetch('/api/price-alerts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ alerts: arr }),
+  }).catch(() => console.warn('sync แจ้งเตือนราคาไปเซิร์ฟเวอร์ไม่สำเร็จ — บันทึกได้แค่ในเครื่องนี้ (localStorage)'));
+}
+
+(function _alertsSyncFromServer() {
+  fetch('/api/price-alerts').then(r => r.json()).then(serverList => {
+    if (!Array.isArray(serverList)) return;
+    const local = _loadAlerts();
+    const byId = new Map(local.map(a => [a.id, a]));
+    let changed = false;
+    serverList.forEach(remote => {
+      if (!remote || typeof remote.id !== 'string') return;
+      const cur = byId.get(remote.id);
+      if (!cur) { local.push(remote); byId.set(remote.id, remote); changed = true; return; }
+      if (remote.triggered && !cur.triggered) {
+        cur.triggered = true;
+        cur.triggeredAt = remote.triggeredAt;
+        cur.triggeredPrice = remote.triggeredPrice;
+        changed = true;
+      }
+    });
+    if (changed) {
+      localStorage.setItem(ALERT_STORAGE_KEY, JSON.stringify(local));
+      _updateBellBadge();
+      if (_alertPanelOpen) renderAlertPanel();
+    }
+    // เผื่อเครื่องนี้มี alert ใหม่ที่อีกเครื่องยังไม่มี ก็ sync กลับขึ้นไฟล์ด้วย
+    if (local.length && (changed || local.length !== serverList.length)) _alertsPush(local);
+  }).catch(() => {});
+})();
 
 function toggleAlertPanel() {
   _alertPanelOpen = !_alertPanelOpen;

@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260804a">
+<link rel="stylesheet" href="static/dashboard.css?v=20260810d">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -2076,6 +2076,14 @@
         ดึง Description จากหน้า Profile ของ Yahoo Finance ต่อหุ้น DR ทุกตัว (ไม่รวม ETF) แล้วแปลเป็นไทยอัตโนมัติ เก็บไว้ดูตอนเปิดกราฟหุ้น<br><br>
         ข้อมูลนี้เปลี่ยนไม่บ่อย — sync ครั้งเดียวอยู่ได้นาน (ข้ามตัวที่เพิ่งดึงไปไม่เกิน 180 วันอัตโนมัติ)<br><br>
         <span style="color:var(--text2)">ทำครั้งแรก + กดซ้ำได้เรื่อยๆ ทุกๆ 2-3 เดือนเพื่อจับบริษัทที่เพิ่งเพิ่มเข้าลิสต์</span>
+      </div></span>
+    </button>
+    <button class="filter-btn" id="dr-desc-sync-index-btn" onclick="startDRDescriptionSyncIndex()">📖 ดึงคำอธิบายบริษัท Nikkei/HSI/S&P500 ฯลฯ (local)
+      <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+        <strong>Description แปลไทย — หุ้นดัชนีหลัก</strong><br>
+        ดึง+แปลเหมือนปุ่มด้านซ้าย แต่ครอบคลุมหุ้นสมาชิกดัชนีหลักทั้งชุด: S&amp;P500 / Dow Jones / Nasdaq100 (US), HSI / HSCEI / HSTECH (HK), Nikkei 225 (JP) — ไม่ใช่แค่ DR universe 318 ตัว<br><br>
+        ใช้กับหุ้น mirror ที่เปิดดูบ่อยในหน้า "🇺🇸 หุ้น US" / "🇭🇰 หุ้น HK" / "🇯🇵 หุ้น JP" แต่ไม่ใช่หุ้น DR<br><br>
+        <span style="color:var(--text2)">หุ้นหลักร้อยตัว ใช้เวลานาน (~30-40 นาที) — กดซ้ำได้เรื่อยๆ ทุกๆ 2-3 เดือน (ข้ามตัวที่เพิ่งดึงไปไม่เกิน 180 วันอัตโนมัติ)</span>
       </div></span>
     </button>
     <button class="filter-btn" id="dr-quick-btn" onclick="drQuickUpdate()">⚡ อัปเดตราคา
@@ -4630,6 +4638,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260804a"></script>
+<script src="static/dashboard.js?v=20260810l"></script>
 </body>
 </html>
