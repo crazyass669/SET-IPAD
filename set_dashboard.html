@@ -3854,6 +3854,13 @@
     <div id="dh-last-runs-wrap" style="display:flex;gap:24px;flex-wrap:wrap;font-size:12px"></div>
   </div>
 
+  <!-- ประวัติล้มเหลวสะสม (ต่างจากการ์ดข้างบนที่โชว์แค่รอบล่าสุด) — อ่านจาก
+       logs/update_history.json ผ่าน /api/update-history เก็บ 50 รอบล่าสุด/กลไก -->
+  <div class="card" style="padding:14px 16px;margin-bottom:12px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">📜 ประวัติล้มเหลวล่าสุด (ทุกกลไก รวมกัน)</div>
+    <div id="dh-update-history-wrap"></div>
+  </div>
+
   <!-- ปุ่มดึงราคาดัชนี US/HK/JP + Sync Mirror — ย้ายมาจาก top nav เพราะกดมือเป็นครั้งคราวเท่านั้น
        ไม่ผูกกับ Quick Update ประจำวัน ไม่จำเป็นต้องอยู่ติดจอตลอด -->
   <div class="card" style="padding:14px 16px;margin-bottom:12px">
@@ -4638,6 +4645,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260810l"></script>
+<script src="static/dashboard.js?v=20260810n"></script>
 </body>
 </html>

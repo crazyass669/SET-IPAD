@@ -5586,6 +5586,13 @@ _UPDATE_STATUS_LABEL = {
     "hedge_refresh":   "🐋 อัพเดท Hedge Holdings (Dataroma)",
     "hedge_fetch_missing": "⬇️ ดึงหุ้น Hedge Holdings ที่ยังไม่มีเข้าคลัง",
     "static_bake": "🧱 Bake ไฟล์ static ทั้งหมด (run_static_update.py)",
+    "static_indices_refresh": "📊 รีเฟรช Indices (sub-step ใน run_static_update.py)",
+    "static_short_sales": "📉 รีเฟรช Short Sales (sub-step ใน run_static_update.py)",
+    "static_nvdr": "📥 รีเฟรช NVDR (sub-step ใน run_static_update.py)",
+    "static_market_stats_daily": "📋 Import Market Stats รายวัน (Table_PE/PBV.xls)",
+    "static_market_stats_monthly": "📋 Import Market Stats รายเดือน (Market_Statistics_Month)",
+    "static_sec_sync": "🕵️ Sync sec_filings.db (insider/major-changes)",
+    "static_snapshot_optional": "📦 Snapshot endpoint เสริม (ไม่ required) ใน run_static_update.py",
 }
 
 @app.route("/api/update-status")
@@ -5599,6 +5606,18 @@ def update_status():
     failed = [{"source": k, "label": _UPDATE_STATUS_LABEL.get(k, k), **v}
               for k, v in raw.items() if not v.get("ok")]
     return jsonify({"all": raw, "failed": failed})
+
+
+@app.route("/api/update-history")
+def update_history():
+    """ประวัติล้มเหลวสะสม (ไม่ใช่แค่รอบล่าสุด) รวมทุกกลไก เรียงเวลาล่าสุดก่อน —
+    เขียนโดย core.run_log.record_run() ทุกครั้งที่มีการเรียก (เก็บ 50 รอบล่าสุด/กลไก)
+    ใช้โชว์ตาราง "ประวัติล้มเหลวล่าสุด" ในหน้า Data Health เพื่อดูแนวโน้ม (ล้มติดกัน
+    กี่รอบ/ล้มตอนไหนบ้าง) ต่างจาก /api/update-status ที่บอกได้แค่สถานะปัจจุบัน"""
+    fails = run_log.read_recent_failures(BASE_DIR, limit=100)
+    for f in fails:
+        f["label"] = _UPDATE_STATUS_LABEL.get(f["source"], f["source"])
+    return jsonify({"recent_failures": fails})
 
 
 # หุ้นไทยเข้าใหม่/ถูกถอด — เทียบรายชื่อสดจาก SET.or.th กับ universe งบการเงินในเครื่อง

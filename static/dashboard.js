@@ -8833,9 +8833,11 @@ async function _tsLoadInsider(sym) {
   const el = document.getElementById('ts-insider');
   if (!el) return;
   try {
+    // ดู fetchInsiderData ด้านบน — IS_STATIC ไม่มี live sync ให้รอ ต้อง timeout สั้น
+    const _timeoutMs = IS_STATIC ? 20000 : 200000;
     const [r59res, r246res] = await Promise.all([
-      _fetchTimeout('/api/insider-trades?days=180', 200000).then(r => r.json()),
-      _fetchTimeout('/api/major-changes?days=180', 200000).then(r => r.json()),
+      _fetchTimeout('/api/insider-trades?days=180', _timeoutMs).then(r => r.json()),
+      _fetchTimeout('/api/major-changes?days=180', _timeoutMs).then(r => r.json()),
     ]);
     if (_tsData?.symbol !== sym) return;
     const r59 = (r59res.records || []).filter(x => x.symbol === sym);
@@ -17042,6 +17044,7 @@ async function loadDataHealth() {
   }
   loadBackupFilesStatus();
   loadLastRuns();
+  loadUpdateHistory();
 }
 
 // กดล่าสุดของ Quick Update / Full Refresh — ใช้ /api/update-status ตัวเดียวกับที่
@@ -17066,6 +17069,13 @@ const _DH_LAST_RUN_GROUPS = [
     { key: 'financials_sync', label: '🔄 อัพเดทงบการเงินทั้งหมด' },
     { key: 'mirror_finnomena', label: '📥 Mirror ทั้งตลาด (force)' },
     { key: 'build_mirror_names', label: '🏷️ ดึงชื่อหุ้น mirror ใหม่' },
+  ]},
+  { title: '🧱 run_static_update.py — sub-step (รันบนเครื่องเท่านั้นถึงจะเห็นที่นี่ — บน GitHub Actions ดูที่ Actions log แทน)', rows: [
+    { key: 'static_indices_refresh', label: '📊 Indices' },
+    { key: 'static_short_sales', label: '📉 Short Sales' },
+    { key: 'static_nvdr', label: '📥 NVDR' },
+    { key: 'static_sec_sync', label: '🕵️ sec_filings.db sync' },
+    { key: 'static_snapshot_optional', label: '📦 Snapshot endpoint เสริม' },
   ]},
 ];
 
@@ -17101,6 +17111,35 @@ async function loadLastRuns() {
       </div>`).join('');
   } catch (e) {
     wrap.innerHTML = `<span style="color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</span>`;
+  }
+}
+
+// ประวัติล้มเหลวสะสม (ไม่ใช่แค่รอบล่าสุดแบบ loadLastRuns ด้านบน) — ใช้ดูแนวโน้ม
+// "ล้มติดกันกี่รอบ / ล้มตอนไหนบ้าง" อ่านจาก /api/update-history (core/run_log.py
+// เก็บ 50 รอบล่าสุด/กลไก ใน logs/update_history.json)
+async function loadUpdateHistory() {
+  const wrap = document.getElementById('dh-update-history-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="empty" style="padding:12px">กำลังเช็ค...</div>';
+  try {
+    const r = await fetch('/api/update-history');
+    const d = await r.json();
+    const fails = d.recent_failures || [];
+    if (!fails.length) {
+      wrap.innerHTML = '<div class="empty" style="padding:12px;color:var(--green)">🟢 ไม่มีประวัติล้มเหลวใน 50 รอบล่าสุดของแต่ละกลไก</div>';
+      return;
+    }
+    wrap.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="min-width:640px">
+      <thead><tr><th>กลไก</th><th>เวลา</th><th>ข้อความ</th></tr></thead>
+      <tbody>${fails.map(f => `
+        <tr>
+          <td style="white-space:nowrap">${f.label}</td>
+          <td style="font-size:11px;color:var(--text2);white-space:nowrap">${f.at}</td>
+          <td style="font-size:11px;color:var(--red)">${_escHtml(f.message || '')}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>`;
+  } catch (e) {
+    wrap.innerHTML = `<div class="empty" style="padding:12px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</div>`;
   }
 }
 
@@ -20564,7 +20603,9 @@ let _nvdrData = null;
 async function loadNvdrData() {
   if (_nvdrData) return _nvdrData;
   try {
-    const r = await fetch('/api/nvdr?t=' + Date.now());
+    // มือถือ/เน็ตช้า: fetch เปล่าค้างได้ไม่รู้จบถ้า TCP เงียบ (ไม่ resolve ไม่ reject) —
+    // ต้องมี timeout ไม่งั้นหน้าที่พึ่งข้อมูลนี้ (Short/Confluence) ค้าง "กำลังโหลด" ตลอดกาล
+    const r = await _fetchTimeout('/api/nvdr?t=' + Date.now(), 25000);
     if (!r.ok) return null;
     _nvdrData = await r.json();
     return _nvdrData;
@@ -20648,7 +20689,8 @@ const _FLOW_SIG_TTL = 5 * 60 * 1000;
 async function loadFlowSignals() {
   if (_flowSigData && (Date.now() - _flowSigTs < _FLOW_SIG_TTL)) return _flowSigData;
   try {
-    const r = await fetch('/api/flow-signals');
+    // ดู loadNvdrData ด้านบน — fetch เปล่าไม่มี timeout ค้างได้ไม่รู้จบบนเน็ตมือถือที่ไม่นิ่ง
+    const r = await _fetchTimeout('/api/flow-signals', 25000);
     if (!r.ok) return _flowSigData;   // ยิงไม่ผ่าน — ใช้ของเดิมดีกว่าคืน null ให้หน้าว่าง
     _flowSigData = await r.json();
     _flowSigTs = Date.now();
@@ -20838,7 +20880,8 @@ function _shortPeriodRange() {
 async function loadShortData() {
   if (_shortData) return _shortData;
   try {
-    const r = await fetch('/api/short-sales?t=' + Date.now());
+    // ดู loadNvdrData ด้านบน — fetch เปล่าไม่มี timeout ค้างได้ไม่รู้จบบนเน็ตมือถือที่ไม่นิ่ง
+    const r = await _fetchTimeout('/api/short-sales?t=' + Date.now(), 25000);
     if (!r.ok) return null;
     _shortData = await r.json();
     return _shortData;
@@ -21680,11 +21723,18 @@ async function fetchInsiderData() {
   document.getElementById('ins-table-wrap').innerHTML =
     '<div style="padding:20px;color:var(--muted);font-size:13px;text-align:center">กำลังโหลดข้อมูลจาก SEC...</div>';
   try {
-    const syncMsg = 'หมดเวลารอข้อมูล — ถ้าเป็นการเปิดหน้านี้ครั้งแรก backend ต้อง sync ข้อมูลจาก SEC ' +
-      'ย้อนหลัง 180 วัน (ใช้เวลา ~2-3 นาที) ลองรออีกสักครู่แล้วโหลดหน้านี้ใหม่';
+    // เว็บมือถือ/ไอแพด (IS_STATIC): endpoint นี้ถูก STATIC_MAP เปลี่ยนเป็นดึงไฟล์ static
+    // ล้วนๆ ไม่มี live sync ให้รอ — ถ้าค้างคือเน็ตมือถือหลุด/ช้าจริง ต้อง timeout สั้น
+    // ไม่งั้นค้าง "กำลังโหลด" นานถึง 200 วิเหมือนโดนแฮงก์ (ดู feedback ผู้ใช้ที่รอแล้วไม่ขึ้น)
+    // เวอร์ชันรันบนเครื่อง (Flask) ยังต้องรอนานได้จริงตอน sync SEC ครั้งแรก (~2-3 นาที)
+    const timeoutMs = IS_STATIC ? 20000 : 200000;
+    const syncMsg = IS_STATIC
+      ? 'หมดเวลารอข้อมูล — เช็คสัญญาณอินเทอร์เน็ตแล้วลองโหลดหน้านี้ใหม่'
+      : 'หมดเวลารอข้อมูล — ถ้าเป็นการเปิดหน้านี้ครั้งแรก backend ต้อง sync ข้อมูลจาก SEC ' +
+        'ย้อนหลัง 180 วัน (ใช้เวลา ~2-3 นาที) ลองรออีกสักครู่แล้วโหลดหน้านี้ใหม่';
     const [r59res, r246res] = await Promise.all([
-      _fetchTimeout(`/api/insider-trades?days=${_insDays}`, 200000, syncMsg).then(r => r.json()),
-      _fetchTimeout(`/api/major-changes?days=${_insDays}`, 200000, syncMsg).then(r => r.json()),
+      _fetchTimeout(`/api/insider-trades?days=${_insDays}`, timeoutMs, syncMsg).then(r => r.json()),
+      _fetchTimeout(`/api/major-changes?days=${_insDays}`, timeoutMs, syncMsg).then(r => r.json()),
     ]);
     // เวอร์ชันเว็บ (static) เก็บข้อมูลไว้ที่ 180 วันคงที่ ไม่สนใจ query string
     // days= ที่ส่งไป -> กรองซ้ำฝั่ง client ด้วยวันที่จริง กันปุ่ม 7/30/90 วัน
@@ -21918,9 +21968,11 @@ async function loadInsiderForStock(symbol) {
   el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:4px 0">กำลังโหลด insider...</div>';
 
   try {
+    // ดู fetchInsiderData ด้านบน — IS_STATIC ไม่มี live sync ให้รอ ต้อง timeout สั้น
+    const _timeoutMs = IS_STATIC ? 20000 : 200000;
     const [r59res, r246res] = await Promise.all([
-      _fetchTimeout('/api/insider-trades?days=180', 200000).then(r => r.json()),
-      _fetchTimeout('/api/major-changes?days=180', 200000).then(r => r.json()),
+      _fetchTimeout('/api/insider-trades?days=180', _timeoutMs).then(r => r.json()),
+      _fetchTimeout('/api/major-changes?days=180', _timeoutMs).then(r => r.json()),
     ]);
     const sym = symbol.toUpperCase();
     const r59  = (r59res.records  || []).filter(x => x.symbol === sym);

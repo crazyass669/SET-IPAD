@@ -115,10 +115,14 @@ if os.path.exists(os.path.join(BASE_DIR, "Table_PE.xls")):
         import subprocess
         r = subprocess.run([sys.executable, os.path.join(BASE_DIR, "import_market_stats.py")],
                            capture_output=True, text=True, timeout=120)
-        log("✅ market stats จาก Table_PE/PBV เสร็จ" if r.returncode == 0
+        ok = r.returncode == 0
+        log("✅ market stats จาก Table_PE/PBV เสร็จ" if ok
             else f"⚠️ import_market_stats ล้ม: {r.stderr[-300:]}")
+        run_log.record_run(BASE_DIR, "static_market_stats_daily", ok,
+                            "เสร็จ" if ok else r.stderr[-300:])
     except Exception as e:
         log(f"⚠️ import_market_stats ข้าม: {e}")
+        run_log.record_run(BASE_DIR, "static_market_stats_daily", False, str(e))
 
 # ── 2b. merge ข้อมูลเดือนล่าสุด + ปันผล/มูลค่าหลักทรัพย์/breadth จาก
 # Market_Statistics_Month_th_TH.xls (ถ้ามีในรีโป) — รันหลัง step 2 เสมอ เพื่อ
@@ -128,10 +132,14 @@ if os.path.exists(os.path.join(BASE_DIR, "Market_Statistics_Month_th_TH.xls")):
         import subprocess
         r = subprocess.run([sys.executable, os.path.join(BASE_DIR, "import_market_stats_monthly.py")],
                            capture_output=True, text=True, timeout=120)
-        log("✅ market stats จาก Market_Statistics_Month_th_TH เสร็จ" if r.returncode == 0
+        ok = r.returncode == 0
+        log("✅ market stats จาก Market_Statistics_Month_th_TH เสร็จ" if ok
             else f"⚠️ import_market_stats_monthly ล้ม: {r.stderr[-300:]}")
+        run_log.record_run(BASE_DIR, "static_market_stats_monthly", ok,
+                            "เสร็จ" if ok else r.stderr[-300:])
     except Exception as e:
         log(f"⚠️ import_market_stats_monthly ข้าม: {e}")
+        run_log.record_run(BASE_DIR, "static_market_stats_monthly", False, str(e))
 
 
 # ── 3. Snapshot ทุก API endpoint ลง data/*.json ─────────────
@@ -150,21 +158,27 @@ try:
     existing = _load_indices_existing()
     _fetch_indices_tv(existing, full_refresh=False)
     log("✅ Indices รีเฟรชเสร็จ")
+    run_log.record_run(BASE_DIR, "static_indices_refresh", True, "รีเฟรชเสร็จ")
 except Exception as e:
     log(f"⚠️ Indices รีเฟรชล้ม: {e}")
+    run_log.record_run(BASE_DIR, "static_indices_refresh", False, str(e))
 try:
     short_sales_daily_update()
     log("✅ Short Sales รีเฟรชเสร็จ")
+    run_log.record_run(BASE_DIR, "static_short_sales", True, "รีเฟรชเสร็จ")
 except Exception as e:
     log(f"⚠️ Short Sales รีเฟรชล้ม: {e}")
+    run_log.record_run(BASE_DIR, "static_short_sales", False, str(e))
 # NVDR ก็ต้องสะสม daily snapshot บน CI เหมือน short sales — เดิมไม่ได้เรียก
 # (และไฟล์โดน gitignore) ทำให้ NVDR Δ + สัญญาณ NVDR ใน Flow Confluence
 # เป็น 0 หมดบนเวอร์ชันเว็บมาตลอด
 try:
     nvdr_daily_update()
     log("✅ NVDR รีเฟรชเสร็จ")
+    run_log.record_run(BASE_DIR, "static_nvdr", True, "รีเฟรชเสร็จ")
 except Exception as e:
     log(f"⚠️ NVDR รีเฟรชล้ม: {e}")
+    run_log.record_run(BASE_DIR, "static_nvdr", False, str(e))
 
 # (endpoint, ไฟล์ปลายทาง, จำเป็นไหม)  จำเป็น=True ถ้าล้มให้ exit 1
 SNAPSHOTS = [
@@ -222,8 +236,11 @@ try:
     n2 = sec_store.sync_major_changes(BASE_DIR)
     sec_store.bake_backup(BASE_DIR)   # เขียน data/sec_filings_backup.json (เฉพาะบน CI — ดู bake_backup)
     log(f"✅ sync เสร็จ: insider {n1} แถว, major-changes {n2} แถว")
+    run_log.record_run(BASE_DIR, "static_sec_sync", True,
+                        f"insider {n1} แถว, major-changes {n2} แถว")
 except Exception as e:
     log(f"⚠️ sync sec_filings.db ล้ม: {e}")
+    run_log.record_run(BASE_DIR, "static_sec_sync", False, str(e))
 
 def _slim_set_data(payload_text):
     """ลดน้ำหนัก set_data.json เฉพาะเวอร์ชันเว็บ: ตัด price_history เหลือ 260 แท่ง (~1 ปี)
@@ -256,6 +273,7 @@ def _is_empty_payload(obj):
 
 
 failures = []
+optional_failures = []
 for url, fname, required in SNAPSHOTS:
     t0 = time.time()
     try:
@@ -278,6 +296,15 @@ for url, fname, required in SNAPSHOTS:
         log(f"{'❌' if required else '⚠️'} {fname}: {e}")
         if required:
             failures.append(fname)
+        else:
+            optional_failures.append(f"{fname}: {e}")
+
+# endpoint ที่ไม่ required เดิม "ล้มเงียบๆ" เห็นแค่ใน console/Actions log — บันทึกด้วย
+# core.run_log เหมือนกลไกอื่น ให้ขึ้น banner/ประวัติล้มเหลวในแอปด้วย (รวมเป็น source
+# เดียว ไม่แยกทีละ endpoint เพราะมีหลายสิบตัว จะรกเกินไป)
+run_log.record_run(
+    BASE_DIR, "static_snapshot_optional", not optional_failures,
+    "; ".join(optional_failures) if optional_failures else f"ครบ {len(SNAPSHOTS)} endpoint")
 
 if failures:
     log(f"❌ ไฟล์จำเป็นล้มเหลว: {failures}")

@@ -1,14 +1,21 @@
 # -*- coding: utf-8 -*-
-"""core/run_log.py — บันทึกผลการรันล่าสุดของแต่ละกลไกอัพเดท (Quick Update, Full
+"""core/run_log.py — บันทึกผลการรันของแต่ละกลไกอัพเดท (Quick Update, Full
 Refresh, GitHub Actions auto-update, update_financials.py, mirror_finnomena.py)
-ลง logs/update_status.json — ใช้โชว์ banner เตือนตอนเปิดแอปถ้ารอบล่าสุดล้มเหลว
-แม้ผู้ใช้จะไม่ได้เฝ้าหน้าจอตอนรันจริง (โดยเฉพาะ GitHub Actions ที่รันตอนไม่มีใครดู)
 
-เก็บแค่ "ผลล่าสุด" ต่อ source เดียว (ไม่ใช่ log สะสมยาว) — พอสำหรับ banner เตือน
-ถ้าอยากได้ประวัติยาวย้อนหลัง ดูจาก logs/dashboard.log (rotating log ของ app.py) แทน"""
+2 ไฟล์:
+  - logs/update_status.json  — "ผลล่าสุด" ต่อ source เดียว (เขียนทับทุกรอบ) ใช้
+    โชว์ banner เตือนตอนเปิดแอปถ้ารอบล่าสุดล้มเหลว แม้ผู้ใช้ไม่ได้เฝ้าหน้าจอตอนรันจริง
+  - logs/update_history.json — ประวัติสะสมต่อ source (เก็บ MAX_HISTORY_PER_SOURCE
+    รอบล่าสุด ตัดของเก่าทิ้ง) ใช้ดูแนวโน้ม "ล้มติดกันกี่รอบ / ล้มตอนไหนบ้าง" ต่างจาก
+    update_status.json ที่บอกได้แค่สถานะปัจจุบัน
+
+record_run() เขียนทั้งสองไฟล์พร้อมกันเสมอ — เรียกที่เดียวได้ทั้งคู่ ไม่ต้องแก้ที่
+เรียกใช้เดิมที่มีอยู่แล้ว 10+ จุด"""
 import json
 import os
 from datetime import datetime
+
+MAX_HISTORY_PER_SOURCE = 50
 
 
 def _log_path(base_dir):
@@ -17,24 +24,42 @@ def _log_path(base_dir):
     return os.path.join(d, "update_status.json")
 
 
+def _history_path(base_dir):
+    d = os.path.join(base_dir, "logs")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "update_history.json")
+
+
 def record_run(base_dir, source, ok, message=""):
     """เรียกตอนจบการรันของกลไกอัพเดทแต่ละตัว (สำเร็จหรือล้มเหลวก็เรียก) —
-    เขียนทับผลของ source เดิม (เก็บแค่รอบล่าสุด)"""
+    เขียนทับ "ผลล่าสุด" ของ source เดิม + append เข้าประวัติสะสม (ตัดเหลือ
+    MAX_HISTORY_PER_SOURCE รอบล่าสุด)"""
+    at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    record = {"ok": bool(ok), "at": at, "message": str(message)[:500]}
+
     path = _log_path(base_dir)
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
         data = {}
-    data[source] = {
-        "ok": bool(ok),
-        "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "message": str(message)[:500],
-    }
+    data[source] = record
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False)
     os.replace(tmp, path)
+
+    hpath = _history_path(base_dir)
+    try:
+        with open(hpath, encoding="utf-8") as f:
+            hist = json.load(f)
+    except Exception:
+        hist = {}
+    hist[source] = (hist.get(source) or [])[-(MAX_HISTORY_PER_SOURCE - 1):] + [record]
+    htmp = hpath + ".tmp"
+    with open(htmp, "w", encoding="utf-8") as f:
+        json.dump(hist, f, ensure_ascii=False)
+    os.replace(htmp, hpath)
 
 
 def read_status(base_dir):
@@ -43,3 +68,27 @@ def read_status(base_dir):
             return json.load(f)
     except Exception:
         return {}
+
+
+def read_history(base_dir, source=None):
+    """ประวัติสะสมทั้งหมด (dict: source -> list ของ {ok, at, message} เรียงเก่า->ใหม่)
+    ส่ง source มาเพื่อกรองเฉพาะกลไกเดียว"""
+    try:
+        with open(_history_path(base_dir), encoding="utf-8") as f:
+            hist = json.load(f)
+    except Exception:
+        hist = {}
+    if source:
+        return hist.get(source, [])
+    return hist
+
+
+def read_recent_failures(base_dir, limit=100):
+    """รวมทุก source เฉพาะรอบที่ล้มเหลว (ok=False) เรียงเวลาล่าสุดก่อน — ใช้โชว์
+    ตาราง "ประวัติล้มเหลวล่าสุด" ในหน้า Data Health (ต่างจาก /api/update-status ที่
+    บอกได้แค่รอบล่าสุดต่อ source)"""
+    hist = read_history(base_dir)
+    fails = [{"source": src, **rec} for src, recs in hist.items()
+             for rec in recs if not rec.get("ok")]
+    fails.sort(key=lambda x: x.get("at", ""), reverse=True)
+    return fails[:limit]
