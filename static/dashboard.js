@@ -207,7 +207,11 @@ if (IS_STATIC) {
   window.fetch = function (url, opts) {
     if (typeof url !== 'string' || !url.startsWith('/api/')) return _origFetch(url, opts);
     const mapped = _staticURL(url);
-    if (mapped) return _origFetch(mapped);
+    // ต้องส่ง signal ต่อด้วย ไม่งั้น AbortController ของ _fetchTimeout() ผูกกับ
+    // request นี้ไม่ติด — ครบเวลาแล้ว abort() ยิงเปล่า ไม่มีอะไรฟัง fetch ค้างได้
+    // นานเท่าที่เน็ตมือถือจะค้าง เหมือนไม่มี timeout เลย (บั๊กที่ทำให้ _fetchTimeout
+    // ทั้งระบบไม่มีผลจริงบนเว็บ static แม้จะตั้ง timeout ไว้ที่ caller ก็ตาม)
+    if (mapped) return _origFetch(mapped, { signal: opts && opts.signal });
     if (url.startsWith('/api/status')) {
       return Promise.resolve(new Response('{"running":false}', { headers: { 'Content-Type': 'application/json' } }));
     }
@@ -224,7 +228,10 @@ if (IS_STATIC) {
 async function loadData() {
   try {
     // ไม่ใส่ cache-buster — server มี ETag แล้ว ถ้าข้อมูลไม่เปลี่ยนจะได้ 304 (โหลดเร็วมาก)
-    const r = await fetch("/api/data");
+    // ต้องมี timeout — นี่คือ fetch แรกสุดตอนเปิดเว็บ ถ้าค้าง (เน็ตมือถือไม่นิ่ง) ผู้ใช้ไม่ผ่าน
+    // หน้า loading เลย (ดู fetchInsiderData/loadShortData ฯลฯ ที่เจอปัญหาเดียวกันมาก่อน)
+    const r = await _fetchTimeout("/api/data", IS_STATIC ? 25000 : 60000,
+      'หมดเวลารอข้อมูล (เกิน ' + (IS_STATIC ? 25 : 60) + ' วิ) — ลองใหม่อีกครั้ง');
     if (!r.ok) {
       document.getElementById("updated-at").textContent = "ยังไม่มีข้อมูล — กด Refresh";
       return;
@@ -454,7 +461,7 @@ function confirmRefresh(period) {
     _drData   = null;
     const statusEl = document.getElementById('dr-status');
     if (statusEl) statusEl.textContent = 'กำลังอัปเดตข้อมูลหุ้นต่างประเทศ...';
-    _fetchTimeout('/api/dr', 150000)
+    _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000)
       .then(r => r.json())
       .then(d => {
         if (d.stocks) {
@@ -1756,7 +1763,7 @@ async function loadDRRotation() {
   if (!_drData || !_drData.length) {
     gate.style.display = ''; gate.textContent = 'กำลังดึงข้อมูลหุ้นต่างประเทศ (DR)...'; body.style.display = 'none';
     try {
-      const d = await (await _fetchTimeout('/api/dr', 150000)).json();
+      const d = await (await _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000)).json();
       if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
       // stale-while-revalidate: /api/dr ตอบชุดเก่าพร้อม refreshing=true ตอน cache หมดอายุ
       // แล้ว rebuild เบื้องหลัง — เดิมแท็บนี้โชว์ชุดเก่าเงียบๆ ไม่มีป้ายและไม่ดึงซ้ำ
@@ -3016,7 +3023,7 @@ function _wlPopulateSymList() {
     if (!_wlSymListReady && !_wlSymListFetching) {
       _wlSymListFetching = true;
       Promise.all([
-        _drData ? Promise.resolve() : _fetchTimeout('/api/dr', 150000).then(r => r.json()).then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; } }).catch(() => {}),
+        _drData ? Promise.resolve() : _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000).then(r => r.json()).then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; } }).catch(() => {}),
         _usData ? Promise.resolve() : fetch('/api/us-index-metrics').then(r => r.json()).then(d => { _usData = d; }).catch(() => {}),
         _hkData ? Promise.resolve() : fetch('/api/hk-index-metrics').then(r => r.json()).then(d => { _hkData = d; }).catch(() => {}),
       ]).then(() => {
@@ -3182,7 +3189,7 @@ function renderWatchlist() {
       document.getElementById("wl-tbody").innerHTML =
         `<tr><td colspan="17"><div class="empty" style="font-size:12px">กำลังโหลดข้อมูล DR/DRx, US Index และ HK Index...</div></td></tr>`;
       Promise.all([
-        (_drData || !need.has("DR")) ? Promise.resolve() : _fetchTimeout('/api/dr', 150000).then(r => r.json()).then(d => {
+        (_drData || !need.has("DR")) ? Promise.resolve() : _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000).then(r => r.json()).then(d => {
           if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
         }).catch(() => {}),
         (_usData || !need.has("US")) ? Promise.resolve() : fetch('/api/us-index-metrics').then(r => r.json()).then(d => {
@@ -5787,7 +5794,8 @@ let _scrInsiderLoaded = false;
 async function _loadScrInsider() {
   if (_scrInsiderLoaded) return;
   try {
-    const res = await _fetchTimeout('/api/insider-trades?days=90', 200000).then(r => r.json());
+    // เว็บมือถือ/ไอแพด (IS_STATIC) ไม่มี live sync ให้รอ ต้อง timeout สั้น (ดู fetchInsiderData)
+    const res = await _fetchTimeout('/api/insider-trades?days=90', IS_STATIC ? 20000 : 200000).then(r => r.json());
     // เวอร์ชันเว็บ (static) เก็บ 180 วันคงที่ — กรองซ้ำฝั่ง client ให้เหลือ 90 วันจริง
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 90);
     const cutoffStr = cutoff.toISOString().slice(0, 10);
@@ -5816,7 +5824,7 @@ async function runScreener() {
     const resultBox = document.getElementById('screener-results');
     if (resultBox) resultBox.innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูลหุ้นต่างประเทศ (DR) — อาจใช้เวลา 1-2 นาทีตอนโหลดครั้งแรก...</div>';
     if (!_drFetchPromise) {
-      _drFetchPromise = _fetchTimeout('/api/dr', 150000)
+      _drFetchPromise = _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000)
         .then(r => r.json())
         .catch(() => null)
         .finally(() => { _drFetchPromise = null; });
@@ -6663,7 +6671,7 @@ async function fsOpenDetail(sym, isDr) {
   if (isDr) {
     if (!_drData) {
       try {
-        const d = await (await _fetchTimeout('/api/dr', 150000)).json();
+        const d = await (await _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000)).json();
         if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
       } catch (e) { fsOpenFin(sym, true); return; }
     }
@@ -14658,7 +14666,7 @@ function initFinPage() {
     if (_drData && _drData.length) {
       _buildDrDatalist();
     } else {
-      _fetchTimeout('/api/dr', 150000).then(r => r.json()).then(d => {
+      _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000).then(r => r.json()).then(d => {
         if (d.stocks) { _drData = _drData || d.stocks; _buildDrDatalist(); }
       }).catch(() => {});
     }
@@ -17431,7 +17439,7 @@ function loadDRPage() {
   document.getElementById('dr-table-wrap').innerHTML =
     '<div class="dr-loading"><span class="dr-load-spin"></span>กำลังโหลดข้อมูล DR/DRx... (ช้าเฉพาะการรันครั้งแรกสุดของเครื่อง ~1 นาที — ปกติขึ้นทันที)</div>';
 
-  _fetchTimeout('/api/dr', 150000)
+  _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000)
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
