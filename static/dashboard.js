@@ -3120,6 +3120,8 @@ function addToWatchlist() {
 function removeFromWatchlist(sym) {
   watchlist = watchlist.filter(s => s !== sym);
   _wlSave();
+  delete _wlMirrorData[sym];
+  _wlMirrorCacheRemove(sym);
   renderWatchlist();
 }
 // ปุ่ม ✕ ในตาราง Watchlist เรียกอันนี้ (ถามยืนยันก่อนลบกันกดผิด) ต่างจาก
@@ -3211,11 +3213,46 @@ async function wlRefreshLivePrices() {
 // on-demand ด้วย endpoint เดียวกับหน้า "📋 Tearsheet" (/api/tearsheet — ดู mirror_ondemand.py)
 // แทนที่จะโชว์แค่ข้อความ "ไม่รองรับ" เฉยๆ — server cache ผลไว้ 1 วันอยู่แล้ว เรียกซ้ำไม่หนัก
 // ฝั่ง client cache ไว้ใน _wlMirrorData ตลอด session กัน re-fetch ทุกครั้งที่ renderWatchlist
+// แล้ว persist ผลสำเร็จลง localStorage (_wlMirrorCacheLoad/Save/Remove) ด้วย เพื่อไม่ต้องโชว์
+// "🔍 กำลังดึงข้อมูล..." ซ้ำทุกครั้งที่เปิดแอปใหม่ (ดู feedback ผู้ใช้ 2026-08-10)
 // ============================================================
 let _wlMirrorData = {};          // key = watchlist entry เต็ม ("US:ZS"/"HK:1024"/"ZS" เผื่อ legacy
                                   // ไม่มี prefix) -> header object (field ชื่อเดียวกับ usMap/hkMap
                                   // entry) หรือ {error} ถ้าดึงไม่สำเร็จ/ไม่ใช่ mirror candidate
 let _wlMirrorFetching = new Set();
+
+// persist ผลสำเร็จลง localStorage (แยกจาก server cache 1 วันใน mirror_ondemand.py) เพราะ
+// _wlMirrorData เดิมเป็นแค่ตัวแปร JS หายทุกครั้งที่ปิด/รีเฟรชหน้า ทำให้หุ้นนอกดัชนีหลักใน
+// Watchlist ต้องยิง request ใหม่ + โชว์ "🔍 กำลังดึงข้อมูล..." ทุกครั้งที่เปิดแอป ทั้งที่ server
+// มีข้อมูลแคชอยู่แล้ว — จำนวนหุ้นใน Watchlist น้อย เก็บ error ไปด้วยไม่คุ้ม (อาจเป็นปัญหาชั่วคราว)
+// จึง cache เฉพาะผลสำเร็จ ใช้ TTL เดียวกับฝั่ง server (stale_days=1) กันข้อมูลเก่าค้าง
+const _WL_MIRROR_LS = 'set_wl_mirror_cache';
+const _WL_MIRROR_TTL_MS = 24 * 60 * 60 * 1000;
+
+function _wlMirrorCacheLoad() {
+  let raw;
+  try { raw = JSON.parse(localStorage.getItem(_WL_MIRROR_LS) || '{}'); } catch (e) { return; }
+  const now = Date.now();
+  for (const [sym, entry] of Object.entries(raw)) {
+    if (entry && entry.t && (now - entry.t) < _WL_MIRROR_TTL_MS) _wlMirrorData[sym] = entry.d;
+  }
+}
+_wlMirrorCacheLoad();
+
+function _wlMirrorCacheSave(sym, data) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(_WL_MIRROR_LS) || '{}');
+    raw[sym] = { d: data, t: Date.now() };
+    localStorage.setItem(_WL_MIRROR_LS, JSON.stringify(raw));
+  } catch (e) {}
+}
+
+function _wlMirrorCacheRemove(sym) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(_WL_MIRROR_LS) || '{}');
+    if (sym in raw) { delete raw[sym]; localStorage.setItem(_WL_MIRROR_LS, JSON.stringify(raw)); }
+  } catch (e) {}
+}
 
 async function _wlFetchTearsheetHeader(mkt, under) {
   const r = await _fetchTimeout(`/api/tearsheet/${mkt.toLowerCase()}/${encodeURIComponent(under)}`, 35000,
@@ -3231,7 +3268,9 @@ async function _wlFetchMirror(sym, mkt, under) {
   if (_wlMirrorFetching.has(sym)) return;
   _wlMirrorFetching.add(sym);
   try {
-    _wlMirrorData[sym] = await _wlFetchTearsheetHeader(mkt, under);
+    const res = await _wlFetchTearsheetHeader(mkt, under);
+    _wlMirrorData[sym] = res;
+    if (!res.error) _wlMirrorCacheSave(sym, res);
   } catch (e) {
     _wlMirrorData[sym] = { error: e.message || 'โหลดไม่สำเร็จ' };
   } finally {
@@ -3255,6 +3294,7 @@ async function _wlFetchMirrorGuessMarket(sym) {
       const idx = watchlist.indexOf(sym);
       if (idx !== -1) { watchlist[idx] = mkt + ':' + sym; _wlSave(); }
       _wlMirrorData[mkt + ':' + sym] = res;
+      _wlMirrorCacheSave(mkt + ':' + sym, res);
     }
     _wlMirrorData[sym] = res;   // cache ผลไว้ (สำเร็จ/พลาดก็ตาม) กัน retry วนทุก render
   } catch (e) {
