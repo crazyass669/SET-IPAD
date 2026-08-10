@@ -22215,6 +22215,7 @@ function openWlAlertModal(sym) {
   const priceLabel = _currentPriceLabel(sym);
   document.getElementById("wl-al-price").placeholder = priceLabel || "0.00";
   document.getElementById("wl-al-price").value = "";
+  document.getElementById("wl-al-cond").value = "below";
   document.getElementById("wl-al-note").value = "";
   _renderWlExistingAlerts(sym);
   document.getElementById("wl-alert-modal").classList.add("open");
