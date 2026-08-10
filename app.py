@@ -2998,6 +2998,43 @@ def financials_analytics():
         return jsonify(result)
 
 
+_MIRROR_SYM_NAME_CACHE = {}   # {ex: (ts, [{symbol,market,name}])}
+_MIRROR_SYM_NAME_TTL = 3600    # เปลี่ยนน้อย (sync รายวัน) แคชไว้กันเปิด DB ซ้ำทุกครั้งที่มี
+                                # symbol ใน Watchlist ไม่รู้จักตลาด (ดู renderWatchlist ฝั่ง frontend)
+
+
+@app.route("/api/mirror-symbol-names")
+def mirror_symbol_names():
+    """symbol+name+market ของหุ้น mirror US/HK ทั้ง universe (เรียก factor_snapshot.
+    get_mirror_symbols — endpoint เบาตัวเดิมที่ /api/mirror-symbols ใช้อยู่แล้วสำหรับหน้า
+    งบการเงิน แค่ query symbol/market ไม่ parse factors) แล้วเติมชื่อบริษัทให้ ใช้เติม
+    datalist ค้นหา/เพิ่มหุ้นใน Watchlist ให้ครอบคลุมหุ้นนอกดัชนีหลักด้วย (เดิมมีแค่สมาชิก
+    S&P500+Dow+NDX/HSI+HSCEI+HSTECH ~623 ตัว จาก us/hk_index_metrics.json ทำให้หุ้นอย่าง
+    ZS/OKTA/S ไม่โผล่ในช่องค้นหาเลย — ดู feedback ผู้ใช้ 2026-08-10) แยก endpoint ต่างหากจาก
+    /api/mirror-symbols เดิม (คนละ response shape — ตัวเดิมคืน {US:[sym,...],HK:[sym,...]}
+    เฉยๆ ให้หน้างบการเงิน เปลี่ยนรูปแบบตรงนั้นจะกระทบของเดิมโดยไม่จำเป็น)
+
+    name มาจาก financials_store.get_names_bulk (payload Yahoo ที่เคย sync แล้วเท่านั้น — ตัวที่
+    ยังไม่เคยถูกเปิดดู/sync จะไม่มีชื่อ คืน null ให้ frontend fallback โชว์แค่ symbol) ไม่ใช่จาก
+    factor_snapshot ตรงๆ (field 'name' ในนั้น default = symbol เฉยๆ ไม่ใช่ชื่อบริษัทจริง)
+    HK คืน symbol แบบมี suffix ".HK" ให้ตรง convention เดียวกับ hk_index_metrics.json/
+    _wlFetchMirror ฝั่ง frontend (mirror namespace เก็บรหัสดิบไม่มี suffix ต้องต่อเอง)"""
+    out = []
+    mirror_syms = factor_snapshot.get_mirror_symbols(BASE_DIR)
+    for ex in ("US", "HK"):
+        cached = _MIRROR_SYM_NAME_CACHE.get(ex)
+        if cached and (time.time() - cached[0] < _MIRROR_SYM_NAME_TTL):
+            out.extend(cached[1])
+            continue
+        names = financials_store.get_names_bulk(BASE_DIR, f"FINN:{ex}:")
+        suffix = ".HK" if ex == "HK" else ""
+        entries = [{"symbol": sym + suffix, "market": ex, "name": names.get(sym)}
+                   for sym in mirror_syms.get(ex, [])]
+        _MIRROR_SYM_NAME_CACHE[ex] = (time.time(), entries)
+        out.extend(entries)
+    return jsonify({"stocks": out})
+
+
 @app.route("/api/factor-screener")
 def factor_screener():
     """Deep Screener — ตารางปัจจัยพื้นฐานต่อหุ้น (รวม Finnomena+Yahoo+SET) จาก factor_snapshot

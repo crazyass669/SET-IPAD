@@ -46,11 +46,30 @@ function _wlSave() {
   });
 }
 
+function _wlHasPrefix(s) {
+  return s.startsWith("DR:") || s.startsWith("US:") || s.startsWith("HK:");
+}
+function _wlBaseSym(s) {
+  return _wlHasPrefix(s) ? s.slice(3) : s;
+}
+
+// เช็คว่า list มี sym นี้ "อยู่แล้ว" ไม่ว่าจะอยู่ในรูป bare (ยังไม่ migrate) หรือ prefixed
+// (migrate แล้ว) ก็ตาม — ใช้ตอน merge จาก server กัน entry ซ้ำเวลา migrate ในเครื่องนี้ (เช่น
+// renderWatchlist เจอ "OKTA" ตรงกับ US Index/mirror เลยเปลี่ยนเป็น "US:OKTA") วิ่งชนกับจังหวะที่
+// _wlSyncFromServer ยังถือ list เก่าที่มีแต่ "OKTA" bare อยู่ — merge ตรงตัวเดิมจะเห็นว่า "OKTA"
+// ไม่อยู่ใน watchlist (มีแต่ "US:OKTA") แล้ว push "OKTA" กลับเข้ามาซ้ำ กลายเป็น 2 รายการ
+// ไม่เทียบข้าม prefix ต่างชนิด (DR:META กับ US:META ยังนับเป็นคนละตัวเสมอ — คนละสินทรัพย์จริง)
+function _wlListHas(list, sym) {
+  if (list.includes(sym)) return true;
+  if (!_wlHasPrefix(sym)) return list.some(w => _wlHasPrefix(w) && _wlBaseSym(w) === sym);
+  return list.includes(_wlBaseSym(sym));
+}
+
 (function _wlSyncFromServer() {
   fetch('/api/watchlist').then(r => r.json()).then(serverList => {
     if (!Array.isArray(serverList)) return;
     let changed = false;
-    serverList.forEach(s => { if (typeof s === 'string' && !watchlist.includes(s)) { watchlist.push(s); changed = true; } });
+    serverList.forEach(s => { if (typeof s === 'string' && !_wlListHas(watchlist, s)) { watchlist.push(s); changed = true; } });
     if (changed) {
       localStorage.setItem("set_wl", JSON.stringify(watchlist));
       if (document.getElementById('page-watchlist')?.classList.contains('active')) renderWatchlist();
@@ -2997,35 +3016,66 @@ function renderStocksTable() {
 // ============================================================
 // WATCHLIST
 // ============================================================
-let _wlSymListReady = false;    // true เมื่อ build ด้วย DR/US/HK ครบแล้ว (ไม่ใช่แค่ SET)
+let _wlSymListReady = false;    // true เมื่อ build ด้วย DR/US/HK/mirror ครบแล้ว (ไม่ใช่แค่ SET)
 let _wlSymListFetching = false;
+let _wlSymListLastAttempt = 0;  // กัน retry ถี่ยิบทุก renderWatchlist() ถ้า endpoint ใดพัง
+                                 // ค้าง (เช่น /api/mirror-symbol-names 500 ทุกครั้ง) — cooldown
+                                 // 30 วิ ต่อรอบแทนที่จะยิงซ้ำไม่หยุด (พบจาก code review 2026-08-10)
+const _WL_SYM_LIST_RETRY_MS = 30000;
+let _wlMirrorSymList = null;    // [{symbol,market,name}] จาก /api/mirror-symbols — หุ้น US/HK
+                                 // ทั้ง universe ที่ Screener+ คำนวณ factor ไว้แล้ว (~5,000 ตัว
+                                 // รวมสมาชิกดัชนีหลักด้วย ต้อง dedupe กับ usSyms/hkSyms เอง)
+                                 // มีไว้ให้ช่องค้นหาเจอหุ้นอย่าง ZS/OKTA/S ที่ไม่อยู่ในดัชนีหลัก
+                                 // (เดิมค้นไม่เจอเลย ต้องพิมพ์ "US:"/"HK:" นำหน้าเดาเอาเอง)
 function _wlPopulateSymList() {
   const dl = document.getElementById("wl-sym-list");
   if (!dl) return;
   if (dl.children.length === 0 || !_wlSymListReady) {
-    const setSyms = (DATA?.stocks || []).map(s => s.symbol).sort();
-    const drSyms  = (_drData || []).map(s => s.sym).sort();
-    const usSyms  = (_usData?.stocks || []).map(s => s.symbol).sort();
-    const hkSyms  = (_hkData?.stocks || []).map(s => s.symbol).sort();
+    const setList = DATA?.stocks || [];
+    const drList  = _drData || [];
+    const usList  = _usData?.stocks || [];
+    const hkList  = _hkData?.stocks || [];
+    const setSyms = setList.map(s => s.symbol).sort();
+    const drSyms  = drList.map(s => s.sym).sort();
+    const usSyms  = usList.map(s => s.symbol).sort();
+    const hkSyms  = hkList.map(s => s.symbol).sort();
+    // ชื่อบริษัทเต็ม → ใส่ในป้าย option ด้วย (เช่น "FTNT — Fortinet, Inc. (US Index)")
+    // ให้พิมพ์ค้นหาด้วยชื่อบริษัทได้ ไม่ใช่แค่ symbol — เบราว์เซอร์กรอง <datalist> จากข้อความ
+    // ป้ายทั้งก้อน ไม่ใช่แค่ value
+    const setNameMap = Object.fromEntries(setList.map(s => [s.symbol, s.name]));
+    const drNameMap  = Object.fromEntries(drList.map(s => [s.sym, s.name]));
+    const usNameMap  = Object.fromEntries(usList.map(s => [s.symbol, s.name]));
+    const hkNameMap  = Object.fromEntries(hkList.map(s => [s.symbol, s.name]));
+    const withName = (sym, name) => sym + (name && name !== sym ? ' — ' + _escHtml(name) : '');
     // value ต้องมี prefix DR:/US:/HK: (เหมือน key ที่ addToWatchlist ใช้จริง) ไม่งั้นถ้า
     // symbol ชนกับ SET (เช่น META มีทั้ง SET, DR, US Index) ตัว value ของทั้ง 3 ตัวเลือกจะ
     // เหมือนกันหมด — เลือกจาก dropdown ตัวไหนก็ได้ text "META" เฉยๆ กลับมา แล้ว
     // addToWatchlist จะ resolve เป็น SET เสมอ (ลำดับ SET > DR > US > HK) ทั้งที่ผู้ใช้ตั้งใจ
     // เลือก DR หรือ US
+    // mirror นอกดัชนีหลัก — กรองตัวที่ซ้ำกับ usSyms/hkSyms ออก (get_mirror_snapshot คืนสมาชิก
+    // ดัชนีหลักมาด้วย ไม่ใช่แค่ตัวนอกดัชนี) ใส่ชื่อบริษัทในป้ายให้แยกง่าย (เช่น "S — SentinelOne,
+    // Inc." กับ "S (SET)" จะได้ไม่สับสนกันตอนพิมพ์สั้นๆ ชนกับหุ้นไทย — ดู feedback 2026-08-10)
+    const usSet = new Set(usSyms), hkSet = new Set(hkSyms);
+    const mirrorSyms = (_wlMirrorSymList || [])
+      .filter(m => !(m.market === 'US' ? usSet : hkSet).has(m.symbol))
+      .sort((a, b) => a.symbol.localeCompare(b.symbol));
     dl.innerHTML =
-      setSyms.map(s => `<option value="${s}" label="${s} (SET)">`).join("") +
-      drSyms.map(s => `<option value="DR:${s}" label="${s} (DR/DRx)">`).join("") +
-      usSyms.map(s => `<option value="US:${s}" label="${s} (US Index)">`).join("") +
-      hkSyms.map(s => `<option value="HK:${s}" label="${s} (HK Index)">`).join("");
-    _wlSymListReady = !!(_drData && _usData && _hkData);
-    // ถ้ายังไม่มี DR/US/HK (เช่นเปิดหน้า Watchlist เป็นหน้าแรกโดยไม่เคยเข้าหน้า DR/US/HK
+      setSyms.map(s => `<option value="${s}" label="${withName(s, setNameMap[s])} (SET)">`).join("") +
+      drSyms.map(s => `<option value="DR:${s}" label="${withName(s, drNameMap[s])} (DR/DRx)">`).join("") +
+      usSyms.map(s => `<option value="US:${s}" label="${withName(s, usNameMap[s])} (US Index)">`).join("") +
+      hkSyms.map(s => `<option value="HK:${s}" label="${withName(s, hkNameMap[s])} (HK Index)">`).join("") +
+      mirrorSyms.map(m => `<option value="${m.market}:${m.symbol}" label="${withName(m.symbol, m.name)} (${m.market}, นอกดัชนีหลัก)">`).join("");
+    _wlSymListReady = !!(_drData && _usData && _hkData && _wlMirrorSymList);
+    // ถ้ายังไม่มี DR/US/HK/mirror (เช่นเปิดหน้า Watchlist เป็นหน้าแรกโดยไม่เคยเข้าหน้า DR/US/HK
     // มาก่อน) ให้ดึงมาเบื้องหลังเพื่อให้ค้นหาเจอหุ้นต่างประเทศด้วย ไม่ใช่แค่ SET
-    if (!_wlSymListReady && !_wlSymListFetching) {
+    if (!_wlSymListReady && !_wlSymListFetching && (Date.now() - _wlSymListLastAttempt > _WL_SYM_LIST_RETRY_MS)) {
       _wlSymListFetching = true;
+      _wlSymListLastAttempt = Date.now();
       Promise.all([
         _drData ? Promise.resolve() : _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000).then(r => r.json()).then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; } }).catch(() => {}),
         _usData ? Promise.resolve() : fetch('/api/us-index-metrics').then(r => r.json()).then(d => { _usData = d; }).catch(() => {}),
         _hkData ? Promise.resolve() : fetch('/api/hk-index-metrics').then(r => r.json()).then(d => { _hkData = d; }).catch(() => {}),
+        _wlMirrorSymList ? Promise.resolve() : fetch('/api/mirror-symbol-names').then(r => r.json()).then(d => { _wlMirrorSymList = d.stocks || []; }).catch(() => {}),
       ]).then(() => {
         _wlSymListFetching = false;
         dl.innerHTML = "";   // reset ให้ rebuild ครบชุดรอบถัดไป
@@ -3156,6 +3206,89 @@ async function wlRefreshLivePrices() {
   renderWatchlist();
 }
 
+// ============================================================
+// WATCHLIST — หุ้น US/HK นอกดัชนีหลัก (ไม่อยู่ใน us/hk_index_metrics.json) ดึงข้อมูลแบบ
+// on-demand ด้วย endpoint เดียวกับหน้า "📋 Tearsheet" (/api/tearsheet — ดู mirror_ondemand.py)
+// แทนที่จะโชว์แค่ข้อความ "ไม่รองรับ" เฉยๆ — server cache ผลไว้ 1 วันอยู่แล้ว เรียกซ้ำไม่หนัก
+// ฝั่ง client cache ไว้ใน _wlMirrorData ตลอด session กัน re-fetch ทุกครั้งที่ renderWatchlist
+// ============================================================
+let _wlMirrorData = {};          // key = watchlist entry เต็ม ("US:ZS"/"HK:1024"/"ZS" เผื่อ legacy
+                                  // ไม่มี prefix) -> header object (field ชื่อเดียวกับ usMap/hkMap
+                                  // entry) หรือ {error} ถ้าดึงไม่สำเร็จ/ไม่ใช่ mirror candidate
+let _wlMirrorFetching = new Set();
+
+async function _wlFetchTearsheetHeader(mkt, under) {
+  const r = await _fetchTimeout(`/api/tearsheet/${mkt.toLowerCase()}/${encodeURIComponent(under)}`, 35000,
+    'หมดเวลารอข้อมูล (เกิน 35 วิ) — หุ้นตัวนี้อาจอยู่นอกดัชนีหลักและต้องดึงราคาสดจาก Yahoo ครั้งแรก ลองใหม่อีกครั้ง');
+  const d = await r.json();
+  if (d.error) return { error: d.error };
+  return { ...d.header, price_history: d.header.sparkline };
+}
+
+// ดึงข้อมูลหุ้น US:/HK: ที่รู้ตลาดแน่ชัดอยู่แล้ว (มี prefix) — เรียกครั้งเดียวต่อ symbol แล้ว
+// re-render ให้เอง (pattern เดียวกับ _drData/_usData/_hkData bulk fetch ด้านบนใน renderWatchlist)
+async function _wlFetchMirror(sym, mkt, under) {
+  if (_wlMirrorFetching.has(sym)) return;
+  _wlMirrorFetching.add(sym);
+  try {
+    _wlMirrorData[sym] = await _wlFetchTearsheetHeader(mkt, under);
+  } catch (e) {
+    _wlMirrorData[sym] = { error: e.message || 'โหลดไม่สำเร็จ' };
+  } finally {
+    _wlMirrorFetching.delete(sym);
+    renderWatchlist();
+  }
+}
+
+// หุ้น legacy ที่เก็บแบบไม่มี prefix แล้วไม่เจอใน SET/DR/US-idx/HK-idx เลย (เช่น watchlist
+// เดิมก่อนมี prefix บังคับ) — ไม่รู้ตลาด ลอง US ก่อน (พบบ่อยกว่า) แล้วค่อย HK ถ้าพลาด
+// /api/tearsheet เช็ค mirror_candidates ก่อนเสมอ (local lookup ไม่ยิง Yahoo) ถึงจะไปดึงราคาจริง
+// เดาตลาดผิดจึงไม่แพง — สำเร็จแล้ว migrate entry เป็น "US:"/"HK:" ให้เลยเหมือน DR/US/HK เดิม
+async function _wlFetchMirrorGuessMarket(sym) {
+  if (_wlMirrorFetching.has(sym)) return;
+  _wlMirrorFetching.add(sym);
+  try {
+    let res = await _wlFetchTearsheetHeader('US', sym);
+    let mkt = 'US';
+    if (res.error) { res = await _wlFetchTearsheetHeader('HK', sym); mkt = 'HK'; }
+    if (!res.error) {
+      const idx = watchlist.indexOf(sym);
+      if (idx !== -1) { watchlist[idx] = mkt + ':' + sym; _wlSave(); }
+      _wlMirrorData[mkt + ':' + sym] = res;
+    }
+    _wlMirrorData[sym] = res;   // cache ผลไว้ (สำเร็จ/พลาดก็ตาม) กัน retry วนทุก render
+  } catch (e) {
+    _wlMirrorData[sym] = { error: e.message || 'โหลดไม่สำเร็จ' };
+  } finally {
+    _wlMirrorFetching.delete(sym);
+    renderWatchlist();
+  }
+}
+
+function _wlMirrorLoadingRow(sym, label, mkt) {
+  const tag = mkt ? `<span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:4px">${_escHtml(mkt)}</span>` : '';
+  return `
+    <tr>
+      <td class="text2">—</td>
+      <td><strong style="color:var(--blue)">${_escHtml(label)}</strong>${tag}</td>
+      <td colspan="14" class="text2">🔍 กำลังดึงข้อมูล ${_escHtml(label)} จาก Yahoo (หุ้นนอกดัชนีหลัก ครั้งแรกอาจช้ากว่าปกติ)...</td>
+      <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(sym)}')">✕</button></td>
+    </tr>`;
+}
+
+function _wlMirrorErrorRow(sym, under, mkt, errMsg) {
+  return `
+    <tr>
+      <td class="text2">—</td>
+      <td><strong style="color:var(--blue)">${_escHtml(under)}</strong>
+        <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:4px">${_escHtml(mkt)}</span>
+      </td>
+      <td colspan="13" class="text2" style="color:var(--red)">${_escHtml(errMsg)}</td>
+      <td class="r"><button class="btn-secondary" style="font-size:11px;padding:4px 8px;white-space:nowrap" onclick="_wlOpenMirrorTearsheet('${_escJsAttr(mkt)}','${_escJsAttr(under)}')">📋 Tearsheet</button></td>
+      <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(sym)}')">✕</button></td>
+    </tr>`;
+}
+
 function renderWatchlist() {
   _wlPopulateSymList();
   if (!DATA) {
@@ -3209,7 +3342,13 @@ function renderWatchlist() {
     return;
   }
 
-  const rows = watchlist.map(sym => {
+  // จัดเรียงตามตลาด: หุ้นไทย(ไม่มี prefix) → DR → US → HK → JP (sort เสถียร คงลำดับเดิม
+  // ภายในกลุ่มเดียวกัน) เรียงแค่ตอน render ไม่แตะ watchlist จริง กัน indexOf/migrate ด้านล่างพัง
+  const _wlMarketRank = sym =>
+    sym.startsWith("DR:") ? 1 : sym.startsWith("US:") ? 2 : sym.startsWith("HK:") ? 3 : sym.startsWith("JP:") ? 4 : 0;
+  const sortedWatchlist = [...watchlist].sort((a, b) => _wlMarketRank(a) - _wlMarketRank(b));
+
+  const rows = sortedWatchlist.map(sym => {
     // ── DR row ──
     if (sym.startsWith("DR:")) {
       const under = sym.slice(3);
@@ -3256,26 +3395,25 @@ function renderWatchlist() {
         </tr>`;
     }
 
-    // ── US Index row (S&P500/Dow/NDX จาก us_index_metrics.json) ──
+    // ── US Index row (S&P500/Dow/NDX จาก us_index_metrics.json) — ถ้าไม่เจอในดัชนีหลัก
+    // ลอง on-demand mirror data (_wlMirrorData, เติมโดย _wlFetchMirror) เหมือนหน้า Tearsheet ──
     if (sym.startsWith("US:")) {
       const under = sym.slice(3);
-      const u = usMap[under];
-      if (!u) return `
-        <tr>
-          <td class="text2">—</td>
-          <td><strong style="color:var(--blue)">${under}</strong>
-            <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:4px">US</span>
-          </td>
-          <td colspan="13" class="text2">ไม่อยู่ในดัชนีหลัก S&amp;P500/Dow/NDX ที่เก็บราคาไว้ในเครื่อง — Watchlist ตารางนี้ยังไม่รองรับหุ้นนอกดัชนี (Quick Update ไม่ช่วย)</td>
-          <td class="r"><button class="btn-secondary" style="font-size:11px;padding:4px 8px;white-space:nowrap" onclick="_wlOpenMirrorTearsheet('US','${under}')">📋 Tearsheet</button></td>
-          <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
-        </tr>`;
+      let u = usMap[under];
+      let isMirror = false;
+      if (!u) {
+        const m = _wlMirrorData[sym];
+        if (m && !m.error) { u = m; isMirror = true; }
+        else if (m && m.error) return _wlMirrorErrorRow(sym, under, 'US', m.error);
+        else { _wlFetchMirror(sym, 'US', under); return _wlMirrorLoadingRow(sym, under, 'US'); }
+      }
       return `
         <tr data-sym="US:${u.symbol}">
           <td><span class="${rsColor(u.rs_score)}" style="font-weight:700">${u.rs_score??"-"}</span></td>
           <td>
-            <strong class="sym-link" style="color:var(--blue)" onclick="openUsChartModal('${u.symbol}')">${u.symbol}</strong>
+            <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('US','${u.symbol}')` : `openUsChartModal('${u.symbol}')`}">${u.symbol}</strong>
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">US</span>
+            ${isMirror ? `<span style="font-size:9px;color:var(--text2)" title="หุ้นนอกดัชนีหลัก S&P500/Dow/NDX — ข้อมูลดึงแบบ on-demand เหมือนหน้า Tearsheet (cache 1 วัน)">🔍</span>` : ''}
             ${_usTvLink(u.symbol)}
           </td>
           <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.name)||"—"}</td>
@@ -3296,26 +3434,25 @@ function renderWatchlist() {
         </tr>`;
     }
 
-    // ── HK Index row (HSI/HSTECH/HSCEI จาก hk_index_metrics.json) ──
+    // ── HK Index row (HSI/HSTECH/HSCEI จาก hk_index_metrics.json) — ถ้าไม่เจอในดัชนีหลัก
+    // ลอง on-demand mirror data (_wlMirrorData, เติมโดย _wlFetchMirror) เหมือนหน้า Tearsheet ──
     if (sym.startsWith("HK:")) {
       const under = sym.slice(3);
-      const h = hkMap[under];
-      if (!h) return `
-        <tr>
-          <td class="text2">—</td>
-          <td><strong style="color:var(--blue)">${under}</strong>
-            <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:4px">HK</span>
-          </td>
-          <td colspan="13" class="text2">ไม่อยู่ในดัชนีหลัก HSI/HSCEI/HSTECH ที่เก็บราคาไว้ในเครื่อง — Watchlist ตารางนี้ยังไม่รองรับหุ้นนอกดัชนี (Quick Update ไม่ช่วย)</td>
-          <td class="r"><button class="btn-secondary" style="font-size:11px;padding:4px 8px;white-space:nowrap" onclick="_wlOpenMirrorTearsheet('HK','${under}')">📋 Tearsheet</button></td>
-          <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
-        </tr>`;
+      let h = hkMap[under];
+      let isMirror = false;
+      if (!h) {
+        const m = _wlMirrorData[sym];
+        if (m && !m.error) { h = m; isMirror = true; }
+        else if (m && m.error) return _wlMirrorErrorRow(sym, under, 'HK', m.error);
+        else { _wlFetchMirror(sym, 'HK', under); return _wlMirrorLoadingRow(sym, under, 'HK'); }
+      }
       return `
         <tr data-sym="HK:${h.symbol}">
           <td><span class="${rsColor(h.rs_score)}" style="font-weight:700">${h.rs_score??"-"}</span></td>
           <td>
-            <strong class="sym-link" style="color:var(--blue)" onclick="openHkChartModal('${h.symbol}')">${h.symbol}</strong>
+            <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('HK','${h.symbol}')` : `openHkChartModal('${h.symbol}')`}">${h.symbol}</strong>
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">HK</span>
+            ${isMirror ? `<span style="font-size:9px;color:var(--text2)" title="หุ้นนอกดัชนีหลัก HSI/HSCEI/HSTECH — ข้อมูลดึงแบบ on-demand เหมือนหน้า Tearsheet (cache 1 วัน)">🔍</span>` : ''}
             ${_hkTvLink(h.symbol)}
           </td>
           <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(h.name)||"—"}</td>
@@ -3456,10 +3593,19 @@ function renderWatchlist() {
             <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${newSym}')">✕</button></td>
           </tr>`;
       }
+      // ไม่เจอในทุกแหล่งที่รู้ตลาดแน่ชัด (SET/DR/US-idx/HK-idx) — อาจเป็นหุ้น mirror นอกดัชนี
+      // หลักที่เก็บไว้แบบไม่มี prefix ตั้งแต่ก่อนมี prefix บังคับ (เช่น OKTA/ZS) ลอง on-demand
+      // เดาตลาด (_wlFetchMirrorGuessMarket) — สำเร็จแล้วจะ migrate เป็น "US:"/"HK:" ให้เอง
+      // แล้ว re-render ผ่าน branch ด้านบนตรงๆ ไม่ผ่าน path นี้อีก
+      const guess = _wlMirrorData[sym];
+      if (!guess) {
+        _wlFetchMirrorGuessMarket(sym);
+        return _wlMirrorLoadingRow(sym, sym, null);
+      }
       return `
         <tr>
           <td class="text2">—</td><td><strong>${sym}</strong></td>
-          <td colspan="14" class="text2">ไม่พบข้อมูล</td>
+          <td colspan="14" class="text2">ไม่พบข้อมูล${guess.error ? ` — ${_escHtml(guess.error)}` : ''}</td>
           <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${sym}')">✕</button></td>
         </tr>`;
     }
@@ -3506,6 +3652,13 @@ function renderWatchlist() {
       .map(h => ({ ...h, symbol: "HK:" + h.symbol }));
     renderSparklinesInTable("wl-tbody", hkRows);
   }
+
+  // sparklines: US/HK mirror นอกดัชนีหลัก — ดึง on-demand เหมือน Tearsheet แล้ว cache ไว้ใน
+  // _wlMirrorData (key = watchlist entry เต็มอยู่แล้ว เช่น "US:ZS" ตรงกับ data-sym พอดี)
+  const mirrorRows = Object.entries(_wlMirrorData)
+    .filter(([k, d]) => watchlist.includes(k) && d && !d.error && d.price_history?.length)
+    .map(([k, d]) => ({ ...d, symbol: k }));
+  if (mirrorRows.length) renderSparklinesInTable("wl-tbody", mirrorRows);
 
   // sparklines: DR — วาดจาก close100 ที่ฝังใน data-dr-close
   requestAnimationFrame(() => {
@@ -10505,6 +10658,21 @@ function _escHtml(s) {
   }[c]));
 }
 
+// escape สำหรับแทรกใน onclick="fn('...')" — ต่างจาก _escHtml เฉยๆ เพราะ inline event
+// handler ถูก HTML-decode ก่อนแล้วค่อย compile เป็น JS (ไม่ใช่ escape ตอน parse HTML ธรรมดา)
+// ถ้า escape ' เป็น &#39; อย่างเดียวจะ decode กลับเป็น ' ตัวเดิมก่อน JS compile เหมือนไม่ escape
+// เลย — ต้องกัน 2 ชั้น: (1) \' กัน JS string ปิดก่อนเวลา (2) &quot;/&amp; กัน HTML attribute
+// (ที่ห่อด้วย ") ปิดก่อนเวลา ใช้กับ sym/under ที่มาจาก watchlist entry (backend เช็คแค่
+// isinstance(str) ไม่กรองตัวอักษร — ดู code review 2026-08-10)
+function _escJsAttr(s) {
+  return String(s ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;');
+}
+
 function _drDescHtml(d, textId) {
   return `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
@@ -12588,7 +12756,7 @@ function _usTvUrl(sym, interval) {
 }
 
 function _usTvLink(sym) {
-  return `<a href="${_usTvUrl(sym)}" target="_blank" title="เปิด TradingView" style="text-decoration:none;font-size:10px;margin-left:3px;opacity:.6">↗</a>`;
+  return `<a class="tv-link" href="${_usTvUrl(sym)}" target="_blank" title="เปิด TradingView">↗</a>`;
 }
 
 function renderUsTable() {
@@ -12916,7 +13084,7 @@ const _HK_COLS = [
 // รูปแบบ yfinance ("0700.HK") ที่ใช้เก็บใน hk_prices.db/hk_index_metrics.json
 function _hkTvLink(sym) {
   const code = sym.replace(/\.HK$/i, '').replace(/^0+/, '') || '0';
-  return `<a href="https://www.tradingview.com/chart/?symbol=HKEX%3A${encodeURIComponent(code)}" target="_blank" title="เปิด TradingView" style="text-decoration:none;font-size:10px;margin-left:3px;opacity:.6">↗</a>`;
+  return `<a class="tv-link" href="https://www.tradingview.com/chart/?symbol=HKEX%3A${encodeURIComponent(code)}" target="_blank" title="เปิด TradingView">↗</a>`;
 }
 
 function renderHkTable() {
@@ -13168,7 +13336,7 @@ const _JP_COLS = [
 // เก็บใน jp_prices.db/jp_index_metrics.json
 function _jpTvLink(sym) {
   const code = sym.replace(/\.T$/i, '');
-  return `<a href="https://www.tradingview.com/chart/?symbol=TSE%3A${encodeURIComponent(code)}" target="_blank" title="เปิด TradingView" style="text-decoration:none;font-size:10px;margin-left:3px;opacity:.6">↗</a>`;
+  return `<a class="tv-link" href="https://www.tradingview.com/chart/?symbol=TSE%3A${encodeURIComponent(code)}" target="_blank" title="เปิด TradingView">↗</a>`;
 }
 
 function renderJpTable() {
@@ -22144,7 +22312,21 @@ function _alertsPush(arr) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ alerts: arr }),
-  }).catch(() => console.warn('sync แจ้งเตือนราคาไปเซิร์ฟเวอร์ไม่สำเร็จ — บันทึกได้แค่ในเครื่องนี้ (localStorage)'));
+  }).then(r => {
+    const note = document.getElementById('al-sync-note');
+    if (!note) return;
+    if (r.ok) { note.textContent = ''; return; }
+    // เกิน 500 ตัว (limit ฝั่ง backend — ดู save_price_alerts ใน app.py) หรือ payload ผิดรูป —
+    // localStorage เครื่องนี้ยังบันทึกได้ปกติ แต่ sync ข้ามเครื่องหยุดทำงานเงียบๆ ถ้าไม่แจ้ง
+    // (เดิม .catch() เช็คแค่ network fail ไม่เช็ค r.ok เลย ตอบ 400 ก็เงียบเหมือนสำเร็จ —
+    // พบจาก code review 2026-08-10 เหมือน _wlSave ที่เคยแก้ปัญหานี้ไปแล้ว)
+    note.textContent = arr.length > 500
+      ? `⚠ แจ้งเตือนเกิน 500 รายการ (มี ${arr.length}) — เกินลิมิต sync ข้ามเครื่อง บันทึกได้แค่ในเครื่องนี้`
+      : '⚠ บันทึกแจ้งเตือนไปเซิร์ฟเวอร์ไม่สำเร็จ — sync ข้ามเครื่องอาจไม่ทำงาน';
+  }).catch(() => {
+    const note = document.getElementById('al-sync-note');
+    if (note) note.textContent = '⚠ ติดต่อเซิร์ฟเวอร์ไม่ได้ — บันทึกแจ้งเตือนได้แค่ในเครื่องนี้ (localStorage)';
+  });
 }
 
 (function _alertsSyncFromServer() {

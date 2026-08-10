@@ -496,8 +496,14 @@
   /* SYMBOL LINK */
   .sym-link { cursor: pointer; color: var(--blue); }
   .sym-link:hover { text-decoration: underline; }
-  .tv-link { font-size:10px; color:var(--text2); opacity:0.55; text-decoration:none; margin-left:3px; vertical-align:middle; }
-  .tv-link:hover { opacity:1; color:#2962ff; }
+  .tv-link {
+    display:inline-flex; align-items:center; justify-content:center;
+    width:15px; height:15px; font-size:10px; line-height:1;
+    color:var(--blue); background:rgba(88,166,255,.15);
+    border-radius:50%; text-decoration:none; margin-left:4px; vertical-align:middle;
+    transition:background .15s,transform .15s;
+  }
+  .tv-link:hover { background:rgba(88,166,255,.35); transform:scale(1.15); }
 
   /* BAND PAGE */
   .band-search-row { display:flex; gap:8px; margin-bottom:20px; }
