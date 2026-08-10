@@ -20681,7 +20681,10 @@ let _confluenceFilter = 'all';
 // สร้าง Map ใหม่เมื่อ DATA ถูกแทนที่ด้วยก้อนใหม่เท่านั้น (เทียบ identity)
 let _stockIdxMap = null, _stockIdxSrc = null;
 function _stockBySym(sym) {
-  if (_stockIdxSrc !== DATA) {
+  // ต้องเช็ค !_stockIdxMap ด้วย ไม่ใช่แค่ _stockIdxSrc !== DATA — ตอนหน้าเว็บเพิ่งโหลด
+  // ทั้งคู่เป็น null เท่ากัน (null !== null = false) ถ้าเรียกฟังก์ชันนี้ก่อน loadData()
+  // เสร็จ (เช่นเปิดหน้า Insider เร็วๆ) จะข้าม Map ไปเลยแล้ว .get() ค้าง null พัง
+  if (_stockIdxSrc !== DATA || !_stockIdxMap) {
     _stockIdxSrc = DATA;
     _stockIdxMap = new Map((DATA?.stocks || []).map(s => [s.symbol, s]));
   }
