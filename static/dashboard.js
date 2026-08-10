@@ -8118,6 +8118,7 @@ function renderTearsheet(d) {
         <button class="btn-secondary" style="font-size:12.5px" onclick="_tsGoFilings('${h.symbol}')">📑 เอกสาร</button>
         <button class="btn-secondary" style="font-size:12.5px" onclick="_tsGoPeer('${h.symbol}')">🆚 เทียบเพื่อน</button>
         <button class="btn-secondary" style="font-size:12.5px" onclick="_tsGoDividends('${h.symbol}')">💵 ปันผล</button>
+        <button class="btn-secondary" style="font-size:12.5px" onclick="_tsGoFin('${h.symbol}')">🧾 เมนูงบการเงิน</button>
       </div>
     </div>`;
 
