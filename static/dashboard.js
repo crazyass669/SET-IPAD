@@ -6323,6 +6323,10 @@ let _fsRows = null, _fsLoaded = false, _fsBuilt = false;
 let _fsMainMetaText = '';   // ข้อความ fs-meta ของ snapshot หลัก (ไทย+DR) — สลับกลับมาโชว์เมื่อออกจาก universe US/HK
 let _fsMirNames = {};   // {US: {ticker: ชื่อบริษัท}, HK: {...}} — โชว์ใต้ symbol ในตารางผล
 let _fsSort = { key: 'roe', dir: -1 };
+// นับ request ล่าสุดของ _runFscreenerMirror — กันสลับตลาด/แก้ filter รัวๆ ก่อน request
+// เดิมเสร็จ แล้ว response เก่ามาถึงทีหลัง response ใหม่ (ไม่รับประกันลำดับ) เขียนทับ
+// ผลลัพธ์ที่ถูกต้องด้วยข้อมูลเก่า/ผิดตลาดแบบเงียบๆ (เจอตอนรีวิว 2026-08-11)
+let _fsMirrorReqId = 0;
 
 // นิยาม filter: cmp 'gte' เก็บถ้า >= ค่า, 'lte' เก็บถ้า <= ค่า, 'bool' = checkbox (เก็บถ้า field จริง)
 // ช่องตัวเลขว่าง = ไม่กรองข้อนั้น (แบบเดียวกับ Stock Screener) · tip = คำอธิบายเมื่อชี้ที่ ?
@@ -7177,6 +7181,7 @@ function _fsReadConds() {
 
 // mirror US/HK: ชุดใหญ่มาก (US ~17k) — กรองฝั่ง server ส่งกลับเฉพาะผลลัพธ์ ≤500
 async function _runFscreenerMirror(uni, conds) {
+  const myReqId = ++_fsMirrorReqId;
   const box = document.getElementById('fs-results');
   box.innerHTML = '<div class="empty" style="padding:24px">กำลังค้นหุ้น ' + uni.toUpperCase() + ' (Finnomena)...</div>';
   const dir = _fsSort.dir < 0 ? 'desc' : 'asc';
@@ -7184,6 +7189,9 @@ async function _runFscreenerMirror(uni, conds) {
   try {
     const r = await fetch(url);
     const d = await r.json();
+    // มี request ใหม่กว่ายิงออกไปแล้ว (ผู้ใช้สลับตลาด/แก้ filter ระหว่างรอ) — ทิ้ง response
+    // นี้ ไม่เขียนทับผลลัพธ์ที่ถูกต้องของ request ล่าสุด (response ไม่รับประกันลำดับกลับ)
+    if (myReqId !== _fsMirrorReqId) return;
     const rows = d.rows || [];
     _fsResultCache = rows;
     const total = d.total || rows.length;
@@ -7222,6 +7230,7 @@ async function _runFscreenerMirror(uni, conds) {
     }
     box.insertBefore(note, box.firstChild);
   } catch (e) {
+    if (myReqId !== _fsMirrorReqId) return;   // request เก่าที่ถูกแทนที่แล้ว — เงียบไว้ ไม่ทับ error ของอันใหม่
     box.innerHTML = '<div class="empty" style="color:var(--red)">ค้นไม่สำเร็จ: ' + e.message + '</div>';
   }
 }

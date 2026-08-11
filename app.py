@@ -3171,6 +3171,11 @@ def factor_screener():
                     r["z_excluded_reason"] = "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"
         try:
             filters = json.loads(request.args.get("filters") or "[]")
+            # ต้องเป็น list ของ dict {k,cmp,v} เท่านั้น — filters ที่ parse JSON ผ่านแต่ shape
+            # ผิด (เช่น URL ถูกแก้มือ/บุ๊คมาร์คเก่าค้าง) จะทำ c.get(...) ใน _keep() ด้านล่าง
+            # throw AttributeError ถ้าไม่กันตรงนี้ (ปกติ UI ส่ง shape ถูกเสมอ แต่กันไว้เผื่อ)
+            if not isinstance(filters, list) or not all(isinstance(c, dict) for c in filters):
+                filters = []
         except Exception:
             filters = []
         sort_key = request.args.get("sort") or "roe"
