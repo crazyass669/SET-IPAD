@@ -255,7 +255,10 @@ def get(base_dir, symbol, source, is_dr=False, market=None):
                     "SELECT payload, synced_at FROM financials WHERE symbol=? AND source=?",
                     (mkey, source)).fetchone()
                 if mrow:
-                    payload = json.loads(mrow[0])
+                    try:
+                        payload = json.loads(mrow[0])
+                    except (TypeError, ValueError):
+                        continue
                     if payload.get("empty"):
                         return None
                     row = mrow
@@ -264,7 +267,13 @@ def get(base_dir, symbol, source, is_dr=False, market=None):
         con.close()
     if not row:
         return None
-    data = json.loads(row[0])
+    # payload เสีย (เขียนไฟล์ค้างกลางคัน/backup ตัดไม่สมบูรณ์) ไม่ควรทำให้ caller ทั้งหมด
+    # ล้ม — /api/financials-analytics วนเรียก get() ทุกหุ้นในตลาด ถ้าโดนแถวเดียวพังไม่กัน
+    # ไว้ตรงนี้ 500 ทั้ง endpoint (ดู get_names_bulk ที่กันแบบเดียวกันไว้แล้ว)
+    try:
+        data = json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
     data["synced_at"] = row[1]
     return data
 
@@ -1165,7 +1174,13 @@ def _finn_map_rows(rows, sym, stock_name, stype, currency):
         qtr = r.get("quarter")
         if qtr not in (1, 2, 3, 4):
             continue   # quarter=9 คือสรุปทั้งปี — ข้าม (รายปีมี source yahoo/set อยู่แล้ว)
-        dt = f"{r.get('fiscal')}{q_end[qtr]}"
+        fiscal = r.get("fiscal")
+        if not fiscal:
+            # แถวมี quarter ถูกต้องแต่ fiscal หาย — ถ้าไม่ข้าม จะได้คีย์วันที่ปลอม "None-03-31"
+            # ที่ merge สะสมเข้า payload ถาวร (upsert ไม่เคยลบคีย์เก่า) แล้วโผล่เป็นปีผีใน
+            # ตาราง/กราฟ/CSV export ภายหลัง
+            continue
+        dt = f"{fiscal}{q_end[qtr]}"
         got = False
         for section, pairs in field_map.items():
             for ours, theirs in pairs:

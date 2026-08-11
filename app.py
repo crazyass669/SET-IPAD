@@ -5,6 +5,7 @@ SET Dashboard — Flask Web Server
 """
 
 import json
+import math
 import os
 import random
 import re
@@ -2908,70 +2909,76 @@ def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map, yahoo_only=Fa
     result = {}
     growth_raw = {}
     for sym in symbols:
-        payload = financials_store.get(BASE_DIR, sym, "yahoo", is_dr=is_dr)
-        if not payload:
+        # กัน 1 หุ้นที่ payload/คำนวณพัง (เช่น field รูปทรงแปลกจากแหล่งข้อมูลเก่า) ทำให้
+        # /api/financials-analytics ทั้ง endpoint ตอบ 500 — ข้ามหุ้นนั้นไปแทนที่จะล้มทั้งตลาด
+        try:
+            payload = financials_store.get(BASE_DIR, sym, "yahoo", is_dr=is_dr)
+            if not payload:
+                continue
+            gs = financials_store.compute_growth_score(payload)
+            fcf = financials_store.compute_fcf_metrics(payload, mktcap_map.get(sym))
+            streaks = financials_store.compute_growth_streaks(payload)
+            ratios = financials_store.compute_ratio_trends(payload)
+            q_finn = None
+            if yahoo_only:
+                q_used = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
+                qg = financials_store.compute_quarterly_growth(q_used)
+            else:
+                # การเติบโตรายไตรมาส (QoQ / YoY-Q / streak / เร่งตัว) จากงบ quarterly — Finnomena
+                # ลึกกว่า Yahoo เสมอเมื่อมี (ตรวจแล้วทุกกรณี ~60-80 ไตรมาส vs ~5-6) จึงเช็คแค่ตัวเดียว
+                # ก่อน ไม่ต้อง get() ทั้งคู่ทุกครั้ง — ก่อนนี้ทำให้ endpoint นี้ช้าลงเพราะ get() แต่ละครั้ง
+                # เปิด/ปิด sqlite connection ใหม่ (สังเกตได้จาก /api/financials-analytics ช้าลงเป็น ~23 วิ
+                # ตอน cache miss จนแข่งกับปุ่ม "งบการเงิน" ในหน้า DR ที่รอ _finAnalyticsData โหลดเสร็จ)
+                q_finn = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr)
+                q_used = q_finn if q_finn else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
+                qg = financials_store.compute_quarterly_growth(q_used)
+                # Finnomena สั้นผิดปกติ (<8 ไตรมาส เช่นหุ้นที่ Finnomena เพิ่งเริ่มเก็บ) — เช็ค yahoo_q
+                # เผื่อลึกกว่า ให้เลือกแหล่งแบบเดียวกับ factor_snapshot (ไม่งั้นสองเมนูต่างกันได้)
+                if q_finn is not None and qg["quarters_available"] < 8:
+                    q_yah = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
+                    qg_y = financials_store.compute_quarterly_growth(q_yah)
+                    if qg_y["quarters_available"] > qg["quarters_available"]:
+                        qg, q_used = qg_y, q_yah
+            # เป็นบวกติดกัน (รายได้/กำไร/EBITDA/OCF) + OCF>กำไรสุทธิงวดล่าสุด — เวอร์ชันรันบนเครื่อง
+            # ใช้ Finnomena รายไตรมาสล้วน (เหมือน factor_snapshot.compute_positive_streaks)
+            # ส่วน yahoo_only (bake เว็บมือถือ/ไอแพด ไม่มี Finnomena) สลับไปนับจากงบ Yahoo
+            # "รายปี" แทน (payload เดิมที่ดึงมาแล้วด้านบน) — field ชื่อเดียวกันแต่หน่วยกลายเป็นปี
+            # ไม่ใช่ไตรมาส ฝั่ง frontend (_patchPosStreakForStatic) แก้ label/tooltip ให้ตรงแล้ว
+            pq = financials_store.compute_positive_streaks(payload if yahoo_only else q_finn)
+            pe = pe_map.get(sym)
+            # PEG = PE ÷ %โตของ 'กำไร' TTM — นิยามเดียวกับ Screener+ (เดิมใช้ CAGR รายได้
+            # หลายปีซึ่งไม่ตรงนิยามสากลและทำให้ค่า PEG สองเมนูไม่ตรงกัน) มีค่าเฉพาะ
+            # growth 1-200%: ต่ำกว่านั้น PEG ระเบิด / เกินนั้นเป็น base effect หลอกตา
+            tg = financials_store.compute_ttm_growth(q_used)
+            g = tg["profit_ttm_yoy"]
+            if yahoo_only and g is None:
+                # Yahoo รายไตรมาสมักมีแค่ ~5 งวด ไม่พอคำนวณ TTM (ต้องการ ≥8) — fallback ไป
+                # กำไรโตเฉลี่ยรายปี (CAGR) แทน ยังมีประโยชน์แต่นิยามไม่เหมือน TTM เป๊ะ
+                # (บอกผู้ใช้ผ่าน tooltip ฝั่ง frontend แล้ว กันเข้าใจผิดว่าตรงกับเวอร์ชันเครื่อง)
+                g = gs.get("profit_cagr")
+            peg = (pe / g) if (pe and pe > 0 and g is not None and 1 <= g <= 200) else None
+            # P/S = Market Cap / รายได้ปีล่าสุด (Yahoo) — ใช้ได้แม้หุ้นขาดทุนที่ PE คำนวณไม่ได้
+            rev_row = payload.get("income", {}).get("Total Revenue", {})
+            latest_rev = rev_row[max(rev_row)] if rev_row else None
+            mc = mktcap_map.get(sym)
+            ps = (mc / latest_rev) if (mc and latest_rev and latest_rev > 0) else None
+            # F-Score/Z-Score — mkt_cap ที่นี่มาจาก set_data.json (สดกว่า Finnomena valuation
+            # ที่ factor_snapshot ใช้) ธนาคาร/เงินทุน/ประกันไทย ไม่แสดง Z-Score (ดู
+            # factor_snapshot._financial_sector_symbols — งบดุลตีความไม่ได้กับสูตร Altman)
+            fscore = financials_store.compute_fscore(payload)
+            if (not is_dr) and fin_sector_syms and sym in fin_sector_syms:
+                zscore = {"z_score": None, "z_variant": None, "z_zone": None}
+            else:
+                zscore = financials_store.compute_zscore(payload, mc, variant=("Z" if is_dr else "Z2"))
+            result[sym] = {**gs, **fcf, **streaks, **ratios, **qg, **tg, **pq, "peg": peg, "ps": ps,
+                           "f_score": fscore["f_score"], "f_score_max": fscore["f_score_max"],
+                           "f_score_detail": fscore["f_score_detail"],
+                           "z_score": zscore["z_score"], "z_variant": zscore["z_variant"],
+                           "z_zone": zscore["z_zone"]}
+            growth_raw[sym] = gs["growth_score"]
+        except Exception as e:
+            print(f"[fin-analytics] ข้าม {sym}: {e}")
             continue
-        gs = financials_store.compute_growth_score(payload)
-        fcf = financials_store.compute_fcf_metrics(payload, mktcap_map.get(sym))
-        streaks = financials_store.compute_growth_streaks(payload)
-        ratios = financials_store.compute_ratio_trends(payload)
-        q_finn = None
-        if yahoo_only:
-            q_used = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
-            qg = financials_store.compute_quarterly_growth(q_used)
-        else:
-            # การเติบโตรายไตรมาส (QoQ / YoY-Q / streak / เร่งตัว) จากงบ quarterly — Finnomena
-            # ลึกกว่า Yahoo เสมอเมื่อมี (ตรวจแล้วทุกกรณี ~60-80 ไตรมาส vs ~5-6) จึงเช็คแค่ตัวเดียว
-            # ก่อน ไม่ต้อง get() ทั้งคู่ทุกครั้ง — ก่อนนี้ทำให้ endpoint นี้ช้าลงเพราะ get() แต่ละครั้ง
-            # เปิด/ปิด sqlite connection ใหม่ (สังเกตได้จาก /api/financials-analytics ช้าลงเป็น ~23 วิ
-            # ตอน cache miss จนแข่งกับปุ่ม "งบการเงิน" ในหน้า DR ที่รอ _finAnalyticsData โหลดเสร็จ)
-            q_finn = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr)
-            q_used = q_finn if q_finn else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
-            qg = financials_store.compute_quarterly_growth(q_used)
-            # Finnomena สั้นผิดปกติ (<8 ไตรมาส เช่นหุ้นที่ Finnomena เพิ่งเริ่มเก็บ) — เช็ค yahoo_q
-            # เผื่อลึกกว่า ให้เลือกแหล่งแบบเดียวกับ factor_snapshot (ไม่งั้นสองเมนูต่างกันได้)
-            if q_finn is not None and qg["quarters_available"] < 8:
-                q_yah = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
-                qg_y = financials_store.compute_quarterly_growth(q_yah)
-                if qg_y["quarters_available"] > qg["quarters_available"]:
-                    qg, q_used = qg_y, q_yah
-        # เป็นบวกติดกัน (รายได้/กำไร/EBITDA/OCF) + OCF>กำไรสุทธิงวดล่าสุด — เวอร์ชันรันบนเครื่อง
-        # ใช้ Finnomena รายไตรมาสล้วน (เหมือน factor_snapshot.compute_positive_streaks)
-        # ส่วน yahoo_only (bake เว็บมือถือ/ไอแพด ไม่มี Finnomena) สลับไปนับจากงบ Yahoo
-        # "รายปี" แทน (payload เดิมที่ดึงมาแล้วด้านบน) — field ชื่อเดียวกันแต่หน่วยกลายเป็นปี
-        # ไม่ใช่ไตรมาส ฝั่ง frontend (_patchPosStreakForStatic) แก้ label/tooltip ให้ตรงแล้ว
-        pq = financials_store.compute_positive_streaks(payload if yahoo_only else q_finn)
-        pe = pe_map.get(sym)
-        # PEG = PE ÷ %โตของ 'กำไร' TTM — นิยามเดียวกับ Screener+ (เดิมใช้ CAGR รายได้
-        # หลายปีซึ่งไม่ตรงนิยามสากลและทำให้ค่า PEG สองเมนูไม่ตรงกัน) มีค่าเฉพาะ
-        # growth 1-200%: ต่ำกว่านั้น PEG ระเบิด / เกินนั้นเป็น base effect หลอกตา
-        tg = financials_store.compute_ttm_growth(q_used)
-        g = tg["profit_ttm_yoy"]
-        if yahoo_only and g is None:
-            # Yahoo รายไตรมาสมักมีแค่ ~5 งวด ไม่พอคำนวณ TTM (ต้องการ ≥8) — fallback ไป
-            # กำไรโตเฉลี่ยรายปี (CAGR) แทน ยังมีประโยชน์แต่นิยามไม่เหมือน TTM เป๊ะ
-            # (บอกผู้ใช้ผ่าน tooltip ฝั่ง frontend แล้ว กันเข้าใจผิดว่าตรงกับเวอร์ชันเครื่อง)
-            g = gs.get("profit_cagr")
-        peg = (pe / g) if (pe and pe > 0 and g is not None and 1 <= g <= 200) else None
-        # P/S = Market Cap / รายได้ปีล่าสุด (Yahoo) — ใช้ได้แม้หุ้นขาดทุนที่ PE คำนวณไม่ได้
-        rev_row = payload.get("income", {}).get("Total Revenue", {})
-        latest_rev = rev_row[max(rev_row)] if rev_row else None
-        mc = mktcap_map.get(sym)
-        ps = (mc / latest_rev) if (mc and latest_rev and latest_rev > 0) else None
-        # F-Score/Z-Score — mkt_cap ที่นี่มาจาก set_data.json (สดกว่า Finnomena valuation
-        # ที่ factor_snapshot ใช้) ธนาคาร/เงินทุน/ประกันไทย ไม่แสดง Z-Score (ดู
-        # factor_snapshot._financial_sector_symbols — งบดุลตีความไม่ได้กับสูตร Altman)
-        fscore = financials_store.compute_fscore(payload)
-        if (not is_dr) and fin_sector_syms and sym in fin_sector_syms:
-            zscore = {"z_score": None, "z_variant": None, "z_zone": None}
-        else:
-            zscore = financials_store.compute_zscore(payload, mc, variant=("Z" if is_dr else "Z2"))
-        result[sym] = {**gs, **fcf, **streaks, **ratios, **qg, **tg, **pq, "peg": peg, "ps": ps,
-                       "f_score": fscore["f_score"], "f_score_max": fscore["f_score_max"],
-                       "f_score_detail": fscore["f_score_detail"],
-                       "z_score": zscore["z_score"], "z_variant": zscore["z_variant"],
-                       "z_zone": zscore["z_zone"]}
-        growth_raw[sym] = gs["growth_score"]
 
     percentiles = rank_percentile(growth_raw)
     for sym, pct in percentiles.items():
@@ -6333,6 +6340,10 @@ def _run_refresh(period="max"):
 
 
 _MARKET_STATS_FILE = os.path.join(BASE_DIR, "set_market_stats.json")
+# กัน race: /api/refresh-market-stats กับ /api/refresh-market-stats-monthly เขียนไฟล์
+# เดียวกันพร้อมกัน (เปิดหลายแท็บ/กดสองปุ่มติดกัน) ไม่งั้นได้ JSON เสีย หรือ endpoint หนึ่ง
+# อ่านค่าเก่าไปเขียนทับผลลัพธ์ล่าสุดของอีก endpoint (lost update) — ดู pattern เดียวกับ _dr_refresh_lock
+_market_stats_lock = threading.Lock()
 
 
 def _resolve_xls(name):
@@ -6352,8 +6363,11 @@ def _resolve_xls(name):
 def market_stats():
     if not os.path.exists(_MARKET_STATS_FILE):
         return jsonify({"error": "ไม่พบ set_market_stats.json — รัน import_market_stats.py ก่อน"}), 404
-    with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
-        return jsonify(json.load(f))
+    try:
+        with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except Exception as e:
+        return jsonify({"error": f"set_market_stats.json เสีย อ่านไม่ได้: {e}"}), 500
 
 
 @app.route("/api/market-stats-meta")
@@ -6364,8 +6378,11 @@ def market_stats_meta():
     หรือไม่) เลย mtime รีเซ็ตเป็น "วันนี้" ตลอด ทำให้ข้อมูลค้างหลายเดือนก็ยังดูเหมือนสด"""
     if not os.path.exists(_MARKET_STATS_FILE):
         return jsonify({"updated_at": None})
-    with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return jsonify({"updated_at": None})
     pe_latest = (data.get("pe", {}).get("dates") or [None])[-1]
     pbv_latest = (data.get("pbv", {}).get("dates") or [None])[-1]
     return jsonify({"updated_at": pe_latest, "pe_date": pe_latest, "pbv_date": pbv_latest})
@@ -6471,33 +6488,43 @@ def refresh_market_stats():
     except Exception as e:
         return jsonify({"ok": False, "error": f"อ่านไฟล์ไม่สำเร็จ: {e}"}), 500
 
-    # check if newer than current
-    old_latest = None
-    old = None
-    if os.path.exists(_MARKET_STATS_FILE):
-        try:
-            with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
-                old = json.load(f)
-            old_latest = old.get("pe", {}).get("dates", [None])[-1]
-        except Exception:
-            pass
+    # ป้องกันเขียนทับประวัติทั้งชุดด้วยข้อมูลว่าง — parse_ym() คืน None แบบเงียบๆ (ไม่ throw)
+    # ถ้า SET เปลี่ยนรูปแบบคอลัมน์วันที่ใน .xls เล็กน้อย ทำให้ทุกแถวถูกข้ามหมด ก่อนหน้านี้โค้ด
+    # จะเขียน output ว่างลงไฟล์ไปแล้วค่อยไป crash ตอนอ่าน pe_data['dates'][0] ด้านล่าง — ประวัติ
+    # P/E, P/BV ย้อนหลังทั้งหมดหายถาวรไปแล้วก่อนที่ error จะโผล่ให้เห็นด้วยซ้ำ
+    if not pe_data["dates"] or not pbv_data["dates"]:
+        return jsonify({"ok": False, "error": "อ่านไฟล์ได้แต่ไม่พบแถวข้อมูลที่ parse วันที่ได้เลย "
+                                              "(รูปแบบคอลัมน์ Month-Year ในไฟล์ .xls อาจเปลี่ยนไป) "
+                                              "— ไม่เขียนทับไฟล์เดิมเพื่อกันข้อมูลย้อนหลังหาย"}), 400
 
-    new_latest = pe_data["dates"][-1] if pe_data["dates"] else None
+    with _market_stats_lock:
+        # check if newer than current
+        old_latest = None
+        old = None
+        if os.path.exists(_MARKET_STATS_FILE):
+            try:
+                with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
+                    old = json.load(f)
+                old_latest = old.get("pe", {}).get("dates", [None])[-1]
+            except Exception:
+                pass
 
-    output = {
-        "updated_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "pe":  {"dates": pe_data["dates"],  "series": pe_data["series"],
-                "stats": {k: calc_stats(v) for k, v in pe_data["series"].items()}},
-        "pbv": {"dates": pbv_data["dates"], "series": pbv_data["series"],
-                "stats": {k: calc_stats(v) for k, v in pbv_data["series"].items()}},
-    }
-    # ซีรีส์ที่มีเฉพาะใน Market_Statistics_Month_th_TH.xls (Table_PE/PBV ไม่มี) ต้องคงไว้ —
-    # เดิม rebuild ทับทั้งไฟล์ ทำให้ประวัติปันผล/มูลค่าหลักทรัพย์/breadth ที่สะสมมาหายทั้งชุด
-    for _k in ("div_yield", "mkt_cap", "breadth"):
-        if old and _k in old:
-            output[_k] = old[_k]
+        new_latest = pe_data["dates"][-1] if pe_data["dates"] else None
 
-    _atomic_write_json(_MARKET_STATS_FILE, output)
+        output = {
+            "updated_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "pe":  {"dates": pe_data["dates"],  "series": pe_data["series"],
+                    "stats": {k: calc_stats(v) for k, v in pe_data["series"].items()}},
+            "pbv": {"dates": pbv_data["dates"], "series": pbv_data["series"],
+                    "stats": {k: calc_stats(v) for k, v in pbv_data["series"].items()}},
+        }
+        # ซีรีส์ที่มีเฉพาะใน Market_Statistics_Month_th_TH.xls (Table_PE/PBV ไม่มี) ต้องคงไว้ —
+        # เดิม rebuild ทับทั้งไฟล์ ทำให้ประวัติปันผล/มูลค่าหลักทรัพย์/breadth ที่สะสมมาหายทั้งชุด
+        for _k in ("div_yield", "mkt_cap", "breadth"):
+            if old and _k in old:
+                output[_k] = old[_k]
+
+        _atomic_write_json(_MARKET_STATS_FILE, output)
 
     pe_cur  = output["pe"]["stats"].get("SET", {})
     pbv_cur = output["pbv"]["stats"].get("SET", {})
@@ -6539,16 +6566,17 @@ def refresh_market_stats_monthly():
     if not records:
         return jsonify({"ok": False, "error": f"ไม่พบข้อมูลเดือนไหนเลยในไฟล์ (ปี {year_ad})"}), 400
 
-    data = {}
-    old_latest = None
-    if os.path.exists(_MARKET_STATS_FILE):
-        with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-        old_latest = (data.get("pe", {}).get("dates") or [None])[-1]
+    with _market_stats_lock:
+        data = {}
+        old_latest = None
+        if os.path.exists(_MARKET_STATS_FILE):
+            with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+            old_latest = (data.get("pe", {}).get("dates") or [None])[-1]
 
-    data = merge_monthly(data, records)
-    data["updated_at"] = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
-    _atomic_write_json(_MARKET_STATS_FILE, data)
+        data = merge_monthly(data, records)
+        data["updated_at"] = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+        _atomic_write_json(_MARKET_STATS_FILE, data)
 
     new_latest = data["pe"]["dates"][-1] if data["pe"]["dates"] else None
     pe_cur  = data["pe"]["stats"].get("SET", {})
@@ -7033,6 +7061,25 @@ def _run_quick():
 # (sources/sec_store.py) sync ตอน Quick Update / auto-update cron
 # ============================================================
 
+# fetchInsiderData() ฝั่ง frontend ยิง /api/insider-trades + /api/major-changes
+# พร้อมกันเสมอ (Promise.all) — ถ้าเป็นการเปิดแอปครั้งแรกที่ยังไม่มี sec_filings.db เลย
+# ทั้งสอง request จะเห็น db_exists()==False พร้อมกันแล้วแยกกัน sync/เขียน DB เดียวกัน
+# พร้อมกัน (มี busy_timeout กันพังอยู่แล้วแต่ไม่กันแข่งกันเปล่าๆ) — lock นี้บังคับให้
+# sync ครั้งแรกเกิดครั้งเดียว รวมทั้ง insider+major เข้าด้วยกัน กัน request ที่มาทีหลัง
+# เห็น db_exists()==True (ไฟล์ถูกสร้างแล้วจาก request แรก) แล้วข้าม sync ของตัวเองไปเฉยๆ
+_sec_first_sync_lock = threading.Lock()
+
+
+def _ensure_sec_db_ready():
+    if sec_store.db_exists(BASE_DIR):
+        return
+    with _sec_first_sync_lock:
+        if sec_store.db_exists(BASE_DIR):   # เช็คซ้ำหลังได้ lock — อีก request อาจ sync เสร็จไปแล้วระหว่างรอ
+            return
+        sec_store.sync_insider_trades(BASE_DIR)
+        sec_store.sync_major_changes(BASE_DIR)
+
+
 @app.route("/api/insider-trades")
 def insider_trades():
     """ผู้บริหารซื้อขายหุ้น (แบบ 59) — อ่านจากฐานข้อมูลสะสม (sec_filings.db)
@@ -7049,7 +7096,7 @@ def insider_trades():
     if not sec_store.db_exists(BASE_DIR):
         # ยังไม่เคย sync เลย -> sync ครั้งแรก (ช้า ~2-3 นาที ดึงย้อนหลัง 180 วัน)
         try:
-            sec_store.sync_insider_trades(BASE_DIR)
+            _ensure_sec_db_ready()
         except Exception as e:
             return jsonify({"error": f"sync ครั้งแรกล้มเหลว: {e}"}), 500
 
@@ -7077,7 +7124,7 @@ def major_changes():
 
     if not sec_store.db_exists(BASE_DIR):
         try:
-            sec_store.sync_major_changes(BASE_DIR)
+            _ensure_sec_db_ready()
         except Exception as e:
             return jsonify({"error": f"sync ครั้งแรกล้มเหลว: {e}"}), 500
 
@@ -8148,12 +8195,28 @@ def get_price_alerts():
         return jsonify([])
 
 
+def _valid_price_alert(a):
+    """เช็คโครงสร้างขั้นต่ำของ 1 alert — กัน record เพี้ยน (targetPrice หาย/ไม่ใช่ตัวเลข)
+    หลุดเข้าไปสะสมใน price_alerts.json แล้ว sync กระจายไปทุกเครื่อง ทำให้ a.targetPrice.toFixed()
+    ฝั่ง frontend throw ตอน render จนตาราง Watchlist/แผงแจ้งเตือนค้างทั้งหน้า (ดู _wlAlertCell)"""
+    if not (isinstance(a, dict) and isinstance(a.get("id"), str)):
+        return False
+    tp = a.get("targetPrice")
+    if not (isinstance(tp, (int, float)) and not isinstance(tp, bool) and math.isfinite(tp)):
+        return False
+    if a.get("condition") not in ("above", "below"):
+        return False
+    if not isinstance(a.get("symbol"), str):
+        return False
+    return True
+
+
 @app.route("/api/price-alerts", methods=["POST"])
 def save_price_alerts():
     body = request.get_json(silent=True) or {}
     alerts = body.get("alerts")
     if (not isinstance(alerts, list) or len(alerts) > 500
-            or not all(isinstance(a, dict) and isinstance(a.get("id"), str) for a in alerts)):
+            or not all(_valid_price_alert(a) for a in alerts)):
         return jsonify({"error": "invalid alerts"}), 400
     os.makedirs(os.path.dirname(PRICE_ALERTS_FILE), exist_ok=True)
     _atomic_write_json(PRICE_ALERTS_FILE, alerts)

@@ -13,6 +13,7 @@ Historical prices เก็บใน SQLite (set_prices.db) เป็นหล�
 import json
 import os
 import sqlite3
+import threading
 from datetime import datetime
 
 OUT_FILE     = "set_data.json"
@@ -312,8 +313,13 @@ def delete_ticker_bars(base_dir, ticker):
 
 def _atomic_write_json(path, obj):
     """เขียน JSON แบบ atomic: เขียนลง .tmp ก่อนแล้ว os.replace ทับ
-    ป้องกันไฟล์เสียหายถ้า process ตาย/ไฟดับกลางคัน"""
-    tmp = path + ".tmp"
+    ป้องกันไฟล์เสียหายถ้า process ตาย/ไฟดับกลางคัน
+
+    ชื่อไฟล์ .tmp ผูกกับ pid+thread id (ไม่ใช่ path+".tmp" คงที่) — กัน 2 thread เขียนไฟล์
+    เดียวกันพร้อมกัน (เช่น sync 2 อุปกรณ์ยิง POST /api/watchlist ชนกัน บน server ที่รัน
+    threaded=True) แล้วได้ bytes สลับกันมั่วก่อน os.replace ซึ่งจะได้ JSON เสีย/อ่านไม่ขึ้น
+    แทนที่จะเป็นแค่ last-writer-wins ตามที่ตั้งใจ"""
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False)
     os.replace(tmp, path)

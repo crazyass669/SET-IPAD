@@ -3111,6 +3111,13 @@ function addToWatchlist() {
   }
 
   if (!watchlist.includes(sym)) {
+    // ฝั่ง backend (POST /api/watchlist) ปฏิเสธลิสต์เกิน 500 ตัวอยู่แล้ว — เช็คฝั่ง client
+    // ด้วยกันลิสต์บวมเกิน sync ไม่ขึ้นแบบเงียบๆ และกัน wlRefreshLivePrices ยิง request
+    // พร้อมกันเป็นร้อยๆ ตัวโดยไม่จำเป็น
+    if (watchlist.length >= 500) {
+      alert("Watchlist เต็ม (สูงสุด 500 ตัว) — ลบตัวที่ไม่ใช้ออกก่อน");
+      return;
+    }
     watchlist.push(sym);
     _wlSave();
   }
@@ -3138,7 +3145,11 @@ function _wlAlertCell(sym) {
   }
   const tags = active.map(a => {
     const condTh = a.condition === "above" ? "↑" : "↓";
-    return `<span class="wl-alert-tag ${a.condition}" onclick="openWlAlertModal('${sym}')" title="${a.condition==='above'?'แจ้งเมื่อราคาขึ้นถึง':'แจ้งเมื่อราคาลงถึง'} ${a.targetPrice}">${condTh}${a.targetPrice.toFixed(2)}</span>`;
+    // targetPrice ป้องกันไว้เผื่อ record เพี้ยนหลุดมาจาก sync ข้ามเครื่อง (แก้ไฟล์มือ/บั๊กเก่า) —
+    // ถ้าไม่กันไว้ .toFixed() จะ throw กลาง .map() ทำให้ตาราง Watchlist ทั้งตารางค้างไม่เรนเดอร์เลย
+    const tp = Number(a.targetPrice);
+    const tpText = Number.isFinite(tp) ? tp.toFixed(2) : '?';
+    return `<span class="wl-alert-tag ${a.condition}" onclick="openWlAlertModal('${sym}')" title="${a.condition==='above'?'แจ้งเมื่อราคาขึ้นถึง':'แจ้งเมื่อราคาลงถึง'} ${a.targetPrice}">${condTh}${tpText}</span>`;
   }).join(" ");
   return tags;
 }
@@ -3177,7 +3188,7 @@ async function wlRefreshLivePrices() {
   if (note) note.textContent = '';
   const drMap = Object.fromEntries((_drData || []).map(s => [s.sym, s]));
   let ok = 0, fail = 0;
-  await Promise.all(watchlist.map(async (sym) => {
+  const fetchOne = async (sym) => {
     let code, qs;
     if (sym.startsWith('DR:')) {
       const under = sym.slice(3);
@@ -3197,7 +3208,13 @@ async function wlRefreshLivePrices() {
       if (d.price != null) { _wlLive[sym] = { price: d.price, ts: Date.now() }; ok++; }
       else fail++;
     } catch { fail++; }
-  }));
+  };
+  // ยิงทีละ batch (ไม่ใช่ Promise.all รวดเดียวทั้งลิสต์) — watchlist ใหญ่ๆ (หลักร้อยตัว)
+  // จะไม่ยิง request พร้อมกันทีเดียวจนกดดัน backend/เบราว์เซอร์เกินจำเป็น
+  const CONCURRENCY = 8;
+  for (let i = 0; i < watchlist.length; i += CONCURRENCY) {
+    await Promise.all(watchlist.slice(i, i + CONCURRENCY).map(fetchOne));
+  }
   if (btn) { btn.disabled = false; btn.textContent = '⚡ ราคาล่าสุด'; }
   // เช็ค 🔔 alert ด้วยราคาสดชุดนี้ทันที — ไวกว่ารอ checkAlerts() รอบถัดไป (ทุก 5 นาที จาก
   // /api/prices ที่เป็นราคาปิด/แคชแบบ batch) ใช้ตัวเช็คเดียวกับที่ setInterval เรียกอยู่แล้ว
@@ -5410,7 +5427,11 @@ async function loadFinAnalytics() {
   // แล้วปล่อยให้ผู้ใช้กรอกค่าที่ไม่มีข้อมูลจริงรองรับแบบเงียบๆ
   finInputs.forEach(el => { if (el) el.disabled = true; });
   try {
-    const r = await fetch('/api/financials-analytics');
+    // เคยเป็น fetch() เปล่าไม่มี timeout ต่างจากจุดอื่นในไฟล์นี้ที่ผ่าน _fetchTimeout() ทั้งหมด —
+    // endpoint นี้คำนวณสด 15-23 วิตอน cache miss และ serialize ผ่าน lock ฝั่ง backend
+    // (คิวรอกันได้) ถ้าไม่มี timeout ฝั่ง client ตัวกรอง fundamentals จะค้าง disabled เงียบๆ
+    // ไม่มีทาง fail ออกมาให้เห็นเลยถ้า backend ช้าผิดปกติ
+    const r = await _fetchTimeout('/api/financials-analytics', 45000);
     const d = await r.json();
     if (!d || d.error) throw new Error(d?.error || 'no data');
     // "สำเร็จแต่ว่างเปล่า" ({"set":{},"dr":{}}) ก็ถือว่าไม่มีข้อมูล — ถ้าปล่อยผ่าน ช่องกรอง
@@ -10125,7 +10146,8 @@ function wlImport() {
   const syms = wlPart.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
   if (!syms.length) { alert('ไม่พบรายชื่อหุ้นในข้อความ'); return; }
   const before = watchlist.length;
-  syms.forEach(s => { if (!watchlist.includes(s)) watchlist.push(s); });
+  // เพดานเดียวกับ backend (500 ตัว) — กันนำเข้าจนลิสต์บวมเกิน sync ข้ามเครื่องไม่ขึ้น
+  syms.forEach(s => { if (!watchlist.includes(s) && watchlist.length < 500) watchlist.push(s); });
   _wlSave();
 
   let newAlerts = 0;
@@ -16773,7 +16795,10 @@ async function searchBand() {
   document.getElementById('band-result').style.display  = 'none';
   document.getElementById('band-error').style.display   = 'none';
   try {
-    const res  = await fetch(`/api/band/${encodeURIComponent(sym)}`);
+    // backend มี timeout 20s ต่อการเชื่อมต่อ mrlikestock.com แต่เป็น per-chunk ไม่ใช่ hard cap
+    // รวม — ถ้าเว็บต้นทางตอบช้ามาก fetch เปล่าจะค้าง spinner ไม่มีทางยกเลิกนอกจากรีเฟรชหน้า
+    const res  = await _fetchTimeout(`/api/band/${encodeURIComponent(sym)}`, 30000,
+      'หมดเวลารอข้อมูล Band (เกิน 30 วิ) — เว็บต้นทางอาจช้าหรือไม่ตอบสนอง ลองใหม่อีกครั้ง');
     const data = await res.json();
     document.getElementById('band-loading').style.display = 'none';
     if (data.error) {
@@ -20943,8 +20968,14 @@ async function loadConfluencePage() {
     body.innerHTML = '<div class="empty" style="padding:24px">ไม่มีข้อมูล (ต้องมี short/NVDR/insider sync ก่อน)</div>';
     return;
   }
-  if (meta) meta.textContent = `${d.count} หุ้นมีสัญญาณ · อัพเดท ${d.generated_at || '—'}`;
-  _renderConfluenceTable();
+  try {
+    if (meta) meta.textContent = `${d.count} หุ้นมีสัญญาณ · อัพเดท ${d.generated_at || '—'}`;
+    _renderConfluenceTable();
+  } catch (e) {
+    // กัน render พังแล้วค้างหน้าเดิมถาวรแบบไม่มี error โชว์เลย (ดู loadShortPage)
+    console.error('loadConfluencePage render error:', e);
+    body.innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">เกิดข้อผิดพลาดขณะแสดงผล: ${e.message}</div>`;
+  }
 }
 
 // ไอคอนทิศทางต่อสัญญาณ (▲ เขียว / ▼ แดง / – เทา)
@@ -21134,8 +21165,12 @@ function renderShortPopup(sym) {
   const v = _shortData.stocks?.[sym];
   if (!v) return '<div style="color:var(--muted);font-size:12px">ไม่มีข้อมูล short sales สำหรับ ' + sym + '</div>';
 
-  const pos_m = (v.short_pos / 1e6).toFixed(2);
-  const vol_m = (v.period_vol / 1e6).toFixed(1);
+  // กัน .toFixed()/เปรียบเทียบพังทั้ง popup ถ้าไฟล์ short_sales_data.json มีค่า null
+  // (เขียนไม่สมบูรณ์/แก้มือ) — backend ปกติ default เป็น 0 อยู่แล้ว แต่กันซ้ำไว้เผื่อไฟล์เพี้ยน
+  const shortPosPct = v.short_pos_pct ?? 0;
+  const periodPctValue = v.period_pct_value ?? 0;
+  const pos_m = ((v.short_pos ?? 0) / 1e6).toFixed(2);
+  const vol_m = ((v.period_vol ?? 0) / 1e6).toFixed(1);
   const period = _shortData.period_from && _shortData.period_to
     ? `${_shortData.period_from} ถึง ${_shortData.period_to}` : '';
   const lastUpd = _shortData.last_api_update ? `อัพเดท ${_shortData.last_api_update}` : '';
@@ -21147,10 +21182,10 @@ function renderShortPopup(sym) {
       <span style="font-size:11px;font-weight:600;color:${color||'#c8d0dc'}">${val}</span>
     </div>`;
 
-  const posColor = v.short_pos_pct >= 2 ? '#e05252' : v.short_pos_pct >= 1 ? '#d07030' : '#c8d0dc';
-  const posLevel = v.short_pos_pct >= 2 ? 'สูงมาก — squeeze potential สูง'
-                 : v.short_pos_pct >= 1 ? 'สูง สำหรับตลาดไทย'
-                 : v.short_pos_pct >= 0.5 ? 'เริ่มมีนัยยะ'
+  const posColor = shortPosPct >= 2 ? '#e05252' : shortPosPct >= 1 ? '#d07030' : '#c8d0dc';
+  const posLevel = shortPosPct >= 2 ? 'สูงมาก — squeeze potential สูง'
+                 : shortPosPct >= 1 ? 'สูง สำหรับตลาดไทย'
+                 : shortPosPct >= 0.5 ? 'เริ่มมีนัยยะ'
                  : 'ต่ำ';
 
   // daily trend — ใช้ last_snap + prev_snap จาก /api/short-sales (ไม่ได้ส่ง daily array ทั้งหมด)
@@ -21159,7 +21194,7 @@ function renderShortPopup(sym) {
   const prevSnap = v.prev_snap;
   const dailyCount = v.daily_count || 0;
   if (lastSnap && prevSnap) {
-    const chg = lastSnap.short_pos - prevSnap.short_pos;
+    const chg = (lastSnap.short_pos ?? 0) - (prevSnap.short_pos ?? 0);
     const chgStr = (chg >= 0 ? '+' : '') + (chg / 1e6).toFixed(2) + 'M';
     const chgCol = chg > 0 ? '#e05252' : '#3ab464';
     const chgTip = chg > 0
@@ -21172,11 +21207,11 @@ function renderShortPopup(sym) {
     <div style="font-size:10px;color:var(--muted);margin-bottom:6px">${period} ${lastUpd ? '· ' + lastUpd : ''}</div>
     ${row('Short Position ค้าง', pos_m + 'M หุ้น', posColor,
       'จำนวนหุ้นที่ขาย short แล้วยังไม่ได้ซื้อคืน — ถ้าราคาขึ้น คนกลุ่มนี้ต้องรีบซื้อคืน (Short Squeeze)')}
-    ${row('Short Position %', v.short_pos_pct.toFixed(3) + '% · ' + posLevel, posColor,
+    ${row('Short Position %', shortPosPct.toFixed(3) + '% · ' + posLevel, posColor,
       'Short Position % ของหุ้นชำระแล้วทั้งหมด — ตลาดไทย: >0.5%=มีนัยยะ · >1%=สูง · >2%=สูงมาก')}
     ${row(`ปริมาณ Short รวม (${_shortPeriodTag()})`, vol_m + 'M หุ้น', '',
       `ปริมาณหุ้นที่ถูกขาย short สะสมช่วง ${_shortPeriodRange()} — บอกว่า short seller สนใจหุ้นนี้มากแค่ไหน`)}
-    ${row(`% Short ต่อการซื้อขาย (${_shortPeriodTag()})`, v.period_pct_value.toFixed(2) + '%', '',
+    ${row(`% Short ต่อการซื้อขาย (${_shortPeriodTag()})`, periodPctValue.toFixed(2) + '%', '',
       `% ของมูลค่าซื้อขายรวมที่เป็น short sell ช่วง ${_shortPeriodRange()} — ยิ่งสูง = short seller มีบทบาทในหุ้นนี้มาก`)}
     ${dailyHtml}
     ${dailyCount > 0
@@ -21443,25 +21478,34 @@ async function loadShortPage() {
       '<div style="padding:20px;color:var(--red);font-size:13px">ไม่พบข้อมูล — กรุณารัน import_short_sales.py ก่อน</div>';
     return;
   }
-  const upd  = data.last_api_update ? `อัพเดท API ${data.last_api_update}` : 'ยังไม่มี daily update';
-  const shortStatusEl = document.getElementById('short-status');
-  shortStatusEl.textContent = `ข้อมูล ${data.period_from} ถึง ${data.period_to} · ${upd}`;
-  const shortStaleBadge = _staleTradeDateBadge(data.last_api_update);
-  if (shortStaleBadge) shortStatusEl.appendChild(shortStaleBadge);
-  // ปุ่มเรียงเป็น HTML คงที่ — เขียนป้ายช่วงจริงทับ (ที่เหลือ render จาก JS อยู่แล้ว)
-  const valSortBtn = document.getElementById('short-sort-val');
-  if (valSortBtn) {
-    valSortBtn.textContent = `% Vol ${_shortPeriodTag()}`;
-    valSortBtn.title = `เรียงตาม % Short ต่อมูลค่าซื้อขายรวม ช่วง ${_shortPeriodRange()}`;
+  try {
+    const upd  = data.last_api_update ? `อัพเดท API ${data.last_api_update}` : 'ยังไม่มี daily update';
+    const shortStatusEl = document.getElementById('short-status');
+    shortStatusEl.textContent = `ข้อมูล ${data.period_from} ถึง ${data.period_to} · ${upd}`;
+    const shortStaleBadge = _staleTradeDateBadge(data.last_api_update);
+    if (shortStaleBadge) shortStatusEl.appendChild(shortStaleBadge);
+    // ปุ่มเรียงเป็น HTML คงที่ — เขียนป้ายช่วงจริงทับ (ที่เหลือ render จาก JS อยู่แล้ว)
+    const valSortBtn = document.getElementById('short-sort-val');
+    if (valSortBtn) {
+      valSortBtn.textContent = `% Vol ${_shortPeriodTag()}`;
+      valSortBtn.title = `เรียงตาม % Short ต่อมูลค่าซื้อขายรวม ช่วง ${_shortPeriodRange()}`;
+    }
+    // Squeeze Radar ต้องใช้ _insAccum (insider) + _nvdrData ด้วย — เดิมต้องเข้าหน้า
+    // Insider/NVDR ก่อนถึงจะมีข้อมูล (แถว NVDR% ในการ์ด squeeze หายเงียบๆ)
+    // โหลดให้อัตโนมัติตรงนี้เลย ไม่ต้องพึ่งลำดับที่ผู้ใช้กดหน้าไหนก่อน
+    if (!_insData) await fetchInsiderData();
+    if (!_nvdrData) await loadNvdrData();
+    renderShortSummary();
+    renderShortSqueeze();
+    renderShortTable();
+  } catch (e) {
+    // กัน render พังแล้วค้าง "กำลังโหลด..." ถาวรแบบไม่มี error โชว์เลย — แอปนี้ไม่มี
+    // window.onunhandledrejection ดักจับ promise ที่ throw ไว้เลย (ต่างจาก fetchInsiderData/
+    // loadFlowPage ที่มี try/catch ห่ออยู่แล้ว หน้านี้เคยไม่มี)
+    console.error('loadShortPage render error:', e);
+    document.getElementById('short-table-wrap').innerHTML =
+      `<div style="padding:20px;color:var(--red);font-size:13px">เกิดข้อผิดพลาดขณะแสดงผล: ${e.message}</div>`;
   }
-  // Squeeze Radar ต้องใช้ _insAccum (insider) + _nvdrData ด้วย — เดิมต้องเข้าหน้า
-  // Insider/NVDR ก่อนถึงจะมีข้อมูล (แถว NVDR% ในการ์ด squeeze หายเงียบๆ)
-  // โหลดให้อัตโนมัติตรงนี้เลย ไม่ต้องพึ่งลำดับที่ผู้ใช้กดหน้าไหนก่อน
-  if (!_insData) await fetchInsiderData();
-  if (!_nvdrData) await loadNvdrData();
-  renderShortSummary();
-  renderShortSqueeze();
-  renderShortTable();
 }
 
 function filterShortByPct(minPct) {
@@ -21534,7 +21578,9 @@ function renderShortSqueeze() {
     const ins = _insAccum[sym];
     if (_insDominant(ins) <= 0) return;
     const nvdr = _nvdrData?.stocks?.[sym];
-    candidates.push({ sym, ...v, ins, insNet: ins.buyValue - ins.sellValue, nvdr });
+    // short_pos_pct: 0 กัน .toFixed() พังถ้าไฟล์สะสมมีค่า null (ดู renderShortTable)
+    candidates.push({ sym, ...v, short_pos_pct: v.short_pos_pct ?? 0,
+      ins, insNet: ins.buyValue - ins.sellValue, nvdr });
   });
   candidates.sort((a, b) => b.short_pos_pct - a.short_pos_pct);
 
@@ -21632,7 +21678,11 @@ function renderShortTable() {
         ? v.short_pos_pct >= _shortMinPct
         : (v.short_pos_pct > 0 || v.short_pos > 0 || v.period_pct_value > 0);
     })
-    .map(([sym, v]) => ({ sym, ...v }))
+    // กัน .toFixed()/เปรียบเทียบพังทั้งตารางถ้าไฟล์ short_sales_data.json มีค่า null
+    // (เขียนไม่สมบูรณ์/แก้มือ) — normalize เป็น 0 ที่จุดเดียวตรงนี้ ให้ทุกจุดที่ใช้ r.* ด้านล่างปลอดภัย
+    .map(([sym, v]) => ({ sym, ...v,
+      short_pos_pct: v.short_pos_pct ?? 0, period_pct_value: v.period_pct_value ?? 0,
+      short_pos: v.short_pos ?? 0, period_vol: v.period_vol ?? 0 }))
     .sort(sortFn[_shortSort] || sortFn.pos);
 
   const filterBadge = _shortMinPct > 0
@@ -21783,7 +21833,7 @@ async function showShortDetail(sym, rowEl) {
 
     document.getElementById('short-detail-stats').innerHTML = [
       `<div title="Short Position ค้างอยู่ % ของหุ้นชำระแล้ว — ยิ่งสูงยิ่ง bearish · >1% = สูงสำหรับไทย · >2% = สูงมาก"><div style="font-size:10px;color:var(--muted);cursor:help">Short Pos %</div><div style="font-size:14px;font-weight:700;color:${d.short_pos_pct>=2?'#e05252':d.short_pos_pct>=1?'#d07030':'#c8d0dc'}">${d.short_pos_pct?.toFixed(3)}%</div></div>`,
-      `<div title="จำนวนหุ้น short ที่ยังค้างอยู่ (ยังไม่ได้ซื้อคืน) — ถ้าราคาขึ้น คนเหล่านี้ต้องซื้อคืน = Short Squeeze"><div style="font-size:10px;color:var(--muted);cursor:help">Outstanding</div><div style="font-size:14px;font-weight:700;color:#c8d0dc">${(d.short_pos/1e6).toFixed(2)}M</div></div>`,
+      `<div title="จำนวนหุ้น short ที่ยังค้างอยู่ (ยังไม่ได้ซื้อคืน) — ถ้าราคาขึ้น คนเหล่านี้ต้องซื้อคืน = Short Squeeze"><div style="font-size:10px;color:var(--muted);cursor:help">Outstanding</div><div style="font-size:14px;font-weight:700;color:#c8d0dc">${((d.short_pos ?? 0)/1e6).toFixed(2)}M</div></div>`,
       `<div title="% Short ต่อมูลค่าซื้อขายรวม ช่วง ${_shortPeriodRange()} — ยิ่งสูง = short seller สนใจหุ้นนี้มาก"><div style="font-size:10px;color:var(--muted);cursor:help">%Val ${_shortPeriodTag()}</div><div style="font-size:14px;font-weight:700;color:#c8d0dc">${d.period_pct_value?.toFixed(2)}%</div></div>`,
       `<div><div style="font-size:10px;color:var(--muted)">ราคา</div><div style="font-size:14px;font-weight:700;color:#c8d0dc">${stock?.price?.toFixed(2)||'—'}</div></div>`,
       `<div title="สถานะ Insider ใน ${_insDays} วัน จากหน้า Insider (ต้องโหลดก่อน)"><div style="font-size:10px;color:var(--muted);cursor:help">Insider (${_insDays}ว)</div><div style="font-size:13px;font-weight:600">${insHtml}</div></div>`,
@@ -21919,14 +21969,15 @@ function drawShortTrendChart(daily) {
 
   // trend arrow (เพิ่ม/ลด) — ลด = ดี (short cover), เพิ่ม = ระวัง
   const first = points[0].val, last = points[points.length-1].val;
-  const chgPct = ((last - first) / first * 100).toFixed(1);
-  const chgCol = last < first ? '#3ab464' : '#e05252';
-  const arrow  = last < first ? '▼' : '▲';
-  const chgLabel = last < first ? `▼ ${chgPct}% short ลด (short cover)` : `▲ +${chgPct}% short เพิ่ม`;
+  // กัน Infinity%/NaN% ตอน snapshot แรกสุดเป็น 0 หุ้น (เพิ่งเริ่มมี short position) —
+  // ไม่มีฐานให้คิดเป็น % เปลี่ยนแปลงได้ โชว์ "n/a" แทน
+  const chgPct = first !== 0 ? ((last - first) / first * 100).toFixed(1) : null;
+  const chgCol = last < first ? '#3ab464' : last > first ? '#e05252' : '#8090a0';
+  const arrow  = last < first ? '▼' : last > first ? '▲' : '–';
   ctx.font = 'bold 11px sans-serif';
   ctx.fillStyle = chgCol;
   ctx.textAlign = 'right';
-  ctx.fillText(`${arrow} ${Math.abs(parseFloat(chgPct))}%`, W - PAD.right, PAD.top - 3);
+  ctx.fillText(chgPct == null ? `${arrow} n/a` : `${arrow} ${Math.abs(parseFloat(chgPct))}%`, W - PAD.right, PAD.top - 3);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -22095,6 +22146,15 @@ function _insiderSortArrow(key) {
   return _insiderSort.dir === 1 ? ' ▼' : ' ▲';
 }
 
+// escape ก่อนใส่ innerHTML — ชื่อผู้บริหาร/ผู้ถือหุ้นใหญ่ (row.name/row.holder) มาจาก SEC
+// scraping ดิบๆ (pandas.read_html อ่าน text content ของ <td> มา) ไม่ผ่าน sanitize เลย
+// ถ้าหลุดอักขระ <, >, " มาในชื่อ จะทำให้ตาราง/popup insider ทั้งก้อนเพี้ยน (เหมือนปัญหา
+// ที่หน้า Hedge Holdings เจอมาก่อนจนต้องมี _hedgeEsc — หน้า Insider ไม่เคยมีมาก่อน)
+function _insEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
 function renderInsiderTable() {
   if (!_insData) return;
   const q = (document.getElementById('ins-search')?.value || '').toUpperCase();
@@ -22166,7 +22226,7 @@ function renderInsiderTable() {
           const srcBadge = isR59
             ? '<span style="font-size:9px;background:#1a3060;color:#5ab4ff;border-radius:3px;padding:1px 4px">ผู้บริหาร</span>'
             : '<span style="font-size:9px;background:#2a1a40;color:#c06bff;border-radius:3px;padding:1px 4px">ผู้ถือหุ้นใหญ่</span>';
-          const who = isR59 ? (row.name||'') : (row.holder||'');
+          const who = _insEsc(isR59 ? (row.name||'') : (row.holder||''));
           return `<tr style="border-bottom:1px solid rgba(255,255,255,0.04);cursor:pointer"
                       onclick="openChartModal('${row.symbol}')"
                       onmouseover="this.style.background='rgba(255,255,255,0.03)'"
@@ -22224,7 +22284,7 @@ async function loadInsiderForStock(symbol) {
         const detail = isR59
           ? `${(row.qty||0).toLocaleString()} หุ้น${row.price ? ' @ ฿'+row.price.toFixed(2) : ''}`
           : row.pct_change != null ? `${row.pct_change.toFixed(2)}% (${row.pct_before?.toFixed(2)}%→${row.pct_after?.toFixed(2)}%)` : '';
-        const who = isR59 ? (row.name||'') : (row.holder||'');
+        const who = _insEsc(isR59 ? (row.name||'') : (row.holder||''));
         const badge = isR59
           ? '<span style="font-size:9px;background:#1a3060;color:#5ab4ff;border-radius:3px;padding:1px 4px">บริหาร</span>'
           : '<span style="font-size:9px;background:#2a1a40;color:#c06bff;border-radius:3px;padding:1px 4px">ถือหุ้นใหญ่</span>';
@@ -22323,7 +22383,7 @@ function _renderWlExistingAlerts(sym) {
       : `<span style="color:var(--green);font-size:10px">● active</span>`;
     return `<div class="wl-alert-ex-item">
       <div style="flex:1">
-        <span style="font-weight:600">ราคา ${condTh} ${a.targetPrice.toFixed(2)} บาท</span>
+        <span style="font-weight:600">ราคา ${condTh} ${_fmtAlertPrice(a.targetPrice)} บาท</span>
         ${a.note ? `<span style="color:var(--text2)"> · ${a.note}</span>` : ""}
         <br>${statusBadge}
       </div>
@@ -22345,6 +22405,12 @@ let _alertCheckTimer = null;
 function _loadAlerts() {
   try { return JSON.parse(localStorage.getItem(ALERT_STORAGE_KEY) || "[]"); }
   catch { return []; }
+}
+// targetPrice ควรเป็นตัวเลขเสมอ แต่ record เก่า/sync ข้ามเครื่องอาจเพี้ยนได้ (undefined/string) —
+// ใช้ตัวนี้แทน a.targetPrice.toFixed() ตรงๆ ทุกจุด กัน exception ทำให้ panel/popup ทั้งก้อนพัง
+function _fmtAlertPrice(v, dp = 2) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(dp) : "?";
 }
 function _saveAlerts(arr) {
   localStorage.setItem(ALERT_STORAGE_KEY, JSON.stringify(arr));
@@ -22525,7 +22591,7 @@ function renderAlertPanel() {
         return `<div class="alert-item">
           <div class="alert-item-body">
             <div class="alert-sym">${label}</div>
-            <div class="alert-cond">ราคา ${condTh} <strong>${a.targetPrice.toFixed(dp)}</strong> ${curr}</div>
+            <div class="alert-cond">ราคา ${condTh} <strong>${_fmtAlertPrice(a.targetPrice, dp)}</strong> ${curr}</div>
             ${a.note ? `<div class="alert-note">${a.note}</div>` : ""}
           </div>
           <button class="alert-del-btn" onclick="deleteAlert('${a.id}')" title="ลบ">×</button>
@@ -22542,7 +22608,7 @@ function renderAlertPanel() {
     return `<div class="alert-item triggered">
       <div class="alert-item-body">
         <div class="alert-sym">${label} <span style="font-size:10px;color:var(--yellow)">✓ triggered</span></div>
-        <div class="alert-cond">ราคา ${condTh} ${a.targetPrice.toFixed(dp)} → ราคาจริง <strong>${a.triggeredPrice?.toFixed(dp) ?? "—"}</strong> ${curr}</div>
+        <div class="alert-cond">ราคา ${condTh} ${_fmtAlertPrice(a.targetPrice, dp)} → ราคาจริง <strong>${a.triggeredPrice?.toFixed(dp) ?? "—"}</strong> ${curr}</div>
         ${when ? `<div class="alert-note">${when}</div>` : ""}
         ${a.note ? `<div class="alert-note">${a.note}</div>` : ""}
       </div>
@@ -22658,7 +22724,7 @@ function _showNextAlertPopup() {
     document.getElementById("alert-popup-sym").textContent = symLabel;
     document.getElementById("alert-popup-msg").innerHTML =
       `ราคา <strong style="font-size:18px;color:${isUp ? "var(--green)" : "var(--red)"}">${price.toFixed(isDRAlert ? 4 : 2)}</strong> ${curr}<br>
-       <span style="font-size:12px;color:var(--text2)">เป้าหมาย ${condTh} ${alert.targetPrice.toFixed(isDRAlert ? 4 : 2)} ${curr}</span>`;
+       <span style="font-size:12px;color:var(--text2)">เป้าหมาย ${condTh} ${_fmtAlertPrice(alert.targetPrice, isDRAlert ? 4 : 2)} ${curr}</span>`;
     document.getElementById("alert-popup-note").textContent = alert.note || "";
   }
   document.getElementById("alert-popup").classList.add("open");
@@ -22689,7 +22755,7 @@ function _showBrowserNotification(alert, price) {
   const dp = isDR ? 4 : 2;
   const symLabel = isDR ? `DR: ${_drUnder(alert.symbol)}` : isUS ? `US: ${_usUnder(alert.symbol)}` : isHK ? `HK: ${_hkUnder(alert.symbol)}` : alert.symbol;
   new Notification(`🔔 ${symLabel} ถึงราคาเป้า!`, {
-    body: `ราคา ${price.toFixed(dp)} ${curr} (เป้า ${condTh} ${alert.targetPrice.toFixed(dp)})${alert.note ? "\n" + alert.note : ""}`,
+    body: `ราคา ${price.toFixed(dp)} ${curr} (เป้า ${condTh} ${_fmtAlertPrice(alert.targetPrice, dp)})${alert.note ? "\n" + alert.note : ""}`,
     icon: "/favicon.ico",
   });
 }
