@@ -8155,7 +8155,7 @@ function renderTearsheet(d) {
         ${wlSupported ? `<button class="btn-secondary" id="ts-wl-btn" style="font-size:12.5px" onclick="_tsToggleWl('${h.symbol}')">${inWl ? '⭐ อยู่ใน Watchlist แล้ว' : '☆ เพิ่มเข้า Watchlist'}</button>` : ''}
         <button class="btn-secondary" style="font-size:12.5px" onclick="closeTsOpenChart('${h.symbol}')">📈 กราฟเต็ม</button>
         <button class="btn-secondary" style="font-size:12.5px" onclick="_tsGoNews('${h.symbol}')">📰 ข่าว</button>
-        <button class="btn-secondary" style="font-size:12.5px" onclick="_tsGoFilings('${h.symbol}')">📑 เอกสาร</button>
+        ${mkt !== 'JP' ? `<button class="btn-secondary" style="font-size:12.5px" onclick="_tsGoFilings('${h.symbol}')">📑 เอกสาร</button>` : ''}
         <button class="btn-secondary" style="font-size:12.5px" onclick="_tsGoPeer('${h.symbol}')">🆚 เทียบเพื่อน</button>
         <button class="btn-secondary" style="font-size:12.5px" onclick="_tsGoDividends('${h.symbol}')">💵 ปันผล</button>
         <button class="btn-secondary" style="font-size:12.5px" onclick="_tsGoFin('${h.symbol}')">🧾 เมนูงบการเงิน</button>
@@ -8844,6 +8844,11 @@ function _tsGoNews(sym) {
 
 function _tsGoFilings(sym) {
   const mkt = _tsData?.market || 'TH';
+  // หน้า Filings เต็มมีแค่แท็บ TH/US/HK (fil-tab-th/us/hk) — ไม่มีแท็บ JP เลย เดิมเรียกตรงนี้
+  // แบบไม่มี guard ทำให้ setFilTab('JP', null) ไม่มีแท็บติด active แล้ว searchFilings() ตกไปที่
+  // _filLinksHK(sym) แบบเงียบๆ (เช็คแค่ TH/US แล้ว else เป็น HK) ได้ลิงก์ HKEX ผิดตัวของหุ้นญี่ปุ่น
+  // — ปุ่มเรียกฟังก์ชันนี้ถูกซ่อนไปแล้วสำหรับ mkt==='JP' แต่กัน defensive ไว้เผื่อจุดเรียกอื่นในอนาคต
+  if (mkt === 'JP') return;
   const btn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'filings'"));
   showPage('filings', btn);
   setFilTab(mkt, document.getElementById('fil-tab-' + mkt.toLowerCase()));
@@ -14149,9 +14154,13 @@ function _newsRecentRender() {
   box.style.flexWrap = 'wrap';
   box.style.gap = '6px';
   box.style.alignItems = 'center';
+  // sym มาจาก localStorage (ผู้ใช้พิมพ์เองไม่ validate) — กรองเป็น [A-Z0-9.-] ก่อนฝังลง onclick
+  // เสมอ กันอักขระอย่าง ' แตก HTML/แทรกสคริปต์ (เหมือน pattern เดียวกับ _filRecentRender)
+  const safe = s => String(s || '').replace(/[^A-Z0-9.\-]/gi, '');
   box.innerHTML = '<span style="color:var(--text2)">🕓 เพิ่งดู:</span>' +
-    list.map(r => `<button class="filter-btn" style="font-size:11px;padding:3px 10px"
-      onclick="_newsRecentPick('${r.sym}','${r.tab}')">${r.tab === 'dr' ? '🌏' : '🇹🇭'} ${r.sym}</button>`).join('');
+    list.filter(r => safe(r.sym) && (r.tab === 'set' || r.tab === 'dr'))
+      .map(r => `<button class="filter-btn" style="font-size:11px;padding:3px 10px"
+      onclick="_newsRecentPick('${safe(r.sym)}','${r.tab}')">${r.tab === 'dr' ? '🌏' : '🇹🇭'} ${safe(r.sym)}</button>`).join('');
 }
 
 function _newsRecentAdd(sym, tab) {

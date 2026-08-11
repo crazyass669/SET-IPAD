@@ -1443,10 +1443,15 @@ def us_index_full_refresh():
     """ดึงราคา OHLC ย้อนหลังสูงสุด (period=max) ของสมาชิกดัชนี S&P 500 + Dow + Nasdaq 100
     ทั้งหมด (union ไม่ซ้ำ ~518 ตัว) ลง us_prices.db — ปุ่มแยกต่างหาก ใช้เฉพาะกดมือ
     (ไม่ผูกเข้า Quick Update ประจำวัน เพราะ full history โหลดนานกว่า gap-update มาก)
-    ใช้ progress state ร่วมกับงานยาวอื่นๆ (_state/_update/_lock — ดู /api/refresh)"""
+    ใช้ progress state ร่วมกับงานยาวอื่นๆ (_state/_update/_lock — ดู /api/refresh)
+    เช็ค _HM_LIVE_STATE["US"] ด้วย — กัน race กับปุ่ม "⚡ อัพเดทราคา" ของ Heatmap US ที่ใช้ล็อก
+    แยกต่างหาก (_hm_live_lock) เดิมสองปุ่มนี้เขียน us_prices.db/us_index_metrics.json พร้อมกัน
+    ได้โดยไม่มีใครกันใคร ทำให้ข้อมูลที่เพิ่งคำนวณเสร็จหายเงียบๆ (lost update) หรือชน SQLite lock"""
     with _lock:
         if _state["running"]:
             return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        if _HM_LIVE_STATE["US"]["running"]:
+            return jsonify({"error": "กำลังอัพเดทราคาสด (Heatmap US) อยู่ โปรดรอสักครู่"}), 409
         _state.update(running=True, done=False, error=None,
                       current=0, total=0, message="กำลังเริ่มดึงราคา US Index ย้อนหลังสูงสุด...")
     threading.Thread(target=_run_us_index_full_refresh, daemon=True).start()
@@ -1454,6 +1459,7 @@ def us_index_full_refresh():
 
 
 def _run_us_index_full_refresh():
+    ok = False
     try:
         from sources import us_index_membership
         from sources.yahoo import fetch_all_batch
@@ -1469,7 +1475,7 @@ def _run_us_index_full_refresh():
         data = fetch_all_batch(tickers, callback=cb, period="max")
         # ขั้นเขียน DB ใช้เวลาหลายนาที (หลายล้านแถวใน transaction เดียว) — บอกสถานะ
         # ให้ชัด ไม่งั้น progress ค้างที่ "batch 6/6" จนดูเหมือนแฮงค์
-        _update(current=517, total=518,
+        _update(current=len(tickers) - 1, total=len(tickers),
                 message=f"กำลังบันทึก {len(data)} ตัวลง us_prices.db (หลายนาที อย่าเพิ่งปิด)...")
         us_store.init_db(BASE_DIR)
         us_store.upsert_bars(BASE_DIR, data)
@@ -1480,14 +1486,22 @@ def _run_us_index_full_refresh():
             msg += f" (ขาด {missing} ตัว)"
         _update(done=True, message=msg)
         run_log.record_run(BASE_DIR, "us_index_full_refresh", True, msg)
+        ok = True
     except Exception as e:
         _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
         run_log.record_run(BASE_DIR, "us_index_full_refresh", False, str(e))
     finally:
-        _update(running=False)
+        if not ok:
+            _update(running=False)
+
+    if not ok:
+        return
 
     # คำนวณ RS/EMA/Stage/52W ใหม่จากราคาที่เพิ่งดึง — ทำนอก try/except หลักเพื่อให้รันแม้
-    # ราคาบางตัวพลาด (best-effort, ไม่ทำให้ job หลักถูกมองว่า error)
+    # ราคาบางตัวพลาด (best-effort, ไม่ทำให้ job หลักถูกมองว่า error) แต่ยัง "running=True"
+    # อยู่ตลอดขั้นนี้ — กันปุ่ม Index Max/Heatmap live update ตัวอื่นเริ่มเขียน us_prices.db/
+    # us_index_metrics.json ซ้อนกันก่อน build() รอบนี้เสร็จ (เดิมปล่อย running=False ก่อน
+    # build() ทำให้กดปุ่มซ้ำหรือกด Heatmap live ระหว่างนี้ชิงเขียนไฟล์ชนกันได้ — lost update)
     try:
         from sources import us_index_metrics
         n_metrics = us_index_metrics.build(BASE_DIR)
@@ -1495,6 +1509,8 @@ def _run_us_index_full_refresh():
         print(f"[US Index] rebuilt metrics: {n_metrics} ticker")
     except Exception as e:
         print(f"[US Index] metrics build error: {e}")
+    finally:
+        _update(running=False)
 
 
 def _run_index_gap_update(membership, store, region, label, progress_cb=None, sleep_s=0.3, index_key=None):
@@ -1697,10 +1713,14 @@ def hk_index_full_refresh():
     """ดึงราคา OHLC ย้อนหลังสูงสุด (period=max) ของสมาชิกดัชนี HSI + HSCEI + HSTECH
     ทั้งหมด (union ไม่ซ้ำ ~105 ตัว) ลง hk_prices.db — ปุ่มแยกต่างหาก ใช้เฉพาะกดมือ
     (ไม่ผูกเข้า Quick Update ประจำวัน เพราะ full history โหลดนานกว่า gap-update มาก)
-    ใช้ progress state ร่วมกับงานยาวอื่นๆ (_state/_update/_lock — ดู /api/refresh)"""
+    ใช้ progress state ร่วมกับงานยาวอื่นๆ (_state/_update/_lock — ดู /api/refresh)
+    เช็ค _HM_LIVE_STATE["HK"] ด้วย — กัน race กับปุ่ม "⚡ อัพเดทราคา" ของ Heatmap HK
+    (ดูเหตุผลเต็มที่ us_index_full_refresh)"""
     with _lock:
         if _state["running"]:
             return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        if _HM_LIVE_STATE["HK"]["running"]:
+            return jsonify({"error": "กำลังอัพเดทราคาสด (Heatmap HK) อยู่ โปรดรอสักครู่"}), 409
         _state.update(running=True, done=False, error=None,
                       current=0, total=0, message="กำลังเริ่มดึงราคา HK Index ย้อนหลังสูงสุด...")
     threading.Thread(target=_run_hk_index_full_refresh, daemon=True).start()
@@ -1708,6 +1728,7 @@ def hk_index_full_refresh():
 
 
 def _run_hk_index_full_refresh():
+    ok = False
     try:
         from sources import hk_index_membership
         from sources.yahoo import fetch_all_batch
@@ -1721,7 +1742,7 @@ def _run_hk_index_full_refresh():
             _update(current=current, total=total, message=msg)
 
         data = fetch_all_batch(tickers, callback=cb, period="max")
-        _update(current=104, total=105,
+        _update(current=len(tickers) - 1, total=len(tickers),
                 message=f"กำลังบันทึก {len(data)} ตัวลง hk_prices.db (หลายนาที อย่าเพิ่งปิด)...")
         hk_store.init_db(BASE_DIR)
         hk_store.upsert_bars(BASE_DIR, data)
@@ -1732,14 +1753,21 @@ def _run_hk_index_full_refresh():
             msg += f" (ขาด {missing} ตัว)"
         _update(done=True, message=msg)
         run_log.record_run(BASE_DIR, "hk_index_full_refresh", True, msg)
+        ok = True
     except Exception as e:
         _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
         run_log.record_run(BASE_DIR, "hk_index_full_refresh", False, str(e))
     finally:
-        _update(running=False)
+        if not ok:
+            _update(running=False)
+
+    if not ok:
+        return
 
     # คำนวณ RS/EMA/Stage/52W ใหม่จากราคาที่เพิ่งดึง — ทำนอก try/except หลักเพื่อให้รันแม้
-    # ราคาบางตัวพลาด (best-effort, ไม่ทำให้ job หลักถูกมองว่า error)
+    # ราคาบางตัวพลาด (best-effort, ไม่ทำให้ job หลักถูกมองว่า error) แต่ยัง "running=True"
+    # อยู่ตลอดขั้นนี้ — กันปุ่ม Index Max/Heatmap live update ตัวอื่นเริ่มเขียน hk_prices.db/
+    # hk_index_metrics.json ซ้อนกันก่อน build() รอบนี้เสร็จ
     try:
         from sources import hk_index_metrics
         n_metrics = hk_index_metrics.build(BASE_DIR)
@@ -1747,6 +1775,8 @@ def _run_hk_index_full_refresh():
         print(f"[HK Index] rebuilt metrics: {n_metrics} ticker")
     except Exception as e:
         print(f"[HK Index] metrics build error: {e}")
+    finally:
+        _update(running=False)
 
 
 def _run_hk_index_gap_update(progress_cb=None, index_key=None):
@@ -1769,11 +1799,14 @@ def hk_index_metrics_route():
 def hk_sector_ranks():
     """จัดอันดับ Sector ของสมาชิกดัชนี HK ตาม RS/return เฉลี่ย — reuse
     core.metrics.summarize_groups() ตัวเดียวกับหน้า "Sectors" ของหุ้นไทย/US (ห้ามเขียนสูตรซ้ำ)
-    query param index=HSI|HSCEI|HSTECH (default HSI)"""
+    query param index=HSI|HSCEI|HSTECH (default HSI) — ค่าที่ไม่รู้จักตอบ 400 เหมือน
+    /api/hk-index-heatmap (เดิม endpoint นี้ fallback เป็น HSI เงียบๆ ทำให้พฤติกรรมไม่ตรงกัน)"""
     from sources import hk_index_metrics
     from core.metrics import summarize_groups
     idx = (request.args.get("index") or "HSI").upper()
-    flag = {"HSI": "in_hsi", "HSCEI": "in_hscei", "HSTECH": "in_hstech"}.get(idx, "in_hsi")
+    flag = {"HSI": "in_hsi", "HSCEI": "in_hscei", "HSTECH": "in_hstech"}.get(idx)
+    if not flag:
+        return jsonify({"error": "index ต้องเป็น HSI, HSCEI หรือ HSTECH เท่านั้น"}), 400
     stocks = [s for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", []) if s.get(flag)]
     return jsonify({"sectors": summarize_groups(stocks, "sector")})
 
@@ -1793,10 +1826,13 @@ def get_hk_history(symbol):
 @app.route("/api/jp-index-full-refresh", methods=["POST"])
 def jp_index_full_refresh():
     """ดึงราคา OHLC ย้อนหลังสูงสุด (period=max) ของสมาชิกดัชนี Nikkei 225 (~225 ตัว)
-    ลง jp_prices.db — ปุ่มแยกต่างหาก ใช้เฉพาะกดมือ (ดู hk_index_full_refresh)"""
+    ลง jp_prices.db — ปุ่มแยกต่างหาก ใช้เฉพาะกดมือ (ดู hk_index_full_refresh)
+    เช็ค _HM_LIVE_STATE["JP"] ด้วย — กัน race กับปุ่ม "⚡ อัพเดทราคา" ของ Heatmap JP"""
     with _lock:
         if _state["running"]:
             return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        if _HM_LIVE_STATE["JP"]["running"]:
+            return jsonify({"error": "กำลังอัพเดทราคาสด (Heatmap JP) อยู่ โปรดรอสักครู่"}), 409
         _state.update(running=True, done=False, error=None,
                       current=0, total=0, message="กำลังเริ่มดึงราคา JP Index ย้อนหลังสูงสุด...")
     threading.Thread(target=_run_jp_index_full_refresh, daemon=True).start()
@@ -1804,6 +1840,7 @@ def jp_index_full_refresh():
 
 
 def _run_jp_index_full_refresh():
+    ok = False
     try:
         from sources import jp_index_membership
         from sources.yahoo import fetch_all_batch
@@ -1828,12 +1865,19 @@ def _run_jp_index_full_refresh():
             msg += f" (ขาด {missing} ตัว)"
         _update(done=True, message=msg)
         run_log.record_run(BASE_DIR, "jp_index_full_refresh", True, msg)
+        ok = True
     except Exception as e:
         _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
         run_log.record_run(BASE_DIR, "jp_index_full_refresh", False, str(e))
     finally:
-        _update(running=False)
+        if not ok:
+            _update(running=False)
 
+    if not ok:
+        return
+
+    # ยัง "running=True" อยู่ตลอด build() นี้ — กันปุ่ม Index Max/Heatmap live update ตัวอื่น
+    # เริ่มเขียน jp_prices.db/jp_index_metrics.json ซ้อนกันก่อน build() รอบนี้เสร็จ
     try:
         from sources import jp_index_metrics
         n_metrics = jp_index_metrics.build(BASE_DIR)
@@ -1841,6 +1885,8 @@ def _run_jp_index_full_refresh():
         print(f"[JP Index] rebuilt metrics: {n_metrics} ticker")
     except Exception as e:
         print(f"[JP Index] metrics build error: {e}")
+    finally:
+        _update(running=False)
 
 
 def _run_jp_index_gap_update(progress_cb=None):
@@ -4250,6 +4296,11 @@ def heatmap_live_update(region):
     with _hm_live_lock:
         if state["running"]:
             return jsonify({"status": "running"})
+        # เช็ค _state["running"] (ล็อกงานยาวหลัก เช่น Index Max/Quick Update) ด้วย — กัน
+        # race ที่ปุ่มนี้แยกล็อกเอง (_hm_live_lock) เลยเริ่มงานซ้อนกับ full-refresh ของตลาด
+        # เดียวกันได้ ทั้งสองเขียน {region}_prices.db/{region}_index_metrics.json ไฟล์เดียวกัน
+        if _state["running"]:
+            return jsonify({"status": "running"})
         state.update(running=True, error=None, done=False, n_fetched=None, n_live=None)
     threading.Thread(target=_run_heatmap_live_update, args=(region, index_key), daemon=True).start()
     return jsonify({"status": "started"})
@@ -4391,14 +4442,22 @@ def stock_news(symbol):
     if not is_dr:
         jobs["set"] = lambda: _news_from_set(sym)
 
+    # ไม่ใช้ "with ThreadPoolExecutor(...) as ex:" — __exit__ ของมันเรียก shutdown(wait=True)
+    # ซึ่งบล็อกรอทุก thread จบงานจริง แม้ f.result(timeout=30) ข้างล่างจะ timeout ไปแล้วก็ตาม
+    # (เช่น yfinance ค้างเกิน 30 วิ) เท่ากับ timeout ที่ตั้งใจไว้ไม่มีผลจริง request thread
+    # ค้างยาวเกิน 30 วิได้ — shutdown(wait=False) ให้ thread ที่ยังค้างทำงานต่อเบื้องหลังแทน
+    # โดยไม่บล็อก request นี้
     rows, errors = [], {}
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    ex = ThreadPoolExecutor(max_workers=3)
+    try:
         futs = {name: ex.submit(fn) for name, fn in jobs.items()}
         for name, f in futs.items():
             try:
                 rows.extend(f.result(timeout=30))
             except Exception as e:
                 errors[name] = str(e)[:120]
+    finally:
+        ex.shutdown(wait=False)
 
     # dedupe หัวข้อซ้ำข้ามแหล่ง (Google มักเจอข่าวเดียวกับ Yahoo) — คงตัวที่เจอก่อนตามลำดับ
     # แหล่ง (yahoo มี summary ครบกว่า) · เทียบแบบตัดช่องว่าง/ตัวพิมพ์
@@ -5033,11 +5092,19 @@ def _dh_index_quality_item(key, label, market_code, membership_path, metrics_pat
             mem = json.load(f)
     except Exception as e:
         return _dh_quality_item(key, label, "red", f"อ่าน membership ไม่ได้: {str(e)[:120]}")
+    if not isinstance(mem, dict):
+        return _dh_quality_item(key, label, "red",
+                                 f"membership.json รูปแบบผิดปกติ (ได้ {type(mem).__name__} ไม่ใช่ object)")
 
     union = set()
     for k in index_keys:
-        n = len(mem.get(k, []))
-        union |= set(mem.get(k, []))
+        members = mem.get(k) or []
+        if not isinstance(members, list):
+            status = "red"
+            problems.append(f"{k} รูปแบบผิดปกติ ({type(members).__name__} ไม่ใช่ list)")
+            continue
+        n = len(members)
+        union |= set(members)
         lo, hi = bounds.get(k, (0, 10 ** 9))
         if not (lo <= n <= hi):
             status = "warn"
@@ -5046,10 +5113,13 @@ def _dh_index_quality_item(key, label, market_code, membership_path, metrics_pat
     try:
         with open(metrics_path, encoding="utf-8") as f:
             stocks = (json.load(f) or {}).get("stocks") or []
+        if not isinstance(stocks, list):
+            stocks = []
     except Exception:
         stocks = []
+    stocks = [s for s in stocks if isinstance(s, dict)]
     metric_syms = {s.get("symbol") for s in stocks}
-    missing = sorted(union - metric_syms)
+    missing = sorted(sym for sym in (union - metric_syms) if sym is not None)
     if missing:
         status = "warn"
         more = '…' if len(missing) > 8 else ''
@@ -5063,6 +5133,16 @@ def _dh_index_quality_item(key, label, market_code, membership_path, metrics_pat
 
     note = " · ".join(problems) if problems else f"{len(union)} ตัว ({market_code}) ครบ ไม่มี sector Unknown"
     return _dh_quality_item(key, label, status, note)
+
+
+def _dh_error_item(key, label, category, err):
+    """item แดงสำหรับตอนที่เรียก get_meta()/read_status() ของแหล่งข้อมูลนั้นแล้ว exception
+    หลุดออกมาเอง (เช่น sqlite ล็อค/เสียหาย, ไฟล์ cache ถูกเขียนทับพอดีตอนอ่าน) — ใช้แทน
+    _dh_item() ตรงจุดที่ยังไม่มี try/except ครอบ กัน exception ตัวเดียวทำให้ทั้ง endpoint
+    /api/data-health ตอบ 500 (ไม่ใช่ JSON) จนหน้า Data Health ทั้งหน้าไม่ขึ้นอะไรเลย"""
+    return {"key": key, "label": label, "category": category,
+            "last_at": None, "age_hours": None, "status": "red",
+            "note": f"⚠ เช็คสถานะไม่ได้ (exception): {err}"}
 
 
 def _dh_item(key, label, category, dt, warn_h, red_h,
@@ -5095,9 +5175,12 @@ def data_health():
     items = []
 
     # ราคา/เทคนิค — auto 3 รอบ/วัน (จ-ศ), gap วันหยุดสุดสัปดาห์ ~59.5 ชม.
-    items.append(_dh_item(
-        "prices", "ราคา/RS/เทคนิค (หุ้นไทย)", "ราคา/เทคนิค",
-        _dh_parse(price_store.get_meta(BASE_DIR, "updated_at")), 30, 72))
+    try:
+        items.append(_dh_item(
+            "prices", "ราคา/RS/เทคนิค (หุ้นไทย)", "ราคา/เทคนิค",
+            _dh_parse(price_store.get_meta(BASE_DIR, "updated_at")), 30, 72))
+    except Exception as e:
+        items.append(_dh_error_item("prices", "ราคา/RS/เทคนิค (หุ้นไทย)", "ราคา/เทคนิค", str(e)[:160]))
 
     items.append(_dh_item(
         "indices", "ดัชนีกลุ่ม (TradingView)", "ราคา/เทคนิค",
@@ -5129,21 +5212,27 @@ def data_health():
         "nvdr", "NVDR", "Flow/เจ้าของ",
         _dh_mtime(os.path.join(BASE_DIR, "nvdr_data.json")), 48, 120))
 
-    _insider_at = _dh_parse(sec_store._get_meta(BASE_DIR, "insider_last_synced_at"))
-    items.append(_dh_item(
-        "insider", "Insider / ผู้ถือหุ้นใหญ่", "Flow/เจ้าของ",
-        _insider_at, 48, 168))
+    try:
+        _insider_at = _dh_parse(sec_store._get_meta(BASE_DIR, "insider_last_synced_at"))
+        items.append(_dh_item(
+            "insider", "Insider / ผู้ถือหุ้นใหญ่", "Flow/เจ้าของ",
+            _insider_at, 48, 168))
+    except Exception as e:
+        items.append(_dh_error_item("insider", "Insider / ผู้ถือหุ้นใหญ่", "Flow/เจ้าของ", str(e)[:160]))
 
     # Hedge Holdings (13F superinvestors จาก Dataroma) — ยื่นรายไตรมาส ดีเลย์ ~45 วัน
     # เกณฑ์เตือนจึงหลวมกว่า flow อื่น (แนะนำกดรีเฟรชเดือนละครั้งพอ — ดู sources/dataroma.py)
     from sources import dataroma as _dataroma_dh
-    _hedge_cache = _dataroma_dh.load_cache(BASE_DIR)
-    items.append(_dh_item(
-        "hedge_holdings", "Hedge Holdings 13F (Dataroma)", "Flow/เจ้าของ",
-        _dh_parse(_hedge_cache.get("generated_at")) if _hedge_cache else None,
-        45 * 24, 100 * 24,
-        missing_note="ยังไม่เคยดึง Hedge Holdings ในเครื่องนี้ — กดปุ่ม '⟳ อัพเดท Hedge Holdings' "
-                      "ในหน้า 🐋 Hedge Holdings", optional=True))
+    try:
+        _hedge_cache = _dataroma_dh.load_cache(BASE_DIR)
+        items.append(_dh_item(
+            "hedge_holdings", "Hedge Holdings 13F (Dataroma)", "Flow/เจ้าของ",
+            _dh_parse(_hedge_cache.get("generated_at")) if _hedge_cache else None,
+            45 * 24, 100 * 24,
+            missing_note="ยังไม่เคยดึง Hedge Holdings ในเครื่องนี้ — กดปุ่ม '⟳ อัพเดท Hedge Holdings' "
+                          "ในหน้า 🐋 Hedge Holdings", optional=True))
+    except Exception as e:
+        items.append(_dh_error_item("hedge_holdings", "Hedge Holdings 13F (Dataroma)", "Flow/เจ้าของ", str(e)[:160]))
 
     # หุ้นเข้าใหม่/ถูกถอด — ไฟล์อังกฤษเป็นตัวหลัก (symbol/market/industry/sector ทั้งระบบ
     # อ่านจากไฟล์นี้) ส่วนไฟล์ไทยให้แค่ "ชื่อบริษัทภาษาไทย" เสริม ไม่มีก็ไม่พัง — จึงไม่เอา
@@ -5180,7 +5269,12 @@ def data_health():
     # เปรียบเทียบจริงกับแหล่งสด (SET.or.th/Wikipedia) แล้วเตือนถ้ามีตัวเข้า/ออกที่ sync
     # มือยังไม่ตรง กันเคสไฟล์ local ค้างเงียบๆ นานเป็นเดือนโดยไม่มีใครสังเกต (ดู
     # PLAN_universe_data_health.txt)
-    _drift_status = index_drift.read_status(BASE_DIR)
+    try:
+        _drift_status = index_drift.read_status(BASE_DIR)
+        if not isinstance(_drift_status, dict):
+            _drift_status = {}
+    except Exception:
+        _drift_status = {}
     items.append(_dh_drift_item("TH", "ตรวจ drift หุ้นไทย (auto, เทียบ SET.or.th)", _drift_status))
     items.append(_dh_drift_item("US", "ตรวจ drift ดัชนี US (auto, เทียบ Wikipedia)", _drift_status))
     items.append(_dh_drift_item("HK", "ตรวจ drift ดัชนี HK (auto, เทียบ Wikipedia)", _drift_status))
@@ -5189,20 +5283,29 @@ def data_health():
     # ราคา/metrics หุ้นดัชนี US/HK/JP — auto ผ่าน Quick Update/Index Max, เกณฑ์เดียวกับ
     # ราคาหุ้นไทย (30/72 ชม.) เพราะ upsert_bars() stamp 'updated_at' รอบเดียวกัน
     from core import us_store as _us_store, hk_store as _hk_store, jp_store as _jp_store
-    items.append(_dh_item(
-        "us_prices", "ราคาหุ้นดัชนี US (us_prices.db)", "ราคา/เทคนิค",
-        _dh_parse(_us_store.get_meta(BASE_DIR, "updated_at")), 30, 72,
-        missing_note="ยังไม่เคยอัพเดทหุ้น US ในเครื่องนี้", optional=True))
+    try:
+        items.append(_dh_item(
+            "us_prices", "ราคาหุ้นดัชนี US (us_prices.db)", "ราคา/เทคนิค",
+            _dh_parse(_us_store.get_meta(BASE_DIR, "updated_at")), 30, 72,
+            missing_note="ยังไม่เคยอัพเดทหุ้น US ในเครื่องนี้", optional=True))
+    except Exception as e:
+        items.append(_dh_error_item("us_prices", "ราคาหุ้นดัชนี US (us_prices.db)", "ราคา/เทคนิค", str(e)[:160]))
 
-    items.append(_dh_item(
-        "hk_prices", "ราคาหุ้นดัชนี HK (hk_prices.db)", "ราคา/เทคนิค",
-        _dh_parse(_hk_store.get_meta(BASE_DIR, "updated_at")), 30, 72,
-        missing_note="ยังไม่เคยอัพเดทหุ้น HK ในเครื่องนี้", optional=True))
+    try:
+        items.append(_dh_item(
+            "hk_prices", "ราคาหุ้นดัชนี HK (hk_prices.db)", "ราคา/เทคนิค",
+            _dh_parse(_hk_store.get_meta(BASE_DIR, "updated_at")), 30, 72,
+            missing_note="ยังไม่เคยอัพเดทหุ้น HK ในเครื่องนี้", optional=True))
+    except Exception as e:
+        items.append(_dh_error_item("hk_prices", "ราคาหุ้นดัชนี HK (hk_prices.db)", "ราคา/เทคนิค", str(e)[:160]))
 
-    items.append(_dh_item(
-        "jp_prices", "ราคาหุ้นดัชนี JP (jp_prices.db)", "ราคา/เทคนิค",
-        _dh_parse(_jp_store.get_meta(BASE_DIR, "updated_at")), 30, 72,
-        missing_note="ยังไม่เคยอัพเดทหุ้น JP ในเครื่องนี้", optional=True))
+    try:
+        items.append(_dh_item(
+            "jp_prices", "ราคาหุ้นดัชนี JP (jp_prices.db)", "ราคา/เทคนิค",
+            _dh_parse(_jp_store.get_meta(BASE_DIR, "updated_at")), 30, 72,
+            missing_note="ยังไม่เคยอัพเดทหุ้น JP ในเครื่องนี้", optional=True))
+    except Exception as e:
+        items.append(_dh_error_item("jp_prices", "ราคาหุ้นดัชนี JP (jp_prices.db)", "ราคา/เทคนิค", str(e)[:160]))
 
     items.append(_dh_item(
         "us_index_metrics", "Metrics หุ้นดัชนี US (us_index_metrics.json)", "ราคา/เทคนิค",
@@ -5220,36 +5323,42 @@ def data_health():
         missing_note="ยังไม่เคยอัพเดทหุ้น JP ในเครื่องนี้", optional=True))
 
     # งบการเงิน (local-only)
-    _fin_summary = financials_store.get_meta_summary(BASE_DIR)
-    items.append(_dh_item(
-        "financials", "งบการเงิน หุ้นไทย+DR (financials.db)", "งบการเงิน",
-        _dh_parse(_fin_summary.get("last_synced_at")), 100 * 24, 150 * 24,
-        missing_note="ยังไม่เคยรัน update_financials.py"))
+    try:
+        _fin_summary = financials_store.get_meta_summary(BASE_DIR)
+        items.append(_dh_item(
+            "financials", "งบการเงิน หุ้นไทย+DR (financials.db)", "งบการเงิน",
+            _dh_parse(_fin_summary.get("last_synced_at")), 100 * 24, 150 * 24,
+            missing_note="ยังไม่เคยรัน update_financials.py"))
+    except Exception as e:
+        items.append(_dh_error_item("financials", "งบการเงิน หุ้นไทย+DR (financials.db)", "งบการเงิน", str(e)[:160]))
 
     # เก็บเป็น JSON string {"at": "YYYY-MM-DD HH:MM", "ok":.., "empty":.., "fail":.., "total":.., "force":..}
     # ไม่ใช่ plain datetime string เหมือน meta อื่น — ต้องแกะก่อน parse
-    _mirror_raw = financials_store._get_meta(BASE_DIR, "finnomena_mirror_last")
-    _mirror_at = None
-    _mirror_info = {}
-    if _mirror_raw:
-        try:
-            _mirror_info = json.loads(_mirror_raw)
-            _mirror_at = _dh_parse(_mirror_info.get("at"))
-        except Exception:
-            pass
-    _mirror_item = _dh_item(
-        "mirror", "Mirror งบ US/HK ทั้งตลาด (Finnomena)", "งบการเงิน",
-        _mirror_at, 100 * 24, 200 * 24,
-        missing_note="ยังไม่เคยรัน mirror_finnomena.py")
-    # ตัว detector "Finnomena อาจเปลี่ยน/ปิด API" — force run (ยิงซ้ำทุกตัวที่มีงบ
-    # เพื่อดึงงวดใหม่) ปกติต้องได้ ok > 0 เสมอถ้ามี candidate เยอะ ถ้า ok=0 ทั้งที่ total
-    # เยอะ = parser พังหรือ API เปลี่ยนรูปแบบ ไม่ใช่แค่ "ไม่มีงวดใหม่ตามฤดูกาล"
-    if _mirror_info.get("force") and _mirror_info.get("total", 0) > 50 and _mirror_info.get("ok", 0) == 0:
-        _mirror_item["status"] = "red"
-        _mirror_item["note"] = ("⚠ รอบ force ล่าสุดดึงงบสำเร็จ 0 ตัวจาก "
-                                 f"{_mirror_info['total']} ตัว — Finnomena อาจเปลี่ยน/ปิด API "
-                                 "(ไม่ใช่แค่ไม่มีงวดใหม่ตามฤดูกาล) ดู PLAN_universe_data_health.txt งาน 4")
-    items.append(_mirror_item)
+    try:
+        _mirror_raw = financials_store._get_meta(BASE_DIR, "finnomena_mirror_last")
+        _mirror_at = None
+        _mirror_info = {}
+        if _mirror_raw:
+            try:
+                _mirror_info = json.loads(_mirror_raw)
+                _mirror_at = _dh_parse(_mirror_info.get("at"))
+            except Exception:
+                pass
+        _mirror_item = _dh_item(
+            "mirror", "Mirror งบ US/HK ทั้งตลาด (Finnomena)", "งบการเงิน",
+            _mirror_at, 100 * 24, 200 * 24,
+            missing_note="ยังไม่เคยรัน mirror_finnomena.py")
+        # ตัว detector "Finnomena อาจเปลี่ยน/ปิด API" — force run (ยิงซ้ำทุกตัวที่มีงบ
+        # เพื่อดึงงวดใหม่) ปกติต้องได้ ok > 0 เสมอถ้ามี candidate เยอะ ถ้า ok=0 ทั้งที่ total
+        # เยอะ = parser พังหรือ API เปลี่ยนรูปแบบ ไม่ใช่แค่ "ไม่มีงวดใหม่ตามฤดูกาล"
+        if _mirror_info.get("force") and _mirror_info.get("total", 0) > 50 and _mirror_info.get("ok", 0) == 0:
+            _mirror_item["status"] = "red"
+            _mirror_item["note"] = ("⚠ รอบ force ล่าสุดดึงงบสำเร็จ 0 ตัวจาก "
+                                     f"{_mirror_info['total']} ตัว — Finnomena อาจเปลี่ยน/ปิด API "
+                                     "(ไม่ใช่แค่ไม่มีงวดใหม่ตามฤดูกาล) ดู PLAN_universe_data_health.txt งาน 4")
+        items.append(_mirror_item)
+    except Exception as e:
+        items.append(_dh_error_item("mirror", "Mirror งบ US/HK ทั้งตลาด (Finnomena)", "งบการเงิน", str(e)[:160]))
 
     # Valuation ตลาด — ปกติช้ากว่าปัจจุบัน ~1 เดือน (ไม่ใช่ค้าง) เตือนเมื่อ >=2 เดือน
     _pe_status = "ok"

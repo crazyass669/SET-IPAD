@@ -207,15 +207,25 @@ def refresh_all(base_dir, callback=None, pause=0.4):
                 cur = h.pop("_current", None)
                 if cur and h["sym"] not in quotes:
                     quotes[h["sym"]] = cur
-            time.sleep(pause)
-            sells = fetch_sells(code)
-            info["sold_out"] = sells["sold_out"]
-            info["sold_out_period"] = sells["period"]
-            result[code] = info
         except Exception as e:  # noqa: BLE001 — กองเดียวพลาดไม่ควรล้มทั้งงาน
             result[code] = {"code": code, "name": mgr["name"], "error": str(e),
                             "holdings": [], "sold_out": [], "value": mgr.get("value"),
                             "num_stocks": mgr.get("num_stocks")}
+            time.sleep(pause)
+            continue
+
+        time.sleep(pause)
+        # หน้า sold-out แยก try ของตัวเอง — พังแล้วไม่ควรทิ้ง holdings ที่ดึงมาสำเร็จแล้วข้างบน
+        # (เดิมอยู่ try ก้อนเดียวกัน ทำให้ manager นั้นทั้งกองโดนแทนที่ด้วย entry ว่างเปล่า
+        # ทั้งที่ holdings จริงดึงมาสำเร็จแล้ว)
+        try:
+            sells = fetch_sells(code)
+            info["sold_out"] = sells["sold_out"]
+            info["sold_out_period"] = sells["period"]
+        except Exception:  # noqa: BLE001
+            info["sold_out"] = []
+            info["sold_out_period"] = None
+        result[code] = info
         time.sleep(pause)  # เกรงใจเซิร์ฟเวอร์ Dataroma
 
     payload = {
