@@ -322,9 +322,10 @@ def _resolve_data_bytes():
     คืน (None, None, None) ถ้าไม่มีไฟล์ใช้ได้เลย"""
     import gzip as _gzip
     for path in (DATA_FILE, BACKUP_FILE):
-        if not os.path.exists(path):
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
             continue
-        mtime = os.path.getmtime(path)
         with _data_gz_lock:
             if _data_gz_cache["path"] == path and _data_gz_cache["mtime"] == mtime:
                 return _data_gz_cache["raw"], _data_gz_cache["gz"], f'"{path == BACKUP_FILE}-{mtime}"'
@@ -369,7 +370,8 @@ def get_data():
 def start_refresh():
     period = "max"
     if request.is_json:
-        p = request.json.get("period", "max")
+        body = request.json
+        p = body.get("period", "max") if isinstance(body, dict) else "max"
         if p in {"1y", "2y", "5y", "10y", "max"}:
             period = p
     with _lock:
@@ -412,7 +414,10 @@ def progress_stream():
 def get_history(symbol):
     """ส่ง full price history จาก SQLite point query (สำหรับ 5Y/Max chart)"""
     ticker = symbol.upper().strip() + ".BK"
-    data = price_store.get_series(BASE_DIR, ticker)
+    try:
+        data = price_store.get_series(BASE_DIR, ticker)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
     if not data:
         return jsonify({"error": f"ไม่พบข้อมูล {symbol} — กรุณา Full Refresh ก่อน"}), 404
     return jsonify(data)
@@ -431,7 +436,10 @@ def price_analytics_endpoint(symbol):
     cached = _price_analytics_cache.get(sym)
     if cached and (time.time() - cached[0] < _PRICE_ANALYTICS_TTL):
         return jsonify(cached[1])
-    result = price_analytics.build_for_symbol(BASE_DIR, sym + ".BK")
+    try:
+        result = price_analytics.build_for_symbol(BASE_DIR, sym + ".BK")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
     if not result:
         return jsonify({"error": f"ข้อมูลราคาไม่พอวิเคราะห์ {symbol} (ต้องมีอย่างน้อย ~1 ปี)"}), 404
     _price_analytics_cache[sym] = (time.time(), result)
@@ -462,9 +470,9 @@ def price_analytics_yf_endpoint(yf_ticker):
             "closes": [nz(c) for c in hist["Close"]],
             "adj_closes": [nz(c) for c in adj_col],
         }
+        result = price_analytics.analyze(ohlc)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    result = price_analytics.analyze(ohlc)
     if not result:
         return jsonify({"error": f"ข้อมูลราคาไม่พอวิเคราะห์ {yft} (ต้องมีอย่างน้อย ~1 ปี)"}), 404
     _price_analytics_cache[cache_key] = (time.time(), result)
@@ -1515,6 +1523,7 @@ def _run_us_index_full_refresh():
         from sources import us_index_metrics
         n_metrics = us_index_metrics.build(BASE_DIR)
         _us_breadth_cache.clear()
+        _bump_cache_gen()
         print(f"[US Index] rebuilt metrics: {n_metrics} ticker")
     except Exception as e:
         print(f"[US Index] metrics build error: {e}")
@@ -1781,6 +1790,7 @@ def _run_hk_index_full_refresh():
         from sources import hk_index_metrics
         n_metrics = hk_index_metrics.build(BASE_DIR)
         _hk_breadth_cache.clear()
+        _bump_cache_gen()
         print(f"[HK Index] rebuilt metrics: {n_metrics} ticker")
     except Exception as e:
         print(f"[HK Index] metrics build error: {e}")
@@ -1891,6 +1901,7 @@ def _run_jp_index_full_refresh():
         from sources import jp_index_metrics
         n_metrics = jp_index_metrics.build(BASE_DIR)
         _jp_breadth_cache.clear()
+        _bump_cache_gen()
         print(f"[JP Index] rebuilt metrics: {n_metrics} ticker")
     except Exception as e:
         print(f"[JP Index] metrics build error: {e}")
@@ -4260,18 +4271,21 @@ def _run_heatmap_live_update(region, index_key=None):
             if not mod.update_live_prices(BASE_DIR, live_map, scope):
                 mod.build(BASE_DIR, live_map=live_map)
             _us_breadth_cache.clear()
+            _bump_cache_gen()
         elif region == "HK":
             n, live_map, scope = _run_hk_index_gap_update(index_key=index_key)
             from sources import hk_index_metrics as mod
             if not mod.update_live_prices(BASE_DIR, live_map, scope):
                 mod.build(BASE_DIR, live_map=live_map)
             _hk_breadth_cache.clear()
+            _bump_cache_gen()
         else:
             n, live_map, scope = _run_jp_index_gap_update()
             from sources import jp_index_metrics as mod
             if not mod.update_live_prices(BASE_DIR, live_map, scope):
                 mod.build(BASE_DIR, live_map=live_map)
             _jp_breadth_cache.clear()
+            _bump_cache_gen()
         state["done"] = True
         # n_fetched/n_live — ให้ frontend โชว์ข้อความ "⚡ ราคาสด ณ HH:MM:SS · สำเร็จ N/M ตัว"
         # แบบเดียวกับปุ่ม "⚡ ราคาล่าสุด" ของ Watchlist (ดู wlRefreshLivePrices ใน dashboard.js)
@@ -6313,6 +6327,9 @@ def _run_refresh(period="max"):
             _update(current=current, total=total, message=msg)
 
         _refresh_svc.run_with_progress(cb, BASE_DIR, period=period)
+        _market_internals_cache.clear()
+        _breadth_cache.clear()
+        _bump_cache_gen()
 
         # อัพเดท Indices (full history) + Capital Flow ล้มได้โดยไม่ทำให้ทั้งรอบ
         # ล้ม (ราคาหุ้น SET หลักได้ไปแล้ว) แต่ต้องโผล่ในผลลัพธ์รอบนี้ ไม่งั้น
@@ -6798,6 +6815,15 @@ def rotation_alerts():
     })
 
 
+# _cache_gen bump คู่กับทุก .clear() ของ breadth/market-internals cache ด้านล่าง — กัน
+# request ที่ compute_breadth() ค้างอยู่ก่อน refresh มาเขียนผลลัพธ์เก่าทับ cache ที่เพิ่ง
+# clear ไป (เช็ค gen ก่อน-หลัง compute แล้วข้าม write ถ้ามี refresh คั่นกลางระหว่างนั้น)
+_cache_gen = {"n": 0}
+
+def _bump_cache_gen():
+    _cache_gen["n"] += 1
+
+
 _breadth_cache: dict = {}
 
 @app.route("/api/breadth")
@@ -6809,14 +6835,17 @@ def market_breadth():
     rng = request.args.get("range", "1y")
     if rng not in RANGE_DAYS:
         rng = "1y"
-    if _breadth_cache.get(rng):
-        return jsonify(_breadth_cache[rng])
+    cached = _breadth_cache.get(rng)
+    if cached:
+        return jsonify(cached)
+    gen0 = _cache_gen["n"]
     try:
         from services.breadth import compute_breadth
         data = compute_breadth(BASE_DIR, days=RANGE_DAYS[rng])
         if not data:
             return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณา Full Refresh ก่อน"}), 404
-        _breadth_cache[rng] = data
+        if _cache_gen["n"] == gen0:
+            _breadth_cache[rng] = data
         return jsonify(data)
     except Exception as e:
         print(f"[Breadth] {traceback.format_exc()}")
@@ -6835,15 +6864,18 @@ def us_market_breadth():
     rng = request.args.get("range", "1y")
     if rng not in RANGE_DAYS:
         rng = "1y"
-    if _us_breadth_cache.get(rng):
-        return jsonify(_us_breadth_cache[rng])
+    cached = _us_breadth_cache.get(rng)
+    if cached:
+        return jsonify(cached)
+    gen0 = _cache_gen["n"]
     try:
         from services.breadth import compute_breadth
         from core import us_store
         data = compute_breadth(BASE_DIR, days=RANGE_DAYS[rng], store=us_store)
         if not data:
             return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณากด 📈 US Index Max ก่อน"}), 404
-        _us_breadth_cache[rng] = data
+        if _cache_gen["n"] == gen0:
+            _us_breadth_cache[rng] = data
         return jsonify(data)
     except Exception as e:
         print(f"[USBreadth] {traceback.format_exc()}")
@@ -6862,15 +6894,18 @@ def hk_market_breadth():
     rng = request.args.get("range", "1y")
     if rng not in RANGE_DAYS:
         rng = "1y"
-    if _hk_breadth_cache.get(rng):
-        return jsonify(_hk_breadth_cache[rng])
+    cached = _hk_breadth_cache.get(rng)
+    if cached:
+        return jsonify(cached)
+    gen0 = _cache_gen["n"]
     try:
         from services.breadth import compute_breadth
         from core import hk_store
         data = compute_breadth(BASE_DIR, days=RANGE_DAYS[rng], store=hk_store)
         if not data:
             return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณากด 📈 HK Index Max ก่อน"}), 404
-        _hk_breadth_cache[rng] = data
+        if _cache_gen["n"] == gen0:
+            _hk_breadth_cache[rng] = data
         return jsonify(data)
     except Exception as e:
         print(f"[HKBreadth] {traceback.format_exc()}")
@@ -6889,15 +6924,18 @@ def jp_market_breadth():
     rng = request.args.get("range", "1y")
     if rng not in RANGE_DAYS:
         rng = "1y"
-    if _jp_breadth_cache.get(rng):
-        return jsonify(_jp_breadth_cache[rng])
+    cached = _jp_breadth_cache.get(rng)
+    if cached:
+        return jsonify(cached)
+    gen0 = _cache_gen["n"]
     try:
         from services.breadth import compute_breadth
         from core import jp_store
         data = compute_breadth(BASE_DIR, days=RANGE_DAYS[rng], store=jp_store)
         if not data:
             return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณากด 📈 JP Index Max ก่อน"}), 404
-        _jp_breadth_cache[rng] = data
+        if _cache_gen["n"] == gen0:
+            _jp_breadth_cache[rng] = data
         return jsonify(data)
     except Exception as e:
         print(f"[JPBreadth] {traceback.format_exc()}")
@@ -6913,13 +6951,15 @@ def market_internals():
     จาก SQLite price store — cache ผลลัพธ์ใน memory, expire เมื่อ Quick Update เสร็จ
     (result-cache ใช้ event invalidation: ถูก clear หลัง refresh — ไม่พึ่ง mtime)
     """
-    if _market_internals_cache.get("data"):
-        return jsonify(_market_internals_cache["data"])
+    cached = _market_internals_cache.get("data")
+    if cached:
+        return jsonify(cached)
 
     if not (price_store.db_exists(BASE_DIR)
             or os.path.exists(os.path.join(BASE_DIR, "set_history.json"))):
         return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณา Full Refresh ก่อน"}), 404
 
+    gen0 = _cache_gen["n"]
     try:
         # ใช้ compute_breadth (vectorized pandas — ~1-2 วิ) แทน loop เดิมที่ทำ
         # .get_loc() ทีละหุ้นทีละวัน (~1,198 หุ้น x 63 วัน ~25 วิ) และยังผูก
@@ -6934,7 +6974,8 @@ def market_internals():
             "new_highs":  breadth["nh"],
             "new_lows":   breadth["nl"],
         }
-        _market_internals_cache["data"] = result
+        if _cache_gen["n"] == gen0:
+            _market_internals_cache["data"] = result
         return jsonify(result)
 
     except Exception as e:
@@ -7032,6 +7073,7 @@ def _run_quick():
         _refresh_svc.run_quick_update(cb, BASE_DIR)
         _market_internals_cache.clear()
         _breadth_cache.clear()
+        _bump_cache_gen()
 
         def _insider():
             from sources import sec_store as _sec_store
@@ -7056,6 +7098,7 @@ def _run_quick():
             from sources import us_index_metrics
             us_index_metrics.build(BASE_DIR, live_map=live_us)
             _us_breadth_cache.clear()
+            _bump_cache_gen()
             print(f"[QuickUpdate] US Index: gap-updated {n_us} ticker, metrics rebuilt")
         _sub_step("US Index", 95, "อัพเดทราคา US Index...", _us_index)
 
@@ -7067,6 +7110,7 @@ def _run_quick():
             from sources import hk_index_metrics
             hk_index_metrics.build(BASE_DIR, live_map=live_hk)
             _hk_breadth_cache.clear()
+            _bump_cache_gen()
             print(f"[QuickUpdate] HK Index: gap-updated {n_hk} ticker, metrics rebuilt")
         _sub_step("HK Index", 96, "อัพเดทราคา HK Index...", _hk_index)
 
@@ -7078,6 +7122,7 @@ def _run_quick():
             from sources import jp_index_metrics
             jp_index_metrics.build(BASE_DIR, live_map=live_jp)
             _jp_breadth_cache.clear()
+            _bump_cache_gen()
             print(f"[QuickUpdate] JP Index: gap-updated {n_jp} ticker, metrics rebuilt")
         _sub_step("JP Index", 97, "อัพเดทราคา JP Index...", _jp_index)
 

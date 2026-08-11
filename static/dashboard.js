@@ -2737,7 +2737,13 @@ function _ensureIdxDataLoaded(onLoaded) {
       renderDqBanner();   // เพิ่งมี _idxData ครั้งแรก — เช็คว่าเก่ากว่าราคาหุ้นไปหรือยัง
     }
     _idxDataWaiters = [];
-  }).catch(() => { _idxDataLoading = false; _idxDataWaiters = []; });
+  }).catch((e) => {
+    console.warn('[_ensureIdxDataLoaded] /api/indices ล้มเหลว:', e);
+    _idxDataLoading = false;
+    const waiters = _idxDataWaiters;
+    _idxDataWaiters = [];
+    waiters.forEach(fn => fn());   // เรียก re-render ต่อ (fallback เป็นค่าเฉลี่ยไม่ถ่วงน้ำหนัก) แทนที่จะค้างเงียบๆ
+  });
 }
 
 // override ret_1d/1w/1m/3m/6m/1y ของ sector/industry group ด้วยดัชนีถ่วงน้ำหนัก market cap
@@ -2945,7 +2951,7 @@ function renderStocks() {
   renderStocksTable();
 }
 
-function renderStocksTable() {
+function renderStocksTable(preservePage) {
   if (!DATA) return;
   let stocks = [...DATA.stocks];
   if (industryFilter !== "ALL") stocks = stocks.filter(s => s.industry === industryFilter);
@@ -3026,8 +3032,10 @@ function renderStocksTable() {
     }
   }
 
-  window._stockPage = 1;
-  renderStockRows(stocks, 1);
+  // preservePage=true (เช่น background insider sync refresh badge) — ไม่รีเซ็ต pagination
+  // ที่ผู้ใช้ "โหลดเพิ่ม" ไว้ ต่างจากตอนผู้ใช้เปลี่ยน filter/sort เองที่ต้องกลับหน้า 1
+  window._stockPage = preservePage ? (window._stockPage || 1) : 1;
+  renderStockRows(stocks, window._stockPage);
 
   window.loadMoreStocks = function() {
     window._stockPage++;
@@ -9387,7 +9395,18 @@ async function loadBreadthCharts() {
   // ข้อมูลเก่าต้องเก็บลง cache ใต้ key ที่ขอจริง ไม่ใช่ key ปัจจุบัน
   const rng = _breadthRange;
   const cached = _breadthCacheByRange[rng];
-  if (cached) { _breadthData = cached; drawBreadthCharts(); return; }
+  if (cached) {
+    _breadthData = cached;
+    try {
+      drawBreadthCharts();
+    } catch (e) {
+      ['bc-ema', 'bc-nhnl', 'bc-mcc'].forEach(id => {
+        const el = document.getElementById(id + '-loading');
+        if (el) { el.style.display = 'block'; el.textContent = 'โหลดไม่สำเร็จ: ' + e.message; }
+      });
+    }
+    return;
+  }
   if (_breadthLoading) return;
   _breadthLoading = true;
   ['bc-ema', 'bc-nhnl', 'bc-mcc'].forEach(id => {
@@ -9455,10 +9474,12 @@ function _bcAxes(c, yMin, yMax, dates, refs) {
   });
   // label เดือนคร่าวๆ 4 จุด
   ctx.textAlign = 'center';
-  for (let i = 0; i < 4; i++) {
-    const idx = Math.floor(i * (dates.length - 1) / 3);
-    const x = pad.l + idx / (dates.length - 1) * (W - pad.l - pad.r);
-    ctx.fillText(dates[idx].slice(5, 7) + '/' + dates[idx].slice(2, 4), x, H - 5);
+  if (dates && dates.length > 1) {
+    for (let i = 0; i < 4; i++) {
+      const idx = Math.floor(i * (dates.length - 1) / 3);
+      const x = pad.l + idx / (dates.length - 1) * (W - pad.l - pad.r);
+      ctx.fillText(dates[idx].slice(5, 7) + '/' + dates[idx].slice(2, 4), x, H - 5);
+    }
   }
   return toY;
 }
@@ -22066,7 +22087,7 @@ async function fetchInsiderData() {
     renderInsiderTable();
     // refresh badges in main stocks table only if currently visible
     if (window._currentStockList && document.getElementById('page-stocks')?.classList.contains('active')) {
-      renderStocksTable();
+      renderStocksTable(true);
     }
   } catch(e) {
     document.getElementById('ins-table-wrap').innerHTML =

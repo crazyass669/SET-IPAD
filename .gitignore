@@ -48,6 +48,9 @@ test_syms.py
 
 # Local only
 start.bat
+# ไฟล์อ้างอิง code-review template รายเมนู (บรรทัด/route ของแต่ละเมนู) — ใช้ดูเอง
+# ในเครื่องเท่านั้น ไม่ต้องขึ้น repo (ผู้ใช้ขอไว้ 2026-08-11)
+CODE_REVIEW_MENU_TEMPLATES.txt
 # นามสกุลจริงคือ .xls (ดาวน์โหลดสดจาก SET.or.th ใน set_data_fetcher.py) — เดิม
 # gitignore พิมพ์ผิดเป็น .xlsx เลยไม่เคยกันได้จริง ทำให้ไฟล์นี้ยัง track อยู่และ
 # CI เขียนทับใหม่ทุกรอบแต่ไม่ได้ถูก git add จนบล็อก git pull --rebase (unstaged
