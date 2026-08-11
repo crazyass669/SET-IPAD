@@ -188,6 +188,20 @@ def iter_recent_series(base_dir, warmup_rows):
         con.close()
 
 
+def get_closes_on_date(base_dir, date):
+    """คืน {ticker: close} ของทุกหุ้นในวันที่ระบุ — ใช้เช็ค sanity ราคา 'prior' จาก
+    SET API fast path (Quick Update) เทียบกับราคาปิดที่เก็บไว้จริงของวันเดียวกัน
+    (ดู services/refresh.py::run_quick_update)"""
+    if not db_exists(base_dir):
+        return {}
+    con = _connect(base_dir)
+    try:
+        rows = con.execute("SELECT ticker, close FROM prices WHERE date=?", (date,)).fetchall()
+    finally:
+        con.close()
+    return dict(rows)
+
+
 def _r4(x):
     """float ปัด 4 ตำแหน่ง หรือ None ถ้าเป็น NaN/None (สำหรับคอลัมน์ OHLC/adj ที่ nullable)"""
     if x is None:

@@ -17176,6 +17176,7 @@ const _DH_STATUS_COLOR = { ok: 'var(--green)', warn: 'var(--yellow)', red: 'var(
 // รันคำสั่งใน terminal — ใส่แค่คำอธิบายไว้)
 const DH_SOURCE_MAP = {
   prices:               { text: '⚡ Quick Update (ปุ่มหัวจอ) หรือ ⟳ Full Refresh', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  prices_stale_dup:     { text: '⚡ Quick Update (ปุ่มหัวจอ) — ถ้ายังซ้ำหลังลองใหม่ อาจเป็นที่ Yahoo ไม่ใช่ปุ่มนี้ ดูหน้า Data Health รอ mtime ขยับ', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   indices:              { text: '⚡ Quick Update (ปุ่มหัวจอ)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   dr_cache:             { text: '⚡ Quick Update ยิงอัพเดท DR คู่กันให้อัตโนมัติ · หรือหน้า DR/DRx (อัพเดทตอนเปิดหน้า / ปุ่ม "⚡ อัปเดตราคา")', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update', gotoPage: 'dr', gotoLabel: 'ไปหน้า DR/DRx' },
   market_flow:          { text: 'เปิดหน้า Flow จะดึงสดให้อัตโนมัติ (cache 4 ชม.) หรือรอ GitHub Actions (3 รอบ/วัน — เครื่องนี้ต้อง git pull)', gotoPage: 'flow', gotoLabel: 'ไปหน้า Flow' },
@@ -17194,8 +17195,11 @@ const DH_SOURCE_MAP = {
   hk_index_membership:  { text: 'หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม HK → "ดึงเฉพาะที่ขาด/เก่า"', fn: 'startHKIndexSync', fnLabel: '🔄 Sync ดัชนี HK', gotoPage: 'financials' },
   jp_index_membership:  { text: 'หน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม JP → "ดึงเฉพาะที่ขาด/เก่า"', fn: 'startJPIndexSync', fnLabel: '🔄 Sync ดัชนี JP', gotoPage: 'financials' },
   us_prices:            { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 US Index Max" ด้านบนในหน้านี้ (ประวัติยาว)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  us_prices_stale_dup:  { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 US Index Max" — ถ้ายังซ้ำหลังลองใหม่ อาจเป็นที่ Yahoo', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   hk_prices:            { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 HK Index Max" ด้านบนในหน้านี้ (ประวัติยาว)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  hk_prices_stale_dup:  { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 HK Index Max" — ถ้ายังซ้ำหลังลองใหม่ อาจเป็นที่ Yahoo', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   jp_prices:            { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 JP Index Max" ด้านบนในหน้านี้ (ประวัติยาว)', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
+  jp_prices_stale_dup:  { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 JP Index Max" — ถ้ายังซ้ำหลังลองใหม่ อาจเป็นที่ Yahoo', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   us_index_metrics:     { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 US Index Max" ด้านบนในหน้านี้', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   hk_index_metrics:     { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 HK Index Max" ด้านบนในหน้านี้', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   jp_index_metrics:     { text: '⚡ Quick Update (รายวัน) หรือปุ่ม "📈 JP Index Max" ด้านบนในหน้านี้', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },

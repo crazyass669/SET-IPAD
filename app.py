@@ -965,18 +965,50 @@ def _etf_do_rebuild():
             "market_maker", "is_lna")} for s in prev]
 
     yf_tickers = [f"{e['symbol']}.BK" for e in etf_list]
-    raw = yf.download(
-        yf_tickers, period="max", auto_adjust=True, progress=False,
-        group_by="ticker", threads=True,
-    )
-    is_multi = len(yf_tickers) > 1
+    try:
+        raw = yf.download(
+            yf_tickers, period="max", auto_adjust=True, progress=False,
+            group_by="ticker", threads=True,
+        )
+        is_multi = len(yf_tickers) > 1
+    except Exception as ex:
+        # yfinance ล่มทั้งกระดาน (rate limit/network) — อย่าปล่อยให้ทั้งเมนู ETF หายไปเฉยๆ
+        # ตกไปใช้ SET API chart-quotation แทนทุกตัว (ดู fallback ด้านล่าง) เหมือน Quick
+        # Update ของหุ้นไทย (services/refresh.py::run_quick_update)
+        print(f"[ETF] yfinance ล่มทั้งกระดาน ({ex}) — fallback ราคาผ่าน SET API")
+        raw = None
+        is_multi = False
 
     def _series(yticker, field):
+        if raw is None:
+            return pd.Series(dtype=float)
         try:
             s = raw[yticker][field] if is_multi else raw[field]
             return s.dropna()
         except (KeyError, TypeError):
             return pd.Series(dtype=float)
+
+    # SET API chart-quotation เป็น fallback ราคาต่อตัว (ดึงล่วงหน้าเฉพาะตัวที่ yfinance
+    # ไม่มีข้อมูลพอ) — รองรับ period ยาวสุดแค่ 1Y ~363 วันปฏิทินจริง (ดู sources/set_api.py)
+    # ต่างจากยาวหลายปีของ yfinance ดังนั้น ETF ที่ใช้ fallback นี้จะได้ ret_1y/ret_3y/ret_5y/ATH
+    # เป็น None (ไม่ครบ 365 วันพอดี) แต่ตัวสั้นกว่า (ret_1m/3m/6m/YTD/EMA/RS) ยังคำนวณได้ปกติ
+    # — ยังดีกว่าตัวนั้นหายไปจากทั้งเมนูเฉยๆ
+    missing_syms = [e["symbol"] for e in etf_list
+                    if len(_series(f"{e['symbol']}.BK", "Close")) < 2]
+    set_fallback = {}
+    if missing_syms:
+        from sources.set_api import fetch_price_history_batch
+        fb_tickers = [f"{s}.BK" for s in missing_syms]
+        # 400 วัน (ไม่ใช่ 365) กันตัด — chart-quotation period="1Y" คืนข้อมูลย้อนหลังจริง
+        # ~364 วันปฏิทิน พอดีกับ ret_1y (calc_return_calendar ต้องการแท่งที่ >= 365 วันก่อน
+        # แท่งล่าสุด) ถ้า start_date ตัดใกล้เกินไปแท่งเก่าสุดจะโดน filter ทิ้งจน ret_1y เป็น
+        # None ทั้งที่ SET มีข้อมูลพอจริงๆ
+        start_date = (pd.Timestamp.now() - pd.Timedelta(days=400)).strftime("%Y-%m-%d")
+        try:
+            set_fallback = fetch_price_history_batch(fb_tickers, start_date)
+            print(f"[ETF] SET API fallback: ได้ราคา {len(set_fallback)}/{len(missing_syms)} ตัว")
+        except Exception as ex:
+            print(f"[ETF] SET API fallback ล้มเหลว: {ex}")
 
     results = []
     price_failed = []
@@ -989,8 +1021,16 @@ def _etf_do_rebuild():
             low_s  = _series(yticker, "Low")
             vol_s  = _series(yticker, "Volume")
             if len(close) < 2:
-                price_failed.append(e["symbol"])
-                continue
+                fb = set_fallback.get(yticker)
+                if fb is not None and len(fb.get("close", [])) >= 2:
+                    # chart-quotation ไม่มี OHLC แยก มีแค่ราคาปิด+volume — ใช้ close
+                    # แทน open/high/low ทั้งหมด (ยังคำนวณ EMA/return/RS ได้ปกติ)
+                    close  = fb["close"]
+                    vol_s  = fb["volume"]
+                    open_s = high_s = low_s = close
+                else:
+                    price_failed.append(e["symbol"])
+                    continue
 
             price = float(close.iloc[-1])
             prev  = float(close.iloc[-2])
@@ -1553,7 +1593,7 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
     ทั้งหมดของ membership (all_tickers) — ใช้ตอนผู้ใช้กดปุ่ม Live ของ Heatmap ขณะดูแค่แท็บ
     ดัชนีย่อยเดียว (เช่น Dow 30 ตัว) ไม่ต้องรอไล่ยิง Yahoo ทั้ง ~518 ตัวของ US ทุกครั้ง"""
     from sources.yahoo import fetch_all_batch, fetch_gap_batch
-    from sources.dr_universe import is_latest_bar_stable, region_today_date
+    from sources.dr_universe import is_latest_bar_stable, region_today_date, region_expected_trading_date
     from services.refresh import detect_ca_mismatch, _repair_ca_tickers
 
     if index_key:
@@ -1638,12 +1678,8 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
         # ยังไม่มา แต่ Yahoo มีข้อมูลเทรดจริงรายนาที (ยืนยันด้วย yf.Ticker().history(interval=
         # '1m') ตอน debug) — กู้ราคาล่าสุดจาก intraday 1m มาโชว์เป็น live_price แทน (ไม่บันทึก
         # ลง DB ถาวรเพราะอาจไม่ตรงเป๊ะกับตัวเลขทางการที่ Yahoo จะเติมย้อนหลังทีหลัง)
-        from datetime import timedelta
-        today = region_today_date(region)
-        if today is not None:
-            expected = today
-            while expected.weekday() >= 5:   # เสาร์=5, อาทิตย์=6 — ย้อนหาวันทำการล่าสุด
-                expected -= timedelta(days=1)
+        expected = region_expected_trading_date(region)
+        if expected is not None:
             stale = []
             for t in data:
                 close = data[t].get("close")
@@ -5216,6 +5252,105 @@ def _dh_index_quality_item(key, label, market_code, membership_path, metrics_pat
     return _dh_quality_item(key, label, status, note)
 
 
+_dh_th_universe_cache = {"mtime": None, "tickers": None}
+
+
+def _dh_th_universe_tickers():
+    """คืน set ของ ticker (.BK) ที่เป็นหุ้นสามัญจริงในดัชนี SET/mai หลัก (~930 ตัว) — อ่านจาก
+    set_data.json (cache ตาม mtime กันอ่านซ้ำทุกครั้งที่เปิดหน้า Data Health) ไม่ใช้ทุก
+    ticker ใน set_prices.db ตรงๆ เพราะ DB เก็บปนกับ derivative warrant/DR/กองทุนที่ดึงผ่าน
+    ฟีเจอร์อื่น (เจอจริง: set_prices.db มี 1,814 ticker ทั้งที่หุ้นสามัญจริงมีแค่ ~930 ตัว —
+    DW พวกนี้เทรดเบาบางมาก ราคานิ่งซ้ำกันหลายวันเป็นเรื่องปกติ ถ้าไม่กรองออกจะ false-positive
+    ชนกับเช็ค 'ราคาซ้ำผิดปกติ' ด้านล่างทันที) คืน None ถ้าอ่านไม่ได้ (caller ควร skip filter)"""
+    try:
+        mtime = os.path.getmtime(DATA_FILE)
+    except OSError:
+        return None
+    if _dh_th_universe_cache["mtime"] == mtime:
+        return _dh_th_universe_cache["tickers"]
+    try:
+        with open(DATA_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        tickers = {s["ticker"] for s in d.get("stocks", []) if s.get("ticker")}
+    except Exception:
+        return None
+    _dh_th_universe_cache.update(mtime=mtime, tickers=tickers)
+    return tickers
+
+
+def _dh_stale_close_check(key, label, db_path, dup_threshold=20, min_universe=30, universe=None):
+    """เช็คว่า Quick Update 'ดึงราคาจริง' หรือแค่ mtime ขยับแต่ได้ราคาซ้ำแท่งก่อนหน้ามา —
+    ต่างจาก _dh_item ด้านบนที่เช็คแค่ mtime (ไฟล์ถูกเขียนทับเวลาไหน) ไม่รู้เนื้อในว่าค่าจริง
+    เปลี่ยนหรือเปล่า เจอเคสจริง 11 ส.ค. 2569: Yahoo ยังไม่ปล่อยแท่งปิดทางการ หุ้นส่วนใหญ่เลย
+    ไม่มีแท่งใหม่เลย (เคสนี้ _dh_item จับได้อยู่แล้วเพราะ mtime ไม่ขยับ) แต่ถ้าวันไหน pipeline
+    ดันดันแท่งซ้ำของเก่าเข้าไปเป็นวันใหม่ (บั๊กที่ยังไม่เจอแต่ป้องกันไว้ก่อน) mtime จะขยับปกติ
+    ทำให้ _dh_item ไม่จับ ต้องเช็คเนื้อราคาจริงแทน
+
+    เทียบ close ของแท่งล่าสุด vs แท่งก่อนหน้าต่อหุ้น (ไม่สนวันที่ label ตรงกันไหม) เฉพาะตัวที่
+    volume ของแท่งล่าสุด > 0 (หุ้นหยุดพักเทรด/ราคาแช่แข็งไม่นับ เป็นเรื่องปกติอยู่แล้ว ไม่ใช่
+    สัญญาณอัพเดทล้มเหลว) ถ้าจำนวนที่เหลือ >= dup_threshold ตัว ให้สงสัยว่าอัพเดทได้ข้อมูลซ้ำเดิมมา
+
+    dup_threshold ต้อง calibrate แยกตามตลาด ห้ามใช้ค่าเดียวกันทุกตลาด — วัดจริงจาก 5 คู่วัน
+    ล่าสุดของหุ้นไทย (929 ตัว ที่ยืนยันแล้วว่าอัพเดทถูกต้องทุกวัน) ได้ baseline ปกติ 251-306
+    ตัว/วัน (หุ้นเพนนีสต็อกจำนวนมากในกระดาน mai ปิดราคาเท่าเดิมทั้งที่มีวอลุ่มเป็นเรื่องปกติ)
+    ตัวเลข 20 ที่เหมาะกับ US/HK/JP (baseline จริงแค่ 1-4 ตัว) จะ false-positive ทุกวันถ้าใช้กับ
+    หุ้นไทย จึงต้องส่ง dup_threshold สูงกว่านี้มากสำหรับ TH โดยเฉพาะ (ดูจุดเรียกใช้)
+
+    universe — ถ้าระบุ (set ของ ticker) จะกรองเฉพาะ ticker กลุ่มนี้ก่อนนับ (ดู
+    _dh_th_universe_tickers เหตุผลที่ต้องกรองฝั่งหุ้นไทย) US/HK/JP ไม่ต้องกรอง เพราะ DB
+    ของ 3 ตลาดนั้นมีแต่สมาชิกดัชนีล้วนๆ อยู่แล้ว (ไม่ปนกับ DW/DR)"""
+    import sqlite3
+    if not os.path.exists(db_path):
+        return _dh_quality_item(key, label, "na", "ยังไม่มีไฟล์ราคา")
+    try:
+        con = sqlite3.connect(db_path)
+        try:
+            rows = con.execute("""
+                SELECT ticker, close, volume FROM (
+                  SELECT ticker, close, volume,
+                         ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+                  FROM prices
+                ) WHERE rn <= 2
+                ORDER BY ticker
+            """).fetchall()
+        finally:
+            con.close()
+    except Exception as e:
+        return _dh_quality_item(key, label, "red", f"เช็คไม่ได้ (exception): {str(e)[:120]}")
+
+    if universe:
+        rows = [r for r in rows if r[0] in universe]
+
+    dup_syms = []
+    total = 0
+    i = 0
+    while i < len(rows):
+        if i + 1 < len(rows) and rows[i][0] == rows[i + 1][0]:
+            total += 1
+            _, c1, v1 = rows[i]
+            _, c2, _v2 = rows[i + 1]
+            if c1 is not None and c1 == c2 and v1:   # v1>0 — วอลุ่มจริงแต่ราคานิ่งเป๊ะถึงนับ
+                dup_syms.append(rows[i][0])
+            i += 2
+        else:
+            total += 1   # หุ้นมีแท่งเดียว (เพิ่ง backfill/เพิ่งเข้าดัชนี) — ไม่มีคู่ให้เทียบ
+            i += 1
+
+    if total < min_universe:
+        return _dh_quality_item(key, label, "na", f"หุ้นในฐานข้อมูลน้อยเกินไป ({total} ตัว) — ยังเช็คไม่ได้แม่นยำ")
+
+    n = len(dup_syms)
+    if n >= dup_threshold:
+        status = "red" if n >= dup_threshold * 2 else "warn"
+        more = "…" if n > 10 else ""
+        note = (f"⚠ สงสัยอัพเดทได้ราคาซ้ำเดิม — {n}/{total} ตัว ราคาปิดเท่าเดิมเป๊ะกับแท่งก่อนหน้า "
+                f"({', '.join(dup_syms[:10])}{more}) ผิดปกติทางสถิติถ้าไม่ใช่ตลาดหยุดทั้งกระดาน")
+    else:
+        status = "ok"
+        note = f"ปกติ — {n}/{total} ตัวราคาซ้ำแท่งก่อนหน้า (ไม่ผิดปกติ)"
+    return _dh_quality_item(key, label, status, note)
+
+
 def _dh_error_item(key, label, category, err):
     """item แดงสำหรับตอนที่เรียก get_meta()/read_status() ของแหล่งข้อมูลนั้นแล้ว exception
     หลุดออกมาเอง (เช่น sqlite ล็อค/เสียหาย, ไฟล์ cache ถูกเขียนทับพอดีตอนอ่าน) — ใช้แทน
@@ -5262,6 +5397,17 @@ def data_health():
             _dh_parse(price_store.get_meta(BASE_DIR, "updated_at")), 30, 72))
     except Exception as e:
         items.append(_dh_error_item("prices", "ราคา/RS/เทคนิค (หุ้นไทย)", "ราคา/เทคนิค", str(e)[:160]))
+
+    # dup_threshold=600 (~65% ของจักรวาล 929 ตัว) ไม่ใช่ 20 แบบ US/HK/JP — วัด baseline จริง
+    # จาก 5 คู่วันล่าสุดที่ยืนยันแล้วว่าอัพเดทถูกต้อง ได้ 251-306 ตัว/วัน (เพนนีสต็อกฝั่ง mai
+    # ปิดราคาเท่าเดิมทั้งที่มีวอลุ่มเป็นเรื่องปกติของตลาดนี้) ตั้ง 600 ให้เหลือ margin ~2 เท่า
+    # จาก baseline สูงสุด กันไม่ให้เตือนพร่ำเพรื่อทุกวัน แต่ยังจับ "อัพเดทได้ราคาซ้ำเกือบทั้ง
+    # กระดาน" ได้จริงถ้าเกิดขึ้น (ดู docstring _dh_stale_close_check)
+    items.append(_dh_stale_close_check(
+        "prices_stale_dup", "ราคาซ้ำแท่งก่อนหน้าผิดปกติ (หุ้นไทย)",
+        os.path.join(BASE_DIR, price_store.DB_FILE),
+        dup_threshold=600,
+        universe=_dh_th_universe_tickers()))
 
     items.append(_dh_item(
         "indices", "ดัชนีกลุ่ม (TradingView)", "ราคา/เทคนิค",
@@ -5372,6 +5518,10 @@ def data_health():
     except Exception as e:
         items.append(_dh_error_item("us_prices", "ราคาหุ้นดัชนี US (us_prices.db)", "ราคา/เทคนิค", str(e)[:160]))
 
+    items.append(_dh_stale_close_check(
+        "us_prices_stale_dup", "ราคาซ้ำแท่งก่อนหน้าผิดปกติ (หุ้น US)",
+        os.path.join(BASE_DIR, _us_store.DB_FILE)))
+
     try:
         items.append(_dh_item(
             "hk_prices", "ราคาหุ้นดัชนี HK (hk_prices.db)", "ราคา/เทคนิค",
@@ -5380,6 +5530,10 @@ def data_health():
     except Exception as e:
         items.append(_dh_error_item("hk_prices", "ราคาหุ้นดัชนี HK (hk_prices.db)", "ราคา/เทคนิค", str(e)[:160]))
 
+    items.append(_dh_stale_close_check(
+        "hk_prices_stale_dup", "ราคาซ้ำแท่งก่อนหน้าผิดปกติ (หุ้น HK)",
+        os.path.join(BASE_DIR, _hk_store.DB_FILE)))
+
     try:
         items.append(_dh_item(
             "jp_prices", "ราคาหุ้นดัชนี JP (jp_prices.db)", "ราคา/เทคนิค",
@@ -5387,6 +5541,10 @@ def data_health():
             missing_note="ยังไม่เคยอัพเดทหุ้น JP ในเครื่องนี้", optional=True))
     except Exception as e:
         items.append(_dh_error_item("jp_prices", "ราคาหุ้นดัชนี JP (jp_prices.db)", "ราคา/เทคนิค", str(e)[:160]))
+
+    items.append(_dh_stale_close_check(
+        "jp_prices_stale_dup", "ราคาซ้ำแท่งก่อนหน้าผิดปกติ (หุ้น JP)",
+        os.path.join(BASE_DIR, _jp_store.DB_FILE)))
 
     items.append(_dh_item(
         "us_index_metrics", "Metrics หุ้นดัชนี US (us_index_metrics.json)", "ราคา/เทคนิค",

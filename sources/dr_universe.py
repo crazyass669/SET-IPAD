@@ -58,6 +58,34 @@ def region_today_date(region):
     return datetime.now(ZoneInfo(cfg[0])).date()
 
 
+def region_expected_trading_date(region):
+    """คืนวันที่ของแท่งปิดล่าสุดที่ "ควรจะมี" อยู่แล้วในข้อมูล (ตลาดปิดสนิท ราคานิ่งแล้ว)
+
+    ต่างจาก region_today_date ตรงที่ถ้าเรียกตอนก่อนตลาดเปิดของวันนี้ (ยังไม่เข้าช่วง
+    pre-market buffer ด้วยซ้ำ) จะย้อนกลับไปวันทำการก่อนหน้าแทนวันนี้ — แก้บั๊กที่ Quick
+    Update รันตอนดึก/เช้ามืดเวลาไทย (~03:00 ICT) ตรงกับ "ก่อนตลาด HK/JP เปิดของวันถัดไป"
+    ตามเวลาท้องถิ่นพอดี ถ้าใช้ region_today_date ตรงๆ จะได้ expected=วันนี้ทั้งที่ตลาดยัง
+    ไม่เปิดเทรดของวันนั้นเลย ทำให้แท่งปิดจริงของเมื่อวาน (ถูกต้องสมบูรณ์แล้ว) โดนตีความผิด
+    ว่า stale แล้วไม่ถูกบันทึกลง DB (ดูจุดเรียกใช้ใน app.py _run_index_gap_update)"""
+    from datetime import datetime, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        return None
+    cfg = _REGION_TZ.get(region)
+    if not cfg:
+        return None
+    tz, open_min, close_min, pre_buf, post_buf = cfg
+    now = datetime.now(ZoneInfo(tz))
+    now_min = now.hour * 60 + now.minute
+    d = now.date()
+    if now_min < open_min - pre_buf:
+        d -= timedelta(days=1)
+    while d.weekday() >= 5:   # เสาร์=5, อาทิตย์=6
+        d -= timedelta(days=1)
+    return d
+
+
 # DR / DRx static mapping — underlying foreign stock → Thai SET DR tickers
 _DR_STATIC = [
     # ── United States ─────────────────────────────────────────────────────

@@ -1428,6 +1428,10 @@ def _mirror_keep(ex, name):
         return seg in ("A", "B", "C")         # share class (BRK-B) เก็บ / -WS -U -R -P ตัด
     if ex == "US" and len(name) == 5 and name[-1] in ("W", "R", "U"):
         return False                          # convention NASDAQ: อักษรตัวที่ 5 บอกชนิดตราสาร
+    # รหัสจีน A-share (เซินเจิ้น/เซี่ยงไฮ้) ปนมาในลิสต์ Finnomena ฝั่ง HK — HKEX ใช้รหัสจริงแค่
+    # 4-5 หลัก ต่อ .HK ให้รหัส 6 หลักไม่มีทางเจอข้อมูลบน Yahoo แน่นอน (ดู fetch_yahoo_full)
+    if ex == "HK" and len(name) == 6 and name.isdigit():
+        return False
     return True
 
 
@@ -1626,7 +1630,8 @@ class _YahooThrottle:
             self._consec_fail = 0
 
 
-def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, callback=None):
+def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, callback=None,
+                            recheck_empty_days=90):
     """ดึงงบ Yahoo annual ('yahoo' source) ให้หุ้น mirror US/HK — เดิมจำกัดแค่สมาชิกดัชนีหลัก
     (S&P500+Dow+NDX / HSI+HSCEI+HSTECH) ตอนนี้ผู้เรียกส่ง ticker ทั้ง mirror universe
     (~5,108 ตัว จาก mirror_candidates) เข้ามาได้แล้ว — ใช้ limit คุมจำนวนต่อรอบแทน
@@ -1643,17 +1648,36 @@ def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, call
     กัน mirror ทั้งก้อนที่ยังไม่เคย sync เลยทำให้รอบแรกช้ามาก — ตัวที่เหลือ resume รอบถัดไปได้เอง
     เพราะเช็คจาก 'have' (source='yahoo') เสมอ ไม่ fetch ซ้ำตัวที่ sync แล้ว
 
+    ticker ที่ Yahoo ไม่มีข้อมูลงบการเงินจริง (ไม่ใช่โดน throttle — ดู _one) จะถูกจำเป็น marker
+    'empty' กัน sync ซ้ำทุก Full Refresh (ก่อนหน้านี้ไม่มี marker เลยยิงซ้ำ ticker กลุ่มนี้ทุกรอบ
+    ไม่มีวันหาย เจอ mirror universe ที่มี preferred/ticker เก่าปนอยู่เยอะจนพาลไป trip circuit
+    breaker รัว) — recheck_empty_days: ตัว marker หมดอายุแล้วจะกลับมาลองใหม่ (เผื่อ Yahoo เพิ่ม
+    ข้อมูลย้อนหลัง/ปรับ mapping ทีหลัง) ค่าเริ่มต้น 90 วัน ~1 ไตรมาส
+
     หลบ rate-limit (Yahoo "Invalid Crumb" HTTP 401): session เดียวร่วมกันทุก thread (กัน
     crumb ขอใหม่ถี่ๆ ต่อ ticker) + retry แบบ exponential backoff เฉพาะ error ที่เข้าข่ายโดน
     throttle + circuit breaker พักคิวทั้ง batch ถ้าพลาดติดกันเยอะ — ดู _new_yahoo_session/
-    _YahooThrottle ด้านบน (ใช้ pattern เดียวกับ sync_all/sync_dividends_batch)
+    _YahooThrottle ด้านบน (ใช้ pattern เดียวกับ sync_all/sync_dividends_batch) — circuit breaker
+    นับเฉพาะ error ที่เข้าข่าย throttle จริงเท่านั้น (_is_yahoo_throttle_err) ไม่ปนกับ 'ไม่มีข้อมูล
+    จริง' ไม่งั้น mirror universe ที่ fail ธรรมชาติเยอะจะ trip breaker ทั้งที่ไม่ได้โดนบล็อกจริง
     คืน {"ok": n, "fail": n, "total": n, "skipped": n}"""
     init_db(base_dir)
     con = _connect(base_dir)
     try:
-        have = {r[0] for r in con.execute("SELECT symbol FROM financials WHERE source='yahoo'")}
+        rows = con.execute(
+            "SELECT symbol, payload, synced_at FROM financials WHERE source='yahoo'").fetchall()
     finally:
         con.close()
+    empty_cutoff = datetime.now() - timedelta(days=recheck_empty_days)
+    have = set()
+    for symbol, payload, synced_at in rows:
+        if '"empty": true' in payload:
+            try:
+                if datetime.strptime(synced_at, "%Y-%m-%d %H:%M:%S") < empty_cutoff:
+                    continue   # marker หมดอายุ — ปล่อยให้กลับเข้า todo ลองใหม่
+            except (TypeError, ValueError):
+                continue
+        have.add(symbol)
 
     todo = []
     for ex, names in tickers_by_ex.items():
@@ -1679,6 +1703,12 @@ def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, call
                     payload = fetch_yahoo_full(name, is_dr=True, market=ex, session=session)
                     upsert(base_dir, _mirror_key(ex, name), "yahoo", payload, is_dr=False)
                 throttle.call_with_backoff(_fetch)
+            except ValueError as e:
+                if "ไม่พบข้อมูลงบการเงินสำหรับ" in str(e):
+                    upsert(base_dir, _mirror_key(ex, name), "yahoo",
+                           {"sym": name, "empty": True, "income": {}, "balance": {}, "cashflow": {}},
+                           is_dr=False)
+                raise
             finally:
                 time.sleep(0.3)   # throttle เบาๆ ทุก request กัน Yahoo บล็อก IP ตอน sync รวด
 
@@ -1695,7 +1725,8 @@ def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, call
             except Exception as e:
                 fail += 1
                 print(f"[MirrorYahooIndex] {ex}:{name} ล้มเหลว: {str(e)[:80]}")
-                throttle.note_outcome(False)
+                if _is_yahoo_throttle_err(e):
+                    throttle.note_outcome(False)
             if callback and (done % 10 == 0 or done == total):
                 callback(done, total, f"Yahoo mirror index {done}/{total} | ok={ok} fail={fail}")
 
@@ -1891,7 +1922,7 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
             except Exception as e:
                 fail += 1
                 print(f"[FinancialsSync] {sym} ({src}) failed: {e}")
-                if src in ("yahoo", "yahoo_q"):
+                if src in ("yahoo", "yahoo_q") and _is_yahoo_throttle_err(e):
                     _yahoo_throttle.note_outcome(False)
             if callback:
                 callback(done, total, f"งบการเงิน {done}/{total} ({sym} · {src})...")

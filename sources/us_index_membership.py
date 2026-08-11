@@ -38,6 +38,17 @@ def _norm(sym):
     return sym.replace(".", "-")   # BRK.B -> BRK-B ให้ตรง yfinance/mirror
 
 
+_SECTOR_JUNK_RE = re.compile(r'[\[\]{}|]')
+
+
+def _looks_like_sector(s):
+    """เดาว่าค่าที่ parse ได้ "ดูเป็น sector" จริงไหม (สั้น ไม่มีร่องรอย wiki markup [[ ]] {{ }} |
+    หลงเหลือ) — กันกรณี regex/split จับผิดคอลัมน์แล้วได้ชื่อบริษัท/เทมเพลตดิบมาแทน sector จริง
+    (บั๊กเดิมที่ SP500_sector ได้ "[[3M]]" แทน "Industrials" — ดู _parse_sp500_sectors) ใช้ก่อน
+    เก็บค่าเข้า out ทุกจุดที่ parse จาก wikitext กันเขียนทับข้อมูลดีด้วยขยะแบบเงียบๆ"""
+    return bool(s) and len(s) <= 40 and not _SECTOR_JUNK_RE.search(s)
+
+
 def _parse_ndx_sectors(txt):
     # แต่ละแถวอยู่บรรทัดเดียว: "| TICKER || [[Company]] || Sector || Subsector"
     # ช่องว่างรอบ "||" ไม่คงเส้นคงวาเสมอ (เช่นแถว FER: "...|| Industrials|| Military...”
@@ -45,21 +56,29 @@ def _parse_ndx_sectors(txt):
     # กลายเป็น sector "Unknown" ทั้งที่ Wikipedia มีข้อมูลอยู่จริง
     out = {}
     for m in re.finditer(r'^\| ([A-Z.]+) \|\|\s*.*?\s*\|\|\s*([^|]+?)\s*\|\|', _table_body(txt), re.MULTILINE):
-        out[_norm(m.group(1))] = m.group(2).strip()
+        sec = m.group(2).strip()
+        if _looks_like_sector(sec):
+            out[_norm(m.group(1))] = sec
     return out
 
 
 def _parse_sp500_sectors(txt):
-    # แต่ละแถวคั่นด้วย "|-" แล้วบรรทัดแรกเป็น symbol ({{NyseSymbol|X}} ฯลฯ) บรรทัดถัดไป
-    # เป็น "|[[Security]]|| Sector || Sub-Industry || ..." — ต้องจับคู่ตามลำดับแถว
+    # แต่ละแถวคั่นด้วย "|-" แต่ละคอลัมน์ขึ้นบรรทัดใหม่ด้วย "||": symbol, Security,
+    # GICS Sector, Sub-Industry, ... — เดิม regex \|\|\s*([^|]+?)\s*\|\| หา "||...||"
+    # แรกที่เจอในแถว ซึ่งพังเวลา symbol template มี "|" ภายใน (เช่น {{NyseSymbol|MMM}})
+    # ทำให้ match ข้ามไปแมตช์คู่ Security-Sector แทนแล้วดึงชื่อบริษัท [[Security]] ออกมา
+    # ผิดที่ (เช่น MMM -> "[[3M]]") แทนที่จะเป็น sector จริง — แก้ด้วยการ split("||") แล้ว
+    # นับตำแหน่งคอลัมน์เทียบกับ field ที่เจอ symbol แทน (symbol+1=Security, symbol+2=Sector)
     out = {}
     for row in _table_body(txt).split("|-"):
-        sm = re.search(r'\{\{(?:NyseSymbol|NasdaqSymbol|BZX link)\|([A-Z.]+)\}\}', row)
-        if not sm:
-            continue
-        secm = re.search(r'\|\|\s*([^|]+?)\s*\|\|', row)
-        if secm:
-            out[_norm(sm.group(1))] = secm.group(1).strip()
+        fields = row.split("||")
+        for i, f in enumerate(fields):
+            sm = re.search(r'\{\{(?:NyseSymbol|NasdaqSymbol|BZX link)\|([A-Z.]+)\}\}', f)
+            if sm and i + 2 < len(fields):
+                sec = fields[i + 2].strip()
+                if _looks_like_sector(sec):
+                    out[_norm(sm.group(1))] = sec
+                break
     return out
 
 
@@ -73,7 +92,9 @@ def _parse_dow_sectors(txt):
         rest = row[sm.end():]
         secm = re.search(r'\|\s*([A-Za-z][A-Za-z &]+?)\s*\n', rest)
         if secm:
-            out[_norm(sm.group(1))] = secm.group(1).strip()
+            sec = secm.group(1).strip()
+            if _looks_like_sector(sec):
+                out[_norm(sm.group(1))] = sec
     return out
 
 
@@ -103,6 +124,26 @@ def fetch_live_membership():
         if len(v) < 10:
             raise ValueError(f"parse {k} ได้แค่ {len(v)} ตัว — หน้า Wikipedia อาจเปลี่ยนโครงสร้างตาราง")
         out[k] = sorted({_norm(s) for s in v})
+    return out
+
+
+def _yfinance_sector_fallback(tickers):
+    """safety net รองสุดท้าย — ดึง sector จาก yfinance เฉพาะ ticker ที่ไม่มีค่าที่ใช้ได้เลยทั้ง
+    ข้อมูลเก่าในเครื่องและรอบ parse ใหม่ (เช่น Wikipedia เปลี่ยนโครงสร้างตารางทั้งยวงจน parse
+    ไม่ได้เลย) ไม่ใช่แหล่งหลักเพราะ Yahoo ใช้ taxonomy คนละแบบกับ GICS ที่ใช้จัดกลุ่ม Sector
+    Ranking/Rotation อยู่ (ดู sector_keys_order ใน us_index_metrics.py) — ยิงทีละ ticker ช้า
+    จึงเรียกเฉพาะตัวที่ขาดจริงๆ เท่านั้น (ปกติควรมี 0 ตัว ถ้า parser ทำงานถูก)"""
+    if not tickers:
+        return {}
+    import yfinance as yf
+    out = {}
+    for t in tickers:
+        try:
+            sec = yf.Ticker(t).get_info().get("sector")
+        except Exception:
+            continue
+        if sec:
+            out[t] = sec
     return out
 
 
@@ -157,7 +198,13 @@ def diff_membership(base_dir, mirror_us=None):
 
 def sync_membership(base_dir):
     """ดึง live list ใหม่จาก Wikipedia แล้วเขียนทับไฟล์ local ให้ตรง (คง extra_names/source/note
-    เดิมไว้ — ไม่แตะชื่อที่เคย backfill มือ) คืน (diff_summary, live_membership)"""
+    เดิมไว้ — ไม่แตะชื่อที่เคย backfill มือ) คืน (diff_summary, live_membership)
+
+    sector map (SP500_sector/DOW_sector/NDX_sector) merge ทีละ ticker แทนเขียนทับทั้งก้อน —
+    ตัวที่ parse รอบใหม่ไม่ได้ค่า (ตกหล่น/ไม่ผ่าน _looks_like_sector) จะคงค่าเก่าไว้ ไม่หาย
+    (กันบั๊กเดือน 2026-08 ที่ SP500_sector parse ผิดคอลัมน์ทั้งไฟล์แล้วเขียนทับข้อมูลดีเดิม)
+    ตัวที่ไม่เคยมี sector เลยทั้งเก่า/ใหม่ (เช่น Wikipedia เปลี่ยนโครงสร้างตารางทั้งยวง) จะลอง
+    เติมจาก yfinance เป็น safety net รองสุดท้าย — ดู _yfinance_sector_fallback"""
     live = fetch_live_membership()
     local = load_local(base_dir)
     diff = {}
@@ -167,6 +214,23 @@ def sync_membership(base_dir):
     updated = dict(local)
     updated.update(live)
     updated.setdefault("extra_names", {})
+
+    sector_keys = ("SP500_sector", "DOW_sector", "NDX_sector")
+    for key in sector_keys:
+        merged = dict(local.get(key) or {})
+        merged.update(live.get(key) or {})
+        updated[key] = merged
+
+    all_syms = sorted(set().union(*(live[k] for k in _INDEXES)))
+    combined_sector = {}
+    for key in sector_keys:
+        combined_sector.update(updated.get(key) or {})
+    missing = [s for s in all_syms if s not in combined_sector]
+    if missing:
+        fallback = _yfinance_sector_fallback(missing)
+        if fallback:
+            updated["SP500_sector"] = {**updated.get("SP500_sector", {}), **fallback}
+
     updated["note"] = ("รายชื่อ constituents ปัจจุบัน ณ วันที่ดึงข้อมูล — ตัวที่ไม่อยู่ใน mirror list "
                         "หลัก (factor_mirror) จะดึงงบผ่าน Yahoo Finance โดยตรงแทน Finnomena เมื่อกรองด้วยปุ่มดัชนีนี้")
     updated["source"] = ("Wikipedia (List of S&P 500 companies / Dow Jones Industrial Average / "

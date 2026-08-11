@@ -51,6 +51,15 @@ _SECTION_RE = re.compile(r'==\s*構成銘柄一覧\s*==\n(.*?)\n==[^=]', re.DOTA
 _SUBHEAD_RE = re.compile(r'^===\s*(.+?)（\d+銘柄）\s*===$')
 _ROW_RE = re.compile(r'^\|([0-9A-Za-z]{3,6})\|\|\[\[([^\]]+)\]\]')
 
+_SECTOR_JUNK_RE = re.compile(r'[\[\]{}|]')
+
+
+def _looks_like_sector(s):
+    """เดาว่าค่าที่ parse ได้ "ดูเป็น sector" จริงไหม — เทียบเคียง _looks_like_sector ใน
+    sources/us_index_membership.py (ดูที่นั่นสำหรับที่มา/บั๊กที่กันอยู่) กันกรณี _SECTION_RE
+    หาไม่เจอแล้ว fallback ไป parse ทั้งหน้า (body = txt) จนหยิบข้อความปนจากที่อื่นมาเป็น sector"""
+    return bool(s) and len(s) <= 40 and not _SECTOR_JUNK_RE.search(s)
+
 
 def _parse_nikkei225(txt):
     """คืน (tickers, sector_map) จาก wikitext ของ ja.wikipedia 日経平均株価
@@ -71,7 +80,8 @@ def _parse_nikkei225(txt):
             name_raw = rm.group(2)
             ticker = f"{code}.T"
             tickers.append(ticker)
-            sectors[ticker] = current_sector_en
+            if _looks_like_sector(current_sector_en):
+                sectors[ticker] = current_sector_en
     return tickers, sectors
 
 
@@ -134,7 +144,11 @@ def diff_membership(base_dir, mirror_jp=None):
 
 def sync_membership(base_dir):
     """ดึง live list ใหม่จาก ja.wikipedia แล้วเขียนทับไฟล์ local ให้ตรง (คง extra_names เดิมไว้)
-    คืน (diff_summary, live_membership)"""
+    คืน (diff_summary, live_membership)
+
+    NIKKEI225_sector merge ทีละ ticker แทนเขียนทับทั้งก้อน — ตัวที่ parse รอบใหม่ไม่ได้ค่า
+    (หน้า ja.wikipedia เปลี่ยนโครงสร้างจน _SECTION_RE หาไม่เจอ ฯลฯ) จะคงค่าเก่าไว้ ไม่หาย
+    เทียบเคียงมาตรการเดียวกับ us_index_membership.sync_membership (ดูที่นั่นสำหรับที่มา)"""
     live = fetch_live_membership()
     local = load_local(base_dir)
     diff = {}
@@ -144,6 +158,11 @@ def sync_membership(base_dir):
     updated = dict(local)
     updated.update(live)
     updated.setdefault("extra_names", {})
+
+    merged_sector = dict(local.get("NIKKEI225_sector") or {})
+    merged_sector.update(live.get("NIKKEI225_sector") or {})
+    updated["NIKKEI225_sector"] = merged_sector
+
     updated["note"] = "รายชื่อ constituents ปัจจุบันของ Nikkei 225 ณ วันที่ดึงข้อมูล"
     updated["source"] = "ja.wikipedia (日経平均株価 — section 構成銘柄一覧) — ดึงสดตรงจาก Wikipedia"
     save_local(base_dir, updated)
