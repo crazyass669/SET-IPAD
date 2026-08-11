@@ -829,7 +829,12 @@ def get_mirror_ondemand(base_dir, sym, market, stale_days=1):
         stale = (datetime.now() - datetime.fromisoformat(synced_at)) > timedelta(days=stale_days)
     except ValueError:
         stale = True
-    return json.loads(payload), stale
+    # payload เสีย (เดียวกับเหตุผลใน get() ด้านบน) ไม่ควรทำ Tearsheet/เทียบเพื่อนของหุ้น
+    # mirror นอกดัชนีหลักตัวนั้น 500 — ถือเหมือนไม่เคย cache เลย (caller เห็น None แล้วดึงสดใหม่)
+    try:
+        return json.loads(payload), stale
+    except (TypeError, ValueError):
+        return None, True
 
 
 def compute_quarterly_growth(payload_yahoo_q):

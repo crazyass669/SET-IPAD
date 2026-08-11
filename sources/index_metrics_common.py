@@ -265,7 +265,14 @@ def load_local(base_dir, out_file):
     cached = _load_cache.get(key)
     if cached is not None and cached[0] == mtime:
         return cached[1]
-    with open(path, encoding="utf-8") as f:
-        result = json.load(f)
+    # ไฟล์เขียนค้างกลางคัน/เสีย (ดิสก์มีปัญหา, แก้มือผิด) ไม่ควรทำให้ Tearsheet/Peer Compare/
+    # Heatmap/Screener+ ของทั้งตลาด US/HK/JP 500 รัวๆ ทุก request จนกว่าจะรีบิลด์ไฟล์ — เหมือน
+    # pattern เดียวกับ _tearsheet_universe_map ฝั่ง TH (app.py) ที่กัน exception ไว้แล้ว คืน
+    # ค่าว่างแทน (ไม่ cache ผลว่างนี้ไว้ — ให้ request ถัดไป retry เผื่อไฟล์ถูกรีบิลด์แล้ว)
+    try:
+        with open(path, encoding="utf-8") as f:
+            result = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"updated_at": None, "total": 0, "stocks": []}
     _load_cache[key] = (mtime, result)
     return result

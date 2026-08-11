@@ -567,21 +567,43 @@ async function restartServer(force) {
       }
       return;
     }
+    // server ปฏิเสธด้วยเหตุอื่น (เช่น compile ไม่ผ่าน — ดู /api/restart) — ไม่ได้เริ่ม
+    // restart เลย ต้องหยุดตรงนี้ ไม่งั้นจะไหลไปเข้า loop รอ server ใหม่ทั้งที่ไม่มีอะไรเกิดขึ้น
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      btn.disabled = false; btn.textContent = '↺ Restart';
+      alert('❌ Restart ไม่สำเร็จ:\n' + (j.error || `HTTP ${r.status}`));
+      return;
+    }
   } catch(e) { /* server ปิดก่อน response — ปกติเมื่อ restart จริง */ }
   // รอ server ขึ้นมาใหม่
   const status = document.getElementById('updated-at');
   if (status) status.textContent = 'รอ server restart...';
   await new Promise(r => setTimeout(r, 2000));
-  // poll จน server ตอบ
+  // poll จน server ตอบ — เช็ค restart_in_progress/restart_failed ด้วย ไม่ใช่แค่ r.ok เฉยๆ
+  // เพราะช่วงแรก process เดิม (ที่ยังไม่ตาย) ก็ตอบ /api/status ปกติ ถ้าถือว่า r.ok = สำเร็จ
+  // เลยจะ reload ทันทีทั้งที่ restart จริงยังไม่เสร็จ/กำลังจะล้มเหลว (ดู _restart_state
+  // ใน app.py — process ใหม่ที่ขึ้นมาสำเร็จจริงจะมีค่า default สดใหม่เสมอ)
   for (let i = 0; i < 30; i++) {
     try {
       const r = await fetch('/api/status');
       if (r.ok) {
-        btn.disabled = false; btn.textContent = '↺ Restart';
-        if (status) status.textContent = 'Restart สำเร็จ — กำลัง reload...';
-        await new Promise(r => setTimeout(r, 500));
-        location.reload();
-        return;
+        const j = await r.json().catch(() => ({}));
+        if (j.restart_failed) {
+          btn.disabled = false; btn.textContent = '↺ Restart';
+          alert('⚠️ Restart ไม่สำเร็จ — เซิร์ฟเวอร์เดิมยังทำงานอยู่ตามปกติ (ไม่ได้ตัดทิ้ง):\n' + j.restart_failed);
+          if (status) status.textContent = 'Restart ไม่สำเร็จ — ใช้งานต่อได้ตามปกติ';
+          return;
+        }
+        if (!j.restart_in_progress) {
+          btn.disabled = false; btn.textContent = '↺ Restart';
+          if (status) status.textContent = 'Restart สำเร็จ — กำลัง reload...';
+          await new Promise(r => setTimeout(r, 500));
+          location.reload();
+          return;
+        }
+        // restart_in_progress ยังเป็น true และยังไม่ fail — ยังเป็น process เดิมที่รอ
+        // ปิดตัวอยู่ ต้อง poll ต่อ ยังตัดสินไม่ได้
       }
     } catch(e) { /* ยังไม่พร้อม */ }
     await new Promise(r => setTimeout(r, 1000));

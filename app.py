@@ -639,10 +639,18 @@ def _dr_do_rebuild():
     # 12 threads เหลือ ~15 วิ และถ้าดึงพลาดใช้ค่ารอบก่อนจาก cache แทน
     # (market cap เปลี่ยนช้า ค่าเก่าอายุไม่กี่ชั่วโมงใช้แทนได้สบาย)
     from concurrent.futures import ThreadPoolExecutor
+    from sources.yahoo import _TimeoutSession
+
+    # session เดียวใช้ร่วมกันทุก thread + บังคับ timeout ต่อ request (เดิมสร้าง
+    # yf.Ticker(t) เปล่าๆ ไม่มี session — จุดเดียวใน DR pipeline ที่หลุด pattern
+    # _TimeoutSession ของโปรเจกต์ ถ้า Yahoo ตอบช้า/ไม่ตอบ 12 worker จะรอกันยาว
+    # ค้าง _dr_rebuild_lock ซึ่ง /api/job-reset ตั้งใจไม่แตะ ต้อง restart ทั้งเซิร์ฟเวอร์
+    # ถึงจะกู้คืนได้ — ดู sources/yahoo.py: REQUEST_TIMEOUT)
+    _mc_session = _TimeoutSession()
 
     def _mc_one(t):
         try:
-            v = getattr(yf.Ticker(t).fast_info, "market_cap", None)
+            v = getattr(yf.Ticker(t, session=_mc_session).fast_info, "market_cap", None)
             return t, (float(v) if v else None), None
         except Exception as e:
             return t, None, str(e)
@@ -727,7 +735,7 @@ def _dr_do_rebuild():
 
             price = float(close.iloc[-1])
             prev  = float(close.iloc[-2])
-            chg   = (price - prev) / prev * 100
+            chg   = (price - prev) / prev * 100 if prev else 0
             live_chg = round((live_price - price) / price * 100, 2) if live_price and price else None
 
             close100 = [round(float(x), 4) for x in close.tail(100).tolist()]
@@ -4854,20 +4862,62 @@ def _any_job_running():
     return any(s["running"] for s in _HM_LIVE_STATE.values())
 
 
+# สถานะ restart ที่กำลังทำอยู่ — เก็บไว้ให้ /api/status รายงานได้ว่า restart ล้มเหลว
+# หรือยัง (เดิมไม่มีเลย: /api/restart ตัด os._exit(0) ทันทีหลัง spawn โดยไม่เช็คว่า
+# process ใหม่เปิดขึ้นมาสำเร็จจริงไหม ถ้าโค้ดพัง (syntax/import error จากการแก้ไฟล์
+# ก่อนหน้า) process ใหม่จะตายทันทีตอนเปิด ในขณะที่ตัวเก่าถูกปิดไปแล้ว — เว็บล่มทั้งคู่
+# ต้องไปรันเซิร์ฟเวอร์เองใหม่ด้วยมือ ไม่มีทางกู้จากหน้าเว็บได้เลย)
+_restart_state = {"in_progress": False, "failed_error": None}
+
+
 @app.route("/api/restart", methods=["POST"])
 def restart_server():
     """Restart Flask process (Windows-safe: spawn new process then exit)
-    ปฏิเสธถ้ามี job กำลังรันอยู่ เว้นแต่ส่ง {"force": true} มา (ผู้ใช้ยืนยันแล้วว่ายอมตัดทิ้ง)"""
+    ปฏิเสธถ้ามี job กำลังรันอยู่ เว้นแต่ส่ง {"force": true} มา (ผู้ใช้ยืนยันแล้วว่ายอมตัดทิ้ง)
+
+    กันเว็บล่มทั้งคู่ (เก่าปิดไปแล้ว ใหม่ตายตั้งแต่เปิด) 2 ชั้น:
+    1. pre-flight compile check ก่อนแตะอะไรเลย — จับ syntax error ของ app.py เอง
+       (คุมได้แค่ syntax ของไฟล์นี้ ไม่ครอบคลุม import error จากไฟล์อื่นที่ import เข้ามา
+       แต่ครอบคลุมสาเหตุที่พบบ่อยที่สุด: แก้โค้ดแล้วพิมพ์ผิด/วงเล็บไม่ครบ)
+    2. หลัง spawn process ใหม่แล้ว รอสั้นๆ เช็คว่ามันไม่ตายทันที (import error ฯลฯ)
+       ก่อนค่อยปิดตัวเอง — ถ้าตายเร็วผิดปกติ ไม่ os._exit ปล่อยตัวเก่าทำงานต่อ"""
     force = bool((request.get_json(silent=True) or {}).get("force"))
     if _any_job_running() and not force:
         return jsonify({"error": "มี job กำลังรันอยู่ (Refresh/Update ฯลฯ) — restart ตอนนี้จะตัดงานทิ้งกลางคัน",
                         "job_running": True}), 409
 
+    script = os.path.abspath(__file__)
+    try:
+        import py_compile
+        py_compile.compile(script, doraise=True)
+    except Exception as e:
+        return jsonify({"error": f"โค้ด app.py compile ไม่ผ่าน — ไม่ restart เพื่อกันเว็บล่มทั้งคู่: {e}"}), 400
+
+    _restart_state.update(in_progress=True, failed_error=None)
+
     def _do_restart():
         time.sleep(0.8)
-        script = os.path.abspath(__file__)
-        subprocess.Popen([sys.executable, script],
-                         cwd=os.path.dirname(script))
+        try:
+            proc = subprocess.Popen([sys.executable, script],
+                                    cwd=os.path.dirname(script))
+        except Exception as e:
+            msg = f"เปิด process ใหม่ไม่สำเร็จ: {e}"
+            print(f"[Restart] {msg}")
+            run_log.record_run(BASE_DIR, "restart", False, msg)
+            _restart_state.update(in_progress=False, failed_error=msg)
+            return  # ไม่ os._exit — server เดิมทำงานต่อตามปกติ
+
+        # เช็คว่า process ใหม่ไม่ปิดตัวเองทันที (syntax/import error ในไฟล์อื่นที่
+        # py_compile ข้างบนตรวจไม่ถึง) ก่อนค่อยปิดตัวเก่า — ระหว่างนี้ port ยัง
+        # เป็นของตัวเก่าอยู่ process ใหม่จะรอที่ _wait_port_free() เฉยๆ ไม่ error
+        time.sleep(1.5)
+        if proc.poll() is not None:
+            msg = f"process ใหม่ปิดตัวเองทันที (exit code {proc.returncode}) — ไม่ restart"
+            print(f"[Restart] {msg}")
+            run_log.record_run(BASE_DIR, "restart", False, msg)
+            _restart_state.update(in_progress=False, failed_error=msg)
+            return  # ไม่ os._exit — server เดิมทำงานต่อตามปกติ
+
         os._exit(0)
     threading.Thread(target=_do_restart, daemon=True).start()
     return jsonify({"ok": True})
@@ -4920,6 +4970,11 @@ def get_status():
         "has_data": has_data,
         "updated_at": updated_at,
         "refresh_running": _state["running"],
+        # process ใหม่ (ถ้า restart สำเร็จจริง) จะมี _restart_state สดใหม่เป็นค่า
+        # default เสมอ (in_progress=False, failed_error=None) — client ใช้แยกแยะ
+        # "restart สำเร็จ" ออกจาก "ยังเป็น process เก่าที่ restart ล้มเหลว" ได้
+        "restart_in_progress": _restart_state["in_progress"],
+        "restart_failed": _restart_state["failed_error"],
     })
 
 
@@ -5728,6 +5783,7 @@ def backup_files_status():
 _UPDATE_STATUS_LABEL = {
     "quick_update":   "⚡ Quick Update",
     "full_refresh":   "⟳ Full Refresh",
+    "restart":        "↺ Restart Server",
     "financials_sync": "🔄 อัพเดทงบการเงิน (update_financials.py)",
     "mirror_finnomena": "📥 Mirror US/HK ทั้งตลาด (mirror_finnomena.py)",
     "build_mirror_names": "🏷️ ดึงชื่อหุ้น mirror ใหม่ (build_mirror_names.py)",
