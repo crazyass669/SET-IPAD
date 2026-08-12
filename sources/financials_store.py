@@ -1160,14 +1160,30 @@ def compute_qpl_report(payload_finn_q, payload_yahoo_q, set_series=None):
     return {"quarters": out}
 
 
+
+# ชื่อบัญชีเดียวกันที่ SET สะกดไม่คงที่ข้ามงวด/บริษัท (ยืนยันแล้วว่าความหมายเดียวกันเป๊ะ ต่างจาก
+# คู่ fallback อื่นใน _set_qpl_row_from_amt ที่เป็นบัญชีคนละตัวกันจริง) — normalize ให้เป็นชื่อ
+# เดียวกันตั้งแต่ตอนสร้าง amt map เพื่อไม่ให้ sub() (ลบงวดสะสม) เห็นเป็นคนละ key แล้วได้ None
+# ทั้งที่มีข้อมูลจริงทั้งสองงวด (เช่น 9M สะกดแบบหนึ่ง 6M สะกดอีกแบบในปีเดียวกัน)
+_SET_ACCOUNT_ALIASES = {
+    "กำไร (ขาดทุน) ก่อนต้นทุนทางการเงิน และ/หรือ ภาษีเงินได้":
+        "กำไร (ขาดทุน) ก่อนต้นทุนทางการเงิน และภาษีเงินได้",
+}
+
+
 def _set_qpl_amt_map(payload):
     """{accountName: amount} — คูณ 1000 ทุกค่า เพราะ financialstatement ของ SET รายงานเป็น
     'พันบาท' (เช็คแล้ว: รวมรายได้ PTT ตรงกับ company-highlight เป๊ะโดยไม่ต้องหารเพิ่ม) ต่างจาก
     Yahoo/Finnomena ที่เก็บเป็นหน่วยบาทดิบ — ถ้าไม่ปรับหน่วยตรงนี้ field-level merge ใน
     compute_qpl_report จะได้แถวที่ปนหน่วยกัน (revenue จาก SET เป็นพันบาท แต่ selling_exp จาก
-    Yahoo เป็นบาทดิบ ในไตรมาสเดียวกัน) พังทั้งตาราง"""
-    return {a.get("accountName"): (a["amount"] * 1000 if a.get("amount") is not None else None)
-            for a in (payload or {}).get("accounts", [])}
+    Yahoo เป็นบาทดิบ ในไตรมาสเดียวกัน) พังทั้งตาราง — ชื่อบัญชี normalize ผ่าน
+    _SET_ACCOUNT_ALIASES ก่อนเก็บ key เผื่องวดที่ใช้คนละคำสะกดสำหรับบัญชีเดียวกัน"""
+    out = {}
+    for a in (payload or {}).get("accounts", []):
+        name = _SET_ACCOUNT_ALIASES.get(a.get("accountName"), a.get("accountName"))
+        amt = a["amount"] * 1000 if a.get("amount") is not None else None
+        out[name] = amt
+    return out
 
 
 def _set_qpl_row_from_amt(amt):
@@ -1208,7 +1224,10 @@ def _set_qpl_row_from_amt(amt):
     op = g("กำไร (ขาดทุน) ก่อนต้นทุนทางการเงิน และภาษีเงินได้",
            "กำไร (ขาดทุน) ก่อนต้นทุนทางการเงิน และ/หรือ ภาษีเงินได้")
     fin_cost = g("ต้นทุนทางการเงิน")
-    pretax = (op - fin_cost) if (op is not None and fin_cost is not None) else None
+    # บัญชี 'ต้นทุนทางการเงิน' หายไปจากงบ มักแปลว่างวดนั้นไม่มีหนี้ที่มีดอกเบี้ย (=0) ไม่ใช่ข้อมูล
+    # ขาด — ถ้าข้อมูลขาดจริง op เองก็จะเป็น None ด้วยอยู่แล้ว (ต้องมี 2 บัญชีมาลบกันถึงได้ op)
+    # ไม่ปล่อย pretax เป็น None ทั้งที่มี op จริง เพราะทำให้ 'กำไรก่อนภาษี'/'% TAX' ว่างเปล่าโดยไม่จำเป็น
+    pretax = (op - (fin_cost if fin_cost is not None else 0)) if op is not None else None
     net_profit = g("การแบ่งปันกำไร (ขาดทุน) สุทธิ : ผู้ถือหุ้นบริษัทใหญ่", "กำไร (ขาดทุน) สุทธิ สำหรับงวด")
     return {
         "revenue": revenue, "cogs": cogs,
@@ -1236,8 +1255,12 @@ def fetch_set_qpl_chart_series(symbol, ctx=None, hdr=None):
     rows = fetch_financial_data_chart(symbol, ctx=ctx, hdr=hdr)
     out = {}
     for r in rows:
-        year, qn = r.get("year"), r.get("quarter")
+        qn = r.get("quarter")
         q = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}.get(qn)
+        try:
+            year = int(r.get("year"))
+        except (TypeError, ValueError):
+            year = None
         if not q or not year:
             continue
         sales, gpm = r.get("sales"), r.get("grossProfitMargin")

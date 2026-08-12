@@ -14537,7 +14537,8 @@ function _finCmpQuarterTable(symA, symB, COL_A, COL_B, series, scrollId) {
     ${years.map(y => [1, 2, 3, 4].map(qn => {
       const d = byYear[y][qn - 1];
       const v = d ? map[d] : null;
-      return `<td class="r" style="padding:${opts.indent ? '3px 6px' : '4px 6px'};border:1px solid var(--border);font-size:${opts.indent ? '10.5px' : '11.5px'}${opts.indent ? ';color:var(--text2)' : ''}">${v != null ? fmt(v) : '—'}</td>`;
+      const cellColor = opts.pctColor && v != null ? (v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text2)') : (opts.indent ? 'var(--text2)' : '');
+      return `<td class="r" style="padding:${opts.indent ? '3px 6px' : '4px 6px'};border:1px solid var(--border);font-size:${opts.indent ? '10.5px' : '11.5px'}${cellColor ? `;color:${cellColor}` : ''}">${v != null ? fmt(v) : '—'}</td>`;
     }).join('')).join('')}
   </tr>`;
 
@@ -14570,9 +14571,9 @@ function _finCmpQuarterTable(symA, symB, COL_A, COL_B, series, scrollId) {
       const qFmt = isPctField ? fmtPP : _finPct;
       return groupHdr(label)
         + row(symA, COL_A, toMap(a), fmt)
-        + row('% QoQ', COL_A, qoqMap(a, isPctField), qFmt, { indent: true })
+        + row('% QoQ', COL_A, qoqMap(a, isPctField), qFmt, { indent: true, pctColor: true })
         + row(symB, COL_B, toMap(b), fmt)
-        + row('% QoQ', COL_B, qoqMap(b, isPctField), qFmt, { indent: true });
+        + row('% QoQ', COL_B, qoqMap(b, isPctField), qFmt, { indent: true, pctColor: true });
     }).join('');
   if (!rowsHtml) return '';
 
@@ -14612,7 +14613,8 @@ function _finCmpAnnualTable(symA, symB, COL_A, COL_B, series, scrollId) {
     </td>
     ${years.map(d => {
       const v = map[d];
-      return `<td class="r" style="padding:${opts.indent ? '3px 6px' : '4px 6px'};border:1px solid var(--border);font-size:${opts.indent ? '10.5px' : '11.5px'}${opts.indent ? ';color:var(--text2)' : ''}">${v != null ? fmt(v) : '—'}</td>`;
+      const cellColor = opts.pctColor && v != null ? (v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text2)') : (opts.indent ? 'var(--text2)' : '');
+      return `<td class="r" style="padding:${opts.indent ? '3px 6px' : '4px 6px'};border:1px solid var(--border);font-size:${opts.indent ? '10.5px' : '11.5px'}${cellColor ? `;color:${cellColor}` : ''}">${v != null ? fmt(v) : '—'}</td>`;
     }).join('')}
   </tr>`;
 
@@ -14637,9 +14639,9 @@ function _finCmpAnnualTable(symA, symB, COL_A, COL_B, series, scrollId) {
       const yFmt = isPctField ? fmtPP : _finPct;
       return groupHdr(label)
         + row(symA, COL_A, toMap(a), fmt)
-        + row('% YoY', COL_A, yoyMap(a, isPctField), yFmt, { indent: true })
+        + row('% YoY', COL_A, yoyMap(a, isPctField), yFmt, { indent: true, pctColor: true })
         + row(symB, COL_B, toMap(b), fmt)
-        + row('% YoY', COL_B, yoyMap(b, isPctField), yFmt, { indent: true });
+        + row('% YoY', COL_B, yoyMap(b, isPctField), yFmt, { indent: true, pctColor: true });
     }).join('');
   if (!rowsHtml) return '';
 

@@ -2951,7 +2951,11 @@ def get_financials_qpl_report(symbol):
 
     set_series = None
     if not is_dr:   # SET official มีแค่หุ้นไทย — DR ข้าม ไม่ยิง set.or.th เปล่าๆ
-        set_series = None if refresh else financials_store.get_set_qpl_series(BASE_DIR, sym)
+        if not refresh:
+            try:
+                set_series = financials_store.get_set_qpl_series(BASE_DIR, sym)
+            except Exception:
+                set_series = None
         if set_series is None:
             try:
                 set_series = financials_store.sync_set_qpl_series(BASE_DIR, sym)
@@ -2973,7 +2977,12 @@ def get_financials_qpl_set(symbol):
     sym = symbol.upper().strip()
     refresh = request.args.get("refresh") == "1"
 
-    set_series = None if refresh else financials_store.get_set_qpl_series(BASE_DIR, sym)
+    set_series = None
+    if not refresh:
+        try:
+            set_series = financials_store.get_set_qpl_series(BASE_DIR, sym)
+        except Exception:
+            set_series = None
     if set_series is None:
         try:
             set_series = financials_store.sync_set_qpl_series(BASE_DIR, sym)
@@ -3027,7 +3036,10 @@ def get_financials_compare(symbol):
         except Exception:
             yq = None
 
-    set_series = financials_store.get_set_qpl_series(BASE_DIR, sym)
+    try:
+        set_series = financials_store.get_set_qpl_series(BASE_DIR, sym)
+    except Exception:
+        set_series = None
     if set_series is None:
         try:
             set_series = financials_store.sync_set_qpl_series(BASE_DIR, sym)
@@ -3057,7 +3069,9 @@ def get_financials_compare(symbol):
         qpl[d] = row
 
     # company-highlight -> ROE/ROA/D-E รายปีล่าสุด (entries เรียงเก่า->ใหม่ วนแล้วเก็บค่าตัวท้ายสุด
-    # ที่ไม่ null ก็ได้ค่าล่าสุดจริงเสมอ ไม่ต้อง sort เพิ่ม)
+    # ที่ไม่ null ก็ได้ค่าล่าสุดจริงเสมอ ไม่ต้อง sort เพิ่ม) — กรองเฉพาะ quarter=='Q9' (งวดรายปี
+    # ตามธรรมเนียมเดียวกับจุดอื่นในโค้ดเบส) ไม่งั้นถ้าปีปัจจุบันยังไม่จบปี entries ตัวท้ายสุดจะเป็น
+    # ไตรมาสกลางปี (Q1-Q3) ได้ค่า ROE/ROA/D-E รายไตรมาสมาแทนที่จะเป็นรายปีตามที่ตั้งใจ
     hl = financials_store.get(BASE_DIR, sym, "set")
     if hl is None:
         try:
@@ -3070,6 +3084,8 @@ def get_financials_compare(symbol):
     for src_key, dest in (("roe", "ROE"), ("roa", "ROA"), ("deRatio", "Debt To Equity")):
         val, dt = None, None
         for e in (hl or {}).get("entries", []):
+            if e.get("quarter") != "Q9":
+                continue
             v = e.get(src_key)
             if v is not None:
                 val, dt = v, f"{e.get('year')}{hl_q_end.get(e.get('quarter'), '-12-31')}"
