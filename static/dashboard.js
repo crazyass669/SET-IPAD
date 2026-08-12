@@ -612,6 +612,29 @@ async function restartServer(force) {
   alert('Server ไม่ตอบสนอง — ลองรีโหลดหน้าเอง');
 }
 
+async function killDuplicateServers() {
+  if (!confirm('ปิด server ตัวอื่นที่รันซ้อนพอร์ตเดียวกันทั้งหมด?\n\nเก็บตัวที่กำลังใช้งานอยู่นี้ไว้เสมอ (ไม่ปิดตัวเอง) — รองรับเฉพาะ Windows')) return;
+  const btn = document.getElementById('kill-dup-btn');
+  btn.disabled = true; btn.textContent = '🗡️ กำลังปิด...';
+  try {
+    const r = await fetch('/api/kill-duplicate-servers', {method: 'POST'});
+    const j = await r.json();
+    if (!r.ok) { alert('❌ ทำไม่สำเร็จ: ' + (j.error || `HTTP ${r.status}`)); return; }
+    if (!j.killed.length && !j.failed.length) {
+      alert('ไม่พบ server ตัวอื่นที่ค้างพอร์ตเดียวกัน — มีตัวนี้ตัวเดียว (PID ' + j.my_pid + ')');
+    } else {
+      let msg = '';
+      if (j.killed.length) msg += `ปิดสำเร็จ ${j.killed.length} ตัว (PID ${j.killed.join(', ')})\n`;
+      if (j.failed.length) msg += `ปิดไม่สำเร็จ ${j.failed.length} ตัว: ` + j.failed.map(f => `PID ${f.pid} (${f.error})`).join(', ');
+      alert(msg.trim());
+    }
+  } catch (e) {
+    alert('ทำไม่สำเร็จ: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '🗡️ Kill Server ซ้ำ';
+  }
+}
+
 async function resetStuckJob() {
   if (!confirm('ปลดล็อก job flag ที่ค้างอยู่?\n\nใช้เมื่อปุ่ม Refresh/Update ต่างๆ ตอบ "กำลังทำงานอยู่" (409) นานผิดปกติ\nไม่ยกเลิกงานที่ยังรันจริงอยู่ (ทำไม่ได้) แค่ปลดให้กดปุ่มใหม่ได้')) return;
   const btn = document.getElementById('job-reset-btn');
@@ -9340,8 +9363,11 @@ function renderHeatmap() {
       const bg  = cfg.clr(v);
       const txt = cfg.txt(v);
       const lbl = v != null ? cfg.fmt(v) : '—';
+      const priceV = s.live_price ?? s.price;
+      const priceLbl = priceV != null ? priceV.toFixed(2) : '—';
       return `<div class="hm-cell" style="background:${bg};color:${txt}" title="${s.symbol} ${lbl}" onclick="openChartModal('${s.symbol}')">
         <span style="font-size:11px;font-weight:700;line-height:1">${s.symbol.slice(0,5)}</span>
+        <span style="font-size:9px;line-height:1;opacity:0.85">${priceLbl}</span>
         <span style="font-size:10px;line-height:1;opacity:0.92">${lbl}</span>
       </div>`;
     }).join('');
@@ -13828,10 +13854,13 @@ function _hmGridCellHtml(r, cfgKey, search, popupFn) {
     lbl = (v > 0 ? '+' : '') + v.toFixed(2) + '%';
   }
   const dim = search && !r.symbol.toLowerCase().includes(search) && !(r.name || '').toLowerCase().includes(search);
+  const priceV = r.live_price ?? r.price;
+  const priceLbl = priceV != null ? priceV.toFixed(2) : '—';
   return `<div class="hm-cell" onclick="${popupFn}(event,'${r.symbol}')"
     title="${(r.name || '').replace(/"/g, '&quot;')} (${r.symbol}): ${lbl}"
     style="background:${cfg.clr(v)};color:${cfg.txt(v)};${dim ? 'opacity:.15;' : ''}">
     <span style="font-size:11px;font-weight:700">${r.symbol.replace(/\.(HK|T)$/, '')}</span>
+    <span style="font-size:9px;opacity:.85">${priceLbl}</span>
     <span style="font-size:10px;opacity:.92">${lbl}</span>
   </div>`;
 }
@@ -16959,7 +16988,7 @@ function loadBandPage() {
   const gate = document.getElementById('band-gate'), body = document.getElementById('band-body');
   if (!gate || !body) return;
   gate.style.display = ''; body.style.display = 'none';
-  gate.innerHTML = '📊 Valuation Band ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง (local) — ดึงข้อมูลสดจาก mrlikestock.com ตอนค้นหา ไม่สามารถ bake เป็นไฟล์ static ล่วงหน้าได้ (ไม่รู้ล่วงหน้าว่าจะค้นหุ้นตัวไหน)';
+  gate.innerHTML = '📊 Valuation Band ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง (local) — ดึงข้อมูลสดจาก mrlikestock.com และ 9hoon.com ตอนค้นหา ไม่สามารถ bake เป็นไฟล์ static ล่วงหน้าได้ (ไม่รู้ล่วงหน้าว่าจะค้นหุ้นตัวไหน)';
 }
 
 function _bandZone(cur, b) {
@@ -16978,24 +17007,50 @@ async function searchBand() {
   document.getElementById('band-loading').style.display = 'block';
   document.getElementById('band-result').style.display  = 'none';
   document.getElementById('band-error').style.display   = 'none';
-  try {
-    // backend มี timeout 20s ต่อการเชื่อมต่อ mrlikestock.com แต่เป็น per-chunk ไม่ใช่ hard cap
-    // รวม — ถ้าเว็บต้นทางตอบช้ามาก fetch เปล่าจะค้าง spinner ไม่มีทางยกเลิกนอกจากรีเฟรชหน้า
-    const res  = await _fetchTimeout(`/api/band/${encodeURIComponent(sym)}`, 30000,
-      'หมดเวลารอข้อมูล Band (เกิน 30 วิ) — เว็บต้นทางอาจช้าหรือไม่ตอบสนอง ลองใหม่อีกครั้ง');
-    const data = await res.json();
-    document.getElementById('band-loading').style.display = 'none';
-    if (data.error) {
+  document.getElementById('np-card').style.display      = 'block';
+  document.getElementById('np-error').style.display     = 'none';
+  document.getElementById('np-body').style.display      = 'none';
+
+  // สอง endpoint นี้ดึงจากคนละเว็บ ยิงพร้อมกันแล้วเรนเดอร์แยกกัน — ตัวหนึ่งพังไม่ควรบัง
+  // ผลของอีกตัว (mrlikestock.com ล่ม 9hoon.com ก็ยังอยากเห็น, และกลับกัน)
+  const bandTask = (async () => {
+    try {
+      // backend มี timeout 20s ต่อการเชื่อมต่อ mrlikestock.com แต่เป็น per-chunk ไม่ใช่ hard cap
+      // รวม — ถ้าเว็บต้นทางตอบช้ามาก fetch เปล่าจะค้าง spinner ไม่มีทางยกเลิกนอกจากรีเฟรชหน้า
+      const res  = await _fetchTimeout(`/api/band/${encodeURIComponent(sym)}`, 30000,
+        'หมดเวลารอข้อมูล Band (เกิน 30 วิ) — เว็บต้นทางอาจช้าหรือไม่ตอบสนอง ลองใหม่อีกครั้ง');
+      const data = await res.json();
+      if (data.error) {
+        document.getElementById('band-error').style.display   = 'block';
+        document.getElementById('band-error').textContent     = '⚠ ' + data.error;
+        return;
+      }
+      _renderBandResult(data);
+    } catch(e) {
       document.getElementById('band-error').style.display   = 'block';
-      document.getElementById('band-error').textContent     = '⚠ ' + data.error;
-      return;
+      document.getElementById('band-error').textContent     = '⚠ เกิดข้อผิดพลาด: ' + e.message;
     }
-    _renderBandResult(data);
-  } catch(e) {
-    document.getElementById('band-loading').style.display = 'none';
-    document.getElementById('band-error').style.display   = 'block';
-    document.getElementById('band-error').textContent     = '⚠ เกิดข้อผิดพลาด: ' + e.message;
-  }
+  })();
+
+  const npTask = (async () => {
+    try {
+      const res  = await _fetchTimeout(`/api/npdata/${encodeURIComponent(sym)}`, 30000,
+        'หมดเวลารอข้อมูลกำไรสุทธิ (เกิน 30 วิ) — 9hoon.com อาจช้าหรือไม่ตอบสนอง ลองใหม่อีกครั้ง');
+      const data = await res.json();
+      if (data.error) {
+        document.getElementById('np-error').style.display = 'block';
+        document.getElementById('np-error').textContent   = '⚠ ' + data.error;
+        return;
+      }
+      _renderNpResult(data);
+    } catch(e) {
+      document.getElementById('np-error').style.display = 'block';
+      document.getElementById('np-error').textContent   = '⚠ เกิดข้อผิดพลาด: ' + e.message;
+    }
+  })();
+
+  await Promise.allSettled([bandTask, npTask]);
+  document.getElementById('band-loading').style.display = 'none';
 }
 
 function _renderBandResult(data) {
@@ -17025,6 +17080,136 @@ function _renderBandResult(data) {
       <div class="band-zone-badge" style="color:${zone.color};border:1px solid ${zone.color}30">${zone.label}</div>
     `;
     requestAnimationFrame(() => _drawBandChart(`band-${type}-canvas`, d));
+  });
+}
+
+function _renderNpResult(data) {
+  document.getElementById('np-body').style.display = 'block';
+  document.getElementById('np-company-name').textContent =
+    data.company_name ? `${data.symbol} — ${data.company_name}` : data.symbol;
+  document.getElementById('np-chips').innerHTML =
+    (data.chips || []).map(c => `<span class="np-chip">${_escHtml(c)}</span>`).join('');
+
+  const fmt = v => v != null && v !== '' ? _escHtml(v) : '—';
+  document.getElementById('np-metrics').innerHTML = `
+    <div class="band-metric"><div class="band-metric-val">${fmt(data.market_cap)}</div><div class="band-metric-lbl">มูลค่าตลาด</div></div>
+    <div class="band-metric"><div class="band-metric-val">${fmt(data.pe)}</div><div class="band-metric-lbl">P/E</div></div>
+    <div class="band-metric"><div class="band-metric-val">${fmt(data.pbv)}</div><div class="band-metric-lbl">P/BV</div></div>
+    <div class="band-metric"><div class="band-metric-val">${fmt(data.div_yield)}</div><div class="band-metric-lbl">Div. Yield (12M)</div></div>
+  `;
+
+  const deltaColor = v => {
+    if (!v) return 'var(--text)';
+    if (v.includes('▲')) return '#3fb950';
+    if (v.includes('▼')) return '#f85149';
+    return 'var(--text)';
+  };
+  const yoy = data.yoy || {}, qoq = data.qoq || {};
+  document.getElementById('np-delta-row').innerHTML = `
+    <div class="band-metric"><div class="band-metric-val">${fmt(data.latest_val)}</div><div class="band-metric-lbl">${fmt(data.latest_label)}</div></div>
+    <div class="band-metric"><div class="band-metric-val" style="color:${deltaColor(yoy.value)}">${fmt(yoy.value)}</div><div class="band-metric-lbl">YoY${yoy.sub ? ` (${_escHtml(yoy.sub)})` : ''}</div></div>
+    <div class="band-metric"><div class="band-metric-val" style="color:${deltaColor(qoq.value)}">${fmt(qoq.value)}</div><div class="band-metric-lbl">QoQ${qoq.sub ? ` (${_escHtml(qoq.sub)})` : ''}</div></div>
+  `;
+
+  const fmtCell = cell => {
+    if (!cell || cell.val == null) return '<td class="np-empty">—</td>';
+    const eps = cell.eps ? `<div class="np-eps">[${_escHtml(cell.eps)}]</div>` : '';
+    return `<td>${_escHtml(cell.val)}${eps}</td>`;
+  };
+  const rows = (data.table || []).map(r =>
+    `<tr><td>${_escHtml(r.year)}</td>${fmtCell(r.q1)}${fmtCell(r.q2)}${fmtCell(r.q3)}${fmtCell(r.q4)}${fmtCell(r.total)}</tr>`
+  ).join('');
+  document.getElementById('np-table').innerHTML = `
+    <thead><tr><th>ปี</th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th>รวม</th></tr></thead>
+    <tbody>${rows}</tbody>
+  `;
+
+  requestAnimationFrame(() => _drawNpChart('np-chart-canvas', data.chart));
+}
+
+// ไล่สีเทา→ฟ้าเข้มขึ้นเรื่อยๆ ตามปี ปีล่าสุด (คอลัมน์ขวาสุด) เน้นส้ม — จำลองพาเลตต์
+// กราฟต้นฉบับของ 9hoon.com (เทา/ฟ้าอ่อน/ฟ้า/ฟ้าเข้ม/กรมท่า/ส้ม)
+function _npYearColors(n) {
+  const blues = ['#8b949e', '#a9c7e8', '#7fb2e5', '#4f8fdb', '#2f6fc4', '#1d4f96'];
+  const colors = [];
+  for (let i = 0; i < n; i++) {
+    colors.push(i === n - 1 ? '#f0883e' : blues[Math.min(i, blues.length - 1)]);
+  }
+  return colors;
+}
+
+function _drawNpChart(canvasId, chart) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const years = (chart && chart.years) || [];
+  const groups = (chart && chart.quarters) || [];
+  if (!years.length || !groups.length) { canvas.style.display = 'none'; return; }
+  canvas.style.display = 'block';
+
+  const dpr = window.devicePixelRatio || 1;
+  const W   = Math.min(canvas.parentElement.clientWidth || 680, 900);
+  const H   = 260;
+  canvas.width  = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const PAD = { top: 14, right: 12, bottom: 46, left: 56 };
+  const PW  = W - PAD.left - PAD.right;
+  const PH  = H - PAD.top  - PAD.bottom;
+
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  const allVals = groups.flatMap(g => g.vals).filter(v => v != null);
+  if (!allVals.length) return;
+  const maxV  = Math.max(...allVals, 0) * 1.12 || 1;
+  const minV  = Math.min(0, ...allVals);
+  const toY   = v => PAD.top + (1 - (v - minV) / (maxV - minV)) * PH;
+  const fmtV  = v => Math.round(v).toLocaleString('en-US');
+
+  // Grid + Y labels
+  ctx.setLineDash([2,4]); ctx.lineWidth = 0.5; ctx.strokeStyle = 'rgba(48,54,61,0.8)';
+  [0, 0.25, 0.5, 0.75, 1].forEach(t => {
+    const y = PAD.top + t * PH;
+    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + PW, y); ctx.stroke();
+    const v = maxV - t * (maxV - minV);
+    ctx.fillStyle = '#8b949e'; ctx.font = '9px Segoe UI,sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(fmtV(v), PAD.left - 5, y + 3);
+  });
+  ctx.setLineDash([]);
+
+  const n       = years.length;
+  const groupW  = PW / groups.length;
+  const barGap  = 2;
+  const barW    = Math.max(2, (groupW - 8) / n - barGap);
+  const colors  = _npYearColors(n);
+  const zeroY   = toY(0);
+
+  groups.forEach((g, gi) => {
+    const gx0 = PAD.left + gi * groupW + 4;
+    years.forEach((yr, yi) => {
+      const v = g.vals[yi];
+      if (v == null) return;
+      const x = gx0 + yi * (barW + barGap);
+      const y = toY(v);
+      ctx.fillStyle = colors[yi];
+      ctx.fillRect(x, Math.min(y, zeroY), barW, Math.max(Math.abs(zeroY - y), 1));
+    });
+    ctx.fillStyle = '#8b949e'; ctx.font = '11px Segoe UI,sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(g.q, gx0 + (groupW - 8) / 2, H - PAD.bottom + 16);
+  });
+
+  // Legend
+  ctx.font = '10px Segoe UI,sans-serif';
+  let lx = PAD.left;
+  const ly = H - 12;
+  years.forEach((yr, i) => {
+    ctx.fillStyle = colors[i];
+    ctx.fillRect(lx, ly - 8, 10, 9);
+    ctx.fillStyle = '#ccc'; ctx.textAlign = 'left';
+    ctx.fillText(yr, lx + 13, ly);
+    lx += 13 + ctx.measureText(yr).width + 14;
   });
 }
 
@@ -18115,6 +18300,7 @@ function _renderDRHeatmap(stocks) {
         : `${s.sym} — ${s.name} — ${lbl} (ราคาปิด)`;
       return `<div class="hm-cell" style="background:${bg};color:${txt}" title="${tip}" onclick="openDRChartModal('${s.sym}')">
         <span style="font-size:11px;font-weight:700;line-height:1">${isLive ? '⚡' : ''}${s.sym.slice(0,6)}</span>
+        <span style="font-size:9px;line-height:1;opacity:0.85">${_drFmtPrice(s.live_price ?? s.price)}</span>
         <span style="font-size:10px;line-height:1;opacity:0.92">${lbl}</span>
       </div>`;
     }).join('');
@@ -18651,6 +18837,7 @@ function _renderETFHeatmap(stocks) {
         : `${s.symbol} — ${s.name_th || ''} — ${lbl}`;
       return `<div class="hm-cell" style="background:${bg};color:${txt}" title="${tip}" onclick="openETFChartModal('${s.symbol}')">
         <span style="font-size:11px;font-weight:700;line-height:1">${isLive ? '⚡' : ''}${s.symbol.slice(0,8)}</span>
+        <span style="font-size:9px;line-height:1;opacity:0.85">${_drFmtPrice(s.live_price ?? s.price)}</span>
         <span style="font-size:10px;line-height:1;opacity:0.92">${lbl}</span>
       </div>`;
     }).join('');

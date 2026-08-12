@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260810e">
+<link rel="stylesheet" href="static/dashboard.css?v=20260812b">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -90,6 +90,15 @@
         ✅ เหมาะ: <b>17:30 น. ขึ้นไป</b> (หลัง SET ปิด)<br>
         📦 ดึง Fundamentals + ประวัติราคาใหม่ทั้งหมด<br>
         ⏱ ใช้เวลา 20 นาที – 1.5 ชั่วโมง
+      </div>
+    </div>
+    <div class="btn-wrap">
+      <button class="refresh-btn" id="kill-dup-btn" onclick="killDuplicateServers()"
+        style="background:#a33;color:#fff">🗡️ Kill Server ซ้ำ</button>
+      <div class="btn-note" style="width:200px">
+        <b>🗡️ Kill Server ที่รันซ้อน</b><br>
+        Windows เผลอเปิด app.py ซ้ำได้ (bind พอร์ตซ้อนกันเงียบๆ) ปุ่มนี้ปิดตัวอื่นที่ค้าง
+        พอร์ตเดียวกันทิ้งทั้งหมด <b>เก็บตัวที่กำลังใช้อยู่ไว้เสมอ</b>
       </div>
     </div>
     <div class="btn-wrap">
@@ -793,7 +802,7 @@
 <!-- PAGE: VALUATION BAND -->
 <div id="page-band" class="page">
   <div class="page-title">Valuation Band</div>
-  <div class="page-sub">PE Band · PBV Band — ตำแหน่ง Valuation เทียบกับค่าเฉลี่ยในอดีต (ข้อมูลจาก mrlikestock.com)</div>
+  <div class="page-sub">PE Band · PBV Band (mrlikestock.com) · กำไรสุทธิรายไตรมาส (9hoon.com) — ตำแหน่ง Valuation เทียบกับค่าเฉลี่ยในอดีต</div>
   <div id="band-gate" class="empty" style="display:none;padding:24px"></div>
   <div id="band-body">
     <div class="band-search-row">
@@ -817,6 +826,23 @@
           <div class="band-card-label">PBV Band</div>
           <div class="band-metrics-row" id="band-pbv-metrics"></div>
           <canvas id="band-pbv-canvas" style="width:100%;display:block;border-radius:6px;background:#0d1117"></canvas>
+        </div>
+      </div>
+      <div class="card" id="np-card" style="display:none;margin-top:16px">
+        <div class="band-card-label">กำไรสุทธิรายไตรมาส (ข้อมูลจาก 9hoon.com)</div>
+        <div id="np-error" style="display:none;color:var(--red);padding:8px 0;font-size:13px"></div>
+        <div id="np-body" style="display:none">
+          <div style="font-size:15px;font-weight:600;margin-bottom:6px" id="np-company-name"></div>
+          <div id="np-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
+          <div class="band-metrics-row" id="np-metrics"></div>
+          <div class="band-metrics-row" id="np-delta-row" style="margin-bottom:14px"></div>
+          <div id="np-chart-wrap" style="margin-bottom:14px">
+            <div style="font-size:11px;color:var(--text2);margin-bottom:6px">กำไรสุทธิรายไตรมาส เทียบ YoY (ล้านบาท)</div>
+            <canvas id="np-chart-canvas" style="width:100%;display:block;border-radius:6px;background:#0d1117"></canvas>
+          </div>
+          <div style="overflow-x:auto">
+            <table class="np-table" id="np-table"></table>
+          </div>
         </div>
       </div>
     </div>
@@ -4648,6 +4674,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260812c"></script>
+<script src="static/dashboard.js?v=20260812g"></script>
 </body>
 </html>

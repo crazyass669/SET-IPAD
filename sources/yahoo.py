@@ -9,12 +9,19 @@ REQUEST_TIMEOUT = 15  # วินาที — ป้องกัน socket ค�
 
 
 class _TimeoutSession:
-    """wrap requests.Session ให้ทุก request มี timeout เริ่มต้นถ้าผู้เรียก (yfinance
-    ภายใน) ไม่ได้ส่ง timeout มาเอง — ไม่แก้ logic อื่นของ Session เลย"""
+    """session ให้ yf.Ticker(..., session=...) ใช้ร่วมกันหลาย ticker/thread โดยบังคับ
+    timeout เริ่มต้นถ้าผู้เรียก (yfinance ภายใน) ไม่ได้ส่ง timeout มาเอง
+
+    ต้องสร้างจาก curl_cffi (impersonate="chrome") ไม่ใช่ requests.Session() เปล่าๆ —
+    requests.Session() ธรรมดาไม่มี TLS/HTTP2 fingerprint ของเบราว์เซอร์จริง Yahoo
+    เลยมองว่าเป็นบอทแล้ว 429 rate-limit ตั้งแต่ request แรก (แม้ตัวเดียวไม่ parallel
+    ก็โดน) เจอจริง: DR market cap หายทั้งกระดาน 2026-08-12 เพราะจุดนี้ — yfinance เอง
+    ก็ default ไป curl_cffi อยู่แล้ว (ดู yfinance/_http.py new_session()) ที่นี่แค่
+    เพิ่ม timeout เริ่มต้นทับ session เดิมของมัน ไม่ได้เปลี่ยน backend"""
 
     def __new__(cls):
-        import requests
-        session = requests.Session()
+        from yfinance._http import new_session
+        session = new_session()
         _orig_request = session.request
 
         def _request(method, url, **kwargs):
@@ -191,9 +198,6 @@ def fetch_company_info(ticker):
     (ดู sources/mirror_ondemand.py) — เบา ยิงครั้งเดียวต่อ ticker ไม่ parallel เหมือน
     fetch_market_caps_parallel (นั่นออกแบบไว้สำหรับหลายร้อยตัวพร้อมกัน)"""
     session = _TimeoutSession()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    })
     info = _info_with_retry(ticker, session)
     mc, pe, pbv, dy = info.get("marketCap"), info.get("trailingPE"), info.get("priceToBook"), info.get("dividendYield")
     return {
@@ -214,9 +218,6 @@ def fetch_market_caps_parallel(tickers, callback=None, workers=3):
 
     # สร้าง session เดียวร่วมกัน เพื่อให้ crumb ไม่หมดอายุระหว่างการดึง
     session = _TimeoutSession()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    })
 
     results = {}
 

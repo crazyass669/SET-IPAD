@@ -1689,11 +1689,7 @@ def _new_yahoo_session():
     ค้างถาวรเมื่อ Yahoo ไม่ตอบระหว่าง batch sync (ทำให้ ThreadPoolExecutor ไม่ยอมจบ,
     _state["running"] ค้าง True ตลอดไป ปุ่มงานหนักอื่นคืน 409 จนกว่าจะ restart server)"""
     from sources.yahoo import _TimeoutSession
-    session = _TimeoutSession()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    })
-    return session
+    return _TimeoutSession()
 
 
 def _is_yahoo_throttle_err(e):

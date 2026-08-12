@@ -516,6 +516,20 @@
   .band-zone-badge { padding:5px 14px; border-radius:20px; font-size:12px; font-weight:600; background:var(--bg3); margin-left:auto; }
   .band-card-label { font-size:11px; font-weight:600; color:var(--text2); text-transform:uppercase; letter-spacing:.6px; margin-bottom:10px; }
 
+  /* NP DATA (9hoon.com) — การ์ดกำไรสุทธิรายไตรมาสในหน้า Valuation Band */
+  .np-chip { font-size:11px; color:var(--text2); background:var(--bg3); border:1px solid var(--border); padding:2px 9px; border-radius:999px; }
+  .np-table { width:100%; border-collapse:collapse; font-size:13px; min-width:480px; }
+  .np-table th {
+    position:sticky; top:0; background:var(--bg3); color:var(--text2); text-align:right;
+    font-weight:600; padding:7px 10px; white-space:nowrap; border-bottom:1px solid var(--border);
+  }
+  .np-table th:first-child { text-align:left; }
+  .np-table td { padding:7px 10px; border-bottom:1px solid var(--border); text-align:right; vertical-align:top; white-space:nowrap; }
+  .np-table td:first-child { text-align:left; font-weight:600; }
+  .np-table td.np-empty { color:var(--text2); }
+  .np-eps { font-size:10.5px; color:var(--text2); margin-top:1px; }
+  .np-table tbody tr:hover { background:var(--bg3); }
+
   /* REFRESH PERIOD DIALOG */
   .period-opt-btn { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:14px 10px; cursor:pointer; text-align:center; color:var(--text); transition:border-color .15s, background .15s; width:100%; }
   .period-opt-btn:hover { border-color:var(--accent); background:var(--bg2); }
@@ -567,7 +581,7 @@
 
   /* HEATMAP */
   .hm-cell {
-    width: 76px; height: 48px; border-radius: 4px;
+    width: 76px; height: 58px; border-radius: 4px;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 1px;
     font-size: 9px; font-weight: 600; cursor: pointer;

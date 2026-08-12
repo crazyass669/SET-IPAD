@@ -57,6 +57,10 @@ class _LRUCache(OrderedDict):
 _band_cache = _LRUCache(2000)
 _BAND_CACHE_TTL = 6 * 3600
 
+# NP data cache — เก็บผลกำไรสุทธิรายไตรมาสจาก 9hoon.com ไว้ 6 ชั่วโมง เพื่อลด latency ค้นซ้ำ
+_npdata_cache = _LRUCache(2000)
+_NPDATA_CACHE_TTL = 6 * 3600
+
 # DR cache — เก็บราคา underlying foreign stocks ไว้ 4 ชั่วโมง
 _dr_cache: dict = {}
 _DR_CACHE_TTL = 4 * 3600
@@ -137,6 +141,9 @@ from sources import hk_index_membership
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+# พอร์ตที่ server ตัวนี้ bind (ดู __main__ ท้ายไฟล์) — ยกมาเป็น module-level constant
+# ให้ /api/kill-duplicate-servers อ้างอิงพอร์ตเดียวกันได้โดยไม่ต้อง hardcode ซ้ำ 2 จุด
+SERVER_PORT  = 5001
 DATA_FILE    = os.path.join(BASE_DIR, "set_data.json")
 BACKUP_FILE  = os.path.join(BASE_DIR, "set_data_backup.json")
 HTML_FILE    = os.path.join(BASE_DIR, "set_dashboard.html")
@@ -542,6 +549,131 @@ def get_band(symbol):
             return jsonify({"error": f"ไม่พบข้อมูล Band สำหรับ {sym}"}), 404
         fetched_at = _dt.now().strftime("%H:%M น.")
         _band_cache[sym] = {"ts": time.time(), "fetched_at": fetched_at, "data": result}
+        result["cached_at"] = None
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/npdata/<symbol>")
+def get_npdata(symbol):
+    """ดึงกำไรสุทธิรายไตรมาส + P/E, P/BV, มูลค่าตลาด จาก 9hoon.com สำหรับหุ้นที่ระบุ — cache 6 ชั่วโมง"""
+    import requests as req, re as _re
+    import lxml.html as _lh
+    from datetime import datetime as _dt
+
+    sym = symbol.upper().strip()
+
+    cached = _npdata_cache.get(sym)
+    if cached and (time.time() - cached["ts"] < _NPDATA_CACHE_TTL):
+        result = dict(cached["data"])
+        result["cached_at"] = cached["fetched_at"]
+        return jsonify(result)
+
+    try:
+        r = req.get(
+            "https://9hoon.com/aset/view_np.php",
+            params={"symbol": sym},
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            timeout=20,
+        )
+        html = r.text
+        tree = _lh.fromstring(html)
+
+        ticker_els = tree.xpath('//div[@class="ticker-text"]')
+        if not ticker_els:
+            return jsonify({"error": f"ไม่พบข้อมูลสำหรับ {sym} บน 9hoon.com"}), 404
+
+        def _txt1(els):
+            return els[0].text_content().strip() if els else None
+
+        company_name  = _txt1(tree.xpath('//div[@class="company-name"]'))
+        chips         = [c.text_content().strip() for c in tree.xpath('//span[contains(@class,"chip")]')]
+        business_type = _txt1(tree.xpath('//div[@class="business-type"]'))
+
+        def _stat_value(label):
+            for cell in tree.xpath(f'//div[@class="stat-label" and normalize-space(text())="{label}"]'):
+                parent = cell.getparent()
+                vals = parent.xpath('./div[contains(@class,"stat-value")]')
+                if vals:
+                    return vals[0].text_content().strip()
+            return None
+
+        market_cap = _stat_value('มูลค่าตลาด')
+        pe         = _stat_value('P/E')
+        pbv        = _stat_value('P/BV')
+        div_yield  = _stat_value('Div. Yield (12M)')
+
+        latest_label = latest_val = None
+        hero_tiles = tree.xpath('//div[contains(@class,"stat-tile") and contains(@class,"hero")]')
+        if hero_tiles:
+            lbl = hero_tiles[0].xpath('.//div[@class="stat-label"]')
+            val = hero_tiles[0].xpath('.//div[contains(@class,"stat-value")]')
+            latest_label = _txt1(lbl)
+            latest_val   = _txt1(val)
+
+        def _delta(label_contains):
+            tiles = tree.xpath(
+                f'//div[contains(@class,"delta-tile")]'
+                f'[.//div[@class="stat-label" and contains(text(),"{label_contains}")]]'
+            )
+            if not tiles:
+                return None
+            val = tiles[0].xpath('.//div[contains(@class,"stat-value")]')
+            sub = tiles[0].xpath('.//div[@class="stat-sub"]')
+            return {"value": _txt1(val), "sub": _txt1(sub)}
+
+        yoy = _delta('YoY')
+        qoq = _delta('QoQ')
+
+        # ตารางกำไรสุทธิรายปี/ไตรมาส (พร้อม EPS ต่อไตรมาส)
+        def _cell(td):
+            eps_divs = td.xpath('.//div[@class="eps-sub"]')
+            eps_text = _txt1(eps_divs)
+            eps = eps_text.strip('[] ').strip() if eps_text else None
+            val_text = ' '.join(t.strip() for t in td.xpath('./text()') if t.strip())
+            val = None if (not val_text or val_text == '-') else val_text
+            return {"val": val, "eps": eps}
+
+        table = []
+        for tr in tree.xpath('//table//tbody/tr'):
+            tds = tr.xpath('./td')
+            if len(tds) < 6:
+                continue
+            table.append({
+                "year":  tds[0].text_content().strip(),
+                "q1":    _cell(tds[1]), "q2": _cell(tds[2]),
+                "q3":    _cell(tds[3]), "q4": _cell(tds[4]),
+                "total": _cell(tds[5]),
+            })
+
+        # ข้อมูลกราฟรายไตรมาสเทียบปี (ดึงจาก google.visualization.DataTable ที่ฝังในหน้า)
+        chart_years = _re.findall(r"addColumn\('number',\s*'(\d{4})'\)", html)
+        chart = {"years": chart_years, "quarters": []}
+        rows_m = _re.search(r'data\.addRows\(\[(.*?)\]\);', html, _re.DOTALL)
+        if rows_m:
+            for qm in _re.finditer(r'\["(Q\d)",([^\]]*)\]', rows_m.group(1)):
+                vals = [(float(v) if v.strip() != 'null' else None) for v in qm.group(2).split(',')]
+                chart["quarters"].append({"q": qm.group(1), "vals": vals})
+
+        result = {
+            "symbol": sym,
+            "company_name": company_name,
+            "chips": chips,
+            "business_type": business_type,
+            "market_cap": market_cap,
+            "pe": pe,
+            "pbv": pbv,
+            "div_yield": div_yield,
+            "latest_label": latest_label,
+            "latest_val": latest_val,
+            "yoy": yoy,
+            "qoq": qoq,
+            "table": table,
+            "chart": chart,
+        }
+        fetched_at = _dt.now().strftime("%H:%M น.")
+        _npdata_cache[sym] = {"ts": time.time(), "fetched_at": fetched_at, "data": result}
         result["cached_at"] = None
         return jsonify(result)
     except Exception as e:
@@ -1809,9 +1941,27 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
                                 "live_chg": round((live_price - prev_price) / prev_price * 100, 2),
                             }
 
+    # advanced — True ถ้ามีอย่างน้อย 1 ticker ได้แท่งปิดของวันใหม่จริง (วันที่มากกว่า
+    # last_dates เดิมก่อนรอบนี้) ต่างจาก n (จำนวน ticker ที่ "เช็ค" รอบนี้ ซึ่ง fetch_gap_batch
+    # จะคืนแท่ง overlap เดิมกลับมาเสมอแม้ไม่มีอะไรใหม่) ใช้บอก caller (heatmap live-update
+    # ปุ่ม) ว่าควร build() ใหม่ทั้งไฟล์ไหม — เดิมพึ่ง live_map อย่างเดียว (ว่างเปล่าตอนตลาดปิด)
+    # ทำให้ราคาปิดวันใหม่ที่เพิ่ง upsert ลง DB ไม่เคยถูกคำนวณเข้า <mkt>_index_metrics.json
+    # เลยจนกว่าจะถึง Quick Update ของวันถัดไป (ดู _run_heatmap_live_update)
+    advanced = bool(new_tickers)
+    if not advanced:
+        for t, d in data.items():
+            if t not in last_dates:
+                continue
+            close = d.get("close")
+            if close is None or not len(close):
+                continue
+            if close.index[-1].date() > pd.to_datetime(last_dates[t]).date():
+                advanced = True
+                break
+
     if data:
         store.upsert_bars(BASE_DIR, data)
-    return len(data), live_map, tickers
+    return len(data), live_map, tickers, advanced
 
 
 def _run_us_index_gap_update(progress_cb=None, sleep_s=0.3, index_key=None):
@@ -4443,28 +4593,32 @@ def _run_heatmap_live_update(region, index_key=None):
             # ระหว่าง batch นานขึ้น (1.5 วิ แทน 0.3 วิ default) กัน Yahoo rate-limit/แบน —
             # HK (~105 ตัว) และ JP (~225 ตัว) ยังน้อยพอที่จะใช้ค่า default ปกติได้ ถ้าผู้ใช้
             # ระบุ index_key (เช่น ดูแค่แท็บ Dow) จะดึงเฉพาะ 30 ตัวนั้นแทนทั้ง union — เร็วขึ้นมาก
-            n, live_map, scope = _run_us_index_gap_update(sleep_s=1.5, index_key=index_key)
+            n, live_map, scope, advanced = _run_us_index_gap_update(sleep_s=1.5, index_key=index_key)
             from sources import us_index_metrics as mod
             # แค่ merge live_price/live_chg เข้าไฟล์เดิม ไม่ build() เต็มรูปแบบ — เดิม build()
             # คำนวณ RS/EMA/Stage ใหม่ทั้ง ~518 ตัวของ union ทุกครั้งแม้ gap-update มาแค่ 30 ตัว
             # ของ Dow (RS percentile ต้อง rank เทียบทั้งกลุ่มถึงจะแม่น คำนวณแค่ scope ที่ขอไม่ได้)
             # ทำให้ปุ่มที่ควรเร็วกลับช้าเท่าดึงทั้งดัชนี — ตอนนี้ RS/EMA/Stage เต็มรูปแบบ
-            # คำนวณเฉพาะตอน Quick Update/Index Max (วันละครั้ง) พอ ปุ่มนี้ใช้แค่โชว์ราคาสด
-            if not mod.update_live_prices(BASE_DIR, live_map, scope):
+            # คำนวณเฉพาะตอน Quick Update/Index Max (วันละครั้ง) พอ ปุ่มนี้ใช้แค่โชว์ราคาสด — ยกเว้น
+            # advanced=True (มีแท่งปิดของวันใหม่จริงมาจาก gap-update รอบนี้ เช่นกดตอนตลาดปิดไปแล้ว
+            # และ Yahoo เพิ่งเติม Close ให้) ต้อง build() เต็มเสมอ ไม่งั้นราคา/ret_1d ที่ Heatmap
+            # โชว์จะค้างของเมื่อวานจนกว่าจะถึง Quick Update รอบถัดไป (ดู docstring ของ advanced
+            # ใน _run_index_gap_update)
+            if advanced or not mod.update_live_prices(BASE_DIR, live_map, scope):
                 mod.build(BASE_DIR, live_map=live_map)
             _us_breadth_cache.clear()
             _bump_cache_gen()
         elif region == "HK":
-            n, live_map, scope = _run_hk_index_gap_update(index_key=index_key)
+            n, live_map, scope, advanced = _run_hk_index_gap_update(index_key=index_key)
             from sources import hk_index_metrics as mod
-            if not mod.update_live_prices(BASE_DIR, live_map, scope):
+            if advanced or not mod.update_live_prices(BASE_DIR, live_map, scope):
                 mod.build(BASE_DIR, live_map=live_map)
             _hk_breadth_cache.clear()
             _bump_cache_gen()
         else:
-            n, live_map, scope = _run_jp_index_gap_update()
+            n, live_map, scope, advanced = _run_jp_index_gap_update()
             from sources import jp_index_metrics as mod
-            if not mod.update_live_prices(BASE_DIR, live_map, scope):
+            if advanced or not mod.update_live_prices(BASE_DIR, live_map, scope):
                 mod.build(BASE_DIR, live_map=live_map)
             _jp_breadth_cache.clear()
             _bump_cache_gen()
@@ -5122,6 +5276,55 @@ def restart_server():
         os._exit(0)
     threading.Thread(target=_do_restart, daemon=True).start()
     return jsonify({"ok": True})
+
+
+@app.route("/api/kill-duplicate-servers", methods=["POST"])
+def kill_duplicate_servers():
+    """ปิด process อื่นที่ bind พอร์ตเดียวกัน (SERVER_PORT) ซ้อนอยู่ — Windows ยอมให้ bind
+    ซ้อนกันได้ด้วย SO_REUSEADDR (ดูคอมเมนต์ _wait_port_free ท้ายไฟล์) ต่างจาก Linux ทำให้
+    เผลอเปิด app.py ซ้ำ (เช่นรันจากหลาย terminal/agent พร้อมกัน) แล้วเกิด "server ผี" ค้างพอร์ต
+    เดียวกันหลายตัว บาง request วิ่งเข้าตัวเก่าที่โค้ด/ข้อมูลไม่ตรงกับตัวที่กำลังดูอยู่ โดยผู้ใช้
+    ไม่รู้ตัว — เดิมต้องเปิด Task Manager ไล่หา python.exe เอง
+
+    หา PID ที่ LISTEN พอร์ต SERVER_PORT จาก `netstat -ano` (ไม่ใช้ psutil — ไม่ได้อยู่ใน
+    requirements.txt, คำสั่งนี้มีในตัว Windows อยู่แล้ว) แล้ว taskkill ทิ้งทุกตัวยกเว้น PID
+    ของ process ปัจจุบัน (os.getpid()) กันฆ่าตัวเอง"""
+    if os.name != "nt":
+        return jsonify({"error": "รองรับเฉพาะ Windows (netstat/taskkill)"}), 400
+
+    my_pid = os.getpid()
+    try:
+        out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True,
+                              text=True, timeout=10, check=True).stdout
+    except Exception as e:
+        return jsonify({"error": f"เรียก netstat ไม่สำเร็จ: {e}"}), 500
+
+    port_suffix = f":{SERVER_PORT}"
+    victim_pids = set()
+    for line in out.splitlines():
+        parts = line.split()
+        # ตัวอย่างแถว: TCP    0.0.0.0:5001    0.0.0.0:0    LISTENING    12345
+        if len(parts) < 5 or parts[0] != "TCP" or parts[3] != "LISTENING":
+            continue
+        if not parts[1].endswith(port_suffix):
+            continue
+        try:
+            pid = int(parts[-1])
+        except ValueError:
+            continue
+        if pid != my_pid:
+            victim_pids.add(pid)
+
+    killed, failed = [], []
+    for pid in sorted(victim_pids):
+        try:
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True,
+                            text=True, timeout=10, check=True)
+            killed.append(pid)
+        except Exception as e:
+            failed.append({"pid": pid, "error": str(e)})
+
+    return jsonify({"ok": True, "my_pid": my_pid, "killed": killed, "failed": failed})
 
 
 @app.route("/api/job-reset", methods=["POST"])
@@ -7398,7 +7601,7 @@ def _run_quick():
         def _us_index():
             def _us_cb(current, total, msg):
                 _update(message=f"US Index: {msg}")
-            n_us, live_us, _scope_us = _run_us_index_gap_update(progress_cb=_us_cb)
+            n_us, live_us, _scope_us, _adv_us = _run_us_index_gap_update(progress_cb=_us_cb)
             from sources import us_index_metrics
             us_index_metrics.build(BASE_DIR, live_map=live_us)
             _us_breadth_cache.clear()
@@ -7410,7 +7613,7 @@ def _run_quick():
         def _hk_index():
             def _hk_cb(current, total, msg):
                 _update(message=f"HK Index: {msg}")
-            n_hk, live_hk, _scope_hk = _run_hk_index_gap_update(progress_cb=_hk_cb)
+            n_hk, live_hk, _scope_hk, _adv_hk = _run_hk_index_gap_update(progress_cb=_hk_cb)
             from sources import hk_index_metrics
             hk_index_metrics.build(BASE_DIR, live_map=live_hk)
             _hk_breadth_cache.clear()
@@ -7422,7 +7625,7 @@ def _run_quick():
         def _jp_index():
             def _jp_cb(current, total, msg):
                 _update(message=f"JP Index: {msg}")
-            n_jp, live_jp, _scope_jp = _run_jp_index_gap_update(progress_cb=_jp_cb)
+            n_jp, live_jp, _scope_jp, _adv_jp = _run_jp_index_gap_update(progress_cb=_jp_cb)
             from sources import jp_index_metrics
             jp_index_metrics.build(BASE_DIR, live_map=live_jp)
             _jp_breadth_cache.clear()
@@ -8667,7 +8870,7 @@ def _wait_port_free(port, timeout=12):
 
 
 if __name__ == "__main__":
-    port = 5001
+    port = SERVER_PORT
 
     if not _wait_port_free(port):
         print(f"[!] พอร์ต {port} มี server อื่นรันอยู่แล้ว — ไม่ start ซ้อน")
