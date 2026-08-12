@@ -945,10 +945,138 @@ def _rebuild_etf_cache():
         return _etf_do_rebuild()
 
 
+def _etf_price_update(symbols):
+    """ทำให้ etf_prices.db (core/etf_store.py) เป็นปัจจุบัน — SET API เป็นหลักสำหรับ
+    วันล่าสุด เหมือน Quick Update ของหุ้นไทย (services/refresh.py::run_quick_update)
+    yfinance ใช้แค่ (1) backfill ประวัติยาวของ ETF ตัวใหม่ที่ยังไม่เคยมีใน DB และ
+    (2) สำรองตอน SET API ใช้ไม่ได้ — ต่างจาก US/HK/JP ที่พึ่ง yfinance ล้วนเพราะไม่มี
+    SET API ของตลาดต่างประเทศ"""
+    import pandas as pd
+    from core import etf_store
+    from sources.yahoo import fetch_all_batch, fetch_gap_batch
+
+    etf_store.init_db(BASE_DIR)
+    tickers = [f"{s}.BK" for s in symbols]
+    last_dates = etf_store.get_last_dates(BASE_DIR)
+
+    # 1) ตัวที่ยังไม่เคยมีใน DB เลย (ETF ใหม่/รอบแรกที่รันหลังอัพเกรด) — backfill
+    # ประวัติเต็มผ่าน yfinance ครั้งเดียว (เร็วกว่าจะรอ SET API สะสมทีละวัน)
+    new_tickers = [t for t in tickers if t not in last_dates]
+    if new_tickers:
+        print(f"[ETF] backfill ประวัติเต็ม {len(new_tickers)} ตัวใหม่ (yfinance)...")
+        try:
+            backfill = fetch_all_batch(new_tickers, period="max")
+        except Exception as ex:
+            print(f"[ETF] backfill yfinance ล้มเหลว: {ex}")
+            backfill = {}
+        if backfill:
+            etf_store.upsert_bars(BASE_DIR, backfill)
+            print(f"[ETF] backfill สำเร็จ {len(backfill)}/{len(new_tickers)} ตัว")
+        missing = [t for t in new_tickers if t not in backfill]
+        if missing:
+            # yfinance พลาดตัวใหม่บางตัว — สำรองผ่าน SET API chart-quotation (ได้แค่
+            # ~1Y ไม่ใช่ประวัติเต็ม แต่ดีกว่าไม่มีข้อมูลเลย)
+            try:
+                from sources.set_api import fetch_price_history_batch
+                start_date = (pd.Timestamp.now() - pd.Timedelta(days=400)).strftime("%Y-%m-%d")
+                fb = fetch_price_history_batch(missing, start_date)
+                if fb:
+                    etf_store.upsert_bars(BASE_DIR, fb)
+                    print(f"[ETF] backfill สำรอง SET API: {len(fb)}/{len(missing)} ตัว")
+            except Exception as ex:
+                print(f"[ETF] backfill สำรอง SET API ล้มเหลว: {ex}")
+        last_dates = etf_store.get_last_dates(BASE_DIR)
+
+    # 2) ตัวที่มีอยู่แล้วใน DB — เติมวันใหม่ผ่าน SET API เป็นหลัก (เร็ว <1s ต่างจาก
+    # yfinance ที่ทั้งช้าและปล่อยแท่งปิดหุ้นไทยช้าเป็นวันๆ — ปัญหาที่รู้จักดี)
+    existing = [t for t in tickers if t in last_dates]
+    if not existing:
+        return
+
+    asof = prev_trading_date = None
+    try:
+        from sources.set_api import fetch_trading_calendar_tail
+        cal = fetch_trading_calendar_tail()
+        asof = cal[-1]
+        prev_trading_date = cal[-2] if len(cal) >= 2 else None
+    except Exception as ex:
+        print(f"[ETF] เช็คปฏิทินวันเทรด SET API ล้มเหลว ({ex}) — fallback yfinance gap-fill ทั้งหมด")
+
+    need_update = [t for t in existing if asof and last_dates[t] < asof]
+    if asof and not need_update:
+        print(f"[ETF] ราคาทุกตัวเป็นปัจจุบันแล้ว (asof={asof})")
+        return
+    if not asof:
+        need_update = existing  # เช็คปฏิทินไม่ได้ — สมมติทุกตัวอาจขาด ให้ yfinance gap-fill ตัดสินเอง
+
+    fast_done = set()
+    if asof and prev_trading_date:
+        # fast path: ตัวที่ขาดพอดี 1 วันเทรด (แท่งสุดท้ายตรงกับ "วันก่อนวันล่าสุด" จริง)
+        # ใช้ fetch_quotes_batch ตรงๆ (snapshot วันเดียว เร็ว <1s) เหมือน TH Quick Update
+        # fast path — ปลอดภัยเฉพาะกรณีขาดแค่ 1 วัน ไม่งั้นจะเติมข้าม gap หลายวันไปเงียบๆ
+        fast_tickers = [t for t in need_update if last_dates[t] == prev_trading_date]
+        if fast_tickers:
+            try:
+                from sources.set_api import fetch_quotes_batch
+                quotes = fetch_quotes_batch(fast_tickers)
+                idx = pd.DatetimeIndex([pd.Timestamp(asof)])
+                fast_data = {}
+                for t, q in quotes.items():
+                    old = etf_store.get_closes_map(BASE_DIR, t, [last_dates[t]]).get(last_dates[t])
+                    # sanity: prior ต้องใกล้เคียงราคาปิดเดิมใน DB — กัน SET API คืน
+                    # ข้อมูลเพี้ยน/คนละตัวลงผิด ticker
+                    if old and q["prior"] is not None and abs(q["prior"] - old) / old > 0.02:
+                        continue
+                    fast_data[t] = {
+                        "open":   pd.Series([q["open"]],   index=idx),
+                        "high":   pd.Series([q["high"]],   index=idx),
+                        "low":    pd.Series([q["low"]],    index=idx),
+                        "close":  pd.Series([q["close"]],  index=idx),
+                        "volume": pd.Series([q["volume"]], index=idx),
+                    }
+                if fast_data:
+                    etf_store.upsert_bars(BASE_DIR, fast_data)
+                    fast_done = set(fast_data.keys())
+                    print(f"[ETF] SET API fast path: {len(fast_data)}/{len(fast_tickers)} ตัว (asof={asof})")
+            except Exception as ex:
+                print(f"[ETF] SET API fast path ล้มเหลว: {ex}")
+
+    remaining = [t for t in need_update if t not in fast_done]
+    if remaining:
+        # เหลือ (ขาดเกิน 1 วันเทรด/fast path พลาด/เช็คปฏิทินไม่ได้) — yfinance gap-fill
+        # เต็ม OHLC ก่อน (เผื่อ ETF ตัวไหนหยุดพักเทรดมานาน ต้องดึงย้อนหลังหลายวัน)
+        start = min(last_dates[t] for t in remaining)
+        try:
+            gap = fetch_gap_batch(remaining, start)
+        except Exception as ex:
+            print(f"[ETF] yfinance gap-fill ล้มเหลว: {ex}")
+            gap = {}
+        if gap:
+            etf_store.upsert_bars(BASE_DIR, gap)
+            print(f"[ETF] yfinance gap-fill: {len(gap)}/{len(remaining)} ตัว")
+
+    # ปิดท้าย: เช็คซ้ำว่ายังมีตัวไหนล้าหลัง asof อยู่ไหม (yfinance อาจคืนข้อมูลมาบ้างแต่
+    # ยังไม่ทันวันล่าสุดจริง — เจอได้กับ ETF เทรดเบาที่ Yahoo ปล่อยแท่งช้าหลายวันติด ไม่ใช่
+    # แค่วันเดียว) เติมส่วนที่เหลือผ่าน SET API chart-quotation จนกว่าจะครบ/หมดหนทาง
+    if asof:
+        stuck = [t for t in need_update
+                 if etf_store.get_last_dates(BASE_DIR).get(t, "") < asof]
+        if stuck:
+            try:
+                from sources.set_api import fetch_price_history_batch
+                last_now = etf_store.get_last_dates(BASE_DIR)
+                fb = fetch_price_history_batch(stuck, min(last_now.get(t, "1900-01-01") for t in stuck))
+                if fb:
+                    etf_store.upsert_bars(BASE_DIR, fb)
+                    print(f"[ETF] SET API chart-quotation เติมส่วนที่ยังล้าหลัง: {len(fb)}/{len(stuck)} ตัว")
+            except Exception as ex:
+                print(f"[ETF] SET API chart-quotation เติมส่วนที่เหลือล้มเหลว: {ex}")
+
+
 def _etf_do_rebuild():
-    import yfinance as yf
     import pandas as pd
     from datetime import datetime as _dt
+    from core import etf_store
 
     try:
         etf_list = fetch_etf_list_live()
@@ -964,73 +1092,33 @@ def _etf_do_rebuild():
             "pnav_ratio", "mkt_cap", "aum", "value_traded", "dividend", "xd_date",
             "market_maker", "is_lna")} for s in prev]
 
-    yf_tickers = [f"{e['symbol']}.BK" for e in etf_list]
     try:
-        raw = yf.download(
-            yf_tickers, period="max", auto_adjust=True, progress=False,
-            group_by="ticker", threads=True,
-        )
-        is_multi = len(yf_tickers) > 1
+        _etf_price_update([e["symbol"] for e in etf_list])
     except Exception as ex:
-        # yfinance ล่มทั้งกระดาน (rate limit/network) — อย่าปล่อยให้ทั้งเมนู ETF หายไปเฉยๆ
-        # ตกไปใช้ SET API chart-quotation แทนทุกตัว (ดู fallback ด้านล่าง) เหมือน Quick
-        # Update ของหุ้นไทย (services/refresh.py::run_quick_update)
-        print(f"[ETF] yfinance ล่มทั้งกระดาน ({ex}) — fallback ราคาผ่าน SET API")
-        raw = None
-        is_multi = False
-
-    def _series(yticker, field):
-        if raw is None:
-            return pd.Series(dtype=float)
-        try:
-            s = raw[yticker][field] if is_multi else raw[field]
-            return s.dropna()
-        except (KeyError, TypeError):
-            return pd.Series(dtype=float)
-
-    # SET API chart-quotation เป็น fallback ราคาต่อตัว (ดึงล่วงหน้าเฉพาะตัวที่ yfinance
-    # ไม่มีข้อมูลพอ) — รองรับ period ยาวสุดแค่ 1Y ~363 วันปฏิทินจริง (ดู sources/set_api.py)
-    # ต่างจากยาวหลายปีของ yfinance ดังนั้น ETF ที่ใช้ fallback นี้จะได้ ret_1y/ret_3y/ret_5y/ATH
-    # เป็น None (ไม่ครบ 365 วันพอดี) แต่ตัวสั้นกว่า (ret_1m/3m/6m/YTD/EMA/RS) ยังคำนวณได้ปกติ
-    # — ยังดีกว่าตัวนั้นหายไปจากทั้งเมนูเฉยๆ
-    missing_syms = [e["symbol"] for e in etf_list
-                    if len(_series(f"{e['symbol']}.BK", "Close")) < 2]
-    set_fallback = {}
-    if missing_syms:
-        from sources.set_api import fetch_price_history_batch
-        fb_tickers = [f"{s}.BK" for s in missing_syms]
-        # 400 วัน (ไม่ใช่ 365) กันตัด — chart-quotation period="1Y" คืนข้อมูลย้อนหลังจริง
-        # ~364 วันปฏิทิน พอดีกับ ret_1y (calc_return_calendar ต้องการแท่งที่ >= 365 วันก่อน
-        # แท่งล่าสุด) ถ้า start_date ตัดใกล้เกินไปแท่งเก่าสุดจะโดน filter ทิ้งจน ret_1y เป็น
-        # None ทั้งที่ SET มีข้อมูลพอจริงๆ
-        start_date = (pd.Timestamp.now() - pd.Timedelta(days=400)).strftime("%Y-%m-%d")
-        try:
-            set_fallback = fetch_price_history_batch(fb_tickers, start_date)
-            print(f"[ETF] SET API fallback: ได้ราคา {len(set_fallback)}/{len(missing_syms)} ตัว")
-        except Exception as ex:
-            print(f"[ETF] SET API fallback ล้มเหลว: {ex}")
+        print(f"[ETF] อัพเดทราคาลง etf_prices.db ล้มเหลว: {ex} — ใช้ข้อมูลเท่าที่มีใน DB เดิม")
 
     results = []
     price_failed = []
     for e in etf_list:
         yticker = f"{e['symbol']}.BK"
         try:
-            close  = _series(yticker, "Close")
-            open_s = _series(yticker, "Open")
-            high_s = _series(yticker, "High")
-            low_s  = _series(yticker, "Low")
-            vol_s  = _series(yticker, "Volume")
+            series = etf_store.get_ohlc_series(BASE_DIR, yticker)
+            if not series or len(series["closes"]) < 2:
+                price_failed.append(e["symbol"])
+                continue
+
+            idx = pd.DatetimeIndex(pd.to_datetime(series["dates"]))
+            close  = pd.Series(series["closes"],  index=idx, dtype=float)
+            # แท่งที่มาจาก SET API chart-quotation ล้วน (fallback/backfill สำรอง) ไม่มี
+            # OHLC แยก เก็บเป็น NULL ไว้ — เติม open/high/low ที่ขาดด้วย close วันนั้นแทน
+            open_s = pd.Series(series["opens"], index=idx, dtype=float).fillna(close)
+            high_s = pd.Series(series["highs"], index=idx, dtype=float).fillna(close)
+            low_s  = pd.Series(series["lows"],  index=idx, dtype=float).fillna(close)
+            vol_s  = pd.Series(series["volumes"], index=idx, dtype=float).fillna(0)
+
             if len(close) < 2:
-                fb = set_fallback.get(yticker)
-                if fb is not None and len(fb.get("close", [])) >= 2:
-                    # chart-quotation ไม่มี OHLC แยก มีแค่ราคาปิด+volume — ใช้ close
-                    # แทน open/high/low ทั้งหมด (ยังคำนวณ EMA/return/RS ได้ปกติ)
-                    close  = fb["close"]
-                    vol_s  = fb["volume"]
-                    open_s = high_s = low_s = close
-                else:
-                    price_failed.append(e["symbol"])
-                    continue
+                price_failed.append(e["symbol"])
+                continue
 
             price = float(close.iloc[-1])
             prev  = float(close.iloc[-2])
@@ -1104,7 +1192,7 @@ def _etf_do_rebuild():
 
             # Premium/Discount ต่อ NAV จริง — SET ให้แค่ pnavRatio ("P/NAV เท่า" ผลหาร
             # ไม่ใช่ % ส่วนต่าง เช่น TDEX pnavRatio=1.29 แต่ premium จริง = -0.34%) คำนวณเองจาก
-            # ราคาปิด(yfinance) เทียบ nav(SET ณ nav_date, ปกติ T-1) แทน ไม่ใช้ pnavRatio ดิบ
+            # ราคาปิดล่าสุด (etf_prices.db) เทียบ nav(SET ณ nav_date, ปกติ T-1) แทน ไม่ใช้ pnavRatio ดิบ
             nav_val = e.get("nav")
             premium_pct = round((price - nav_val) / nav_val * 100, 2) if nav_val else None
 
@@ -1181,12 +1269,17 @@ def _etf_do_rebuild():
 @app.route("/api/etf-history/<symbol>")
 def get_etf_history(symbol):
     """คืน dates+closes เต็ม สำหรับกราฟ full-history ใน chart modal — เสิร์ฟจาก
-    _etf_cache ก่อน (ไม่ fetch ซ้ำ) fallback yfinance ตรงถ้า cache ไม่มี"""
+    _etf_cache ก่อน (ไม่ fetch ซ้ำ) fallback etf_prices.db แล้วค่อย yfinance ตรง
+    เป็นทางสุดท้าย (เช่น ETF ตัวใหม่ที่ยังไม่เคยรัน rebuild เข้า DB เลย)"""
     cached = _etf_cache.get("result")
     if cached:
         for s in cached.get("stocks", []):
             if s.get("symbol") == symbol:
                 return jsonify({"dates": s.get("dates", []), "closes": s.get("closes", [])})
+    from core import etf_store
+    series = etf_store.get_ohlc_series(BASE_DIR, f"{symbol}.BK")
+    if series and series.get("closes"):
+        return jsonify({"dates": series["dates"], "closes": series["closes"]})
     try:
         import yfinance as yf
         hist = yf.Ticker(f"{symbol}.BK").history(period="max", auto_adjust=True)
@@ -2209,10 +2302,13 @@ def resolve_yf(symbol):
 
 @app.route("/api/live-price/<symbol>")
 def live_price(symbol):
-    """ราคาล่าสุดจาก Yahoo Finance แบบเบา (fast_info — ไม่โหลด history เต็ม) ใช้คำนวณ
-    PE/PBV band แบบสด ("มูลค่าเทียบอดีตตัวเอง") ในหน้างบการเงิน — งวด Finnomena
-    ล่าสุดอาจเป็นราคา ณ สิ้นไตรมาสที่ผ่านมาแล้ว ไม่ใช่ราคาวันนี้"""
-    import yfinance as yf
+    """ราคาล่าสุด ใช้คำนวณ PE/PBV band แบบสด ("มูลค่าเทียบอดีตตัวเอง") ในหน้างบการเงิน —
+    งวด Finnomena ล่าสุดอาจเป็นราคา ณ สิ้นไตรมาสที่ผ่านมาแล้ว ไม่ใช่ราคาวันนี้ · ยังใช้เป็น
+    "⚡ อัพเดทราคาล่าสุด" ของ ETF/DR/Watchlist ด้วย
+
+    หุ้น/ETF ที่จดทะเบียนบน SET ตรง (ไม่ใช่ DR/mirror ต่างประเทศ) ลอง SET API ก่อนเสมอ —
+    เร็วกว่า Yahoo มาก (~1s vs Yahoo ที่บางช่วงช้าถึง 30-45s ตอนโดน rate limit จนปุ่มกดแล้ว
+    timeout เงียบๆ ราคาเลยค้างเป็นของเมื่อวาน) fallback yfinance เฉพาะตอน SET API พลาด"""
     sym = symbol.upper().strip()
     is_dr = request.args.get("is_dr") == "1"
     market = request.args.get("market")
@@ -2227,6 +2323,19 @@ def live_price(symbol):
             return jsonify({"sym": sym, "error": "ไม่ทราบตลาดของหุ้นนี้"}), 404
     else:
         yf_ticker = sym + ".BK"
+
+    if not is_dr and not yf_override:
+        try:
+            from sources.set_api import fetch_quotes_batch
+            q = fetch_quotes_batch([yf_ticker], min_ratio=0)
+            row = q.get(yf_ticker)
+            if row and row.get("close") is not None:
+                return jsonify({"sym": sym, "yf": yf_ticker, "price": float(row["close"]),
+                                "currency": "THB"})
+        except Exception:
+            pass  # SET API พลาด (ล่ม/หุ้นพักเทรด) — ตกไปใช้ yfinance ด้านล่างตามเดิม
+
+    import yfinance as yf
     try:
         fi = yf.Ticker(yf_ticker).fast_info
         price = getattr(fi, "last_price", None)
@@ -2649,6 +2758,43 @@ def get_financials_full(symbol):
     financials_store.upsert(BASE_DIR, sym, source, payload, is_dr=is_dr)
     data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr, market=market)
     return jsonify(_with_quality(data))
+
+
+@app.route("/api/financials-qpl-report/<symbol>")
+def get_financials_qpl_report(symbol):
+    """ตารางงบกำไรขาดทุนรายไตรมาสสไตล์ broker research (รายได้/ต้นทุนขาย/กำไรขั้นต้น/
+    SG&A แยกขาย-บริหาร/กำไรดำเนินงาน/ต้นทุนการเงิน/กำไรก่อนภาษี/ภาษี/กำไรสุทธิ) — ผสาน
+    Finnomena (ยาว ~16 ปี, บรรทัดหยาบ) + Yahoo (ละเอียดครบ, สั้นแค่ไม่กี่ไตรมาสล่าสุด)
+    ดู compute_qpl_report() ใน financials_store.py สำหรับตรรกะการผสาน"""
+    sym = symbol.upper().strip()
+    is_dr = request.args.get("is_dr") == "1"
+    market = request.args.get("market")
+
+    finn = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr, market=market)
+    if finn is None:
+        try:
+            fresh = financials_store.fetch_finnomena_quarterly(sym, is_dr=is_dr)
+            financials_store.upsert(BASE_DIR, sym, "finnomena_q", fresh, is_dr=is_dr)
+            finn = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr, market=market)
+        except Exception:
+            finn = None
+
+    yq = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, market=market)
+    if yq is None:
+        try:
+            fresh = financials_store.fetch_yahoo_quarterly(sym, is_dr=is_dr, market=market)
+            financials_store.upsert(BASE_DIR, sym, "yahoo_q", fresh, is_dr=is_dr)
+            yq = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, market=market)
+        except Exception:
+            yq = None
+
+    if not finn and not yq:
+        return jsonify({"error": f"ไม่พบข้อมูลงบการเงินของ {sym} จากทั้ง Finnomena และ Yahoo"}), 404
+
+    report = financials_store.compute_qpl_report(finn, yq)
+    report["sym"] = sym
+    report["name"] = (yq or finn or {}).get("name") or sym
+    return jsonify(report)
 
 
 _DIVIDENDS_STALE_DAYS = 30   # ตามแผน PLAN_stock_study_suite.txt งาน #5

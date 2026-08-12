@@ -93,6 +93,12 @@ jp_prices.db
 jp_prices.db-wal
 jp_prices.db-shm
 
+# SQLite ราคา ETF ที่จดทะเบียนบน SET โดยตรง — local only, regenerate อัตโนมัติ
+# (backfill เต็มครั้งแรกผ่าน yfinance แล้วอัพเดทรายวันผ่าน SET API เหมือนหุ้นไทย)
+etf_prices.db
+etf_prices.db-wal
+etf_prices.db-shm
+
 # SQLite SEC filings store (insider trades / major shareholder changes)
 sec_filings.db
 sec_filings.db-wal

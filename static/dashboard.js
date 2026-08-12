@@ -15013,7 +15013,7 @@ function _finSyncViewButton(source) {
   const m = map[source];
   if (!m) return;
   _finView = m[0];
-  document.querySelectorAll('#fin-view-finn-btn,#fin-view-fyear-btn,#fin-view-yyear-btn,#fin-view-yq-btn,#fin-view-set-btn,#fin-view-div-btn')
+  document.querySelectorAll('#fin-view-finn-btn,#fin-view-fyear-btn,#fin-view-yyear-btn,#fin-view-yq-btn,#fin-view-set-btn,#fin-view-qpl-btn,#fin-view-div-btn')
     .forEach(b => b.classList.remove('active'));
   const btn = document.getElementById(m[1]);
   if (btn) btn.classList.add('active');
@@ -15021,7 +15021,7 @@ function _finSyncViewButton(source) {
 
 function setFinView(view, btn) {
   _finView = view;
-  document.querySelectorAll('#fin-view-finn-btn,#fin-view-fyear-btn,#fin-view-yyear-btn,#fin-view-yq-btn,#fin-view-set-btn,#fin-view-div-btn')
+  document.querySelectorAll('#fin-view-finn-btn,#fin-view-fyear-btn,#fin-view-yyear-btn,#fin-view-yq-btn,#fin-view-set-btn,#fin-view-qpl-btn,#fin-view-div-btn')
     .forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('fin-result').innerHTML = '';
@@ -15060,6 +15060,14 @@ async function searchFinancials() {
     _finRecentAdd(sym, _finTab);
     history.replaceState(null, '', '#fin/' + _finTab + '/' + encodeURIComponent(sym));
     loadDividendsView(sym, isDrSym ? _finMirMarket : 'TH', hint);
+    return;
+  }
+  // ตาราง P&L รายไตรมาส — endpoint/renderer แยกจาก financials-full เหมือนมุมมองปันผล
+  // (โครงสร้างข้อมูลคนละแบบ: รายการต่อไตรมาสที่ผสาน 2 แหล่งมาแล้ว ไม่ใช่ section->field->date)
+  if (_finView === 'qpl') {
+    _finRecentAdd(sym, _finTab, isDrSym ? _finMirMarket : null);
+    history.replaceState(null, '', '#fin/' + _finTab + '/' + (isDrSym ? _finMirMarket + ':' : '') + encodeURIComponent(sym));
+    loadFinQplReport(sym, isDrSym, isDrSym ? _finMirMarket : null, hint);
     return;
   }
   // แปลงมุมมองที่ผู้ใช้เลือก -> source ที่ดึง (+ fallback ถ้าแหล่งนั้นไม่มีข้อมูลหุ้นตัวนี้)
@@ -15147,6 +15155,130 @@ async function _checkFinDQ(sym) {
     </div>`;
     box.insertBefore(callout, box.firstChild);
   } catch (e) { /* เงียบ — ไม่ใช่ฟีเจอร์หลัก */ }
+}
+
+// มุมมอง "📋 P&L รายไตรมาส" — ตาราง broker-style ผสาน Finnomena (ยาว)+Yahoo (ละเอียด)
+// ใช้ endpoint แยก /api/financials-qpl-report ไม่ใช่ financials-full (โครงสร้างข้อมูล
+// เป็นรายการต่อไตรมาสที่ผสานมาแล้ว ไม่ใช่ section->field->date) ดู compute_qpl_report()
+// ใน sources/financials_store.py
+async function loadFinQplReport(sym, isDr, market, hint) {
+  hint.textContent = 'กำลังโหลด...';
+  document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูลงบการเงิน...</div>';
+  try {
+    const qs = (isDr ? '?is_dr=1' : '') + (market ? (isDr ? '&' : '?') + 'market=' + market : '');
+    const r = await _fetchTimeout(`/api/financials-qpl-report/${encodeURIComponent(sym)}${qs}`, 25000,
+      'หมดเวลารอข้อมูล (เกิน 25 วิ) — หุ้นนี้อาจยังไม่เคย sync ในเครื่อง กำลังลองดึงสดแต่ช้าเกินไป ลองใหม่อีกครั้ง');
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    hint.textContent = '';
+    _renderFinQplReport(d);
+  } catch (e) {
+    hint.textContent = '';
+    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${e.message}</div>`;
+  }
+}
+
+// ค่าเงิน (บาท) -> หน่วยพันบาท คั่นหลักพัน — ตามธรรมเนียมตาราง broker research ของไทย
+function _qplNum(v) {
+  if (v == null || isNaN(v)) return '—';
+  return Math.round(v / 1000).toLocaleString('en-US');
+}
+// แถวต้นทุน/ภาษี แสดงติดลบด้วยวงเล็บ (ธรรมเนียมงบการเงิน) แม้ payload เก็บเป็นค่าบวก (magnitude)
+function _qplNumNeg(v) {
+  if (v == null || isNaN(v)) return '—';
+  return `(${Math.round(v / 1000).toLocaleString('en-US')})`;
+}
+function _qplPct(v) {
+  if (v == null || isNaN(v)) return '—';
+  return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+}
+
+function _renderFinQplReport(d) {
+  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const qs = d.quarters || [];
+  if (!qs.length) {
+    document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">ไม่พบข้อมูลงบไตรมาสของหุ้นนี้</div>';
+    return;
+  }
+  // จัดกลุ่มตามปี พ.ศ. -> { 2565: [Q1,Q2,Q3,Q4], ... } ช่องที่ไม่มีข้อมูลเป็น null
+  const byYear = {};
+  qs.forEach(q => { (byYear[q.year_be] = byYear[q.year_be] || [null, null, null, null])[q.q - 1] = q; });
+  const years = Object.keys(byYear).map(Number).sort((a, b) => a - b);
+  const hasCoarse = qs.some(q => !q.detail);
+
+  const yearHead = years.map(y => `<th colspan="4" style="text-align:center;background:#8b2fc9;color:#fff;padding:6px 4px;border:1px solid var(--border)">${y}</th>`).join('');
+  const qHead = years.map(y => [1, 2, 3, 4].map(qn => {
+    const cell = byYear[y][qn - 1];
+    const dim = cell && !cell.detail ? ';opacity:.65' : '';
+    const mark = cell && !cell.detail ? ' †' : '';
+    return `<th style="text-align:center;background:#c93fd6;color:#fff;padding:4px;border:1px solid var(--border);font-size:11px${dim}">Q${qn}${mark}</th>`;
+  }).join('')).join('');
+
+  const cellsOf = (getter, fmt, opts = {}) => years.map(y => [1, 2, 3, 4].map(qn => {
+    const cell = byYear[y][qn - 1];
+    const v = cell ? getter(cell) : null;
+    const dim = cell && !cell.detail ? ';color:var(--text2)' : '';
+    const hl = opts.hlYellow ? ';background:#f2c94c26' : (opts.hlGreen ? ';background:#3fb95014' : (opts.hlPeach ? ';background:#e8823014' : ''));
+    return `<td class="r" style="padding:4px 6px;border:1px solid var(--border);font-size:12px${dim}${hl}">${cell ? fmt(v) : '—'}</td>`;
+  }).join('')).join('');
+
+  const row = (label, getter, fmt, opts = {}) => `<tr>
+    <td style="padding:5px 8px;border:1px solid var(--border);font-size:12.5px;white-space:nowrap${opts.bold ? ';font-weight:700' : ''}${opts.indent ? ';padding-left:18px;color:var(--text2)' : ''}">${label}</td>
+    ${cellsOf(getter, fmt, opts)}
+  </tr>`;
+
+  const rowsHtml = [
+    row('รายได้จากการขาย', c => c.revenue, _qplNum, { bold: true }),
+    row('% growth YoY', c => c.revenue_yoy, _qplPct, { indent: true }),
+    row('ต้นทุนขาย', c => c.cogs, _qplNum),
+    row('กำไรขั้นต้น', c => c.gross_profit, _qplNum, { bold: true, hlGreen: true }),
+    row('% GPM', c => c.gpm, _qplPct, { indent: true }),
+    row('ค่าใช้จ่ายในการขาย', c => c.selling_exp, _qplNum, { hlPeach: true }),
+    row('% to Revenue', c => c.selling_pct, _qplPct, { indent: true }),
+    row('ค่าใช้จ่ายในการบริหาร', c => c.admin_exp, _qplNum, { hlPeach: true }),
+    row('% to Revenue', c => c.admin_pct, _qplPct, { indent: true }),
+    row('SG&A to Sales', c => c.sga_pct, _qplPct, { bold: true }),
+    row('รวมค่าใช้จ่าย', c => c.total_expenses, _qplNum),
+    row('กำไรจากการดำเนินงาน', c => c.operating_profit, _qplNum, { bold: true, hlYellow: true }),
+    row('ต้นทุนทางการเงิน', c => c.financial_cost, _qplNumNeg),
+    row('กำไรก่อนภาษี', c => c.pretax_profit, _qplNum, { bold: true, hlYellow: true }),
+    row('% growth YoY', c => c.pretax_yoy, _qplPct, { indent: true }),
+    row('ค่าใช้จ่ายภาษีเงินได้', c => c.tax_expense, _qplNumNeg),
+    row('% TAX', c => c.tax_pct == null ? null : -Math.abs(c.tax_pct), _qplPct, { indent: true }),
+    row('กำไรสำหรับงวด', c => c.net_profit, _qplNum, { bold: true, hlYellow: true }),
+    row('% NPM', c => c.npm, _qplPct, { indent: true }),
+  ].join('');
+
+  const caveat = hasCoarse ? `
+    <div style="margin-top:10px;font-size:11.5px;color:var(--text2);line-height:1.6">
+      † = ไตรมาสจากแหล่ง Finnomena เท่านั้น (Yahoo ยังไม่มีประวัติย้อนไปถึง) — คำนวณต้นทุนขาย/กำไรจากการดำเนินงานเองจากอัตลักษณ์ทางบัญชี (ตรงเป๊ะ)
+      แต่ <b>แยกค่าใช้จ่ายขาย/บริหารไม่ได้ และไม่มีต้นทุนทางการเงิน/กำไรก่อนภาษี/ภาษีเงินได้</b> (Finnomena ไม่ได้ให้ตัวเลขนี้มา — ปล่อยว่างไว้ ไม่ใช่ error)
+      พบด้วยว่าบางช่วงปีเก่ามาก Finnomena เก็บเฉพาะค่าใช้จ่ายบริหารไว้ในช่อง SG&A (ไม่รวมค่าใช้จ่ายขาย) — ตัวเลข SG&A/กำไรดำเนินงานของไตรมาสเก่าอาจต่ำกว่าความเป็นจริง
+      แนะนำอ้างอิงเฉพาะรายได้/กำไรขั้นต้น/กำไรสุทธิสำหรับไตรมาสที่มีเครื่องหมาย †
+    </div>` : '';
+
+  document.getElementById('fin-result').innerHTML = `
+    <div class="card" style="padding:14px 16px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:2px">${esc(d.sym)} ${d.name && d.name !== d.sym ? `— ${esc(d.name)}` : ''}</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:10px">งบกำไรขาดทุนรายไตรมาส (หน่วย: พันบาท) — ผสาน Finnomena + Yahoo Finance · เลื่อนซ้ายเพื่อดูปีเก่ากว่า</div>
+      <div id="qpl-scroll" style="overflow-x:auto">
+        <table class="tbl" style="border-collapse:collapse;min-width:600px">
+          <thead>
+            <tr><th style="border:1px solid var(--border)"></th>${yearHead}</tr>
+            <tr><th style="border:1px solid var(--border);background:var(--bg2)"></th>${qHead}</tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+      ${caveat}
+    </div>`;
+  // เริ่มที่ปีล่าสุด (ขวาสุด) เป็นค่าเริ่มต้น — ผู้ใช้เลื่อนซ้ายเองเพื่อย้อนดูปีเก่ากว่า
+  // (คอลัมน์เรียงเก่า->ใหม่ ซ้าย->ขวา เหมือนภาพต้นแบบ) รอ layout เสร็จก่อนด้วย rAF กัน
+  // scrollWidth ยังไม่นิ่งตอน DOM เพิ่งถูกแทรก
+  requestAnimationFrame(() => {
+    const box = document.getElementById('qpl-scroll');
+    if (box) box.scrollLeft = box.scrollWidth;
+  });
 }
 
 // งาน #5 Dividend History — มุมมอง "💵 ปันผล" ในหน้างบการเงิน (ใช้ endpoint แยก
@@ -17122,11 +17254,7 @@ function _drFmtCap(v) {
 
 function _drFmtPrice(p) {
   if (p == null) return '—';
-  if (p >= 10000) return p.toLocaleString('en-US', {maximumFractionDigits: 0});
-  if (p >= 1000)  return p.toLocaleString('en-US', {maximumFractionDigits: 1});
-  if (p >= 100)   return p.toFixed(2);
-  if (p >= 10)    return p.toFixed(3);
-  return p.toFixed(4);
+  return p.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 }
 
 // ราคาล่าสุดที่ยังไม่นิ่ง (pre-market/กำลังเทรด) — โชว์คู่กับราคาปิดหลักที่ freeze

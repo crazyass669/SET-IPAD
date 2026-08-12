@@ -984,6 +984,133 @@ def compute_quarterly_growth(payload_yahoo_q):
     }
 
 
+_QTR_MONTH = {3: 1, 6: 2, 9: 3, 12: 4}   # เดือนสิ้นงวด -> ไตรมาสปฏิทิน (บริษัทไทยส่วนใหญ่ FYE ธ.ค.)
+
+
+def compute_qpl_report(payload_finn_q, payload_yahoo_q):
+    """ตาราง 'งบกำไรขาดทุนรายไตรมาส' สไตล์ broker research (รายได้/ต้นทุนขาย/กำไรขั้นต้น/
+    SG&A แยกขาย-บริหาร/กำไรดำเนินงาน/ต้นทุนการเงิน/กำไรก่อนภาษี/ภาษี/กำไรสุทธิ + %YoY) —
+    ผสาน 2 แหล่ง เพราะไม่มีแหล่งเดียวที่ให้ทั้งประวัติยาวและรายละเอียดครบ:
+
+    - Finnomena (finnomena_q): ยาว ~16 ปีแต่มีแค่ รายได้/กำไรขั้นต้น/SG&A รวม/กำไรสุทธิ
+      -> คำนวณต้นทุนขาย (Revenue-Gross Profit) และกำไรดำเนินงาน (Gross Profit-SG&A) เองได้
+      แบบ 'ตรงเป๊ะ' ตามหลักบัญชี (ไม่ใช่ประมาณการ) แต่แยกค่าใช้จ่ายขาย/บริหารไม่ได้ และไม่มี
+      ต้นทุนทางการเงิน/กำไรก่อนภาษี/ภาษี (ปล่อย None — Finnomena ไม่ได้ให้ตัวเลขนี้มาเลย)
+    - Yahoo (yahoo_q): มีครบทุกบรรทัดตรงตัว แต่สะสมได้แค่ไม่กี่ไตรมาสล่าสุดต่อรอบ sync
+      (yfinance ไม่มีทาง backfill ไตรมาสเก่าที่ไม่เคยดึงไว้) — ทับ Finnomena ทุกงวดที่มีข้อมูล
+      เพราะละเอียดกว่า ใช้ field จริงตรงๆ (Operating Income/Interest Expense/Pretax Income/
+      Tax Provision) ไม่ derive เอง เผื่อบริษัทมีรายการนอกเหนือ COGS+SG&A (เช่น other income)
+      ซึ่งทำให้ผลรวมบรรทัดใน Yahoo อาจไม่ reconcile เป๊ะ 100% เหมือนงวด Finnomena-only
+
+    คืน {"quarters": [...]} เรียงเก่า->ใหม่ ทุก entry มี "source": "finnomena"|"yahoo" +
+    "detail": bool (True = มีครบทุกบรรทัดจาก Yahoo, False = ประมาณจาก Finnomena บางบรรทัด)"""
+
+    def _f(v):
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _pct_change(cur, prev):
+        if cur is None or prev is None or prev == 0:
+            return None
+        return round((cur - prev) / abs(prev) * 100, 2)
+
+    def _safe_pct(num, den):
+        if num is None or den is None or den == 0:
+            return None
+        return round(num / den * 100, 2)
+
+    combined = {}   # (year_ad, q) -> row dict
+
+    # ── ชั้น 1: Finnomena — คลุมทุกไตรมาสที่มีประวัติ (คำนวณต้นทุน/กำไรดำเนินงานเองจาก
+    # อัตลักษณ์ทางบัญชี: COGS = Revenue-GrossProfit, Operating = GrossProfit-SG&A) ──
+    if payload_finn_q:
+        inc = payload_finn_q.get("income", {})
+        rev_m = inc.get("Total Revenue", {})
+        gp_m  = inc.get("Gross Profit", {})
+        ni_m  = inc.get("Net Income", {})
+        sga_m = inc.get("Selling General And Administration", {})
+        for d in set(rev_m) | set(gp_m) | set(ni_m) | set(sga_m):
+            try:
+                y, m = int(d[:4]), int(d[5:7])
+            except (TypeError, ValueError):
+                continue
+            q = _QTR_MONTH.get(m)
+            if not q:
+                continue
+            r, g, n, s = _f(rev_m.get(d)), _f(gp_m.get(d)), _f(ni_m.get(d)), _f(sga_m.get(d))
+            cogs = (r - g) if (r is not None and g is not None) else None
+            op   = (g - s) if (g is not None and s is not None) else None
+            total_exp = (cogs + s) if (cogs is not None and s is not None) else None
+            combined[(y, q)] = {
+                "year_ad": y, "q": q, "date": d, "source": "finnomena", "detail": False,
+                "revenue": r, "cogs": cogs, "gross_profit": g,
+                "selling_exp": None, "admin_exp": None, "sga_total": s,
+                "total_expenses": total_exp, "operating_profit": op,
+                "financial_cost": None, "pretax_profit": None,
+                "tax_expense": None, "net_profit": n,
+            }
+
+    # ── ชั้น 2: Yahoo — ทับทุกงวดที่มี (ละเอียดกว่า ใช้ field จริงตรงๆ ไม่ derive) ──
+    if payload_yahoo_q:
+        inc = payload_yahoo_q.get("income", {})
+        def g(field, d):
+            return _f(inc.get(field, {}).get(d))
+        rev_m = inc.get("Total Revenue", {})
+        for d in rev_m:
+            try:
+                y, m = int(d[:4]), int(d[5:7])
+            except (TypeError, ValueError):
+                continue
+            q = _QTR_MONTH.get(m)
+            if not q:
+                continue
+            r     = g("Total Revenue", d)
+            cogs  = g("Cost Of Revenue", d)
+            gp_   = g("Gross Profit", d)
+            if gp_ is None and r is not None and cogs is not None:
+                gp_ = r - cogs
+            sell  = g("Selling And Marketing Expense", d)
+            admin = g("General And Administrative Expense", d)
+            sga_combo = g("Selling General And Administration", d)
+            if sga_combo is not None:
+                sga_total = sga_combo
+            elif sell is not None or admin is not None:
+                sga_total = (sell or 0) + (admin or 0)
+            else:
+                sga_total = None
+            op = g("Operating Income", d)
+            if op is None and gp_ is not None and sga_total is not None:
+                op = gp_ - sga_total
+            total_exp = (cogs + sga_total) if (cogs is not None and sga_total is not None) else None
+            combined[(y, q)] = {
+                "year_ad": y, "q": q, "date": d, "source": "yahoo", "detail": True,
+                "revenue": r, "cogs": cogs, "gross_profit": gp_,
+                "selling_exp": sell, "admin_exp": admin, "sga_total": sga_total,
+                "total_expenses": total_exp, "operating_profit": op,
+                "financial_cost": g("Interest Expense", d), "pretax_profit": g("Pretax Income", d),
+                "tax_expense": g("Tax Provision", d), "net_profit": g("Net Income", d),
+            }
+
+    out = []
+    for key in sorted(combined.keys()):
+        row = combined[key]
+        prior = combined.get((key[0] - 1, key[1]))   # ไตรมาสเดียวกันปีก่อน (YoY)
+        rev, pretax = row["revenue"], row["pretax_profit"]
+        row["year_be"] = row["year_ad"] + 543
+        row["revenue_yoy"] = _pct_change(rev, prior["revenue"] if prior else None)
+        row["gpm"] = _safe_pct(row["gross_profit"], rev)
+        row["selling_pct"] = _safe_pct(row["selling_exp"], rev)
+        row["admin_pct"] = _safe_pct(row["admin_exp"], rev)
+        row["sga_pct"] = _safe_pct(row["sga_total"], rev)
+        row["pretax_yoy"] = _pct_change(pretax, prior["pretax_profit"] if prior else None) if pretax is not None else None
+        row["tax_pct"] = _safe_pct(row["tax_expense"], pretax)
+        row["npm"] = _safe_pct(row["net_profit"], rev)
+        out.append(row)
+    return {"quarters": out}
+
+
 # ============================================================
 # Fetch — SET.or.th (ทุก field จาก company-highlight)
 # ============================================================
