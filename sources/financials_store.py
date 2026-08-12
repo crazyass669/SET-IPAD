@@ -174,6 +174,24 @@ def _merge_set_payload(old, new):
     return merged
 
 
+def _merge_set_qpl_payload(old, new):
+    """ผสานงวด SET official (ตาราง P&L รายไตรมาส) ใหม่เข้ากับที่เก็บสะสมไว้ — periods endpoint
+    ของ SET มีแค่ปีปัจจุบัน+ปีก่อนหน้าเท่านั้น (เช็คแล้ว 2026-08-12) พองวดเก่าเลื่อนหลุดออกจาก
+    periods list ข้อมูลละเอียด (COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี) ของงวดนั้นดึงซ้ำไม่ได้อีกเลย
+    ต้องเก็บสะสมถาวรทุกรอบ sync (หลักการเดียวกับ yahoo_q ที่ yfinance backfill ย้อนหลังไม่ได้)
+    งวดที่เคย detail=True ห้ามถูกทับด้วยของใหม่ที่หยาบกว่า (detail=False) — เผื่อรอบ fetch ถัดไป
+    period นั้นหลุดจาก periods list แล้วเหลือแค่ระดับ chart"""
+    if old is None:
+        return new
+    merged_q = dict(old.get("quarters", {}))
+    for key, row in new.get("quarters", {}).items():
+        old_row = merged_q.get(key)
+        if old_row and old_row.get("detail") and not row.get("detail"):
+            continue
+        merged_q[key] = row
+    return {"quarters": merged_q}
+
+
 def upsert(base_dir, symbol, source, payload, is_dr=False):
     """เขียน payload ลง DB แบบ 'ผสานกับของเก่า' ไม่ใช่เขียนทับทั้งก้อน — สะสม
     ประวัติย้อนหลังไปเรื่อยๆ แม้ Yahoo/SET.or.th จะให้ย้อนหลังจำกัดแค่ ~4-5 ปีต่อครั้งก็ตาม
@@ -186,6 +204,8 @@ def upsert(base_dir, symbol, source, payload, is_dr=False):
         merged = _merge_yahoo_payload(old, payload)
     elif source == "set":
         merged = _merge_set_payload(old, payload)
+    elif source == "set_qpl":
+        merged = _merge_set_qpl_payload(old, payload)
     else:
         merged = payload
     con = _connect(base_dir)
@@ -987,23 +1007,47 @@ def compute_quarterly_growth(payload_yahoo_q):
 _QTR_MONTH = {3: 1, 6: 2, 9: 3, 12: 4}   # เดือนสิ้นงวด -> ไตรมาสปฏิทิน (บริษัทไทยส่วนใหญ่ FYE ธ.ค.)
 
 
-def compute_qpl_report(payload_finn_q, payload_yahoo_q):
+_QPL_FIELDS = ("revenue", "cogs", "gross_profit", "selling_exp", "admin_exp", "sga_total",
+               "total_expenses", "operating_profit", "financial_cost", "pretax_profit",
+               "tax_expense", "net_profit")
+
+
+def _qpl_merge_layer(combined, layer_rows, source_name):
+    """เขียน layer_rows ({(year_ad,q): row}) ทับ combined ทีละ field เฉพาะ field ที่ layer นี้
+    มีค่า (ไม่ใช่ None) — ทำให้ layer ที่มาทีหลัง (แม่น/ละเอียดกว่า) อัพเกรดทีละช่องได้โดยไม่ล้าง
+    ของเก่าที่ layer ก่อนหน้าเคยมีแต่ layer นี้ไม่มี (เช่น SET-chart หยาบมีแค่ revenue/cogs/
+    net_profit — ไม่ควรไปล้าง selling_exp/financial_cost ที่ Yahoo เคยเติมไว้ก่อนหน้า)"""
+    for key, row in layer_rows.items():
+        dest = combined.setdefault(key, {"year_ad": key[0], "q": key[1], "detail": False})
+        for f in _QPL_FIELDS:
+            v = row.get(f)
+            if v is not None:
+                dest[f] = v
+        if row.get("selling_exp") is not None or row.get("admin_exp") is not None:
+            dest["detail"] = True
+        dest["source"] = source_name
+
+
+def compute_qpl_report(payload_finn_q, payload_yahoo_q, set_series=None):
     """ตาราง 'งบกำไรขาดทุนรายไตรมาส' สไตล์ broker research (รายได้/ต้นทุนขาย/กำไรขั้นต้น/
     SG&A แยกขาย-บริหาร/กำไรดำเนินงาน/ต้นทุนการเงิน/กำไรก่อนภาษี/ภาษี/กำไรสุทธิ + %YoY) —
-    ผสาน 2 แหล่ง เพราะไม่มีแหล่งเดียวที่ให้ทั้งประวัติยาวและรายละเอียดครบ:
+    ผสาน 3 แหล่งแบบ field-level (เขียนทับทีละช่อง ไม่ใช่ทั้งแถว) เรียงจากหยาบ->ละเอียด/แม่นสุด
+    เพราะไม่มีแหล่งเดียวให้ทั้งประวัติยาว+รายละเอียดครบ+ความแม่นระดับทางการพร้อมกัน:
 
-    - Finnomena (finnomena_q): ยาว ~16 ปีแต่มีแค่ รายได้/กำไรขั้นต้น/SG&A รวม/กำไรสุทธิ
-      -> คำนวณต้นทุนขาย (Revenue-Gross Profit) และกำไรดำเนินงาน (Gross Profit-SG&A) เองได้
-      แบบ 'ตรงเป๊ะ' ตามหลักบัญชี (ไม่ใช่ประมาณการ) แต่แยกค่าใช้จ่ายขาย/บริหารไม่ได้ และไม่มี
-      ต้นทุนทางการเงิน/กำไรก่อนภาษี/ภาษี (ปล่อย None — Finnomena ไม่ได้ให้ตัวเลขนี้มาเลย)
-    - Yahoo (yahoo_q): มีครบทุกบรรทัดตรงตัว แต่สะสมได้แค่ไม่กี่ไตรมาสล่าสุดต่อรอบ sync
-      (yfinance ไม่มีทาง backfill ไตรมาสเก่าที่ไม่เคยดึงไว้) — ทับ Finnomena ทุกงวดที่มีข้อมูล
-      เพราะละเอียดกว่า ใช้ field จริงตรงๆ (Operating Income/Interest Expense/Pretax Income/
-      Tax Provision) ไม่ derive เอง เผื่อบริษัทมีรายการนอกเหนือ COGS+SG&A (เช่น other income)
-      ซึ่งทำให้ผลรวมบรรทัดใน Yahoo อาจไม่ reconcile เป๊ะ 100% เหมือนงวด Finnomena-only
+    1. Finnomena (finnomena_q): ยาว ~16 ปีแต่มีแค่ รายได้/กำไรขั้นต้น/SG&A รวม/กำไรสุทธิ ->
+       คำนวณต้นทุนขาย/กำไรดำเนินงานเองจากอัตลักษณ์ทางบัญชี (Revenue-GrossProfit, GrossProfit-SGA)
+       ไม่มีต้นทุนทางการเงิน/กำไรก่อนภาษี/ภาษี (Finnomena ไม่ได้ให้ตัวเลขนี้มาเลย)
+    2. Yahoo (yahoo_q): ครบทุกบรรทัดตรงตัว แต่สะสมได้แค่ไม่กี่ไตรมาสล่าสุดต่อรอบ sync (yfinance
+       ไม่มีทาง backfill ไตรมาสเก่าที่ไม่เคยดึงไว้)
+    3. SET official (set_series, ดู fetch_set_qpl_series): ผสาน 2 ชั้นย่อยมาแล้ว — chart 5 ปี
+       หยาบ (revenue/cogs/gross_profit/net_profit จาก grossProfitMargin — ไม่ derive sga เพราะ
+       totalExpense ของ SET ปนค่าใช้จ่ายอื่นมาด้วย) + detail งวดล่าสุด/อนุพันธ์จากงวดสะสม (COGS/
+       SG&A แยกขาย-บริหาร/ต้นทุนการเงิน/ภาษี ตรงจากบัญชีที่บริษัทยื่นจริง) — เป็นชั้นที่แม่นสุด
+       (ทางการ, เช็คแล้วตรงกับ Yahoo เป๊ะในช่อง COGS/selling/admin กับ 5 หุ้นสุ่ม 2026-08-12)
+       เขียนทับ Yahoo/Finnomena เฉพาะ field ที่มีจริง ไม่ล้าง field อื่นที่ชั้นก่อนหน้ามี
 
-    คืน {"quarters": [...]} เรียงเก่า->ใหม่ ทุก entry มี "source": "finnomena"|"yahoo" +
-    "detail": bool (True = มีครบทุกบรรทัดจาก Yahoo, False = ประมาณจาก Finnomena บางบรรทัด)"""
+    คืน {"quarters": [...]} เรียงเก่า->ใหม่ ทุก entry มี "source" (ชื่อ layer ล่าสุดที่แตะแถวนี้)
+    + "detail": bool (True = มีแยกค่าใช้จ่ายขาย/บริหาร จาก Yahoo หรือ SET detail)"""
 
     def _f(v):
         try:
@@ -1025,6 +1069,7 @@ def compute_qpl_report(payload_finn_q, payload_yahoo_q):
 
     # ── ชั้น 1: Finnomena — คลุมทุกไตรมาสที่มีประวัติ (คำนวณต้นทุน/กำไรดำเนินงานเองจาก
     # อัตลักษณ์ทางบัญชี: COGS = Revenue-GrossProfit, Operating = GrossProfit-SG&A) ──
+    finn_layer = {}
     if payload_finn_q:
         inc = payload_finn_q.get("income", {})
         rev_m = inc.get("Total Revenue", {})
@@ -1043,16 +1088,16 @@ def compute_qpl_report(payload_finn_q, payload_yahoo_q):
             cogs = (r - g) if (r is not None and g is not None) else None
             op   = (g - s) if (g is not None and s is not None) else None
             total_exp = (cogs + s) if (cogs is not None and s is not None) else None
-            combined[(y, q)] = {
-                "year_ad": y, "q": q, "date": d, "source": "finnomena", "detail": False,
+            finn_layer[(y, q)] = {
                 "revenue": r, "cogs": cogs, "gross_profit": g,
-                "selling_exp": None, "admin_exp": None, "sga_total": s,
-                "total_expenses": total_exp, "operating_profit": op,
-                "financial_cost": None, "pretax_profit": None,
-                "tax_expense": None, "net_profit": n,
+                "sga_total": s, "total_expenses": total_exp, "operating_profit": op,
+                "net_profit": n,
             }
+    _qpl_merge_layer(combined, finn_layer, "finnomena")
 
-    # ── ชั้น 2: Yahoo — ทับทุกงวดที่มี (ละเอียดกว่า ใช้ field จริงตรงๆ ไม่ derive) ──
+    # ── ชั้น 2: Yahoo — ครบทุกบรรทัดตรงตัว ใช้ field จริงตรงๆ ไม่ derive (เผื่อบริษัทมีรายการ
+    # นอกเหนือ COGS+SG&A เช่น other income ซึ่งทำให้ผลรวมบรรทัดอาจไม่ reconcile เป๊ะ 100%) ──
+    yahoo_layer = {}
     if payload_yahoo_q:
         inc = payload_yahoo_q.get("income", {})
         def g(field, d):
@@ -1084,31 +1129,245 @@ def compute_qpl_report(payload_finn_q, payload_yahoo_q):
             if op is None and gp_ is not None and sga_total is not None:
                 op = gp_ - sga_total
             total_exp = (cogs + sga_total) if (cogs is not None and sga_total is not None) else None
-            combined[(y, q)] = {
-                "year_ad": y, "q": q, "date": d, "source": "yahoo", "detail": True,
+            yahoo_layer[(y, q)] = {
                 "revenue": r, "cogs": cogs, "gross_profit": gp_,
                 "selling_exp": sell, "admin_exp": admin, "sga_total": sga_total,
                 "total_expenses": total_exp, "operating_profit": op,
                 "financial_cost": g("Interest Expense", d), "pretax_profit": g("Pretax Income", d),
                 "tax_expense": g("Tax Provision", d), "net_profit": g("Net Income", d),
             }
+    _qpl_merge_layer(combined, yahoo_layer, "yahoo")
+
+    # ── ชั้น 3: SET official — แม่นสุด (ทางการ) เขียนทับเฉพาะ field ที่มีจริง (ดู docstring) ──
+    if set_series:
+        _qpl_merge_layer(combined, set_series, "set")
 
     out = []
     for key in sorted(combined.keys()):
         row = combined[key]
         prior = combined.get((key[0] - 1, key[1]))   # ไตรมาสเดียวกันปีก่อน (YoY)
-        rev, pretax = row["revenue"], row["pretax_profit"]
+        rev, pretax = row.get("revenue"), row.get("pretax_profit")
         row["year_be"] = row["year_ad"] + 543
-        row["revenue_yoy"] = _pct_change(rev, prior["revenue"] if prior else None)
-        row["gpm"] = _safe_pct(row["gross_profit"], rev)
-        row["selling_pct"] = _safe_pct(row["selling_exp"], rev)
-        row["admin_pct"] = _safe_pct(row["admin_exp"], rev)
-        row["sga_pct"] = _safe_pct(row["sga_total"], rev)
-        row["pretax_yoy"] = _pct_change(pretax, prior["pretax_profit"] if prior else None) if pretax is not None else None
-        row["tax_pct"] = _safe_pct(row["tax_expense"], pretax)
-        row["npm"] = _safe_pct(row["net_profit"], rev)
+        row["revenue_yoy"] = _pct_change(rev, prior.get("revenue") if prior else None)
+        row["gpm"] = _safe_pct(row.get("gross_profit"), rev)
+        row["selling_pct"] = _safe_pct(row.get("selling_exp"), rev)
+        row["admin_pct"] = _safe_pct(row.get("admin_exp"), rev)
+        row["sga_pct"] = _safe_pct(row.get("sga_total"), rev)
+        row["pretax_yoy"] = _pct_change(pretax, prior.get("pretax_profit") if prior else None) if pretax is not None else None
+        row["tax_pct"] = _safe_pct(row.get("tax_expense"), pretax)
+        row["npm"] = _safe_pct(row.get("net_profit"), rev)
         out.append(row)
     return {"quarters": out}
+
+
+def _set_qpl_amt_map(payload):
+    """{accountName: amount} — คูณ 1000 ทุกค่า เพราะ financialstatement ของ SET รายงานเป็น
+    'พันบาท' (เช็คแล้ว: รวมรายได้ PTT ตรงกับ company-highlight เป๊ะโดยไม่ต้องหารเพิ่ม) ต่างจาก
+    Yahoo/Finnomena ที่เก็บเป็นหน่วยบาทดิบ — ถ้าไม่ปรับหน่วยตรงนี้ field-level merge ใน
+    compute_qpl_report จะได้แถวที่ปนหน่วยกัน (revenue จาก SET เป็นพันบาท แต่ selling_exp จาก
+    Yahoo เป็นบาทดิบ ในไตรมาสเดียวกัน) พังทั้งตาราง"""
+    return {a.get("accountName"): (a["amount"] * 1000 if a.get("amount") is not None else None)
+            for a in (payload or {}).get("accounts", [])}
+
+
+def _set_qpl_row_from_amt(amt):
+    """แปลง {accountName: amount} (จาก fetch_financial_statement หรือผลลบงวดสะสม) เป็น
+    raw-row เดียวกับ layer อื่นใน compute_qpl_report — จับคู่ด้วยชื่อบัญชีเพราะเช็คแล้วชื่อ
+    เหมือนกันข้ามบริษัทที่สุ่มทดสอบ (5 ตัว 2026-08-12) ทนกว่า accountCode เผื่อบางบริษัทจัด
+    schema เลขบัญชีต่าง — คืน None ถ้าไม่มีรายได้เลย (บัญชีธนาคาร/ประกันใช้ผังบัญชีคนละแบบ
+    ไม่มีรายการ 'รายได้จากการขายและให้บริการ')
+
+    กำไรสุทธิใช้ 'ส่วนผู้ถือหุ้นบริษัทใหญ่' ไม่ใช่ 'กำไรสุทธิสำหรับงวด' รวม — เช็คแล้วว่าตัวหลัง
+    รวมส่วนได้เสียที่ไม่มีอำนาจควบคุม (NCI) ด้วย ต่างจากนิยาม 'Net Income' ของ Yahoo/Finnomena/
+    company-highlight ถึง +74% ในหุ้นที่มี NCI เยอะ (SIAM, เช็ค 2026-08-12) ส่วน 'กำไรก่อนต้นทุน
+    ทางการเงินและภาษี' เป็นบรรทัดที่ SET ให้แทน 'กำไรจากการดำเนินงาน' ของเรา (ไม่มี EBT แยกต่างหาก
+    ในผังบัญชีไทย — กำไรก่อนภาษีต้อง derive เอง = บรรทัดนี้ลบต้นทุนทางการเงิน)"""
+    def g(*names):
+        for n in names:
+            v = amt.get(n)
+            if v is not None:
+                return v
+        return None
+    # 'รายได้จากการดำเนินธุรกิจ' มาก่อน — เช็ค 5 หุ้นสุ่มแล้วพบว่านี่คือตัวที่ตรงกับ Yahoo
+    # Total Revenue เป๊ะเสมอ (PTT/IRPC/CH: เท่ากับ 'รายได้จากการขายและให้บริการ' พอดีเพราะไม่มี
+    # รายได้ธุรกิจย่อยอื่น แต่ LPH ต่างกันจริง 619,024 vs 512,530 — 'รายได้จากการขายและให้บริการ'
+    # แคบกว่า ไม่รวมรายได้ธุรกิจย่อยอื่น เช่น รายได้ค่าเช่า ทำให้ต่ำกว่า Yahoo ~20% ถ้าใช้ผิดตัว)
+    revenue = g("รายได้จากการดำเนินธุรกิจ", "รายได้จากการขายและให้บริการ")
+    if revenue is None:
+        return None
+    cogs = g("ต้นทุน")
+    selling = g("ค่าใช้จ่ายในการขาย")
+    admin = g("ค่าใช้จ่ายในการบริหาร")
+    sga_combo = g("ค่าใช้จ่ายในการขายและบริหาร")
+    if sga_combo is not None:
+        sga_total = sga_combo
+    elif selling is not None or admin is not None:
+        sga_total = (selling or 0) + (admin or 0)
+    else:
+        sga_total = None
+    op = g("กำไร (ขาดทุน) ก่อนต้นทุนทางการเงิน และภาษีเงินได้",
+           "กำไร (ขาดทุน) ก่อนต้นทุนทางการเงิน และ/หรือ ภาษีเงินได้")
+    fin_cost = g("ต้นทุนทางการเงิน")
+    pretax = (op - fin_cost) if (op is not None and fin_cost is not None) else None
+    net_profit = g("การแบ่งปันกำไร (ขาดทุน) สุทธิ : ผู้ถือหุ้นบริษัทใหญ่", "กำไร (ขาดทุน) สุทธิ สำหรับงวด")
+    return {
+        "revenue": revenue, "cogs": cogs,
+        "gross_profit": (revenue - cogs) if cogs is not None else None,
+        "selling_exp": selling, "admin_exp": admin, "sga_total": sga_total,
+        "total_expenses": (cogs + sga_total) if (cogs is not None and sga_total is not None) else None,
+        "operating_profit": op, "financial_cost": fin_cost, "pretax_profit": pretax,
+        "tax_expense": g("ภาษีเงินได้"), "net_profit": net_profit,
+        "detail": selling is not None or admin is not None,
+    }
+
+
+def fetch_set_qpl_chart_series(symbol, ctx=None, hdr=None):
+    """{(year_ad,q): raw-row} หยาบ 5 ปีจาก company-highlight/financial-data-chart (ดู
+    sources/set_api.py::fetch_financial_data_chart) — revenue/cogs/gross_profit derive จาก
+    grossProfitMargin% ไม่ derive sga_total/operating_profit เพราะ totalExpense ของ SET ปน
+    'ค่าใช้จ่ายอื่น' มาด้วย (เช็คกับ PTT: totalExpense = COGS+SGA+ค่าใช้จ่ายอื่น ไม่ใช่แค่ COGS+SGA
+    2026-08-12) — derive ตรงๆ จะได้ sga เพี้ยน ปล่อยให้ Yahoo/Finnomena เติมช่องนั้นแทน
+
+    คูณ 1000 ทุกค่าเงิน — endpoint นี้รายงานเป็น 'พันบาท' เหมือน company-highlight ต่างจาก
+    Yahoo/Finnomena ที่เป็นบาทดิบ (ดูคอมเมนต์เดียวกันใน _set_qpl_amt_map)
+
+    ctx/hdr: ส่งมาเองได้เพื่อ reuse cookie เดียวข้ามหลาย symbol ตอน bulk sync (ดู sync_all)"""
+    from sources.set_api import fetch_financial_data_chart
+    rows = fetch_financial_data_chart(symbol, ctx=ctx, hdr=hdr)
+    out = {}
+    for r in rows:
+        year, qn = r.get("year"), r.get("quarter")
+        q = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}.get(qn)
+        if not q or not year:
+            continue
+        sales, gpm = r.get("sales"), r.get("grossProfitMargin")
+        gross_profit = (sales * gpm / 100) if (sales is not None and gpm is not None) else None
+        cogs = (sales - gross_profit) if (sales is not None and gross_profit is not None) else None
+        net_profit = r.get("netProfit")
+        out[(year, q)] = {
+            "revenue": sales * 1000 if sales is not None else None,
+            "cogs": cogs * 1000 if cogs is not None else None,
+            "gross_profit": gross_profit * 1000 if gross_profit is not None else None,
+            "net_profit": net_profit * 1000 if net_profit is not None else None,
+            "detail": False,
+        }
+    return out
+
+
+def fetch_set_qpl_detail_series(symbol, ctx=None, hdr=None):
+    """{(year_ad,q): raw-row} ละเอียด (COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี) จากงบที่บริษัทยื่นจริง
+    (ดู sources/set_api.py::fetch_financial_statement) — งวดล่าสุดใช้ตรงๆ ส่วนงวดสะสม (6M/9M/YE)
+    ลบกันเองเป็นไตรมาสเดี่ยว (Q3=9M-6M, Q4=YE-9M, Q2=6M-Q1 ถ้ามี Q1 ปีเดียวกันใน periods list)
+    ได้ประมาณ 3-4 ไตรมาสล่าสุดเท่านั้น — periods endpoint มีแค่ปีปัจจุบัน+ปีก่อนหน้า (เช็คแล้ว
+    2026-08-12) ไม่ย้อนลึกหลายปี ไตรมาสเก่ากว่านั้นต้องพึ่ง Yahoo/Finnomena/chart-series แทน
+
+    ctx/hdr: ส่งมาเองได้เพื่อ reuse cookie เดียวข้ามหลาย symbol ตอน bulk sync (ดู sync_all)"""
+    from sources.set_api import (fetch_financial_statement_periods, fetch_financial_statement,
+                                  _bootstrap_headers)
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    periods = fetch_financial_statement_periods(symbol, ctx=ctx, hdr=hdr)
+    if not periods:
+        return {}
+
+    parsed = {}   # period_code -> {"type","year","amt"}
+    for p in periods:
+        try:
+            ptype, year_s = p.rsplit("_", 1)
+            year = int(year_s)
+        except ValueError:
+            continue
+        try:
+            d = fetch_financial_statement(symbol, "income_statement", period=p, ctx=ctx, hdr=hdr)
+        except Exception:
+            continue
+        parsed[p] = {"type": ptype, "year": year, "amt": _set_qpl_amt_map(d)}
+
+    def sub(a, b):
+        keys = set(a) | set(b)
+        return {k: (a.get(k) - b.get(k)) if (a.get(k) is not None and b.get(k) is not None) else None
+                for k in keys}
+
+    amt_by_qtr = {}   # (year, q) -> amt map เดี่ยว
+    by_year = {}
+    for info in parsed.values():
+        amt_by_qtr_key = (info["year"], 1) if info["type"] == "Q1" else None
+        if amt_by_qtr_key:
+            amt_by_qtr[amt_by_qtr_key] = info["amt"]
+        by_year.setdefault(info["year"], {})[info["type"]] = info["amt"]
+    for year, by_t in by_year.items():
+        if "9M" in by_t and "6M" in by_t:
+            amt_by_qtr[(year, 3)] = sub(by_t["9M"], by_t["6M"])
+        if "YE" in by_t and "9M" in by_t:
+            amt_by_qtr[(year, 4)] = sub(by_t["YE"], by_t["9M"])
+        if "6M" in by_t and "Q1" in by_t:
+            amt_by_qtr[(year, 2)] = sub(by_t["6M"], by_t["Q1"])
+
+    out = {}
+    for key, amt in amt_by_qtr.items():
+        row = _set_qpl_row_from_amt(amt)
+        if row:
+            out[key] = row
+    return out
+
+
+def fetch_set_qpl_series(symbol, ctx=None, hdr=None):
+    """รวม 2 ชั้นจาก SET official สำหรับ compute_qpl_report: chart (5 ปี หยาบ) + detail
+    (ล่าสุด+อนุพันธ์ ละเอียด ทับ chart ทั้งแถวสำหรับงวดที่มีของละเอียดกว่า) เงียบถ้าพังทั้งคู่
+    (caller ยังมี Yahoo/Finnomena เป็นฐานอยู่แล้ว ไม่ใช่จุดเดียวที่พังแล้วทั้งตารางหาย)
+
+    ctx/hdr: ส่งมาเองได้เพื่อ reuse cookie เดียวข้ามหลาย symbol ตอน bulk sync (ดู sync_all)"""
+    out = {}
+    try:
+        out.update(fetch_set_qpl_chart_series(symbol, ctx=ctx, hdr=hdr))
+    except Exception:
+        pass
+    try:
+        out.update(fetch_set_qpl_detail_series(symbol, ctx=ctx, hdr=hdr))
+    except Exception:
+        pass
+    return out
+
+
+def _set_qpl_payload_to_dict(payload):
+    """{"quarters": {"YYYY-Q": row}} (รูปแบบเก็บใน DB, key เป็น string เพราะ JSON ไม่รองรับ
+    tuple key) -> {(year_ad,q): row} (รูปแบบที่ compute_qpl_report ใช้)"""
+    out = {}
+    for key_str, row in (payload or {}).get("quarters", {}).items():
+        y_s, q_s = key_str.split("-")
+        out[(int(y_s), int(q_s))] = row
+    return out
+
+
+def get_set_qpl_series(base_dir, symbol):
+    """อ่าน SET official ที่เก็บสะสมไว้ใน DB ตรงๆ (source='set_qpl') ไม่ยิง SET.or.th สดเลย —
+    ใช้เป็นค่าเริ่มต้นของ endpoint (เหมือน pattern เดียวกับ Yahoo/Finnomena ที่อ่าน DB ก่อนเสมอ
+    ไม่ sync สดทุกครั้งที่มีคนเปิดหน้า) คืน None ถ้ายังไม่เคย sync หุ้นตัวนี้เลย — caller ควร
+    fallback ไป sync_set_qpl_series() ต่อ (ดึงสดครั้งแรกแล้วเก็บไว้ให้ครั้งต่อไปอ่านจากที่นี่ได้)"""
+    payload = get(base_dir, symbol, "set_qpl")
+    if not payload:
+        return None
+    return _set_qpl_payload_to_dict(payload)
+
+
+def sync_set_qpl_series(base_dir, symbol):
+    """ดึง SET official สดรอบใหม่ (fetch_set_qpl_series) + ผสานกับที่เก็บสะสมไว้ใน DB
+    (source='set_qpl', ดู _merge_set_qpl_payload) แล้วเขียนกลับ — คืน {(year_ad,q): row}
+    พร้อมใช้กับ compute_qpl_report
+
+    ต่างจาก get_set_qpl_series() ตรงที่ฟังก์ชันนี้ 'ยิงสดเสมอ' — ใช้เป็น fallback ตอนยังไม่เคย
+    sync หุ้นตัวนี้เลย (DB ว่าง) หรือตอนผู้ใช้ขอ refresh เอง (?refresh=1) ไม่ใช่ path ปกติที่
+    ทุกการเปิดหน้าจะยิง เพราะ SET periods endpoint มีแค่ปีปัจจุบัน+ปีก่อนหน้า พองวดเลื่อนหลุด
+    จาก periods list แล้วจะดึงซ้ำไม่ได้อีกเลย — sync ครั้งไหนที่ทำได้ก็เก็บสะสมไว้ถาวร
+    ถ้า fetch สดพังหมด (เน็ตสะดุด/SET.or.th ล่ม) ยังคืนของสะสมเดิมจาก DB แทนที่จะให้ตารางว่างเปล่า"""
+    try:
+        fresh = fetch_set_qpl_series(symbol)
+    except Exception:
+        fresh = {}
+    if fresh:
+        fresh_payload = {"quarters": {f"{y}-{q}": row for (y, q), row in fresh.items()}}
+        upsert(base_dir, symbol, "set_qpl", fresh_payload, is_dr=False)
+    return _set_qpl_payload_to_dict(get(base_dir, symbol, "set_qpl"))
 
 
 # ============================================================
@@ -1991,7 +2250,7 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
     done = ok = fail = 0
 
     set_ctx, set_hdr = (None, None)
-    if "set" in sources:
+    if "set" in sources or "set_qpl" in sources:
         try:
             set_ctx, set_hdr = _bootstrap_headers()
         except Exception:
@@ -2005,6 +2264,7 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
 
     _yahoo_gate = threading.Semaphore(3)   # จำกัด Yahoo request พร้อมกันไม่เกิน 3 (แยกจาก SET.or.th)
     _finn_gate  = threading.Semaphore(2)   # Finnomena ไม่รู้เพดาน rate-limit — ยิงสุภาพไว้ก่อน
+    _set_qpl_gate = threading.Semaphore(2)   # set_qpl ยิงหลาย request/หุ้น (chart+periods+detail สูงสุด 6) หนักกว่า 'set' เฉยๆ
     _yahoo_session = _new_yahoo_session()
     _yahoo_throttle = _YahooThrottle()
 
@@ -2026,6 +2286,13 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
                     payload = fetch_finnomena_quarterly(sym, is_dr=is_dr)
                 finally:
                     time.sleep(0.25)
+        elif src == "set_qpl":
+            with _set_qpl_gate:
+                try:
+                    raw = fetch_set_qpl_series(sym, ctx=set_ctx, hdr=set_hdr)
+                    payload = {"quarters": {f"{y}-{q}": row for (y, q), row in raw.items()}}
+                finally:
+                    time.sleep(0.3)  # throttle มากกว่า 'set' เพราะยิงหลาย request/หุ้น
         else:
             payload = fetch_set_full(sym, set_ctx, set_hdr)
             time.sleep(0.15)  # throttle เบาๆ กัน SET.or.th block IP

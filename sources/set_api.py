@@ -250,3 +250,52 @@ def fetch_price_history_batch(tickers, start_date, callback=None, workers=6):
                 callback(done, total, f"สำรองราคา (SET API chart-quotation) {done}/{total}...")
 
     return results
+
+
+# ============================================================
+# งบกำไรขาดทุนรายไตรมาสละเอียด (สำหรับตาราง P&L รายไตรมาส) — เจอ endpoint พวกนี้
+# จากการไล่อ่าน JS bundle ของ settrade.com (ใช้ backend เดียวกับ set.or.th ผ่าน
+# /api/set/... ) ไม่มีเอกสารทางการรองรับเหมือน endpoint อื่นในไฟล์นี้ทั้งหมด
+# ============================================================
+
+def fetch_financial_data_chart(symbol, ctx=None, hdr=None):
+    """สรุปรายไตรมาส 'เดี่ยวๆ' (ไม่สะสม) ย้อนหลัง ~5 ปี จาก company-highlight/financial-data-chart
+    (accumulated=false) — ต่างจาก company-highlight ปกติตรงที่ไม่มีปัญหางวด '6M'/'9M' ปนมา
+    (บริษัทที่ยื่นงบล่าสุดเป็นงวดสะสม เช่น PTTEP/AOT) เพราะ endpoint นี้ตัดเป็นรายไตรมาสให้เอง
+    field มีแค่ระดับสรุป (revenue/totalExpense/GPM%/ebit/netProfit) ไม่มี COGS/SG&A แยก
+    คืน list ของ raw dict เรียงเก่า->ใหม่ เฉพาะ quarter ที่เป็น Q1-Q4 (กันกรณี edge ที่หลุดมา)"""
+    sym = symbol[:-3] if symbol.endswith(".BK") else symbol
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr,
+                  f"/api/set/stock/{urllib.parse.quote(sym)}/company-highlight/financial-data-chart"
+                  f"?accumulated=false&lang=th", timeout=15)
+    return [r for r in (d or []) if r.get("quarter") in ("Q1", "Q2", "Q3", "Q4")]
+
+
+def fetch_financial_statement_periods(symbol, ctx=None, hdr=None):
+    """รายชื่องวดที่มีงบละเอียดให้ดึงได้ (เช่น ['Q1_2026','YE_2025','9M_2025','6M_2025']) —
+    มีแค่ปีปัจจุบัน+ปีก่อนหน้าเท่านั้น ไม่ย้อนลึกหลายปี (เช็คกับ PTT/IRPC/CH/LPH/SIAM แล้ว)"""
+    sym = symbol[:-3] if symbol.endswith(".BK") else symbol
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr,
+                  f"/api/set/stock/{urllib.parse.quote(sym)}/financialstatement/periods", timeout=15)
+    return (d or {}).get("periods") or []
+
+
+def fetch_financial_statement(symbol, account_type="income_statement", period=None, ctx=None, hdr=None):
+    """งบละเอียดทีละบรรทัดบัญชี (accountCode/accountName/amount) ตรงกับที่บริษัทยื่นจริง —
+    account_type: income_statement | balance_sheet | cash_flow
+    period: None = งวดล่าสุด, หรือค่าจาก fetch_financial_statement_statement_periods()
+    (เช่น 'YE_2025') เพื่อดึงงวดอื่นที่ไม่ใช่ล่าสุด — คืน raw dict {symbol,year,quarter,
+    endDate,accounts:[...]} unit เป็น 'พันบาท' (divider=1000 ทุกแถว)"""
+    sym = symbol[:-3] if symbol.endswith(".BK") else symbol
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    params = {"accountType": account_type, "lang": "th"}
+    if period:
+        params["period"] = period
+    q = urllib.parse.urlencode(params)
+    return _get_json(ctx, hdr,
+                      f"/api/set/stock/{urllib.parse.quote(sym)}/financialstatement?{q}", timeout=15)

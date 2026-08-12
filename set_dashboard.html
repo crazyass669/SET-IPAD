@@ -3241,7 +3241,7 @@
 
   <!-- เทียบหุ้น 2 ตัว — ใช้งบไตรมาส Finnomena 16 ปี เทียบรายได้/margin/ROE แบบ overlay -->
   <div id="fin-compare-panel" class="card" style="padding:14px 16px;margin-bottom:12px;display:none">
-    <div style="font-size:12px;color:var(--text2);margin-bottom:8px">เทียบงบการเงิน 2 หุ้น (ไทยหรือต่างประเทศ ผสมกันได้) — ใช้งบไตรมาส Finnomena ย้อน 16 ปี
+    <div style="font-size:12px;color:var(--text2);margin-bottom:8px">เทียบงบการเงิน 2 หุ้น (ไทยหรือต่างประเทศ ผสมกันได้) — สลับดูรายไตรมาสหรือรายปีได้ (โหมดรายปีใช้ Finnomena ทั้งสองฝั่ง)
       <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px;text-align:left">
         เลือกป้าย 🇹🇭/🌏 ก่อนพิมพ์ — รายชื่อ autocomplete และแหล่งข้อมูลที่ดึงจะอิงตามป้ายที่เลือกเสมอ
         (ป้องกัน symbol ชนกัน เช่น <b>META</b> = ทั้ง Meta Platforms สหรัฐฯ และ META Corporation หุ้นไทย mai)
@@ -3263,6 +3263,13 @@
         <div class="filter-row" style="gap:0;margin:0">
           <button class="filter-btn" id="fin-cmp-b-set" onclick="setFinCmpMarket('b','set')" style="font-size:10px;padding:2px 8px;border-radius:5px 0 0 5px">🇹🇭 ไทย</button>
           <button class="filter-btn active" id="fin-cmp-b-dr" onclick="setFinCmpMarket('b','dr')" style="font-size:10px;padding:2px 8px;border-radius:0 5px 5px 0">🌏 ต่างประเทศ</button>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <span style="font-size:10px;color:var(--text2)">ช่วงเวลา</span>
+        <div class="filter-row" style="gap:0;margin:0">
+          <button class="filter-btn active" id="fin-cmp-period-q" onclick="setFinCmpPeriod('q')" style="font-size:10px;padding:2px 8px;border-radius:5px 0 0 5px">รายไตรมาส</button>
+          <button class="filter-btn" id="fin-cmp-period-y" onclick="setFinCmpPeriod('y')" style="font-size:10px;padding:2px 8px;border-radius:0 5px 5px 0" title="ใช้งบรายปีจาก Finnomena ทั้งสองฝั่งเสมอ (แม้ฝั่งไทยปกติจะใช้ SET.or.th รายไตรมาสก็ตาม)">รายปี</button>
         </div>
       </div>
       <button class="btn-primary" onclick="runFinCompare()">⚖️ เทียบ</button>
@@ -3975,11 +3982,14 @@
           <b>🔄 อัพเดทงบการเงินทั้งหมด — ใช้บ่อยสุด</b>
           <span class="badge badge-blue" style="margin-left:4px">Yahoo</span>
           <span class="badge badge-green" style="margin-left:2px">SET</span>
+          <span class="badge badge-green" style="margin-left:2px">SET P&amp;L รายไตรมาส</span>
           <span class="badge badge-yellow" style="margin-left:2px">Finnomena</span><br>
-          เช็ค DR ใหม่ → งบหุ้นไทยทุกตัว (Yahoo+SET+Finnomena) → งบ DR (Yahoo+Finnomena) →
+          เช็ค DR ใหม่ → งบหุ้นไทยทุกตัว (Yahoo+SET+SET P&amp;L รายไตรมาส+Finnomena) → งบ DR (Yahoo+Finnomena) →
           งบสมาชิกดัชนีหลัก US (S&amp;P500+Dow+NDX)/HK (HSI+HSCEI+HSTECH)/JP (Nikkei 225) <b>ผ่าน Yahoo เท่านั้น</b>
           (ข้ามตัวที่มีงบซ้ำกับ DR/DRx อยู่แล้วอัตโนมัติ ไม่ดึงซ้ำ) → หุ้น US/HK ที่ค้นบ่อยใน 90 วัน (ผ่าน Finnomena) →
           คำนวณ factor snapshot ใหม่ให้ Screener<br>
+          "SET P&amp;L รายไตรมาส" = ข้อมูลตารางงบกำไรขาดทุนรายไตรมาสทางการ (หน้างบการเงิน → 📋 P&amp;L รายไตรมาส)
+          เก็บสะสมทุกรอบเหมือนแหล่งอื่น กันงวดละเอียดที่เคยดึงได้หายไปตอน SET เปลี่ยนช่วงที่เปิดให้ดึงย้อนหลัง<br>
           📦 แทน <code>python update_financials.py</code><br>
           ⏱ ไม่กี่นาที - เกือบครึ่งชั่วโมง (ขึ้นกับจำนวนหุ้น/DR) — <b>กดทุกครั้งหลังงบไตรมาสออก</b>
         </div>
@@ -4007,6 +4017,74 @@
       </div>
     </div>
   </div>
+
+  <!-- แจกแจง 4 แหล่งข้อมูลงบการเงิน (Yahoo/Finnomena/SET company-highlight/SET P&L รายไตรมาส) —
+       เช็คตัวเลขจริงจาก DB/API ตอนพัฒนาฟีเจอร์ P&L รายไตรมาส (2026-08-13) เก็บไว้อ้างอิงไม่ต้องไล่หาใหม่
+       ปิดไว้ default (details ไม่ใส่ open) เพราะเป็นตารางยาว ไม่ใช่ข้อมูลที่ต้องดูทุกวัน -->
+  <details class="card" id="dh-source-breakdown" style="padding:14px 16px;margin-bottom:12px">
+    <summary style="font-size:13px;font-weight:600;cursor:pointer;list-style:none">
+      📚 แจกแจง 4 แหล่งข้อมูลงบการเงิน (Yahoo / Finnomena / SET company-highlight / SET P&amp;L รายไตรมาส)
+      <span style="font-weight:400;color:var(--text2);font-size:11px"> (คลิกเพื่อย่อ/ขยาย)</span>
+    </summary>
+    <div style="font-size:12px;line-height:1.6;margin-top:10px">
+      <div style="overflow-x:auto">
+        <table class="tbl" style="min-width:960px">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Yahoo (<code>yahoo</code>/<code>yahoo_q</code>)</th>
+              <th>Finnomena (<code>finnomena_q</code>)</th>
+              <th>SET company-highlight (<code>set</code>)</th>
+              <th>SET P&amp;L รายไตรมาส (<code>set_qpl</code>)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="font-weight:600">ย้อนหลังกี่ปี</td>
+              <td>รายปี ~4-5 ปี (สะสมเพิ่มช้าๆ) · รายไตรมาสสะสมได้เท่าที่เคย sync ไว้เท่านั้น — yfinance backfill ย้อนหลังเพิ่มไม่ได้</td>
+              <td><b>ยาวที่สุด</b> ~16-20 ปี / ~65-80 ไตรมาส</td>
+              <td>แค่ 4 ปีเต็ม (Q9) + ไตรมาสปัจจุบันที่ยังไม่ปิดปี 1 งวด — <b>ไม่มีประวัติไตรมาสย้อนหลังจริง</b></td>
+              <td>ชั้นหยาบ: <b>5 ปีเต็มไตรมาสเดี่ยวๆ</b> (17 ไตรมาส) · ชั้นละเอียด: แค่ <b>~3-4 ไตรมาสล่าสุด</b> (ปีปัจจุบัน+ก่อนหน้า)</td>
+            </tr>
+            <tr>
+              <td style="font-weight:600">ความละเอียด</td>
+              <td><b>ละเอียดสุด</b> — income ~46 fields / balance ~95 fields / cashflow ~62 fields (ทุกบรรทัดที่ yfinance ให้)</td>
+              <td>ปานกลาง — รายได้/กำไรขั้นต้น/SG&amp;A รวม/กำไรสุทธิ/EPS + งบดุลย่อ + CF ย่อ + ratio/valuation สำเร็จรูป (GPM/NPM/ROA/ROE/D-E/PE/PBV ฯลฯ)</td>
+              <td>หยาบ — totalRevenue(รวมอื่น)/sales(รายได้หลัก)/totalExpense(รวม)/ebit/ebitda/netProfit/EPS/CF 3 ขา/ratio หลักๆ <b>ไม่มี COGS/SG&amp;A แยก</b></td>
+              <td>ชั้นหยาบ: revenue/COGS/gross profit (derive จาก GPM%)/net profit เท่านั้น · ชั้นละเอียด: <b>ครบทุกบรรทัดจริงจากงบที่บริษัทยื่น</b> (COGS, ค่าใช้จ่ายขาย-บริหารแยก, ต้นทุนการเงิน, ภาษี, กำไรสุทธิ)</td>
+            </tr>
+            <tr>
+              <td style="font-weight:600">ความแม่น</td>
+              <td>สูง (Operating Income/Pretax อาจรวมรายการอื่น เช่น equity income ทำให้ไม่ reconcile เป๊ะกับ SET บางกรณี)</td>
+              <td>ปานกลาง — sga field ปีเก่ามากบางตัวข้อมูลไม่ครบ (นับแค่ค่าใช้จ่ายบริหาร)</td>
+              <td>สูง (ทางการ) แต่ revenue field ต้องเลือกให้ถูก (410100 ไม่ใช่ 410101)</td>
+              <td><b>สูงสุด</b> — ตรงกับที่บริษัทยื่นจริงกับตลาดเป๊ะ (verified COGS/selling/admin ตรง Yahoo 100% ใน 5 หุ้นสุ่ม)</td>
+            </tr>
+            <tr>
+              <td style="font-weight:600">coverage (2026-08-13)</td>
+              <td>899/929 (96.8%)</td>
+              <td>918/929 (98.8%)</td>
+              <td>929/929 (100%)</td>
+              <td><b>2/929 (0.2%)</b> — ยังไม่ sync ทั้งตลาด</td>
+            </tr>
+            <tr>
+              <td style="font-weight:600">หน่วยเงิน</td>
+              <td>บาทดิบ</td>
+              <td>บาทดิบ</td>
+              <td>พันบาท</td>
+              <td>พันบาท (แปลงเป็นบาทดิบให้แล้วตอน merge)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="margin-top:10px;color:var(--text2)">
+        <b>บทบาทในตาราง P&amp;L รายไตรมาส</b> (หน้างบการเงิน → 📋 P&amp;L รายไตรมาส, ดู <code>compute_qpl_report</code>
+        ใน sources/financials_store.py): Finnomena เป็นฐาน (ให้ประวัติยาวที่สุด) → Yahoo ทับเสริมความละเอียดเท่าที่มี →
+        SET ทับบนสุด (แม่นสุด) เฉพาะช่วง/บรรทัดที่มีข้อมูล — ไตรมาสเก่ากว่า 5 ปีเลยยังต้องพึ่ง Finnomena เพียงอย่างเดียว
+        (มีบั๊ก SG&amp;A เก่าที่ทราบแล้ว — แสดงเครื่องหมาย † ในตาราง)
+      </div>
+    </div>
+  </details>
 
   <!-- คู่มือลำดับการกดอัพเดท — สรุปจาก สรุป_ปุ่มอัพเดทข้อมูล.txt + คู่มือ-อัพเดทข้อมูล.txt
        เปิดค้างไว้ (open) เพราะเป็นข้อมูลที่ต้องดูบ่อยตอนไม่แน่ใจว่าต้องกดอะไร -->
@@ -4662,6 +4740,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260812i"></script>
+<script src="static/dashboard.js?v=20260813m"></script>
 </body>
 </html>

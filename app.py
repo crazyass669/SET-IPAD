@@ -2913,14 +2913,22 @@ def get_financials_full(symbol):
 @app.route("/api/financials-qpl-report/<symbol>")
 def get_financials_qpl_report(symbol):
     """ตารางงบกำไรขาดทุนรายไตรมาสสไตล์ broker research (รายได้/ต้นทุนขาย/กำไรขั้นต้น/
-    SG&A แยกขาย-บริหาร/กำไรดำเนินงาน/ต้นทุนการเงิน/กำไรก่อนภาษี/ภาษี/กำไรสุทธิ) — ผสาน
-    Finnomena (ยาว ~16 ปี, บรรทัดหยาบ) + Yahoo (ละเอียดครบ, สั้นแค่ไม่กี่ไตรมาสล่าสุด)
-    ดู compute_qpl_report() ใน financials_store.py สำหรับตรรกะการผสาน"""
+    SG&A แยกขาย-บริหาร/กำไรดำเนินงาน/ต้นทุนการเงิน/กำไรก่อนภาษี/ภาษี/กำไรสุทธิ) — ผสาน 3 แหล่ง
+    Finnomena (ยาว ~16 ปี, บรรทัดหยาบ) + Yahoo (ละเอียดครบ, สั้นแค่ไม่กี่ไตรมาสล่าสุด) + SET
+    official (ทางการ, แม่นสุด — chart 5 ปีหยาบ + งบละเอียดล่าสุด/อนุพันธ์ ~3-4 ไตรมาส เฉพาะหุ้นไทย)
+    ดู compute_qpl_report() ใน financials_store.py สำหรับตรรกะการผสาน
+
+    ทั้ง 3 แหล่งอ่านจาก DB local ก่อนเสมอ (pattern เดียวกันหมด ไม่มีแหล่งไหนยิงสดทุกครั้งที่เปิดหน้า)
+    ยิงสด (แล้วเก็บลง DB ให้ครั้งต่อไปอ่านได้เลย) เฉพาะตอน DB ยังไม่มีข้อมูลหุ้นตัวนั้นเลย หรือผู้ใช้
+    ขอ ?refresh=1 เอง — SET official (source 'set_qpl') สำคัญที่ต้อง sync สะสมไว้ทุกครั้งที่มีโอกาส
+    เพราะ periods endpoint ของ SET มีแค่ปีปัจจุบัน+ปีก่อนหน้า พองวดเลื่อนหลุดออกจาก periods list
+    จะดึงข้อมูลละเอียด (COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี) ของงวดนั้นซ้ำไม่ได้อีกเลย"""
     sym = symbol.upper().strip()
     is_dr = request.args.get("is_dr") == "1"
     market = request.args.get("market")
+    refresh = request.args.get("refresh") == "1"
 
-    finn = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr, market=market)
+    finn = None if refresh else financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr, market=market)
     if finn is None:
         try:
             fresh = financials_store.fetch_finnomena_quarterly(sym, is_dr=is_dr)
@@ -2929,7 +2937,7 @@ def get_financials_qpl_report(symbol):
         except Exception:
             finn = None
 
-    yq = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, market=market)
+    yq = None if refresh else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, market=market)
     if yq is None:
         try:
             fresh = financials_store.fetch_yahoo_quarterly(sym, is_dr=is_dr, market=market)
@@ -2941,10 +2949,149 @@ def get_financials_qpl_report(symbol):
     if not finn and not yq:
         return jsonify({"error": f"ไม่พบข้อมูลงบการเงินของ {sym} จากทั้ง Finnomena และ Yahoo"}), 404
 
-    report = financials_store.compute_qpl_report(finn, yq)
+    set_series = None
+    if not is_dr:   # SET official มีแค่หุ้นไทย — DR ข้าม ไม่ยิง set.or.th เปล่าๆ
+        set_series = None if refresh else financials_store.get_set_qpl_series(BASE_DIR, sym)
+        if set_series is None:
+            try:
+                set_series = financials_store.sync_set_qpl_series(BASE_DIR, sym)
+            except Exception:
+                set_series = None
+
+    report = financials_store.compute_qpl_report(finn, yq, set_series=set_series)
     report["sym"] = sym
     report["name"] = (yq or finn or {}).get("name") or sym
     return jsonify(report)
+
+
+@app.route("/api/financials-qpl-set/<symbol>")
+def get_financials_qpl_set(symbol):
+    """ตารางกำไรขาดทุนรายไตรมาสจาก SET.or.th ล้วนๆ (source 'set_qpl' อย่างเดียว ไม่ผสาน
+    Finnomena/Yahoo เหมือน /api/financials-qpl-report) — ใช้แสดงเสริมในแท็บ 🇹🇭 SET.or.th
+    คู่กับตาราง Company Highlight รายปีที่มีอยู่เดิม เฉพาะหุ้นไทย (DR ไม่มีข้อมูล SET.or.th)
+    อ่าน DB ก่อนเสมอ ยิงสดเฉพาะ DB ว่างหรือ ?refresh=1 (pattern เดียวกับ endpoint งบอื่นๆ)"""
+    sym = symbol.upper().strip()
+    refresh = request.args.get("refresh") == "1"
+
+    set_series = None if refresh else financials_store.get_set_qpl_series(BASE_DIR, sym)
+    if set_series is None:
+        try:
+            set_series = financials_store.sync_set_qpl_series(BASE_DIR, sym)
+        except Exception:
+            set_series = None
+    if not set_series:
+        return jsonify({"error": f"ไม่พบข้อมูลงบไตรมาสจาก SET.or.th ของ {sym}"}), 404
+
+    report = financials_store.compute_qpl_report(None, None, set_series=set_series)
+    report["sym"] = sym
+    payload = financials_store.get(BASE_DIR, sym, "set_qpl")
+    report["synced_at"] = (payload or {}).get("synced_at")
+    return jsonify(report)
+
+
+@app.route("/api/financials-compare/<symbol>")
+def get_financials_compare(symbol):
+    """ข้อมูลสำหรับแท็บ '⚖️ เทียบหุ้น 2 ตัว' ของหุ้นไทย (ไม่รองรับ DR — ฝั่ง frontend fallback
+    ไป finnomena_q/yahoo_q ปกติสำหรับ DR เพราะ SET.or.th ไม่มีข้อมูลหุ้นต่างประเทศ) ใช้ SET.or.th
+    เป็นแหล่งหลักตามคำขอ user: P&L รายไตรมาส (ผสาน Finnomena+Yahoo+SET ผ่าน compute_qpl_report —
+    เหมือน /api/financials-qpl-report ทุกประการ เพื่อได้ประวัติลึก ~16-20 ปีแทนที่จะมีแค่ SET-only
+    ~4-5 ปี ตามคำขอ user "ทำทั้งสองอย่าง" [เพิ่มความลึก + เพิ่มบรรทัด]) + company-highlight
+    (ROE/ROA/D-E รายปีล่าสุด) เสริมด้วย Finnomena เฉพาะ 4 แถว valuation ที่ SET ไม่มีให้ (Market
+    Cap/P-E ผ่าน Basic EPS+Close/P-BV/Dividend Yield) คืนโครงเดียวกับ /api/financials-full
+    (income/ratios/valuation) ให้ _renderFinCompare ใช้ต่อได้ตรงๆ + คีย์ใหม่ 'qpl' ({date: row})
+    เก็บ raw row เต็มของทุกไตรมาส (cogs/selling_exp/admin_exp/sga_total/operating_profit/
+    financial_cost/pretax_profit/tax_expense + %) ให้ตารางเทียบรายไตรมาสฝั่ง frontend ใช้วาด
+    บรรทัดเพิ่มได้ — field ไหนไม่มี (เช่น Finnomena พัง) จะเป็น '—' ในตารางแทน ไม่ error ทั้งแถว
+    ไม่มีข้อมูลจากทั้ง 3 แหล่งเลย -> 404 ให้ frontend fallback ไป finnomena_q เอง"""
+    sym = symbol.upper().strip()
+
+    # Finnomena รายไตรมาส — ยาว ~16-20 ปีแต่หยาบ (ไม่มี COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี)
+    # ดึงไว้ก่อนเพราะใช้ทั้งเสริมประวัติ P&L (compute_qpl_report) และดึง valuation ด้านล่าง
+    finn = financials_store.get(BASE_DIR, sym, "finnomena_q")
+    if finn is None:
+        try:
+            fresh = financials_store.fetch_finnomena_quarterly(sym)
+            financials_store.upsert(BASE_DIR, sym, "finnomena_q", fresh)
+            finn = financials_store.get(BASE_DIR, sym, "finnomena_q")
+        except Exception:
+            finn = None
+
+    # Yahoo รายไตรมาส — ครบทุกบรรทัดตรงตัวแต่สั้นแค่ไม่กี่ไตรมาสล่าสุด ใช้เสริมรายละเอียด
+    # COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี ให้ช่วงที่ SET detail ยังไปไม่ถึง
+    yq = financials_store.get(BASE_DIR, sym, "yahoo_q")
+    if yq is None:
+        try:
+            fresh = financials_store.fetch_yahoo_quarterly(sym)
+            financials_store.upsert(BASE_DIR, sym, "yahoo_q", fresh)
+            yq = financials_store.get(BASE_DIR, sym, "yahoo_q")
+        except Exception:
+            yq = None
+
+    set_series = financials_store.get_set_qpl_series(BASE_DIR, sym)
+    if set_series is None:
+        try:
+            set_series = financials_store.sync_set_qpl_series(BASE_DIR, sym)
+        except Exception:
+            set_series = None
+
+    if not finn and not yq and not set_series:
+        return jsonify({"error": f"ไม่พบข้อมูลงบการเงินของ {sym}"}), 404
+
+    quarters = financials_store.compute_qpl_report(finn, yq, set_series=set_series)["quarters"]
+    if not quarters:
+        return jsonify({"error": f"ไม่พบข้อมูลงบการเงินของ {sym}"}), 404
+
+    q_end = {1: "-03-31", 2: "-06-30", 3: "-09-30", 4: "-12-31"}
+    income = {"Total Revenue": {}, "Net Income": {}}
+    ratios = {"Net Margin": {}, "Gross Margin": {}}
+    qpl = {}   # {date: raw row เต็ม} — ให้ตารางเทียบรายไตรมาสวาดบรรทัด COGS/SG&A/Operating/ฯลฯ เพิ่มได้
+    for row in quarters:
+        q, y = row.get("q"), row.get("year_ad")
+        if q not in q_end or y is None:
+            continue
+        d = f"{y}{q_end[q]}"
+        if row.get("revenue") is not None: income["Total Revenue"][d] = row["revenue"]
+        if row.get("net_profit") is not None: income["Net Income"][d] = row["net_profit"]
+        if row.get("npm") is not None: ratios["Net Margin"][d] = row["npm"]
+        if row.get("gpm") is not None: ratios["Gross Margin"][d] = row["gpm"]
+        qpl[d] = row
+
+    # company-highlight -> ROE/ROA/D-E รายปีล่าสุด (entries เรียงเก่า->ใหม่ วนแล้วเก็บค่าตัวท้ายสุด
+    # ที่ไม่ null ก็ได้ค่าล่าสุดจริงเสมอ ไม่ต้อง sort เพิ่ม)
+    hl = financials_store.get(BASE_DIR, sym, "set")
+    if hl is None:
+        try:
+            fresh = financials_store.fetch_set_full(sym)
+            financials_store.upsert(BASE_DIR, sym, "set", fresh)
+            hl = financials_store.get(BASE_DIR, sym, "set")
+        except Exception:
+            hl = None
+    hl_q_end = {"Q1": "-03-31", "Q2": "-06-30", "Q3": "-09-30", "Q9": "-12-31"}
+    for src_key, dest in (("roe", "ROE"), ("roa", "ROA"), ("deRatio", "Debt To Equity")):
+        val, dt = None, None
+        for e in (hl or {}).get("entries", []):
+            v = e.get(src_key)
+            if v is not None:
+                val, dt = v, f"{e.get('year')}{hl_q_end.get(e.get('quarter'), '-12-31')}"
+        if val is not None:
+            ratios[dest] = {dt: val}
+
+    # Finnomena — เสริมเฉพาะ valuation (Market Cap/P-BV/Dividend Yield) + Basic EPS/Close (คำนวณ P/E
+    # TTM ฝั่ง frontend เหมือน path Finnomena ปกติ) ตามที่ user เลือก ไม่ใช่แหล่งหลักอีกต่อไป
+    valuation = {}
+    name = sym
+    if finn:
+        fval = finn.get("valuation") or {}
+        for key in ("Market Cap", "PBV", "Dividend Yield", "Close"):
+            if fval.get(key):
+                valuation[key] = fval[key]
+        feps = (finn.get("income") or {}).get("Basic EPS")
+        if feps:
+            income["Basic EPS"] = feps
+        name = finn.get("name") or sym
+
+    return jsonify({"sym": sym, "name": name, "income": income, "ratios": ratios,
+                     "valuation": valuation, "qpl": qpl})
 
 
 _DIVIDENDS_STALE_DAYS = 30   # ตามแผน PLAN_stock_study_suite.txt งาน #5
@@ -3185,7 +3332,7 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, min_age_days=N
         target = symbols if symbols else _financials_universe()
         # yahoo_q = งบรายไตรมาส (สะสมทุกรอบ sync — ใช้กรอง QoQ/YoY-Q ใน Screener)
         # finnomena_q = งบไตรมาสย้อนยาว ~20 ปี (backfill ครั้งเดียวได้ streak/เร่งตัว/TTM เต็มสูตร)
-        srcs = tuple(sources) if sources else ("yahoo", "set", "yahoo_q", "finnomena_q")
+        srcs = tuple(sources) if sources else ("yahoo", "set", "set_qpl", "yahoo_q", "finnomena_q")
 
         def cb(current, total, msg):
             _update(current=current, total=total, message=msg)
@@ -5647,43 +5794,41 @@ def _dh_stale_close_check(key, label, db_path, dup_threshold=20, min_universe=30
 
     universe — ถ้าระบุ (set ของ ticker) จะกรองเฉพาะ ticker กลุ่มนี้ก่อนนับ (ดู
     _dh_th_universe_tickers เหตุผลที่ต้องกรองฝั่งหุ้นไทย) US/HK/JP ไม่ต้องกรอง เพราะ DB
-    ของ 3 ตลาดนั้นมีแต่สมาชิกดัชนีล้วนๆ อยู่แล้ว (ไม่ปนกับ DW/DR)"""
+    ของ 3 ตลาดนั้นมีแต่สมาชิกดัชนีล้วนๆ อยู่แล้ว (ไม่ปนกับ DW/DR)
+
+    เดิมเคยดึงด้วย ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) รอบเดียวทั้งตาราง
+    แต่ prices เป็น WITHOUT ROWID จัดเรียงจริงตาม (ticker, date) ASC — ORDER BY date DESC ในแต่ละ
+    partition ทำให้ SQLite ต้อง sort ทั้งตารางลง temp B-tree ก่อน วัดจริงบนเครื่อง 2569-08-13:
+    set_prices.db (4.4M แถว) 4.3s, us_prices.db 4.6s รวม 4 ตลาด ~10.6s ทุกครั้งที่เปิดหน้า Data
+    Health (คือสาเหตุหลักที่หน้านี้โหลดช้า) เปลี่ยนมา query ทีละ ticker ด้วย
+    ORDER BY date DESC LIMIT 2 แทน — ใช้ primary key (ticker, date) seek ตรงๆ ไม่ต้อง sort
+    ทั้งตาราง วัดใหม่รวม 4 ตลาดเหลือ <1.5s"""
     import sqlite3
     if not os.path.exists(db_path):
         return _dh_quality_item(key, label, "na", "ยังไม่มีไฟล์ราคา")
     try:
         con = sqlite3.connect(db_path)
         try:
-            rows = con.execute("""
-                SELECT ticker, close, volume FROM (
-                  SELECT ticker, close, volume,
-                         ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
-                  FROM prices
-                ) WHERE rn <= 2
-                ORDER BY ticker
-            """).fetchall()
+            tickers = sorted(universe) if universe else [
+                r[0] for r in con.execute("SELECT DISTINCT ticker FROM prices").fetchall()]
+            dup_syms = []
+            total = 0
+            for tk in tickers:
+                bars = con.execute(
+                    "SELECT close, volume FROM prices WHERE ticker=? ORDER BY date DESC LIMIT 2",
+                    (tk,)).fetchall()
+                if not bars:
+                    continue   # อยู่ใน universe แต่ยังไม่มีราคาใน DB เลย (เพิ่งเข้าดัชนี) — ไม่นับ
+                total += 1
+                if len(bars) == 2:
+                    (c1, v1), (c2, _v2) = bars
+                    if c1 is not None and c1 == c2 and v1:   # v1>0 — วอลุ่มจริงแต่ราคานิ่งเป๊ะถึงนับ
+                        dup_syms.append(tk)
+                # len(bars) == 1: หุ้นมีแท่งเดียว (เพิ่ง backfill/เพิ่งเข้าดัชนี) — ไม่มีคู่ให้เทียบ
         finally:
             con.close()
     except Exception as e:
         return _dh_quality_item(key, label, "red", f"เช็คไม่ได้ (exception): {str(e)[:120]}")
-
-    if universe:
-        rows = [r for r in rows if r[0] in universe]
-
-    dup_syms = []
-    total = 0
-    i = 0
-    while i < len(rows):
-        if i + 1 < len(rows) and rows[i][0] == rows[i + 1][0]:
-            total += 1
-            _, c1, v1 = rows[i]
-            _, c2, _v2 = rows[i + 1]
-            if c1 is not None and c1 == c2 and v1:   # v1>0 — วอลุ่มจริงแต่ราคานิ่งเป๊ะถึงนับ
-                dup_syms.append(rows[i][0])
-            i += 2
-        else:
-            total += 1   # หุ้นมีแท่งเดียว (เพิ่ง backfill/เพิ่งเข้าดัชนี) — ไม่มีคู่ให้เทียบ
-            i += 1
 
     if total < min_universe:
         return _dh_quality_item(key, label, "na", f"หุ้นในฐานข้อมูลน้อยเกินไป ({total} ตัว) — ยังเช็คไม่ได้แม่นยำ")
@@ -5919,6 +6064,48 @@ def data_health():
             missing_note="ยังไม่เคยรัน update_financials.py"))
     except Exception as e:
         items.append(_dh_error_item("financials", "งบการเงิน หุ้นไทย+DR (financials.db)", "งบการเงิน", str(e)[:160]))
+
+    # แจกแจง coverage ต่อแหล่งข้อมูลงบการเงิน (Yahoo/Finnomena/SET company-highlight/SET P&L
+    # รายไตรมาส) — ต่างจาก item "financials" ด้านบนที่เช็คแค่ mtime ของ sync ล่าสุด รายการนี้
+    # เทียบ universe หุ้นไทยจริง (_financials_universe, ตัวเดียวกับ /api/financials-coverage)
+    # กับที่มีข้อมูลจริงต่อแหล่งใน DB ให้เห็นว่าแหล่งไหน sync ยังไม่ครบทั้งตลาดจริงๆ (เช่น
+    # set_qpl เพิ่งเพิ่มเข้า bulk sync — ยิงหลาย request/หุ้น sync ทั้งตลาดใช้เวลา ~1 ชม.)
+    try:
+        _fin_cov_srcs = [("yahoo", "Yahoo Finance"), ("finnomena_q", "Finnomena"),
+                          ("set", "SET company-highlight"), ("set_qpl", "SET P&L รายไตรมาส")]
+        _fin_cov = financials_store.get_coverage(BASE_DIR, _financials_universe(),
+                                                  sources=[k for k, _ in _fin_cov_srcs])
+        _fin_cov_rows = []
+        _fin_cov_worst_pct = 100.0
+        for _k, _label in _fin_cov_srcs:
+            _c = _fin_cov.get(_k, {"covered": 0, "total": 0})
+            _total = _c["total"]
+            _pct = (_c["covered"] / _total * 100) if _total else 0.0
+            _fin_cov_worst_pct = min(_fin_cov_worst_pct, _pct)
+            _color = "var(--green)" if _pct >= 99.5 else ("var(--yellow)" if _pct >= 90 else "var(--red)")
+            _fin_cov_rows.append(
+                f'<tr><td style="padding:2px 10px 2px 0">{_label}</td>'
+                f'<td style="text-align:right;color:{_color};font-weight:600">'
+                f'{_c["covered"]}/{_total} ({_pct:.1f}%)</td></tr>')
+        _fin_cov_status = ("ok" if _fin_cov_worst_pct >= 99.5
+                            else "warn" if _fin_cov_worst_pct >= 90 else "red")
+        _fin_cov_extra = ""
+        if _fin_cov_worst_pct < 90:
+            _fin_cov_extra = ('<div style="margin-top:6px">ยังไม่ sync ทั้งตลาด — กดปุ่ม '
+                               '"🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างเพื่อ sync ให้ครบ '
+                               '(set_qpl ยิงหลาย request/หุ้น sync ทั้งตลาดใช้เวลานานสุด ~1 ชม.)</div>')
+        items.append({
+            "key": "financials_coverage_by_source",
+            "label": "งบการเงิน — แจกแจงตามแหล่ง (financials.db)",
+            "category": "งบการเงิน",
+            "last_at": None, "age_hours": None,
+            "status": _fin_cov_status,
+            "note": (f'<table style="border-collapse:collapse">{"".join(_fin_cov_rows)}</table>'
+                     f'{_fin_cov_extra}'),
+        })
+    except Exception as e:
+        items.append(_dh_error_item("financials_coverage_by_source",
+                                     "งบการเงิน — แจกแจงตามแหล่ง (financials.db)", "งบการเงิน", str(e)[:160]))
 
     # เก็บเป็น JSON string {"at": "YYYY-MM-DD HH:MM", "ok":.., "empty":.., "fail":.., "total":.., "force":..}
     # ไม่ใช่ plain datetime string เหมือน meta อื่น — ต้องแกะก่อน parse
@@ -6523,12 +6710,27 @@ def mirror_yahoo_index_sync():
 # เดียวกับ mirror-sync-new/mirror-yahoo-index-sync ด้านบน (progress bar + run_log)
 # ============================================================
 
+_FIN_UPDATE_ALL_MIN_AGE_DAYS = 7   # ข้ามคู่ (หุ้น, แหล่ง) ที่ synced_at ใหม่กว่า N วัน — กันกดซ้ำ/เผลอกดสอง
+# ครั้งแล้วต้องรอ sync ทั้งตลาดใหม่ทั้งหมด (set_qpl ตัวเดียวใช้เวลา ~1 ชม. ถ้า sync ทั้ง 929 ตัว
+# ทุกครั้ง) ตั้งชื่อแยกจาก min_age_days ใน sync_all เผื่ออยากปรับค่านี้ให้ต่างจาก endpoint อื่น
+
+
 def _run_financials_update_all():
     """เทียบเท่า `python update_financials.py` (scope=all) — เช็ค DR ใหม่ → sync งบหุ้นไทย
-    (Yahoo+SET+Finnomena) → sync งบ DR (Yahoo+Finnomena) → sync งบสมาชิกดัชนีหลัก US
+    (Yahoo+SET+SET-QPL+Finnomena) → sync งบ DR (Yahoo+Finnomena) → sync งบสมาชิกดัชนีหลัก US
     (S&P500+Dow+NDX)/HK (HSI+HSCEI+HSTECH)/JP (Nikkei 225) ผ่าน Yahoo (ข้าม ticker ที่มีงบ
     อยู่แล้วจาก DR/DRx โดยอัตโนมัติ — ดู sync_mirror_yahoo_index) → refresh งบ mirror US/HK
-    ที่ค้นบ่อยใน 90 วัน → build factor snapshot ใหม่ ปุ่มที่ใช้บ่อยสุด (ทุกครั้งหลังงบไตรมาสออก)"""
+    ที่ค้นบ่อยใน 90 วัน → build factor snapshot ใหม่ ปุ่มที่ใช้บ่อยสุด (ทุกครั้งหลังงบไตรมาสออก)
+
+    SET-QPL (source 'set_qpl') = ข้อมูลตาราง P&L รายไตรมาสจาก SET official (ดู
+    compute_qpl_report ใน financials_store.py) — เก็บสะสมใน DB เหมือนแหล่งอื่น กันข้อมูลละเอียด
+    (COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี) หายเมื่อ SET periods list เลื่อนหลุด
+
+    Incremental (min_age_days=7, ดู _FIN_UPDATE_ALL_MIN_AGE_DAYS): เดิมยิงสดทุกคู่ (หุ้น×แหล่ง) ทั้ง
+    929+ ตัวทุกครั้งที่กด แม้เพิ่ง sync ไปหมาดๆ — เปลืองเวลา/ยิง SET.or.th ซ้ำโดยไม่จำเป็น (บริษัทยื่น
+    งบแค่ไตรมาสละครั้ง) ตอนนี้ข้ามคู่ที่ synced ไปไม่เกิน 7 วันให้เอง เหมือน pattern 'ดึงเฉพาะที่ขาด/เก่า'
+    ของดัชนี US/HK/JP — ปกติกดหลังงบไตรมาสออก (ห่างกันเป็นเดือน) จะไม่ข้ามอะไรเลยเหมือน full sync เดิม
+    แต่ป้องกันกรณีกดซ้ำ/เผลอกดสองครั้งใกล้กัน"""
     t0 = time.time()
     searched = []
     try:
@@ -6545,8 +6747,9 @@ def _run_financials_update_all():
             pct = 5 + (done / max(total, 1) * 45)
             _update(current=round(pct), total=100, message=f"งบหุ้นไทย: {done}/{total}")
         r_th = financials_store.sync_all(BASE_DIR, syms_th,
-                                          sources=("yahoo", "set", "yahoo_q", "finnomena_q"),
-                                          callback=_th_cb, is_dr=False)
+                                          sources=("yahoo", "set", "set_qpl", "yahoo_q", "finnomena_q"),
+                                          callback=_th_cb, is_dr=False,
+                                          min_age_days=_FIN_UPDATE_ALL_MIN_AGE_DAYS)
 
         syms_dr = _dr_financials_universe()
         _update(current=50, total=100, message=f"sync งบ DR {len(syms_dr)} ตัว...")
@@ -6556,7 +6759,8 @@ def _run_financials_update_all():
             _update(current=round(pct), total=100, message=f"งบ DR: {done}/{total}")
         r_dr = financials_store.sync_all(BASE_DIR, syms_dr,
                                           sources=("yahoo", "yahoo_q", "finnomena_q"),
-                                          callback=_dr_cb, is_dr=True)
+                                          callback=_dr_cb, is_dr=True,
+                                          min_age_days=_FIN_UPDATE_ALL_MIN_AGE_DAYS)
 
         # sync งบสมาชิกดัชนีหลัก US (S&P500+Dow+NDX) / HK (HSI+HSCEI+HSTECH) / JP (Nikkei 225)
         # ผ่าน Yahoo — sync_mirror_yahoo_index สแกน namespace 'DR:{sym}'/'FINN:{ex}:{sym}' ที่มี
@@ -6606,8 +6810,9 @@ def _run_financials_update_all():
         _fin_analytics_cache.clear()
 
         elapsed_min = (time.time() - t0) / 60
-        summary = (f"เสร็จแล้ว! หุ้นไทย {r_th['ok']}/{r_th['total']} (พลาด {r_th['fail']}) · "
-                   f"DR {r_dr['ok']}/{r_dr['total']} (พลาด {r_dr['fail']}) · "
+        summary = (f"เสร็จแล้ว! หุ้นไทย {r_th['ok']}/{r_th['total']} (พลาด {r_th['fail']}, "
+                   f"ข้าม {r_th['skipped']} คู่ที่ synced ไม่เกิน {_FIN_UPDATE_ALL_MIN_AGE_DAYS} วัน) · "
+                   f"DR {r_dr['ok']}/{r_dr['total']} (พลาด {r_dr['fail']}, ข้าม {r_dr['skipped']}) · "
                    f"ดัชนีหลัก US/HK/JP {r_idx['ok']}/{r_idx['total']} (ข้าม {r_idx['skipped']} ที่มีแล้ว)"
                    + (f" · mirror ค้นบ่อย {refreshed_mirror}/{len(searched)}" if searched else "")
                    + f" · ใช้เวลา {elapsed_min:.0f} นาที")

@@ -79,8 +79,8 @@ try:
 
     if scope in ("all", "th"):
         syms = _th_universe()
-        print(f"[งบไทย] sync {len(syms)} หุ้น · แหล่ง Yahoo + SET + Yahoo-Q + Finnomena-Q ...", flush=True)
-        r = fs.sync_all(BASE, syms, sources=("yahoo", "set", "yahoo_q", "finnomena_q"),
+        print(f"[งบไทย] sync {len(syms)} หุ้น · แหล่ง Yahoo + SET + SET-QPL + Yahoo-Q + Finnomena-Q ...", flush=True)
+        r = fs.sync_all(BASE, syms, sources=("yahoo", "set", "set_qpl", "yahoo_q", "finnomena_q"),
                         callback=_progress("ไทย"), is_dr=False)
         print(f"[งบไทย] เสร็จ: สำเร็จ {r['ok']}/{r['total']} (พลาด {r['fail']})", flush=True)
 
