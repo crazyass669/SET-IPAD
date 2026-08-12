@@ -6,7 +6,16 @@
   const _origFetch = window.fetch.bind(window);
   window.fetch = function (input, init) {
     const method = ((init && init.method) || 'GET').toUpperCase();
-    if (method === 'POST' && window.__DASH_TOKEN__) {
+    // แนบเฉพาะ request ที่ยิงกลับมาที่ origin ของเราเอง (/api/*) — request ข้าม origin
+    // (เช่น Algolia ที่ปุ่ม Jitta ใช้ resolve URL หุ้น) ต้องไม่แนบ ไม่งั้น browser เห็น
+    // custom header แปลกปลอมแล้วบล็อก preflight ทั้ง request (ปลายทางไม่รู้จัก/ไม่อนุญาต
+    // header นี้ใน Access-Control-Allow-Headers) ทำให้ fetch fail เงียบๆ ทุกครั้ง
+    let sameOrigin = true;
+    try {
+      const urlStr = typeof input === 'string' ? input : (input && input.url) || '';
+      sameOrigin = new URL(urlStr, window.location.origin).origin === window.location.origin;
+    } catch (e) { /* parse ไม่ได้ (เช่น URL แปลก) — ปลอดภัยไว้ก่อน ถือว่าเป็นของเราเอง */ }
+    if (method === 'POST' && window.__DASH_TOKEN__ && sameOrigin) {
       init = Object.assign({}, init, {
         headers: Object.assign({}, init.headers, { 'X-Dashboard-Token': window.__DASH_TOKEN__ }),
       });
@@ -10500,8 +10509,10 @@ async function _fetchDRFullHistory(sym) {
 // insider-short-nvdr) — price_history/vol_history ติดมากับ metrics อยู่แล้ว (~2 ปี)
 // วาดได้ทันทีไม่ต้องรอ fetch, ส่วน 5Y/Max ค่อยดึงเพิ่มจาก us_prices.db เบื้องหลัง
 // ============================================================
-function openUsChartModal(symbol) {
-  const s = (_usData?.stocks || []).find(x => x.symbol === symbol);
+function openUsChartModal(symbol, rowOverride) {
+  // rowOverride: ใช้ตอนเรียกจากหน้า Heatmap US ที่มี row (พร้อม price_history) อยู่แล้ว
+  // ใน _hmData — ไม่ต้องรอ _usData โหลด (หน้า "หุ้น US" อาจยังไม่เคยถูกเปิดเลย)
+  const s = rowOverride || (_usData?.stocks || []).find(x => x.symbol === symbol);
   if (!s || !s.price_history || s.price_history.length < 5) {
     alert(`ไม่มีข้อมูลราคาสำหรับ ${symbol} — ลองกด US Index Max`);
     return;
@@ -10588,8 +10599,9 @@ function openUsChartModal(symbol) {
 // ก็อปโครงจาก openUsChartModal ทั้งหมด ต่างแค่ flag _isHKIdx (ให้ setCmTf ไปดึง
 // /api/hk-history แทน) และ tag ดัชนี in_hsi/in_hstech/in_hscei
 // ============================================================
-function openHkChartModal(symbol) {
-  const s = (_hkData?.stocks || []).find(x => x.symbol === symbol);
+function openHkChartModal(symbol, rowOverride) {
+  // rowOverride: เหตุผลเดียวกับ openUsChartModal — ใช้ตอนเรียกจากหน้า Heatmap HK
+  const s = rowOverride || (_hkData?.stocks || []).find(x => x.symbol === symbol);
   if (!s || !s.price_history || s.price_history.length < 5) {
     alert(`ไม่มีข้อมูลราคาสำหรับ ${symbol} — ลองกด HK Index Max`);
     return;
@@ -10675,8 +10687,9 @@ function openHkChartModal(symbol) {
 // งบการเงิน/เทียบเพื่อน/Tearsheet/คำอธิบายบริษัทแปลไทย (_renderDRDescription, market=JP ->
 // sym + '.T') เปิดใช้ได้เต็มแล้ว
 // ============================================================
-function openJpChartModal(symbol) {
-  const s = (_jpData?.stocks || []).find(x => x.symbol === symbol);
+function openJpChartModal(symbol, rowOverride) {
+  // rowOverride: เหตุผลเดียวกับ openUsChartModal — ใช้ตอนเรียกจากหน้า Heatmap JP
+  const s = rowOverride || (_jpData?.stocks || []).find(x => x.symbol === symbol);
   if (!s || !s.price_history || s.price_history.length < 5) {
     alert(`ไม่มีข้อมูลราคาสำหรับ ${symbol} — ลองกด JP Index Max`);
     return;
@@ -11393,7 +11406,7 @@ function closeChartModal() {
 
 // ปุ่ม "🔗 หน้างบการเงิน" บน popup กราฟ (chart-modal) — ไปหน้าเมนู "งบการเงิน" จริงพร้อมค้นหุ้น
 // ตัวนี้ให้ทันที คนละอันกับแท็บ "🧾 งบการเงิน" (cm-mode-fin) ที่แค่สลับ panel ภายใน popup เดิม
-// (แท็บนั้นคงไว้เหมือนเดิม ไม่แตะ) — ใช้ hash เดียวกับ _spopGoFin/_hmGoFin/_hkHmGoFin/_jpHmGoFin
+// (แท็บนั้นคงไว้เหมือนเดิม ไม่แตะ) — ใช้ hash เดียวกับ _spopGoFin
 // เคลียร์ _cmParentIdx ก่อนเรียก closeChartModal() เพราะถ้าค้างอยู่ (เปิดมาจากแท็บ
 // "หุ้นในกลุ่ม" ของ index modal) closeChartModal จะ setTimeout เปิด index modal ซ้อนทับ
 // หน้างบการเงินที่เรากำลังจะนำทางไป — เคลียร์ก่อนแล้วเรียกปกติ ได้ cleanup ครบ
@@ -13692,7 +13705,6 @@ let _hmIndex = 'SP500';
 let _hmPeriod = 'ret_1d';   // key ใน HM_CFG — สลับดูได้ทันทีจากข้อมูลชุดเดียวกัน ไม่ยิง API ซ้ำ
 let _hmSortDir = 1;    // 1 = มากไปน้อย, -1 = น้อยไปมาก — คลิกปุ่ม metric เดิมซ้ำเพื่อสลับ (ดู _hmCmp)
 let _hmData = {};      // cache ในหน่วยความจำต่อ tab {SP500:{rows,ts,requested,missing}, DOW:{...}, NDX:{...}}
-let _hmPopupSym = null;
 
 // ลิงก์ไปหน้า Heatmap จริงของ TradingView.com ต่อดัชนี — เผื่อผู้ใช้อยากดู treemap ขนาดกล่อง
 // = market cap จริง (ของเราตัด market cap ออกแล้วเปลี่ยนเป็น grid ขนาดเท่ากันแทน เพราะเดิมต้อง
@@ -13906,65 +13918,26 @@ function _renderHeatmap(data) {
   }
   const searchEl = document.getElementById('hm-search');
   const search = (searchEl?.value || '').trim().toLowerCase();
-  box.innerHTML = _hmGridHtml(rows, _hmPeriod, search, '_hmShowPopup', _hmSortDir);
+  box.innerHTML = _hmGridHtml(rows, _hmPeriod, search, '_hmOpenModal', _hmSortDir);
 }
 
-function _hmShowPopup(ev, sym) {
-  const rows = (_hmData[_hmIndex] || {}).rows || [];
-  const r = rows.find(x => x.symbol === sym);
-  if (!r) return;
-  _hmPopupSym = sym;
-  const pop = document.getElementById('hm-popup');
-  document.getElementById('hm-popup-sym').textContent = r.symbol;
-  document.getElementById('hm-popup-name').textContent = r.name || '';
-  document.getElementById('hm-popup-sector').textContent = r.sector || '';
-  const setChg = (id, v) => {
-    const el = document.getElementById(id);
-    el.textContent = v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '—';
-    el.style.color = v == null ? 'var(--text2)' : v >= 0 ? 'var(--green)' : 'var(--red)';
-  };
-  setChg('hm-popup-chg1d', r.ret_1d);
-  setChg('hm-popup-chg1w', r.ret_1w);
-  const rsEl = document.getElementById('hm-popup-rs');
-  rsEl.textContent = r.rs_score != null ? Math.round(r.rs_score) : '—';
-  rsEl.style.color = r.rs_score == null ? 'var(--text2)' : r.rs_score >= 50 ? 'var(--green)' : 'var(--red)';
-  const finBtn = document.getElementById('hm-popup-fin-btn');
-  if (finBtn) finBtn.onclick = _hmGoFin;
-  const vw = window.innerWidth, vh = window.innerHeight;
-  let left = ev.clientX + 12, top = ev.clientY + 12;
-  if (left + 220 > vw) left = ev.clientX - 232;
-  if (top + 160 > vh) top = ev.clientY - 172;
-  pop.style.left = left + 'px';
-  pop.style.top = top + 'px';
-  pop.style.display = 'block';
-  ev.stopPropagation();
-  document.addEventListener('click', _hmCloseOnOutside, { once: true });
-}
-
-function _hmCloseOnOutside() {
-  const pop = document.getElementById('hm-popup');
-  if (pop) pop.style.display = 'none';
-}
-
-function _hmGoFin() {
-  if (!_hmPopupSym) return;
-  const sym = _hmPopupSym;
-  document.getElementById('hm-popup').style.display = 'none';
-  openInternalHash('#fin/dr/US:' + sym);   // ทริกเกอร์ _finApplyHash — ไม่ต้องเดา setTimeout ว่าหน้าโหลดเสร็จหรือยัง (หรือเปิดแท็บใหม่ตามโหมดที่เลือก)
+// เปิด chart modal เต็มรูปแบบทันที (เหมือนคลิกหุ้นไทยในหน้า Market Heatmap) แทนที่ popup
+// ย่อเดิม — row จาก _hmData มี price_history/vol_history ครบอยู่แล้ว (source เดียวกับ
+// /api/us-index-metrics) ส่งตรงเป็น rowOverride ให้ openUsChartModal ไม่ต้องรอ _usData โหลด
+function _hmOpenModal(ev, sym) {
+  const r = ((_hmData[_hmIndex] || {}).rows || []).find(x => x.symbol === sym);
+  if (r) openUsChartModal(sym, r);
 }
 
 // ============================================================
 // HK HEATMAP — HSI / HSTECH / HSCEI
 // ก็อปโครงจาก US HEATMAP ด้านบนทั้งหมด — reuse _hmColor/_hmGridCellHtml/_hmGridHtml ตัวเดิม
-// (generic ไม่มี id ผูกอยู่) ต่างแค่ prefix hm->hk-hm, endpoint /api/hk-index-heatmap, และ
-// popup ใช้ตัวแปร/handler แยก (_hkHmPopupSym) เพราะ popup DOM #hm-popup ใช้ร่วมกันแค่ตัว
-// element ไม่ใช่ state
+// (generic ไม่มี id ผูกอยู่) ต่างแค่ prefix hm->hk-hm, endpoint /api/hk-index-heatmap
 // ============================================================
 let _hkHmIndex = 'HSI';
 let _hkHmPeriod = 'ret_1d';   // key ใน HM_CFG (ดูคอมเมนต์หัวไฟล์ US heatmap ด้านบน)
 let _hkHmSortDir = 1;    // 1 = มากไปน้อย, -1 = น้อยไปมาก — คลิกปุ่ม metric เดิมซ้ำเพื่อสลับ
 let _hkHmData = {};      // {HSI:{rows,ts,requested,missing}, HSTECH:{...}, HSCEI:{...}}
-let _hkHmPopupSym = null;
 
 // ลิงก์ TradingView Heatmap ต่อดัชนี — เหมือน _HM_TV_URL ของ US (ดูคอมเมนต์ตรงนั้น)
 const _HK_HM_TV_URL = {
@@ -14040,50 +14013,13 @@ function _renderHkHeatmap(data) {
   }
   const searchEl = document.getElementById('hk-hm-search');
   const search = (searchEl?.value || '').trim().toLowerCase();
-  box.innerHTML = _hmGridHtml(rows, _hkHmPeriod, search, '_hkHmShowPopup', _hkHmSortDir);
+  box.innerHTML = _hmGridHtml(rows, _hkHmPeriod, search, '_hkHmOpenModal', _hkHmSortDir);
 }
 
-function _hkHmShowPopup(ev, sym) {
-  const rows = (_hkHmData[_hkHmIndex] || {}).rows || [];
-  const r = rows.find(x => x.symbol === sym);
-  if (!r) return;
-  _hkHmPopupSym = sym;
-  const pop = document.getElementById('hm-popup');
-  document.getElementById('hm-popup-sym').textContent = r.symbol;
-  document.getElementById('hm-popup-name').textContent = r.name || '';
-  document.getElementById('hm-popup-sector').textContent = r.sector || '';
-  const setChg = (id, v) => {
-    const el = document.getElementById(id);
-    el.textContent = v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '—';
-    el.style.color = v == null ? 'var(--text2)' : v >= 0 ? 'var(--green)' : 'var(--red)';
-  };
-  setChg('hm-popup-chg1d', r.ret_1d);
-  setChg('hm-popup-chg1w', r.ret_1w);
-  const rsEl = document.getElementById('hm-popup-rs');
-  rsEl.textContent = r.rs_score != null ? Math.round(r.rs_score) : '—';
-  rsEl.style.color = r.rs_score == null ? 'var(--text2)' : r.rs_score >= 50 ? 'var(--green)' : 'var(--red)';
-  const finBtn = document.getElementById('hm-popup-fin-btn');
-  if (finBtn) finBtn.onclick = _hkHmGoFin;
-  const vw = window.innerWidth, vh = window.innerHeight;
-  let left = ev.clientX + 12, top = ev.clientY + 12;
-  if (left + 220 > vw) left = ev.clientX - 232;
-  if (top + 160 > vh) top = ev.clientY - 172;
-  pop.style.left = left + 'px';
-  pop.style.top = top + 'px';
-  pop.style.display = 'block';
-  ev.stopPropagation();
-  document.addEventListener('click', _hmCloseOnOutside, { once: true });
-}
-
-function _hkHmGoFin() {
-  if (!_hkHmPopupSym) return;
-  // งบเก็บใต้ namespace mirror ด้วยรหัสดิบไม่มี .HK ("0700") — ส่ง "0700.HK" ทั้ง suffix
-  // จะค้นไม่เจอเสมอ ต้องตัด suffix ออก — ส่วนการสลับ market เป็น HK ให้ _finApplyHash จัดการ
-  // เองจาก prefix "HK:" ใน hash (ไม่เรียก _finMirSelectMarket ตรงนี้ซ้ำ กันโหมด "🗗 แท็บใหม่"
-  // ไปสลับตลาด+re-render หน้างบการเงินของแท็บปัจจุบันทิ้งไว้เงียบๆ โดยไม่ตั้งใจ)
-  const sym = _hkHmPopupSym.replace(/\.HK$/i, '');
-  document.getElementById('hm-popup').style.display = 'none';
-  openInternalHash('#fin/dr/HK:' + sym);
+// เปิด chart modal เต็มรูปแบบทันที — ดูเหตุผล/comment เดียวกับ _hmOpenModal (US) ด้านบน
+function _hkHmOpenModal(ev, sym) {
+  const r = ((_hkHmData[_hkHmIndex] || {}).rows || []).find(x => x.symbol === sym);
+  if (r) openHkChartModal(sym, r);
 }
 
 // ============================================================
@@ -14094,7 +14030,6 @@ function _hkHmGoFin() {
 let _jpHmPeriod = 'ret_1d';   // key ใน HM_CFG (ดูคอมเมนต์หัวไฟล์ US heatmap ด้านบน)
 let _jpHmSortDir = 1;    // 1 = มากไปน้อย, -1 = น้อยไปมาก — คลิกปุ่ม metric เดิมซ้ำเพื่อสลับ
 let _jpHmData = null;      // {rows,ts,requested,missing}
-let _jpHmPopupSym = null;
 
 function jpHmLiveUpdate() {
   _hmLiveUpdate('JP', document.getElementById('jp-hm-refresh-btn'), '⚡ รีเฟรช', () => loadJpHeatmapPage(true), null, 'jp-hm-note');
@@ -14151,48 +14086,13 @@ function _renderJpHeatmap(data) {
   }
   const searchEl = document.getElementById('jp-hm-search');
   const search = (searchEl?.value || '').trim().toLowerCase();
-  box.innerHTML = _hmGridHtml(rows, _jpHmPeriod, search, '_jpHmShowPopup', _jpHmSortDir);
+  box.innerHTML = _hmGridHtml(rows, _jpHmPeriod, search, '_jpHmOpenModal', _jpHmSortDir);
 }
 
-function _jpHmShowPopup(ev, sym) {
-  const rows = (_jpHmData || {}).rows || [];
-  const r = rows.find(x => x.symbol === sym);
-  if (!r) return;
-  _jpHmPopupSym = sym;
-  const pop = document.getElementById('hm-popup');
-  document.getElementById('hm-popup-sym').textContent = r.symbol;
-  document.getElementById('hm-popup-name').textContent = r.name || '';
-  document.getElementById('hm-popup-sector').textContent = r.sector || '';
-  const setChg = (id, v) => {
-    const el = document.getElementById(id);
-    el.textContent = v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '—';
-    el.style.color = v == null ? 'var(--text2)' : v >= 0 ? 'var(--green)' : 'var(--red)';
-  };
-  setChg('hm-popup-chg1d', r.ret_1d);
-  setChg('hm-popup-chg1w', r.ret_1w);
-  const rsEl = document.getElementById('hm-popup-rs');
-  rsEl.textContent = r.rs_score != null ? Math.round(r.rs_score) : '—';
-  rsEl.style.color = r.rs_score == null ? 'var(--text2)' : r.rs_score >= 50 ? 'var(--green)' : 'var(--red)';
-  const finBtn = document.getElementById('hm-popup-fin-btn');
-  if (finBtn) finBtn.onclick = _jpHmGoFin;
-  const vw = window.innerWidth, vh = window.innerHeight;
-  let left = ev.clientX + 12, top = ev.clientY + 12;
-  if (left + 220 > vw) left = ev.clientX - 232;
-  if (top + 160 > vh) top = ev.clientY - 172;
-  pop.style.left = left + 'px';
-  pop.style.top = top + 'px';
-  pop.style.display = 'block';
-  ev.stopPropagation();
-  document.addEventListener('click', _hmCloseOnOutside, { once: true });
-}
-
-function _jpHmGoFin() {
-  if (!_jpHmPopupSym) return;
-  // งบเก็บใต้ namespace mirror ด้วยรหัสดิบไม่มี .T ("7203") — ต้องตัด suffix ออก ส่วนการสลับ
-  // market เป็น JP ให้ _finApplyHash จัดการเองจาก prefix "JP:" ใน hash (ดูคอมเมนต์ใน _hkHmGoFin)
-  const sym = _jpHmPopupSym.replace(/\.T$/i, '');
-  document.getElementById('hm-popup').style.display = 'none';
-  openInternalHash('#fin/dr/JP:' + sym);
+// เปิด chart modal เต็มรูปแบบทันที — ดูเหตุผล/comment เดียวกับ _hmOpenModal (US) ด้านบน
+function _jpHmOpenModal(ev, sym) {
+  const r = ((_jpHmData || {}).rows || []).find(x => x.symbol === sym);
+  if (r) openJpChartModal(sym, r);
 }
 
 // ============================================================
