@@ -9,6 +9,12 @@ bias fix), sec_filings.db (insider/ผู้ถือหุ้นใหญ่) �
 (ประวัติหุ้นเข้า/ออก) financials_backups/ ในเครื่องช่วยกันไฟล์เสีย/เขียนพลาดได้
 แต่ไม่ช่วยถ้าเครื่อง/ฮาร์ดดิสก์พังทั้งลูก — ต้องมีสำเนานอกเครื่องด้วย
 
+us_prices.db/hk_prices.db/jp_prices.db (~440MB รวม) ต่างจาก 4 ไฟล์ข้างบนตรงที่
+"regenerate ได้" จริง (Yahoo ยังมีประวัติเต็มของหุ้นดัชนีหลัก US/HK/JP ที่ยังเทรดอยู่
+เสมอ ผ่านปุ่ม Index Max หรือ backfill_*_index_prices.py) แต่ backfill ใหม่ทั้งชุด
+(500+225+100 ตัว ประวัติ period=max) ใช้เวลานานมาก — สำรองไว้เพื่อประหยัดเวลา
+ไม่ใช่เพื่อกันข้อมูลหายถาวรแบบ 4 ไฟล์บน
+
 ใช้:
     python backup_financials_offsite.py D:\\Backups\\SET_Dashboard
     (หรือดับเบิลคลิก backup_financials_offsite.bat แล้วพิมพ์ path เมื่อถาม)
@@ -37,6 +43,9 @@ FILES = [
     ("set_prices.db", True),
     ("sec_filings.db", False),
     ("delisted_log.json", False),
+    ("us_prices.db", False),
+    ("hk_prices.db", False),
+    ("jp_prices.db", False),
 ]
 
 
@@ -95,12 +104,38 @@ def _backup_one(fname, required, dest_dir):
     return f"{fname} ({size_mb:.0f} MB, {elapsed:.0f} วิ)"
 
 
+def _fresh_enough(min_age_days):
+    """เช็คว่าสำรองล่าสุด (จาก run_log) ยังใหม่กว่า min_age_days วันไหม — ใช้กับ
+    trigger 'At log on' ที่ยิงทุกครั้งที่ล็อกอิน กันไม่ให้สำรองซ้ำถี่เกินจำเป็น
+    (trigger รายสัปดาห์ปกติไม่ควรโดนเงื่อนไขนี้บล็อค เพราะห่างกันเกิน min_age_days
+    อยู่แล้วตามธรรมชาติ — ยกเว้นเพิ่งสำรองไปจริงๆ ไม่นาน ซึ่งก็ถูกต้องที่จะข้าม)"""
+    status = run_log.read_status(BASE).get("offsite_backup")
+    if not status or not status.get("ok"):
+        return False
+    try:
+        last = datetime.strptime(status["at"], "%Y-%m-%d %H:%M:%S")
+    except (KeyError, ValueError):
+        return False
+    return (datetime.now() - last).days < min_age_days
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("ใช้: python backup_financials_offsite.py <โฟลเดอร์ปลายทาง>")
-        print(r"เช่น: python backup_financials_offsite.py D:\Backups\SET_Dashboard")
+    args = [a for a in sys.argv[1:]]
+    min_age_days = None
+    if "--min-age-days" in args:
+        i = args.index("--min-age-days")
+        min_age_days = int(args[i + 1])
+        del args[i:i + 2]
+
+    if len(args) < 1:
+        print("ใช้: python backup_financials_offsite.py <โฟลเดอร์ปลายทาง> [--min-age-days N]")
+        print(r"เช่น: python backup_financials_offsite.py D:\Backups\SET_Dashboard --min-age-days 3")
         sys.exit(1)
-    dest_dir = sys.argv[1]
+    dest_dir = args[0]
+
+    if min_age_days is not None and _fresh_enough(min_age_days):
+        print(f"[Backup] สำรองล่าสุดยังใหม่กว่า {min_age_days} วัน — ข้ามรอบนี้ (ใช้กับ trigger 'At log on')", flush=True)
+        return
 
     try:
         os.makedirs(dest_dir, exist_ok=True)

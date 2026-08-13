@@ -17717,7 +17717,6 @@ const _DH_LAST_RUN_GROUPS = [
   { title: '📅 ทุกวันทำการ (แถบเมนูบนสุด)', rows: [
     { key: 'quick_update', label: '⚡ Quick Update' },
     { key: 'full_refresh', label: '⟳ Full Refresh' },
-    { key: 'hedge_refresh', label: '🐋 Hedge Holdings' },
   ]},
   { title: '📈 อัพเดทราคาดัชนี US/HK/JP + Sync Mirror (กดมือเป็นครั้งคราว)', rows: [
     { key: 'us_index_full_refresh', label: '📈 US Index Max' },
@@ -17726,8 +17725,9 @@ const _DH_LAST_RUN_GROUPS = [
     { key: 'mirror_yahoo_index_sync', label: '🌐 Sync Mirror US/HK เต็ม' },
     { key: 'static_bake', label: '🧱 Bake ไฟล์ static ทั้งหมด' },
   ]},
-  { title: '📊 อัพเดทงบไตรมาส (ก.พ. / พ.ค. / ส.ค. / พ.ย.)', rows: [
+  { title: '📊 อัพเดทงบไตรมาส / 13F (ก.พ. / พ.ค. / ส.ค. / พ.ย. — หลัง SET 45-day deadline)', rows: [
     { key: 'financials_sync', label: '🔄 อัพเดทงบการเงินทั้งหมด' },
+    { key: 'hedge_refresh', label: '🐋 Hedge Holdings (13F — ดีเลย์ ~45 วัน หน้า Hedge Holdings)' },
     { key: 'mirror_finnomena', label: '📥 Mirror ทั้งตลาด (force)' },
     { key: 'build_mirror_names', label: '🏷️ ดึงชื่อหุ้น mirror ใหม่' },
   ]},

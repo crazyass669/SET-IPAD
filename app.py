@@ -6447,6 +6447,9 @@ _OFFSITE_BACKUP_FILES = [
     ("set_prices.db", "ราคาหุ้น + หุ้นเพิกถอน (set_prices.db)"),
     ("sec_filings.db", "SEC filings / insider (sec_filings.db)"),
     ("delisted_log.json", "ประวัติหุ้นเข้า/ออก (delisted_log.json)"),
+    ("us_prices.db", "ราคาหุ้นดัชนี US (us_prices.db)"),
+    ("hk_prices.db", "ราคาหุ้นดัชนี HK (hk_prices.db)"),
+    ("jp_prices.db", "ราคาหุ้นดัชนี JP (jp_prices.db)"),
 ]
 
 
