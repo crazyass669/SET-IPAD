@@ -16,7 +16,8 @@ from core import store as _default_ca_store
 from core.metrics import validate_stocks, rank_rs, summarize_groups
 from core.store import (OUT_FILE, DUAL_WRITE_JSON, _atomic_write_json,
                         _check_stock_count, get_closes_map, get_closes_on_date,
-                        get_last_dates, iter_all_series, load_history, save_history)
+                        get_last_dates, iter_all_series, iter_recent_series,
+                        load_history, save_history)
 from sources.yahoo import fetch_all_batch, fetch_gap_batch, fetch_market_caps_parallel
 from services.rotation import update_rotation_state
 from set_data_fetcher import load_set_symbols, process_stock, sanitize
@@ -54,6 +55,24 @@ def detect_ca_mismatch(base_dir, new_data, tol=0.005, min_bad=2, store=None):
                         break
         except Exception:
             continue
+    return suspects
+
+
+def detect_flat_price_tickers(base_dir, days=14):
+    """หา ticker ที่ราคาปิด `days` แท่งล่าสุด (default 14 วันเทรด) เท่ากันเป๊ะทุกแท่ง —
+    สัญญาณว่าอาจโดนเครื่องหมาย SP/NC/NP/H พักเทรดอยู่ แต่แหล่งราคาที่ใช้เติมข้อมูล (เช่น
+    chart-quotation fallback ของ SET.or.th) ไม่มี field เครื่องหมายให้เช็คตรงๆ เลยได้ราคา
+    อ้างอิงที่ค้างนิ่งมาเป็นแท่งใหม่ทุกวันโดยไม่รู้ตัว (เจอจริงกับ WELL 2569-08 — ราคา 0.71
+    นิ่งมากกว่าเดือนระหว่างโดน SP/NC/NP พร้อมกัน) คืน list ticker ที่ต้องสงสัยเฉยๆ (ยังไม่เช็ค
+    เครื่องหมายจริง — ต่อด้วย sources.set_api.fetch_signs_batch)
+
+    ใช้ iter_recent_series (query ตาม clustered index ticker+date) แทน iter_all_series
+    เต็มตาราง — เร็วกว่ามากตามที่ core/store.py คอมเมนต์ไว้ (~2 วิ ทั้งกระดาน)"""
+    suspects = []
+    for t, s in iter_recent_series(base_dir, days):
+        closes = [c for c in s["closes"] if c is not None]
+        if len(closes) >= days and len(set(closes)) == 1:
+            suspects.append(t)
     return suspects
 
 
@@ -259,6 +278,16 @@ def run_quick_update(callback, base_dir=None):
     if not last_map:
         raise ValueError("ไม่พบหุ้นที่ตรงกับ universe ปัจจุบันเลยใน set_prices.db")
 
+    # หุ้นเข้าใหม่ที่ไม่เคยมีราคาใน set_prices.db มาก่อนเลย (เพิ่งเข้าตลาดจริง) —
+    # ไม่อยู่ใน last_map เลยไม่โดนนับใน active_map/stale_tickers ด้านล่าง ถ้าไม่กันไว้ตรงนี้
+    # SET API fast path (quote_tickers/remaining ผูกกับ active_map ล้วน) จะข้ามตัวพวกนี้
+    # เงียบๆ ทุกรอบ ทั้งที่ fast path สำเร็จปกติ (เจอจริง 2569-08-13 กรณี WELL เข้า mai
+    # ใหม่ กด Quick Update แล้วไม่โผล่) ต้องไล่ผ่าน Yahoo แทนเสมอ (ดูจุดใช้ด้านล่าง)
+    never_fetched = ticker_set - set(last_map.keys())
+    if never_fetched:
+        logging.info(f"[QuickUpdate] หุ้นเข้าใหม่ยังไม่เคยมีราคาในเครื่อง {len(never_fetched)} ตัว: "
+              f"{sorted(never_fetched)[:10]}")
+
     # ตัดหุ้นค้างนาน (พักเทรด/เพิกถอน เช่น ACAP ค้างเป็นเดือน) ออกจากการหา
     # start_date — ไม่งั้นตัวเดียวลากให้ดาวน์โหลดย้อนหลังหลายเดือนทั้งกระดานทุกรอบ
     # หุ้นพวกนี้ไม่มีแท่งใหม่อยู่แล้ว การเริ่มดึงจากวันใหม่ไม่ทำให้ข้อมูลมันเสีย
@@ -336,8 +365,10 @@ def run_quick_update(callback, base_dir=None):
                     logging.info(f"[QuickUpdate] SET API fast path: {len(new_data)}/{len(quote_tickers)} "
                           f"หุ้น (asof={asof})")
                     # หุ้นค้างนาน (stale) + หุ้นที่ sync ไม่ตรง mode (ตามหลังอยู่ แต่ยังไม่ทัน
-                    # เกณฑ์ 14 วัน) — เช็คแยกผ่าน Yahoo (list สั้น) ว่ามีข้อมูลใหม่ไหม
-                    remaining = stale_tickers | {t for t, d in active_map.items() if d < mode_date}
+                    # เกณฑ์ 14 วัน) + หุ้นเข้าใหม่ที่ไม่เคยมีราคาเลย — เช็คแยกผ่าน Yahoo
+                    # (list สั้น) ว่ามีข้อมูลใหม่ไหม (never_fetched คำนวณไว้ด้านบนสุดของฟังก์ชัน)
+                    remaining = (stale_tickers | {t for t, d in active_map.items() if d < mode_date}
+                                 | never_fetched)
                     if remaining:
                         try:
                             catchup = fetch_gap_batch(list(remaining), start_date, callback=callback)
@@ -487,7 +518,28 @@ def run_quick_update(callback, base_dir=None):
     out_path = os.path.join(base_dir, OUT_FILE)
     _atomic_write_json(out_path, sanitize(output))
 
+    # ตรวจซ้ำหุ้นราคาปิดคงที่ผิดปกติ >= 14 วันเทรด แล้วเช็คเครื่องหมาย SP/NC/NP/H จริง
+    # จาก SET API ยืนยันสาเหตุ — non-critical, ล้มได้โดยไม่กระทบผลลัพธ์หลักของ Quick Update
+    flat_note = ""
+    try:
+        flat_tickers = detect_flat_price_tickers(base_dir)
+        if flat_tickers:
+            from sources.set_api import fetch_signs_batch
+            signs = fetch_signs_batch(flat_tickers)
+            if signs:
+                detail = ", ".join(f"{t}({signs[t]})" for t in sorted(signs))
+                logging.warning(f"[QuickUpdate] ราคาคงที่ {len(flat_tickers)} ตัว — "
+                      f"ยืนยันติดเครื่องหมาย {len(signs)} ตัว: {detail}")
+                flat_note = f" · พบหุ้นติดเครื่องหมาย {len(signs)} ตัว ({detail[:80]})"
+            else:
+                logging.info(f"[QuickUpdate] ราคาคงที่ {len(flat_tickers)} ตัว "
+                      f"แต่เช็คเครื่องหมายไม่เจอ (อาจไม่ใช่ SP/NC/NP/H หรือ SET API ตอบไม่ครบ): "
+                      f"{sorted(flat_tickers)[:10]}")
+    except Exception as e:
+        logging.warning(f"[QuickUpdate] ตรวจหุ้นราคาคงที่ล้มเหลว: {e}")
+
     callback(total, total,
-             f"Quick Update เสร็จ! {len(stocks)} หุ้น (ดาวน์โหลดใหม่ {len(new_data)} หุ้น)")
+             f"Quick Update เสร็จ! {len(stocks)} หุ้น (ดาวน์โหลดใหม่ {len(new_data)} หุ้น)"
+             + flat_note)
 
 

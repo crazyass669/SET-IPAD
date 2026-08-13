@@ -94,18 +94,23 @@ def fetch_fundamentals(tickers, callback=None, workers=8, min_ratio=0.5):
     return results
 
 
-_SUSPEND_SIGNS = {"SP", "NC", "H"}
+_SUSPEND_SIGNS = {"SP", "NC", "NP", "H"}
 
 
-def fetch_quotes_batch(tickers, callback=None, workers=6, batch_size=30, min_ratio=0.5):
+def fetch_quotes_batch(tickers, callback=None, workers=6, batch_size=30, min_ratio=0.5,
+                        signs_out=None):
     """ดึงราคาล่าสุด (OHLCV วันเดียว) ของทั้งกระดานเร็ว จาก
     /api/set/stock-info/list-by-symbols — primary ของ Quick Update แทน Yahoo
     (เร็วกว่ามาก + ไม่ lag เหมือน Yahoo ที่ปล่อยแท่งปิดหุ้นไทยช้า — ดู
     services/refresh.py::run_quick_update สำหรับ fast-path logic เต็ม)
 
     tickers: list ของ "PTT.BK" -> คืน {ticker: {"open","high","low","close",
-             "volume","prior"}} เฉพาะตัวที่มีราคาจริง (ข้าม sign SP/NC/H หรือ
+             "volume","prior"}} เฉพาะตัวที่มีราคาจริง (ข้าม sign SP/NC/NP/H หรือ
              OHLC เป็น null — หุ้นพักเทรด/non-compliant)
+    signs_out: dict ว่างที่ส่งเข้ามาให้ฟังก์ชันเติมให้ (ticker -> sign string ดิบ เช่น
+             "SP,NC,NP") เฉพาะตัวที่ SET คืนเครื่องหมายมาไม่ว่าง — เดิมอ่าน sign มาเช็ค
+             แล้วทิ้งเงียบๆ ไม่มีทางรู้ว่าตัวที่หายไปจากผลลัพธ์เป็นเพราะเครื่องหมายอะไร
+             (ดู detect_flat_price_tickers ใน services/refresh.py ที่ใช้ param นี้)
     รับสูงสุด 30 ตัว/request (เกินกว่านั้นตอบ 400)
     raise ValueError ถ้าดึงสำเร็จน้อยกว่า min_ratio (ให้ caller fallback Yahoo)
     """
@@ -138,7 +143,10 @@ def fetch_quotes_batch(tickers, callback=None, workers=6, batch_size=30, min_rat
                 tick = sym_map.get(r.get("symbol"))
                 if not tick:
                     continue
-                sign_codes = {c.strip() for c in (r.get("sign") or "").split(",") if c.strip()}
+                sign_raw = (r.get("sign") or "").strip()
+                if sign_raw and signs_out is not None:
+                    signs_out[tick] = sign_raw
+                sign_codes = {c.strip() for c in sign_raw.split(",") if c.strip()}
                 o, h, l, c = r.get("open"), r.get("high"), r.get("low"), r.get("last")
                 if sign_codes & _SUSPEND_SIGNS or None in (o, h, l, c):
                     continue
@@ -156,6 +164,21 @@ def fetch_quotes_batch(tickers, callback=None, workers=6, batch_size=30, min_rat
         raise ValueError(f"SET API quotes ได้แค่ {ok}/{total} "
                          f"(<{int(min_ratio*100)}%) — ควร fallback")
     return results
+
+
+def fetch_signs_batch(tickers, workers=6, batch_size=30):
+    """เช็คเฉพาะเครื่องหมาย (sign) ปัจจุบันของหุ้นกลุ่มเล็กที่ระบุ ไม่สนราคา — ใช้กับ ticker
+    ที่ตรวจพบว่าราคาปิดคงที่ผิดปกติหลายวันติด (ดู detect_flat_price_tickers ใน
+    services/refresh.py) เพื่อยืนยันว่าเป็นเพราะ SP/NC/NP/H จริงไหม min_ratio=0 เพราะ
+    ตัวที่ต้องสงสัยส่วนใหญ่คาดว่าจะถูกกรองออกจาก results อยู่แล้ว (นั่นคือประเด็นที่จะเช็ค)
+    ไม่ควร raise แค่เพราะ "ได้ราคาน้อย" — คืน {ticker: sign string} เฉพาะตัวที่มีเครื่องหมาย"""
+    signs = {}
+    try:
+        fetch_quotes_batch(tickers, workers=workers, batch_size=batch_size, min_ratio=0,
+                            signs_out=signs)
+    except Exception:
+        pass
+    return signs
 
 
 def fetch_trading_calendar_tail(ref_symbol="PTT", n=5):
