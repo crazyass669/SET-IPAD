@@ -539,7 +539,29 @@ function startMirrorYahooIndexSync() {
 // Quick Update/Full Refresh (progress bar + SSE + กันกดซ้ำระหว่างมีงานอื่นรันอยู่)
 function startFinancialsUpdateAll() {
   if (!confirm('เช็ค DR ใหม่ → งบหุ้นไทยทุกตัว (Yahoo+SET+Finnomena) → งบ DR → หุ้น US/HK ที่ค้นบ่อย → คำนวณ factor snapshot ใหม่?\n\nอาจใช้เวลานานถึงเกือบครึ่งชั่วโมง (ขึ้นกับจำนวนหุ้น/DR ที่ต้องดึง) — ปิดแท็บ/ปิดคอมได้ระหว่างรัน')) return;
-  _startJob("/api/financials-update-all", "fin-update-all-btn", "🔄 อัพเดทงบการเงินทั้งหมด", null, checkDataHealthBadge);
+  _startJob("/api/financials-update-all", "fin-update-all-btn", "🔄 อัพเดทงบการเงินทั้งหมด", null,
+    () => { checkDataHealthBadge(); loadFinUpdateAllStatus(); });
+}
+
+// โชว์ "กดล่าสุดเมื่อไหร่ + ผลลัพธ์" ติดกับปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" กันสับสนว่าข้อมูลที่ได้
+// เป็นล่าสุดจริงหรือถูกข้ามไป (เดิม user เข้าใจผิดว่า sync ไปแล้วต้องได้ของใหม่เสมอ ทั้งที่บางคู่
+// (หุ้น×แหล่ง) มีงวดล่าสุดอยู่แล้วจริงเลยถูกข้าม ดู skip_up_to_date ใน sync_all) — อ่านจาก
+// run_log (financials_sync key, เขียนโดย _run_financials_update_all ท้าย app.py) ผ่าน
+// /api/update-status ตัวเดียวกับที่ใช้ทำ banner เตือนตอนเปิดแอป
+async function loadFinUpdateAllStatus() {
+  const el = document.getElementById('fin-update-all-status');
+  if (!el || IS_STATIC) return;
+  try {
+    const r = await fetch('/api/update-status');
+    const d = await r.json();
+    const s = d.all && d.all.financials_sync;
+    if (!s) { el.textContent = 'ยังไม่เคยกดปุ่มนี้'; return; }
+    const icon = s.ok ? '✅' : '⚠️';
+    el.innerHTML = `${icon} กดล่าสุด: <b>${s.at}</b> — ${s.message}<br>` +
+      `ไม่มีช่วงรอแล้ว กดตอนไหนก็ได้ ระบบจะข้ามเฉพาะคู่ (หุ้น×แหล่ง) ที่มีงวดล่าสุดอยู่แล้วจริงเท่านั้น`;
+  } catch (e) {
+    el.textContent = '';
+  }
 }
 
 function startMirrorFinnomenaForceFull() {
@@ -5382,9 +5404,11 @@ function goToFinUpdate() {
   showPage('financials', btn);
 }
 function startFinancialsSync() {
-  // min_age_days: 7 — ข้ามคู่ (หุ้น, แหล่ง) ที่เพิ่ง sync ไปไม่เกิน 7 วัน กันกดซ้ำแล้วต้องรอ
-  // sync ทั้งตลาดใหม่ทั้งหมด (เดิมส่ง {} เปล่าๆ = ยิงสดทุกคู่ทุกครั้งไม่ว่าจะเพิ่ง sync มาหรือไม่)
-  _startJob('/api/financials/sync-all', 'fin-sync-btn', '🔄 อัพเดทงบการเงินทั้งหมด (local)', { min_age_days: 7 }, () => {
+  // skip_up_to_date: true — ข้ามคู่ (หุ้น, แหล่ง) ที่มีข้อมูลงวดล่าสุดที่ควรจะมีอยู่แล้วจริง (เช็ค
+  // เนื้อหาจริงฝั่ง backend ไม่ใช่เดาจากวันที่ sync) กันกดซ้ำแล้วต้องรอ sync ทั้งตลาดใหม่ทั้งหมด
+  // (เดิมส่ง {} เปล่าๆ = ยิงสดทุกคู่ทุกครั้งไม่ว่าจะเพิ่ง sync มาหรือไม่, เดิมใช้ min_age_days แบบ
+  // เดาจากเวลา 7→2 วัน ก่อนเปลี่ยนมาเช็คเนื้อหาจริงแทนตั้งแต่ 2026-08-15)
+  _startJob('/api/financials/sync-all', 'fin-sync-btn', '🔄 อัพเดทงบการเงินทั้งหมด (local)', { skip_up_to_date: true }, () => {
     fetch('/api/financials-meta').then(r => r.json()).then(d => {
       const note = document.getElementById('fin-meta-note');
       if (note && d.last_synced_at) note.textContent = `sync ล่าสุด: ${d.last_synced_at} · ${d.symbol_count} หุ้น`;
@@ -5676,9 +5700,10 @@ function _renderFinCoverage(d) {
 
 function retryFinMissing(symbols) {
   const beforeCount = symbols.length;
-  // min_age_days: หุ้นในลิสต์ "ขาด" อาจขาดแค่บางแหล่ง — คู่ (หุ้น×แหล่ง) ที่มีข้อมูลสดอยู่แล้ว
+  // skip_up_to_date: หุ้นในลิสต์ "ขาด" อาจขาดแค่บางแหล่ง — คู่ (หุ้น×แหล่ง) ที่มีงวดล่าสุดอยู่แล้ว
   // ให้ข้าม ไม่ยิงซ้ำ (เดิมยิงครบ 4 แหล่งทุกตัว เช่น 910 หุ้น = 3,640 งาน ทั้งที่ของจริงขาดไม่กี่ร้อยคู่)
-  _startJob('/api/financials/sync-all', 'fin-sync-btn', '🔄 อัพเดทงบการเงินทั้งหมด (local)', { symbols, min_age_days: 7 }, async (s) => {
+  // ดูเหตุผลเต็มที่ startFinancialsSync() ด้านบน (เปลี่ยนจาก min_age_days เดาเวลา มาเช็คเนื้อหาจริง)
+  _startJob('/api/financials/sync-all', 'fin-sync-btn', '🔄 อัพเดทงบการเงินทั้งหมด (local)', { symbols, skip_up_to_date: true }, async (s) => {
     fetch('/api/financials-meta').then(r => r.json()).then(d => {
       const note = document.getElementById('fin-meta-note');
       if (note && d.last_synced_at) note.textContent = `sync ล่าสุด: ${d.last_synced_at} · ${d.symbol_count} หุ้น`;
@@ -17503,11 +17528,12 @@ function startDRFinancialsSync() {
   });
 }
 
-// incremental: ข้ามคู่ (หุ้น, แหล่ง) ที่ดึงไปแล้วไม่เกิน 7 วัน — เร็วกว่าปุ่มดึงเต็มมาก
-// เพราะปุ่มเดิมยิงทุกตัวซ้ำทุกครั้งไม่ว่าจะเพิ่งดึงไปเมื่อไหร่ก็ตาม (ดูกล่องอธิบายในหน้า UI)
+// incremental: ข้ามคู่ (หุ้น, แหล่ง) ที่มีงวดล่าสุดอยู่แล้ว — เร็วกว่าปุ่มดึงเต็มมาก เพราะปุ่มเดิม
+// ยิงทุกตัวซ้ำทุกครั้งไม่ว่าจะเพิ่งดึงไปเมื่อไหร่ก็ตาม (ดูกล่องอธิบายในหน้า UI)
+// เดิมใช้ min_age_days เดาเวลา (7→2 วัน) เปลี่ยนมาเช็คเนื้อหาจริง (2026-08-15) ตาม startFinancialsSync()
 function startDRFinancialsSyncIncremental() {
   _startJob('/api/financials/sync-all', 'dr-fin-sync-incr-btn', '🔄 ดึงเฉพาะที่ขาด/เก่า (local)',
-    { universe: 'dr', min_age_days: 7 }, () => {
+    { universe: 'dr', skip_up_to_date: true }, () => {
       loadFinAnalytics();
     });
 }
@@ -17670,6 +17696,7 @@ async function loadDataHealth() {
   const summaryEl = document.getElementById('dh-summary');
   const checkedEl = document.getElementById('dh-checked-at');
   wrap.innerHTML = '<div class="empty" style="padding:16px">กำลังเช็ค...</div>';
+  loadFinUpdateAllStatus();
   try {
     const r = await fetch('/api/data-health');
     const d = await r.json();
@@ -20332,6 +20359,52 @@ async function refreshMarketStatsMonthly() {
 
   btn.disabled = false;
   btn.innerHTML = '⟳ อัพเดทข้อมูล (Market Statistics)';
+}
+
+async function checkDelistedNew() {
+  const btn = document.getElementById('val-check-delisted-btn');
+  const status = document.getElementById('val-refresh-status');
+  const box = document.getElementById('val-delisted-result');
+  btn.disabled = true;
+  btn.textContent = '🔍 กำลังเช็ค...';
+  status.textContent = '';
+  box.style.display = 'none';
+
+  try {
+    const r = await _fetchTimeout('/api/check-delisted-th', 30000, undefined, { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'เช็คไม่สำเร็จ');
+
+    if (!d.actionable.length) {
+      status.textContent = `✓ ไม่มีหุ้นเพิกถอนใหม่ที่ต้องจัดการ (SET ยืนยันแล้ว ${d.official_count} ตัว ณ ${d.as_of_date})`;
+      status.style.color = '#96c850';
+    } else {
+      status.textContent = `⚠ พบ ${d.actionable.length} ตัวที่ SET เพิกถอนแล้ว แต่ยังไม่บันทึกในเครื่อง`;
+      status.style.color = 'var(--red)';
+      box.style.display = 'block';
+      box.innerHTML = `<div class="card" style="padding:14px">
+        <div style="overflow-x:auto"><table class="tbl" style="min-width:560px">
+          <thead><tr><th>Symbol</th><th>ชื่อ</th><th>ตลาด</th><th>วันเพิกถอน</th><th>เหตุผล</th><th>ราคาล่าสุดที่มี</th></tr></thead>
+          <tbody>${d.actionable.map(x => `
+            <tr>
+              <td><strong>${x.symbol}</strong></td>
+              <td style="font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.name || '—'}</td>
+              <td style="font-size:11px;color:var(--text2)">${x.market || '—'}</td>
+              <td style="font-size:11px">${x.delist_date || '—'}</td>
+              <td style="font-size:11px">${x.delist_reason || '—'}</td>
+              <td style="font-size:11px;color:var(--text2)">${x.last_price_date || '—'}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px">บันทึกทีละตัว: <code>python mark_delisted.py &lt;symbol&gt; "&lt;เหตุผล&gt;"</code></div>
+      </div>`;
+    }
+  } catch (e) {
+    status.textContent = '✗ เช็คไม่สำเร็จ: ' + e.message;
+    status.style.color = 'var(--red)';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🔍 เช็คหุ้นเพิกถอนใหม่';
+  }
 }
 
 // แปลง "2026-06" -> "มิ.ย. 2026"

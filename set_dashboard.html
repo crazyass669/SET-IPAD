@@ -2276,12 +2276,19 @@
       title="เปิดหน้า Market Statistics ของ SET.or.th ในแท็บใหม่ เพื่อดาวน์โหลด Market_Statistics_Month_th_TH.xls">
       🔗 เปิดหน้าดาวน์โหลด SET.or.th
     </a>
+    <button id="val-check-delisted-btn" onclick="checkDelistedNew()"
+      style="font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border);
+             background:var(--bg-card2);color:#c8d0dc;cursor:pointer;display:flex;align-items:center;gap:6px"
+      data-vtip="&lt;div class='tip-head'&gt;เช็คหุ้นเพิกถอนใหม่&lt;/div&gt;ดึงรายชื่อหุ้นเพิกถอนที่ &lt;b&gt;SET.or.th ยืนยันแล้ว&lt;/b&gt; (official) มาเทียบกับข้อมูลในเครื่อง&lt;br&gt;แจ้งเฉพาะตัวที่เราเคยเก็บราคาไว้จริง แต่ยังไม่บันทึกว่าเพิกถอน&lt;hr&gt;ไม่แก้ไฟล์ให้อัตโนมัติ — เจอแล้วต้องรัน &lt;b&gt;mark_delisted.py&lt;/b&gt; เองเพื่อบันทึกจริง">
+      🔍 เช็คหุ้นเพิกถอนใหม่
+    </button>
     <span id="val-refresh-status" style="font-size:11px;color:var(--muted)"></span>
   </div>
   <div class="page-sub">P/E และ P/BV ย้อนหลัง เพื่อประเมิน Valuation Zone ของตลาด
     <span style="color:var(--muted)"> · วาง Market_Statistics_Month_th_TH.xls ใหม่ในโฟลเดอร์ แล้วกด อัพเดท</span>
   </div>
   <div id="val-data-month" style="font-size:12px;margin:4px 0 2px;color:var(--muted)"></div>
+  <div id="val-delisted-result" style="display:none;margin-bottom:14px"></div>
 
   <!-- P/E-P/BV รายวันจาก SET.or.th โดยตรง (คู่กับค่ารายเดือนจาก Excel ด้านล่าง) -->
   <div id="val-daily-box" style="display:none;margin-bottom:14px"></div>
@@ -3978,6 +3985,7 @@
     <div style="display:flex;gap:14px;flex-wrap:wrap">
       <div class="btn-wrap">
         <button class="refresh-btn" id="fin-update-all-btn" onclick="startFinancialsUpdateAll()">🔄 อัพเดทงบการเงินทั้งหมด</button>
+        <div id="fin-update-all-status" style="font-size:11px;color:var(--text2);margin:4px 0"></div>
         <div class="btn-note">
           <b>🔄 อัพเดทงบการเงินทั้งหมด — ใช้บ่อยสุด</b>
           <span class="badge badge-blue" style="margin-left:4px">Yahoo</span>
@@ -4746,6 +4754,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260813o"></script>
+<script src="static/dashboard.js?v=20260815c"></script>
 </body>
 </html>

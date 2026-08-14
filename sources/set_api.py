@@ -322,3 +322,27 @@ def fetch_financial_statement(symbol, account_type="income_statement", period=No
     q = urllib.parse.urlencode(params)
     return _get_json(ctx, hdr,
                       f"/api/set/stock/{urllib.parse.quote(sym)}/financialstatement?{q}", timeout=15)
+
+
+def fetch_delisted_companies(lang="th", ctx=None, hdr=None):
+    """รายชื่อหุ้นเพิกถอนที่ SET ยืนยันแล้วทั้งหมด (official, ไม่ใช่ heuristic เดา
+    จากราคานิ่ง) — ขุด endpoint จาก JS bundle ของหน้า
+    https://www.set.or.th/th/market/information/securities-list/delisted-list
+    (หน้านั้น render ฝั่ง client ล้วน ดึง HTML ตรงๆ ไม่เห็นข้อมูล)
+
+    คืน {"as_of_date": "YYYY-MM-DD", "companies": [{"symbol","name","market",
+    "delist_date","delist_reason"}, ...]} ย้อนหลังถึงปี 1976 (~340 ตัว)"""
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, f"/api/set/company/delisted-company?lang={lang}", timeout=20)
+    comps = (d or {}).get("delistedCompanies") or []
+    return {
+        "as_of_date": (d.get("asOfDate") or "")[:10],
+        "companies": [{
+            "symbol": c.get("symbol"),
+            "name": c.get("name"),
+            "market": c.get("market"),
+            "delist_date": (c.get("delistDate") or "")[:10],
+            "delist_reason": c.get("delistReason") or "",
+        } for c in comps],
+    }

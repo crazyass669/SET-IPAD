@@ -18,7 +18,7 @@ import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import requests
 
@@ -329,18 +329,79 @@ def get_synced_symbols(base_dir, source, is_dr=False):
     return {r[0] for r in rows if not r[0].startswith("DR:") and not r[0].startswith("FINN:")}
 
 
-def get_synced_map(base_dir, is_dr=False):
-    """คืน {(symbol, source): synced_at(datetime)} ของ universe ฝั่งนั้น (ไทย หรือ DR)
-    ใช้ทำ incremental sync — ข้ามคู่ (หุ้น, แหล่ง) ที่เพิ่งดึงไปไม่นาน"""
+def _target_period(source, today=None):
+    """วันสิ้นงวดล่าสุดที่ 'ควรจะมีข้อมูลแล้ว' ของแหล่งนั้น ณ วันนี้ — ใช้เทียบกับ
+    _payload_latest_period() ตัดสิน skip ใน sync_all(skip_up_to_date=True)
+
+    ใช้ไตรมาสปฏิทินล่าสุดที่ปิดไปแล้ว (Q1=31มี.ค./Q2=30มิ.ย./Q3=30ก.ย./Q4=31ธ.ค.) เป็น
+    target ของแหล่งรายไตรมาส (set/set_qpl/yahoo_q/finnomena_q) — ไม่ต้องรอ deadline ยื่นงบ
+    45/60 วัน เพราะ target แค่บอกว่า "ควรลองอีกไหม" ไม่ใช่ "รับประกันว่ามีแน่" หุ้นที่ยังไม่ยื่น
+    จะยังไม่ผ่าน check นี้เอง (latest_period ใน DB ไม่ถึง target) เลยถูก sync ซ้ำทุกครั้งจนกว่า
+    จะยื่นจริง ไม่ต้องเดางวด/deadline ให้ผิดพลาดได้ — ต่างจาก 'yahoo' (รายปี) ที่ใช้แค่ 31 ธ.ค."""
+    today = today or date.today()
+    y = today.year
+    if source == "yahoo":
+        candidates = [date(y - 1, 12, 31), date(y, 12, 31)]
+    else:
+        candidates = [date(y - 1, 12, 31), date(y, 3, 31), date(y, 6, 30),
+                      date(y, 9, 30), date(y, 12, 31)]
+    return max(d for d in candidates if d <= today)
+
+
+def _payload_latest_period(source, payload):
+    """แกะวันสิ้นงวดล่าสุดที่ 'มีอยู่จริง' ใน payload ที่เก็บไว้ (ไม่ใช่ synced_at ที่บอกแค่
+    เวลาที่เคยยิง fetch) — เทียบกับ _target_period() เพื่อตัดสิน skip แบบดูเนื้อหาจริง
+    แทนเดาจากเวลา คืน None ถ้า parse ไม่ได้/ยังไม่มีข้อมูล (นับเป็น 'ยังไม่ครบ' เสมอ — ปลอดภัย
+    กว่า ไม่ skip หุ้นที่ควรจะ sync ต่อผิด)"""
+    if not payload:
+        return None
+    try:
+        if source == "set_qpl":
+            qend = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
+            dates = []
+            for k in (payload.get("quarters") or {}):
+                y, q = k.split("-")
+                y, q = int(y), int(q)
+                if q in qend:
+                    m, d = qend[q]
+                    dates.append(date(y, m, d))
+            return max(dates) if dates else None
+        if source == "set":
+            dates = [date.fromisoformat(e["endDate"][:10])
+                     for e in (payload.get("entries") or []) if e.get("endDate")]
+            return max(dates) if dates else None
+        if source in ("yahoo", "yahoo_q", "finnomena_q"):
+            inc = payload.get("income") or {}
+            dstrs = {d for field_map in inc.values() if isinstance(field_map, dict)
+                     for d in field_map}
+            return date.fromisoformat(max(dstrs)[:10]) if dstrs else None
+    except Exception:
+        return None
+    return None
+
+
+def get_latest_period_map(base_dir, is_dr=False, sources=None):
+    """คืน {(symbol, source): date|None} วันสิ้นงวดล่าสุดที่มีอยู่จริงในแต่ละคู่ (หุ้น, แหล่ง)
+    ของ universe ฝั่งนั้น — ใช้ทำ incremental sync แบบดูเนื้อหาจริง (ดู sync_all
+    skip_up_to_date) แทนเดาจากเวลา sync ล่าสุดแบบเดิม (get_synced_map ตัวเก่า)
+
+    sources: จำกัดเฉพาะแหล่งที่สนใจ (กัน query/parse payload ของแหล่งอื่นที่ไม่เกี่ยวทิ้งโดยเปล่า
+    ประโยชน์ — payload รวมของ 5 แหล่ง × ~930 หุ้นไทย ~86MB อ่านทีเดียวได้เร็วพอสำหรับปุ่มกดมือ)"""
     if not db_exists(base_dir):
         return {}
     con = _connect(base_dir)
     try:
-        rows = con.execute("SELECT symbol, source, synced_at FROM financials").fetchall()
+        if sources:
+            qmarks = ",".join("?" * len(sources))
+            rows = con.execute(
+                f"SELECT symbol, source, payload FROM financials WHERE source IN ({qmarks})",
+                list(sources)).fetchall()
+        else:
+            rows = con.execute("SELECT symbol, source, payload FROM financials").fetchall()
     finally:
         con.close()
     out = {}
-    for sym, src, ts in rows:
+    for sym, src, payload_raw in rows:
         if sym.startswith("FINN:"):
             continue   # mirror ทั้งตลาด — ไม่เกี่ยวกับ sync รายตัว
         is_dr_row = sym.startswith("DR:")
@@ -348,9 +409,10 @@ def get_synced_map(base_dir, is_dr=False):
             continue
         key = sym[3:] if is_dr_row else sym
         try:
-            out[(key, src)] = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-        except (TypeError, ValueError):
-            pass   # ไม่มี timestamp = ถือว่าเก่ามาก (ไม่ใส่ map -> จะถูกดึงใหม่)
+            payload = json.loads(payload_raw)
+        except Exception:
+            payload = None
+        out[(key, src)] = _payload_latest_period(src, payload)
     return out
 
 
@@ -2227,13 +2289,16 @@ def sync_dividends_batch(base_dir, symbols_by_market, workers=4, min_age_days=30
 # ============================================================
 
 def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=None,
-            is_dr=False, min_age_days=None, market=None):
+            is_dr=False, skip_up_to_date=False, market=None):
     """ดึงงบการเงินเต็มของทุก symbol × ทุก source มา upsert เข้า DB
     คืน {"ok": n, "fail": n, "total": n, "skipped": n}
 
-    min_age_days: ถ้าใส่ (เช่น 7) จะข้ามคู่ (symbol, source) ที่ synced_at ใน DB
-    ใหม่กว่า N วันไปแล้ว — ไม่ยิง fetch ซ้ำของที่เพิ่งดึงไปไม่นาน (incremental sync)
-    None = ดึงทุกคู่เสมอเหมือนพฤติกรรมเดิม (full sync)
+    skip_up_to_date=True: ข้ามคู่ (symbol, source) ที่ "มีข้อมูลงวดล่าสุดที่ควรจะมีอยู่แล้ว"
+    (เทียบ _payload_latest_period ของ payload จริงใน DB กับ _target_period ของวันนี้) —
+    ต่างจาก logic เดิมที่เดาจาก "sync ไปแล้วกี่วัน" (เช่น หุ้นที่ sync เมื่อวานแต่ยังไม่มี Q2
+    เพราะ SET ยังไม่ขึ้นข้อมูล จะถูก skip ทิ้งผิดๆ ทั้งที่ยังไม่มีของจริง) — แบบใหม่นี้ยิงซ้ำทุกครั้ง
+    ที่กดจนกว่าจะได้งวดล่าสุดจริง แล้วจะหยุด skip เองพอมีครบ ไม่ต้องเดาจำนวนวัน
+    False (ปกติ) = ดึงทุกคู่เสมอเหมือนพฤติกรรมเดิม (full sync — ใช้กับ scheduled task รายไตรมาส)
 
     market: ส่งต่อให้ fetch_yahoo_full/fetch_yahoo_quarterly เดา yf ticker ตอน symbol
     ไม่อยู่ใน DR universe ที่ curate ไว้ (หุ้น mirror US/HK ทั่วไปนอกพอร์ต) — ไม่งั้นจะ
@@ -2257,13 +2322,12 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
              if not (src == "finnomena_q" and not finnomena_supported(sym, is_dr=is_dr))]
 
     skipped = 0
-    if min_age_days is not None:
-        synced_map = get_synced_map(base_dir, is_dr=is_dr)
-        cutoff = datetime.now() - timedelta(days=min_age_days)
+    if skip_up_to_date:
+        latest_map = get_latest_period_map(base_dir, is_dr=is_dr, sources=sources)
         fresh_tasks = []
         for sym, src in tasks:
-            ts = synced_map.get((sym, src))
-            if ts is not None and ts >= cutoff:
+            have = latest_map.get((sym, src))
+            if have is not None and have >= _target_period(src):
                 skipped += 1
             else:
                 fresh_tasks.append((sym, src))

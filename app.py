@@ -3328,7 +3328,7 @@ def financials_coverage():
     return jsonify(coverage)
 
 
-def _run_financials_sync(symbols=None, sources=None, is_dr=False, min_age_days=None):
+def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_date=False):
     try:
         if is_dr and not symbols:
             # เช็ค SET.or.th ก่อนดึงงบ — DR ออกใหม่ถูกเพิ่มเข้า universe อัตโนมัติ
@@ -3354,12 +3354,12 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, min_age_days=N
             _update(current=current, total=total, message=msg)
 
         result = financials_store.sync_all(BASE_DIR, target, sources=srcs, callback=cb,
-                                           is_dr=is_dr, min_age_days=min_age_days)
+                                           is_dr=is_dr, skip_up_to_date=skip_up_to_date)
         _fin_analytics_cache.clear()   # ข้อมูลเปลี่ยน — บังคับคำนวณ growth/PEG/FCF ใหม่รอบถัดไป
         skipped = result.get("skipped", 0)
         _update(done=True,
                 message=f"เสร็จแล้ว! สำเร็จ {result['ok']}/{result['total']}"
-                        + (f" · ข้าม {skipped} คู่ (ดึงไปแล้วไม่เกิน {min_age_days} วัน)" if skipped else "")
+                        + (f" · ข้าม {skipped} คู่ (มีงวดล่าสุดอยู่แล้ว)" if skipped else "")
                         + (f" (ล้มเหลว {result['fail']} — อาจโดนบล็อคชั่วคราวหรือแหล่งข้อมูลไม่มีจริง ลองอีกครั้งได้)" if result["fail"] else ""))
     except Exception as e:
         _update(done=True, error=str(e),
@@ -3373,7 +3373,7 @@ def start_financials_sync():
     symbols = None
     sources = None
     is_dr = False
-    min_age_days = None
+    skip_up_to_date = False
     if request.is_json:
         body = request.json or {}
         if body.get("universe") == "dr":
@@ -3388,22 +3388,17 @@ def start_financials_sync():
         body_sources = body.get("sources")
         if body_sources:
             sources = body_sources
-        # incremental sync: ข้ามคู่ (หุ้น, แหล่ง) ที่ดึงไปแล้วไม่เกิน N วัน — ใช้กับปุ่ม
-        # "ดึงเฉพาะที่ขาด/เก่า" แทนปุ่มดึงเต็มที่ยิงทุกตัวซ้ำทุกครั้ง (ดู sync_all min_age_days)
-        raw_age = body.get("min_age_days")
-        if raw_age is not None:
-            try:
-                min_age_days = max(0, int(raw_age))
-            except (TypeError, ValueError):
-                min_age_days = None
+        # incremental sync: ข้ามคู่ (หุ้น, แหล่ง) ที่มีข้อมูลงวดล่าสุดที่ควรจะมีอยู่แล้ว — ใช้กับปุ่ม
+        # "ดึงเฉพาะที่ขาด/เก่า" แทนปุ่มดึงเต็มที่ยิงทุกตัวซ้ำทุกครั้ง (ดู sync_all skip_up_to_date)
+        skip_up_to_date = bool(body.get("skip_up_to_date"))
     with _lock:
         if _state["running"]:
             return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
         label = ("กำลังเริ่ม sync งบการเงิน" + (" (หุ้นต่างประเทศ DR)" if is_dr else " (เฉพาะที่ขาด)" if symbols else "")
-                + (f" — ข้ามของที่ดึงไปแล้วไม่เกิน {min_age_days} วัน" if min_age_days is not None else "") + "...")
+                + (" — ข้ามของที่มีงวดล่าสุดอยู่แล้ว" if skip_up_to_date else "") + "...")
         _state.update(running=True, done=False, error=None,
                       current=0, total=0, message=label)
-    threading.Thread(target=_run_financials_sync, args=(symbols, sources, is_dr, min_age_days), daemon=True).start()
+    threading.Thread(target=_run_financials_sync, args=(symbols, sources, is_dr, skip_up_to_date), daemon=True).start()
     return jsonify({"ok": True})
 
 
@@ -6729,9 +6724,12 @@ def mirror_yahoo_index_sync():
 # เดียวกับ mirror-sync-new/mirror-yahoo-index-sync ด้านบน (progress bar + run_log)
 # ============================================================
 
-_FIN_UPDATE_ALL_MIN_AGE_DAYS = 7   # ข้ามคู่ (หุ้น, แหล่ง) ที่ synced_at ใหม่กว่า N วัน — กันกดซ้ำ/เผลอกดสอง
-# ครั้งแล้วต้องรอ sync ทั้งตลาดใหม่ทั้งหมด (set_qpl ตัวเดียวใช้เวลา ~1 ชม. ถ้า sync ทั้ง 929 ตัว
-# ทุกครั้ง) ตั้งชื่อแยกจาก min_age_days ใน sync_all เผื่ออยากปรับค่านี้ให้ต่างจาก endpoint อื่น
+# เดิมข้ามคู่ (หุ้น, แหล่ง) ที่ synced_at ใหม่กว่า N วัน (min_age_days=7 → 2 → ...) กันกดซ้ำ/
+# เผลอกดสองครั้งแล้วต้องรอ sync ทั้งตลาดใหม่ทั้งหมด — แต่เดาจาก "เวลา sync" ทำให้หุ้นที่เพิ่งมีข่าว
+# งบไตรมาสใหม่ (แต่ SET.or.th ยังไม่ทันขึ้นข้อมูลตอนที่เรา sync ครั้งก่อน) ถูก skip ทิ้งผิดๆ จนกว่าจะ
+# ครบ N วัน (2026-08-15) เปลี่ยนมาใช้ sync_all(skip_up_to_date=True) แทน — เช็คเนื้อหาจริงใน DB
+# ว่ามีงวดล่าสุดที่ควรจะมีแล้วหรือยัง (ดู _target_period/_payload_latest_period ใน
+# financials_store.py) ไม่ต้องเดาจำนวนวันอีกต่อไป กดกี่ครั้งก็ retry เฉพาะคู่ที่ยังไม่ครบจริงๆ
 
 
 def _run_financials_update_all():
@@ -6745,11 +6743,10 @@ def _run_financials_update_all():
     compute_qpl_report ใน financials_store.py) — เก็บสะสมใน DB เหมือนแหล่งอื่น กันข้อมูลละเอียด
     (COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี) หายเมื่อ SET periods list เลื่อนหลุด
 
-    Incremental (min_age_days=7, ดู _FIN_UPDATE_ALL_MIN_AGE_DAYS): เดิมยิงสดทุกคู่ (หุ้น×แหล่ง) ทั้ง
-    929+ ตัวทุกครั้งที่กด แม้เพิ่ง sync ไปหมาดๆ — เปลืองเวลา/ยิง SET.or.th ซ้ำโดยไม่จำเป็น (บริษัทยื่น
-    งบแค่ไตรมาสละครั้ง) ตอนนี้ข้ามคู่ที่ synced ไปไม่เกิน 7 วันให้เอง เหมือน pattern 'ดึงเฉพาะที่ขาด/เก่า'
-    ของดัชนี US/HK/JP — ปกติกดหลังงบไตรมาสออก (ห่างกันเป็นเดือน) จะไม่ข้ามอะไรเลยเหมือน full sync เดิม
-    แต่ป้องกันกรณีกดซ้ำ/เผลอกดสองครั้งใกล้กัน"""
+    Incremental (skip_up_to_date=True, ดู sync_all ใน financials_store.py): เดิมยิงสดทุกคู่
+    (หุ้น×แหล่ง) ทั้ง 929+ ตัวทุกครั้งที่กด แม้เพิ่ง sync ไปหมาดๆ — เปลืองเวลา/ยิง SET.or.th ซ้ำโดยไม่
+    จำเป็น ตอนนี้ข้ามเฉพาะคู่ที่ "มีข้อมูลงวดล่าสุดที่ควรจะมีอยู่แล้วจริง" (เช็คเนื้อหา ไม่ใช่เดาจาก
+    วันที่ sync) — หุ้นที่ยังไม่มีงวดล่าสุดจะถูก retry ทุกครั้งที่กดจนกว่าจะได้ ไม่ต้องรอครบ N วัน"""
     t0 = time.time()
     searched = []
     try:
@@ -6768,7 +6765,7 @@ def _run_financials_update_all():
         r_th = financials_store.sync_all(BASE_DIR, syms_th,
                                           sources=("yahoo", "set", "set_qpl", "yahoo_q", "finnomena_q"),
                                           callback=_th_cb, is_dr=False,
-                                          min_age_days=_FIN_UPDATE_ALL_MIN_AGE_DAYS)
+                                          skip_up_to_date=True)
 
         syms_dr = _dr_financials_universe()
         _update(current=50, total=100, message=f"sync งบ DR {len(syms_dr)} ตัว...")
@@ -6779,7 +6776,7 @@ def _run_financials_update_all():
         r_dr = financials_store.sync_all(BASE_DIR, syms_dr,
                                           sources=("yahoo", "yahoo_q", "finnomena_q"),
                                           callback=_dr_cb, is_dr=True,
-                                          min_age_days=_FIN_UPDATE_ALL_MIN_AGE_DAYS)
+                                          skip_up_to_date=True)
 
         # sync งบสมาชิกดัชนีหลัก US (S&P500+Dow+NDX) / HK (HSI+HSCEI+HSTECH) / JP (Nikkei 225)
         # ผ่าน Yahoo — sync_mirror_yahoo_index สแกน namespace 'DR:{sym}'/'FINN:{ex}:{sym}' ที่มี
@@ -6830,7 +6827,7 @@ def _run_financials_update_all():
 
         elapsed_min = (time.time() - t0) / 60
         summary = (f"เสร็จแล้ว! หุ้นไทย {r_th['ok']}/{r_th['total']} (พลาด {r_th['fail']}, "
-                   f"ข้าม {r_th['skipped']} คู่ที่ synced ไม่เกิน {_FIN_UPDATE_ALL_MIN_AGE_DAYS} วัน) · "
+                   f"ข้าม {r_th['skipped']} คู่ที่มีงวดล่าสุดอยู่แล้ว) · "
                    f"DR {r_dr['ok']}/{r_dr['total']} (พลาด {r_dr['fail']}, ข้าม {r_dr['skipped']}) · "
                    f"ดัชนีหลัก US/HK/JP {r_idx['ok']}/{r_idx['total']} (ข้าม {r_idx['skipped']} ที่มีแล้ว)"
                    + (f" · mirror ค้นบ่อย {refreshed_mirror}/{len(searched)}" if searched else "")
@@ -7412,6 +7409,54 @@ def refresh_market_stats_monthly():
         "old_latest": old_latest,
         "new_latest": new_latest,
     })
+
+
+# cache กันยิง SET.or.th ซ้ำถ้ากดปุ่ม/รีเฟรชหน้าถี่ๆ (ดู pattern เดียวกับ _dr_diff_cache)
+_delisted_check_cache = {"result": None, "ts": 0}
+_DELISTED_CHECK_CACHE_TTL = 3600
+
+
+@app.route("/api/check-delisted-th", methods=["POST"])
+def check_delisted_th():
+    """เทียบรายชื่อหุ้นเพิกถอนที่ SET.or.th ยืนยันแล้ว (sources/set_api.py::fetch_delisted_companies)
+    กับ delisted_log.json ในเครื่อง — รายงานเฉพาะตัวที่ (1) ยังไม่มีใน log และ (2) เราเคย
+    เก็บราคาไว้จริงใน set_prices.db (ตัวที่ไม่เคย track ไม่ต้องทำอะไร ไม่โผล่มากวนใจ)
+    ไม่แก้ delisted_log.json ให้อัตโนมัติ — ให้ผู้ใช้รัน mark_delisted.py เองถ้าต้องการบันทึกจริง"""
+    cached = _delisted_check_cache.get("result")
+    if cached and (time.time() - _delisted_check_cache.get("ts", 0) < _DELISTED_CHECK_CACHE_TTL):
+        return jsonify(cached)
+    try:
+        from core.delisted_log import read_log
+        from core.store import get_last_dates
+        from sources.set_api import fetch_delisted_companies
+
+        official = fetch_delisted_companies()
+        our_log = read_log(BASE_DIR)
+        our_th_symbols = {v["symbol"] for v in our_log.values() if v.get("market") == "TH"}
+        last_dates = get_last_dates(BASE_DIR)
+
+        actionable = []
+        for c in official["companies"]:
+            sym = c["symbol"]
+            if sym in our_th_symbols:
+                continue
+            last_seen = last_dates.get(f"{sym}.BK")
+            if not last_seen:
+                continue  # ไม่เคย track ราคาไว้เลย — ไม่มีอะไรต้องแก้
+            actionable.append({**c, "last_price_date": last_seen})
+        actionable.sort(key=lambda c: c["delist_date"], reverse=True)
+
+        result = {
+            "ok": True,
+            "as_of_date": official["as_of_date"],
+            "official_count": len(official["companies"]),
+            "actionable": actionable,
+        }
+        _delisted_check_cache["result"] = result
+        _delisted_check_cache["ts"] = time.time()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/stock-valuation-stats")
