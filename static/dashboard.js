@@ -15249,6 +15249,20 @@ function _qplTableCore(qs, scrollId) {
   const years = Object.keys(byYear).map(Number).sort((a, b) => a - b);
   const hasCoarse = qs.some(q => !q.detail);
 
+  // % QoQ/YoY คำนวณจาก "ไตรมาสก่อนหน้าจริงในอนุกรมของหุ้นตัวเอง" (คีย์ year_be*4+q) ไม่ใช่ตำแหน่ง
+  // ในตาราง กันกรณีมีไตรมาสขาดหาย (เช่นหุ้นเพิ่งเข้าตลาด) เทียบข้ามไตรมาสผิดโดยไม่รู้ตัว
+  const byKey = {};
+  qs.forEach(q => { byKey[q.year_be * 4 + q.q] = q; });
+  const _qplChg = (getter, offset) => c => {
+    const prev = byKey[c.year_be * 4 + c.q - offset];
+    if (!prev) return null;
+    const cur = getter(c), pv = getter(prev);
+    if (cur == null || pv == null || !pv) return null;
+    return (cur / pv - 1) * 100;
+  };
+  const qoqOf = getter => _qplChg(getter, 1);
+  const yoyOf = getter => _qplChg(getter, 4);
+
   const yearHead = years.map(y => `<th colspan="4" style="text-align:center;background:#8b2fc9;color:#fff;padding:6px 4px;border:1px solid var(--border)">${y}</th>`).join('');
   const qHead = years.map(y => [1, 2, 3, 4].map(qn => {
     const cell = byYear[y][qn - 1];
@@ -15262,7 +15276,8 @@ function _qplTableCore(qs, scrollId) {
     const v = cell ? getter(cell) : null;
     const dim = cell && !cell.detail ? ';color:var(--text2)' : '';
     const hl = opts.hlYellow ? ';background:#f2c94c26' : (opts.hlGreen ? ';background:#3fb95014' : (opts.hlPeach ? ';background:#e8823014' : ''));
-    return `<td class="r" style="padding:4px 6px;border:1px solid var(--border);font-size:12px${dim}${hl}">${cell ? fmt(v) : '—'}</td>`;
+    const pctColor = opts.pctColor && v != null ? `;color:${v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text2)'}` : '';
+    return `<td class="r" style="padding:4px 6px;border:1px solid var(--border);font-size:12px${dim}${hl}${pctColor}">${cell ? fmt(v) : '—'}</td>`;
   }).join('')).join('');
 
   const row = (label, getter, fmt, opts = {}) => `<tr>
@@ -15270,26 +15285,38 @@ function _qplTableCore(qs, scrollId) {
     ${cellsOf(getter, fmt, opts)}
   </tr>`;
 
+  // แถว %QoQ/%YoY คู่กันใต้แถวหลัก — ใช้ getter ของแถวหลักคำนวณจาก _qplChg เอง ไม่พึ่งฟิลด์ที่
+  // backend ส่งมา (revenue_yoy/pretax_yoy เดิม) เพื่อให้มีครบทุกบรรทัดตัวเงินหลักสม่ำเสมอกัน
+  const growthRows = getter => [
+    row('% QoQ', qoqOf(getter), _qplPct, { indent: true, pctColor: true }),
+    row('% YoY', yoyOf(getter), _qplPct, { indent: true, pctColor: true }),
+  ].join('');
+
   const rowsHtml = [
     row('รายได้จากการขาย', c => c.revenue, _qplNum, { bold: true }),
-    row('% growth YoY', c => c.revenue_yoy, _qplPct, { indent: true }),
+    growthRows(c => c.revenue),
     row('ต้นทุนขาย', c => c.cogs, _qplNum),
+    growthRows(c => c.cogs),
     row('กำไรขั้นต้น', c => c.gross_profit, _qplNum, { bold: true, hlGreen: true }),
+    growthRows(c => c.gross_profit),
     row('% GPM', c => c.gpm, _qplPct, { indent: true }),
     row('ค่าใช้จ่ายในการขาย', c => c.selling_exp, _qplNum, { hlPeach: true }),
     row('% to Revenue', c => c.selling_pct, _qplPct, { indent: true }),
     row('ค่าใช้จ่ายในการบริหาร', c => c.admin_exp, _qplNum, { hlPeach: true }),
     row('% to Revenue', c => c.admin_pct, _qplPct, { indent: true }),
     row('รวม SG&A', c => c.sga_total, _qplNum, { bold: true, hlPeach: true }),
+    growthRows(c => c.sga_total),
     row('SG&A to Sales', c => c.sga_pct, _qplPct, { indent: true }),
     row('รวมค่าใช้จ่าย', c => c.total_expenses, _qplNum),
     row('กำไรจากการดำเนินงาน', c => c.operating_profit, _qplNum, { bold: true, hlYellow: true }),
+    growthRows(c => c.operating_profit),
     row('ต้นทุนทางการเงิน', c => c.financial_cost, _qplNumNeg),
     row('กำไรก่อนภาษี', c => c.pretax_profit, _qplNum, { bold: true, hlYellow: true }),
-    row('% growth YoY', c => c.pretax_yoy, _qplPct, { indent: true }),
+    growthRows(c => c.pretax_profit),
     row('ค่าใช้จ่ายภาษีเงินได้', c => c.tax_expense, _qplNumNeg),
     row('% TAX', c => c.tax_pct == null ? null : -Math.abs(c.tax_pct), _qplPct, { indent: true }),
     row('กำไรสำหรับงวด', c => c.net_profit, _qplNum, { bold: true, hlYellow: true }),
+    growthRows(c => c.net_profit),
     row('% NPM', c => c.npm, _qplPct, { indent: true }),
   ].join('');
 
