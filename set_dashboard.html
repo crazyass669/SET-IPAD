@@ -57,6 +57,7 @@
   <button class="nav-btn" onclick="showPage('short',this)" title="Short Sales — ข้อมูลการขายชอร์ตรายหุ้น, Squeeze Radar">Short</button>
   <button class="nav-btn" onclick="showPage('confluence',this)" title="สัญญาณเงินทุนรวม — insider + short + NVDR ที่ตรงกันหลายชั้น">🎯 สัญญาณรวม</button>
   <button class="nav-btn" onclick="showPage('financials',this)">งบการเงิน</button>
+  <button class="nav-btn" onclick="showPage('market-trend',this)" title="แนวโน้มตลาดย้อนหลัง — รายได้/กำไร/ROE/Cash Quality/Market Breadth ทั้งตลาด SET ย้อนหลังสูงสุด 20 ไตรมาส (local-only)">📈 แนวโน้มตลาด</button>
   <button class="nav-btn" onclick="showPage('us-stocks',this)" title="หุ้น US — RS / Stage / 52W High / Momentum / EMA ของสมาชิก S&amp;P 500 · Dow Jones · Nasdaq 100 (ราคา OHLC ใน us_prices.db, คำนวณสูตรเดียวกับหุ้นไทย)"><span class="nav-flag nav-flag-us"></span>หุ้น US</button>
   <button class="nav-btn" onclick="showPage('hk-stocks',this)" title="หุ้น HK — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Hang Seng Index · Hang Seng TECH · Hang Seng China Enterprises (ราคา OHLC ใน hk_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US)"><span class="nav-flag nav-flag-hk"></span>หุ้น HK</button>
   <button class="nav-btn" onclick="showPage('jp-stocks',this)" title="หุ้น JP — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Nikkei 225 (ราคา OHLC ใน jp_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US/HK) — มี Tearsheet/เทียบเพื่อน/งบการเงินครบแล้ว"><span class="nav-flag nav-flag-jp"></span>หุ้น JP</button>
@@ -361,10 +362,19 @@
       <button class="filter-btn" id="idx-filter-reversal" onclick="event.stopPropagation(); toggleIdxReversal(this); showIdxTT('<b>🔄 กลับตัว</b><br>กรองเฉพาะ sector ที่อาจกำลังกลับตัว:<br>• 1M% &gt; 0 (เดือนนี้เป็นบวก)<br>• 6M% &lt; 15 (ยังไม่วิ่งไปไกล)<br>• Momentum Score &gt; 1 (momentum กำลังเร่ง)<br><br>ใช้หา sector ต้นรอบ ที่ยังมีโอกาส',event)"
         onmouseenter="showIdxTT('<b>🔄 กลับตัว</b><br>กรองเฉพาะ sector ที่อาจกำลังกลับตัว:<br>• 1M% &gt; 0 (เดือนนี้เป็นบวก)<br>• 6M% &lt; 15 (ยังไม่วิ่งไปไกล)<br>• Momentum Score &gt; 1 (momentum กำลังเร่ง)<br><br>ใช้หา sector ต้นรอบ ที่ยังมีโอกาส',event)" onmouseleave="hideIdxTT()">🔄 กลับตัว</button>
     </div>
+    <div id="idx-cmp-sort-row" style="display:none;align-items:center;gap:8px;font-size:11px;color:var(--text2)">
+      <span>เรียงตาม:</span>
+      <button class="filter-btn active" id="idx-cmp-sort-btn-revenue"     onclick="setCmpSort('revenue',this)">ลำดับตลาด</button>
+      <button class="filter-btn"        id="idx-cmp-sort-btn-revenue_yoy" onclick="setCmpSort('revenue_yoy',this)">รายได้โต</button>
+      <button class="filter-btn"        id="idx-cmp-sort-btn-profit_yoy"  onclick="setCmpSort('profit_yoy',this)">กำไรโต</button>
+      <button class="filter-btn"        id="idx-cmp-sort-btn-roe"         onclick="setCmpSort('roe',this)">ROE</button>
+      <button class="filter-btn"        id="idx-cmp-sort-btn-profit"      onclick="setCmpSort('profit',this)">กำไรรวม</button>
+    </div>
     <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text2);margin-left:auto">
       มุมมอง:
       <button class="filter-btn active" id="idx-view-cards"   onclick="setIdxView('cards',this)">⊞ Cards</button>
       <button class="filter-btn"        id="idx-view-heatmap" onclick="setIdxView('heat',this)">▦ Heatmap</button>
+      <button class="filter-btn"        id="idx-view-compare" onclick="setIdxView('compare',this)">⚖ เปรียบเทียบ Sector</button>
     </div>
   </div>
   <div id="idx-grid"></div>
@@ -3428,6 +3438,45 @@
   <div id="fin-result"></div>
 </div>
 
+<!-- PAGE: MARKET TREND — แนวโน้มพื้นฐานตลาด SET ทั้งตลาดย้อนหลังสูงสุด 20 ไตรมาส
+     (รายได้/กำไร/ROE/Cash Quality/Market Breadth) ต่อยอดจาก bullpedia.ai, local-only -->
+<div id="page-market-trend" class="page">
+  <div class="page-title">แนวโน้มตลาดย้อนหลัง</div>
+  <div class="page-sub" id="mt-updated">สูงสุด 20 ไตรมาส · รายได้/กำไร/NPM ไม่รวมกลุ่มการเงิน และ REIT · กราฟอื่นๆ ใช้ทั้งตลาด · tooltip แสดง coverage ทุกจุด</div>
+  <div id="mt-grid" style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:14px">
+    <div class="idx-card" style="cursor:default">
+      <div class="idx-card-name">รายได้รวม</div>
+      <div class="idx-card-sym">แท่ง = รายได้ (ลบ.) · เส้น = YoY ของบริษัทที่เทียบกันได้</div>
+      <div style="height:260px;margin-top:8px"><canvas id="mt-chart-revenue"></canvas></div>
+    </div>
+    <div class="idx-card" style="cursor:default">
+      <div class="idx-card-name">กำไรสุทธิรวม + NPM</div>
+      <div class="idx-card-sym">แท่ง = กำไรส่วนผู้ถือหุ้น (ลบ.) · เส้น = Aggregate NPM</div>
+      <div style="height:260px;margin-top:8px"><canvas id="mt-chart-profit"></canvas></div>
+    </div>
+    <div class="idx-card" style="cursor:default">
+      <div class="idx-card-name">ROE ตลาด</div>
+      <div class="idx-card-sym">Aggregate ROE เทียบ Median ROE · กำไร TTM / ส่วนผู้ถือหุ้น</div>
+      <div style="height:260px;margin-top:8px"><canvas id="mt-chart-roe"></canvas></div>
+    </div>
+    <div class="idx-card" style="cursor:default">
+      <div class="idx-card-name">Margin Trend</div>
+      <div class="idx-card-sym">Aggregate NPM เทียบ Median NPM ของหุ้นทั้งตลาด</div>
+      <div style="height:260px;margin-top:8px"><canvas id="mt-chart-margin"></canvas></div>
+    </div>
+    <div class="idx-card" style="cursor:default">
+      <div class="idx-card-name">Cash Quality</div>
+      <div class="idx-card-sym">Aggregate CFO/NP เทียบ Median CFO/NP · คำนวณจาก TTM</div>
+      <div style="height:260px;margin-top:8px"><canvas id="mt-chart-cashquality"></canvas></div>
+    </div>
+    <div class="idx-card" style="cursor:default">
+      <div class="idx-card-name">Market Breadth</div>
+      <div class="idx-card-sym">% หุ้นที่โต/CFO บวก และจำนวนหุ้นพลิกกำไร/พลิกขาดทุน</div>
+      <div style="height:260px;margin-top:8px"><canvas id="mt-chart-breadth"></canvas></div>
+    </div>
+  </div>
+</div>
+
 <!-- PAGE: US INDEX HEATMAP — คนละหน้ากับ "Heatmap" เดิม (id="page-heatmap") ที่เป็น Market
      Heatmap ของหุ้นไทยจัดกลุ่มตาม Sector — ห้ามใช้ id/route "heatmap" ซ้ำกับหน้านั้นเด็ดขาด
      (getElementById จะเจอหน้าไทยก่อนเสมอเพราะอยู่ก่อนใน DOM ทำให้หน้านี้ไม่มีทางแสดงได้เลย) -->
@@ -4781,6 +4830,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260817e"></script>
+<script src="static/dashboard.js?v=20260817h"></script>
 </body>
 </html>

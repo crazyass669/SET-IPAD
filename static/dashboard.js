@@ -3963,6 +3963,7 @@ function showPage(id, btn) {
   if (id === "dr")             loadDRPage();
   if (id === "etf")            loadETFPage();
   if (id === "financials")     initFinPage();
+  if (id === "market-trend")   loadMarketTrendPage();
   if (id === "us-stocks")      loadUsStocksPage();
   if (id === "hk-stocks")      loadHkStocksPage();
   if (id === "jp-stocks")      loadJpStocksPage();
@@ -3982,6 +3983,187 @@ function showPage(id, btn) {
   if (id === "data-health")    loadDataHealth();
   if (id === "hedge")          loadHedgePage();
   if (id === "overview")       { setTimeout(() => { if (!_nhLoaded) loadNewHighChart(); }, 100); }
+}
+
+
+// ============================================================
+// MARKET TREND — 📈 แนวโน้มตลาดย้อนหลัง (ดู /api/market-trend +
+// financials_store.get_market_trend ใน backend) สไตล์กราฟ reuse จาก _drawCmFinChart
+// (หน้างบการเงิน) ตรงๆ ให้เข้าธีมเดียวกันทั้งแอป
+// ============================================================
+let _marketTrendData = null;
+let _marketTrendLoading = false;
+const _mtCharts = {};   // canvasId -> Chart instance (ทำลายทิ้งก่อนวาดใหม่กันซ้อน)
+
+async function loadMarketTrendPage() {
+  if (_marketTrendData) { _renderMarketTrend(); return; }
+  if (_marketTrendLoading) return;
+  _marketTrendLoading = true;
+  const sub = document.getElementById('mt-updated');
+  const origSub = sub ? sub.textContent : '';
+  if (sub) sub.textContent = 'กำลังรวมข้อมูลย้อนหลังทั้งตลาด... (ครั้งแรกอาจช้า ~20-30 วิ)';
+  try {
+    const res = await _fetchTimeout('/api/market-trend?t=' + Date.now(), 45000);
+    const d = await res.json();
+    if (d.error) throw new Error(d.error);
+    _marketTrendData = d;
+    if (sub) sub.textContent = origSub;
+    _renderMarketTrend();
+  } catch (e) {
+    if (sub) sub.textContent = `โหลดไม่ได้: ${e.message}`;
+  } finally {
+    _marketTrendLoading = false;
+  }
+}
+
+function _mtQuarterLabel(q) {
+  const [y, qn] = (q || '').split('-');
+  return y ? `${qn}Q${y.slice(-2)}` : '—';
+}
+
+function _mtDestroy(id) {
+  if (_mtCharts[id]) { _mtCharts[id].destroy(); delete _mtCharts[id]; }
+}
+
+const _MT_TICK_COLOR = '#8b949e', _MT_GRID_COLOR = '#1e2736';
+const _MT_TOOLTIP_BASE = {
+  backgroundColor: '#1c2128', borderColor: '#30363d', borderWidth: 1,
+  titleColor: '#e6edf3', bodyColor: '#8b949e',
+};
+
+// กราฟแท่ง+เส้น 2 แกน (รายได้/กำไร) — โครงเดียวกับ _drawCmFinChart (dashboard.js ~11912)
+function _mtDrawBarLine(canvasId, labels, barVals, lineVals, barLabel, lineLabel, barColor, lineFmt, barFmt) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  _mtDestroy(canvasId);
+  _mtCharts[canvasId] = new Chart(canvas, {
+    data: {
+      labels,
+      datasets: [
+        { type: 'bar', label: barLabel, data: barVals, backgroundColor: barColor + 'd9',
+          borderColor: barColor, borderWidth: 1, borderRadius: 4, yAxisID: 'yBar', order: 2 },
+        { type: 'line', label: lineLabel, data: lineVals, borderColor: '#e8b84b',
+          backgroundColor: 'rgba(232,184,75,0.15)', borderWidth: 2.5, pointRadius: 3,
+          pointHoverRadius: 6, tension: 0.25, yAxisID: 'yLine', order: 1, spanGaps: true },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: _MT_TICK_COLOR, font: { size: 11 }, boxWidth: 14, padding: 16 } },
+        tooltip: { ...(_MT_TOOLTIP_BASE), callbacks: {
+          label: ctx => ctx.raw == null ? null
+            : ctx.dataset.yAxisID === 'yBar' ? ` ${barLabel}: ${barFmt(ctx.raw)}`
+            : ` ${lineLabel}: ${lineFmt(ctx.raw)}`
+        } }
+      },
+      scales: {
+        x: { ticks: { color: _MT_TICK_COLOR, font: { size: 11 } }, grid: { color: _MT_GRID_COLOR } },
+        yBar:  { position: 'left',  ticks: { color: _MT_TICK_COLOR, font: { size: 11 }, callback: barFmt }, grid: { color: _MT_GRID_COLOR } },
+        yLine: { position: 'right', ticks: { color: _MT_TICK_COLOR, font: { size: 11 }, callback: lineFmt }, grid: { display: false } },
+      }
+    }
+  });
+}
+
+// กราฟเส้นคู่แกนเดียว (Aggregate vs Median) — ROE / Margin Trend / Cash Quality
+function _mtDrawDualLine(canvasId, labels, seriesA, seriesB, labelA, labelB, colorA, colorB, fmt) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  _mtDestroy(canvasId);
+  _mtCharts[canvasId] = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: labelA, data: seriesA, borderColor: colorA, backgroundColor: colorA + '26',
+          borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 6, tension: 0.25, spanGaps: true },
+        { label: labelB, data: seriesB, borderColor: colorB, backgroundColor: colorB + '26',
+          borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 6, tension: 0.25, spanGaps: true },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: _MT_TICK_COLOR, font: { size: 11 }, boxWidth: 14, padding: 16 } },
+        tooltip: { ...(_MT_TOOLTIP_BASE), callbacks: {
+          label: ctx => ctx.raw == null ? null : ` ${ctx.dataset.label}: ${fmt(ctx.raw)}`
+        } }
+      },
+      scales: {
+        x: { ticks: { color: _MT_TICK_COLOR, font: { size: 11 } }, grid: { color: _MT_GRID_COLOR } },
+        y: { ticks: { color: _MT_TICK_COLOR, font: { size: 11 }, callback: fmt }, grid: { color: _MT_GRID_COLOR } },
+      }
+    }
+  });
+}
+
+// กราฟ Market Breadth — 3 เส้น % (แกนซ้าย 0-100) + 2 เส้นจำนวนหุ้น (แกนขวา)
+function _mtDrawBreadth(canvasId, labels, q) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  _mtDestroy(canvasId);
+  const pctFmt = v => v == null ? '' : v.toFixed(0) + '%';
+  const cntFmt = v => v == null ? '' : String(Math.round(v));
+  const mk = (label, data, color, axis) => ({
+    label, data, borderColor: color, backgroundColor: color + '00', borderWidth: 2,
+    pointRadius: 2, pointHoverRadius: 5, tension: 0.25, spanGaps: true, yAxisID: axis
+  });
+  _mtCharts[canvasId] = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        mk('รายได้โต %',   q.map(x => x.pct_revenue_growing), '#58a6ff', 'yPct'),
+        mk('กำไรโต %',     q.map(x => x.pct_profit_growing),  '#3fb950', 'yPct'),
+        mk('CFO บวก %',    q.map(x => x.pct_cfo_positive),    '#e8b84b', 'yPct'),
+        mk('พลิกกำไร (ตัว)', q.map(x => x.flipped_profit), '#a371f7', 'yCnt'),
+        mk('พลิกขาดทุน (ตัว)', q.map(x => x.flipped_loss), '#f85149', 'yCnt'),
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: _MT_TICK_COLOR, font: { size: 11 }, boxWidth: 14, padding: 16 } },
+        tooltip: { ...(_MT_TOOLTIP_BASE), callbacks: {
+          label: ctx => ctx.raw == null ? null
+            : ` ${ctx.dataset.label}: ${ctx.dataset.yAxisID === 'yPct' ? pctFmt(ctx.raw) : cntFmt(ctx.raw)}`
+        } }
+      },
+      scales: {
+        x: { ticks: { color: _MT_TICK_COLOR, font: { size: 11 } }, grid: { color: _MT_GRID_COLOR } },
+        yPct: { position: 'left',  min: 0, max: 100, ticks: { color: _MT_TICK_COLOR, font: { size: 11 }, callback: pctFmt }, grid: { color: _MT_GRID_COLOR } },
+        yCnt: { position: 'right', min: 0, ticks: { color: _MT_TICK_COLOR, font: { size: 11 }, callback: cntFmt }, grid: { display: false } },
+      }
+    }
+  });
+}
+
+function _renderMarketTrend() {
+  if (!_marketTrendData) return;
+  const q = _marketTrendData.quarters || [];
+  if (!q.length) return;
+  const labels = q.map(x => _mtQuarterLabel(x.quarter));
+
+  const thbFmt = v => v == null ? '' : (Math.round(v / 1e6)).toLocaleString('en-US') + ' ลบ.';
+  const pctFmt = v => v == null ? '' : (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+  const npmFmt = v => v == null ? '' : v.toFixed(1) + '%';
+  const ratioFmt = v => v == null ? '' : v.toFixed(2) + 'x';
+
+  _mtDrawBarLine('mt-chart-revenue', labels, q.map(x => x.revenue), q.map(x => x.revenue_yoy),
+    'รายได้', 'YoY', '#1f6feb', pctFmt, thbFmt);
+  _mtDrawBarLine('mt-chart-profit', labels, q.map(x => x.profit), q.map(x => x.npm),
+    'กำไรสุทธิ', 'Aggregate NPM', '#3fb950', npmFmt, thbFmt);
+  _mtDrawDualLine('mt-chart-roe', labels, q.map(x => x.roe_aggregate), q.map(x => x.roe_median),
+    'Aggregate ROE', 'Median ROE', '#58a6ff', '#e8b84b', npmFmt);
+  _mtDrawDualLine('mt-chart-margin', labels, q.map(x => x.npm), q.map(x => x.npm_median),
+    'Aggregate NPM', 'Median NPM', '#3fb950', '#f85149', npmFmt);
+  _mtDrawDualLine('mt-chart-cashquality', labels, q.map(x => x.cfo_np_aggregate), q.map(x => x.cfo_np_median),
+    'Aggregate CFO/NP', 'Median CFO/NP', '#58a6ff', '#e8b84b', ratioFmt);
+  _mtDrawBreadth('mt-chart-breadth', labels, q);
 }
 
 
@@ -19642,12 +19824,98 @@ function setIdxSort(key, btn) {
 
 function setIdxView(view, btn) {
   _idxView = view;
-  document.querySelectorAll('#idx-view-cards,#idx-view-heatmap').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#idx-view-cards,#idx-view-heatmap,#idx-view-compare').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   // sort label หายไปเมื่อ heatmap (period ทำหน้าที่แทน)
   const lbl = document.getElementById('idx-sort-label');
   if (lbl) lbl.textContent = view === 'heat' ? 'สี/เรียงตาม:' : 'เรียงตาม:';
+  // มุมมอง "เปรียบเทียบ Sector" ใช้ dataset/แถวปุ่มเรียงคนละชุดกับราคาดัชนี (revenue/profit/roe
+  // ไม่ใช่ ret_1d/RS/Momentum) — สลับซ่อนแถวควบคุมที่ไม่เกี่ยวข้องแทนการซ้อนกันให้งง
+  const isCompare = view === 'compare';
+  document.getElementById('idx-sort-row').style.display = isCompare ? 'none' : '';
+  document.getElementById('idx-cmp-sort-row').style.display = isCompare ? 'flex' : 'none';
+  document.getElementById('idx-group-row').style.display = isCompare ? 'none' : '';
   renderIdxGrid();
+}
+
+function setCmpSort(key, btn) {
+  _cmpSortKey = key;
+  document.querySelectorAll('#idx-cmp-sort-row .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _renderSectorCmpGrid();
+}
+
+// ── มุมมอง "เปรียบเทียบ Sector" — รวมรายได้/กำไร/ROE รายไตรมาสกลุ่มตาม Sector (SET) ──
+let _sectorCmpData    = null;
+let _sectorCmpLoading = false;
+let _cmpSortKey       = 'revenue';
+
+async function renderSectorCompare() {
+  if (_sectorCmpData) { _renderSectorCmpGrid(); return; }
+  if (_sectorCmpLoading) return;
+  _sectorCmpLoading = true;
+  const grid = document.getElementById('idx-grid');
+  grid.style.display = 'block';
+  grid.innerHTML = '<div style="color:var(--text2);padding:20px">กำลังรวมข้อมูลรายได้/กำไรทั้งตลาด... (ครั้งแรกอาจช้า ~20-30 วิ)</div>';
+  try {
+    const res = await _fetchTimeout('/api/sector-compare?t=' + Date.now(), 45000);
+    const d = await res.json();
+    if (d.error) throw new Error(d.error);
+    _sectorCmpData = d;
+    _renderSectorCmpGrid();
+  } catch (e) {
+    grid.innerHTML = `<div style="color:var(--red)">โหลดไม่ได้: ${e.message}</div>`;
+  } finally {
+    _sectorCmpLoading = false;
+  }
+}
+
+function _renderSectorCmpGrid() {
+  if (!_sectorCmpData) return;
+  const grid = document.getElementById('idx-grid');
+  grid.style.display = 'grid';
+  grid.style.gridTemplateColumns = 'repeat(auto-fill,minmax(260px,1fr))';
+  grid.style.gap = '12px';
+
+  const fmtTHB = v => v == null ? '—' : Math.round(v / 1e6).toLocaleString('en-US') + ' ลบ.';
+  const fmtPct = v => v == null ? '—' : `<span style="color:${v>0?'var(--green)':v<0?'var(--red)':'var(--text2)'}">${v>0?'+':''}${v.toFixed(1)}%</span>`;
+
+  const sorted = [...(_sectorCmpData.sectors || [])].sort((a,b) => (b[_cmpSortKey] ?? -Infinity) - (a[_cmpSortKey] ?? -Infinity));
+  const qParts = (_sectorCmpData.quarter || '').split('-');
+  const quarterLabel = qParts.length === 2 ? `Q${qParts[1]}/${qParts[0].slice(-2)}` : '—';
+
+  const cards = sorted.map(s => {
+    const total = s.profit_stocks + s.loss_stocks;
+    const profitPct = total ? (s.profit_stocks / total * 100) : 0;
+    const covN = s.reported ?? s.count, covTotal = s.total ?? covN;
+    const covMissing = covTotal - covN;
+    const covColor = covMissing > 0 ? 'var(--yellow)' : 'var(--text2)';
+    const missingList = (s.missing_symbols || []).join(', ');
+    return `<div class="idx-card" onclick="openSectorModal('${s.sector.replace(/'/g, "\\'")}')">
+      <div class="idx-card-name">${s.sector}</div>
+      <div class="idx-card-sym">${quarterLabel}
+        <span style="color:${covColor};margin-left:6px">📄 ${covN}/${covTotal}</span>
+      </div>
+      <div style="font-size:11px;color:var(--text2);margin-top:8px">รายได้รวม</div>
+      <div style="font-size:14px;font-weight:700">${fmtTHB(s.revenue)} <span style="font-size:11px;font-weight:400">${fmtPct(s.revenue_yoy)} YoY</span></div>
+      <div style="font-size:11px;color:var(--text2);margin-top:6px">กำไรรวม</div>
+      <div style="font-size:14px;font-weight:700">${fmtTHB(s.profit)} <span style="font-size:11px;font-weight:400">${fmtPct(s.profit_yoy)} YoY</span></div>
+      <div style="display:flex;gap:12px;margin-top:8px;font-size:11px;color:var(--text2)">
+        <div>ROE <b style="color:var(--text)">${s.roe != null ? s.roe.toFixed(1)+'%' : '—'}</b></div>
+        <div>NPM <b style="color:var(--text)">${s.npm != null ? s.npm.toFixed(1)+'%' : '—'}</b></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text2);margin-top:8px">
+        <span>กำไร/ขาดทุน</span><span>${s.profit_stocks}/${s.loss_stocks}</span>
+      </div>
+      <div style="height:5px;border-radius:3px;overflow:hidden;background:var(--red);margin-top:3px">
+        <div style="height:100%;width:${profitPct}%;background:var(--green)"></div>
+      </div>
+      <div style="font-size:10px;color:var(--text2);margin-top:6px">สัดส่วนกำไรตลาด ${s.profit_share_pct != null ? s.profit_share_pct.toFixed(1)+'%' : '—'}</div>
+      ${covMissing > 0 ? `<div style="font-size:10px;color:var(--yellow);margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">⚠ ยังไม่มีงบ ${covMissing} บริษัท: ${missingList}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  grid.innerHTML = cards || '<div class="text2">ไม่มีข้อมูล</div>';
 }
 
 const isReversal = (i) => i.ret_1m > 0 && (i.ret_6m == null || i.ret_6m < 15) && (i.mom == null || i.mom > 1);
@@ -19715,6 +19983,7 @@ function renderIdxHeatmap(items) {
 }
 
 function renderIdxGrid() {
+  if (_idxView === 'compare') { renderSectorCompare(); return; }
   if (!_idxData) return;
   let items = Object.values(_idxData);
   if (_idxGroup !== 'ALL') items = items.filter(x => x.group === _idxGroup);

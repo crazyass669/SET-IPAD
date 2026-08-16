@@ -1490,7 +1490,14 @@ def fetch_set_qpl_chart_series(symbol, ctx=None, hdr=None):
             year = None
         if not q or not year:
             continue
-        sales, gpm = r.get("sales"), r.get("grossProfitMargin")
+        # ธนาคาร/ประกัน/เงินทุนฯ ไม่มีแนวคิด 'ยอดขาย' แบบธุรกิจทั่วไป — SET เลยเว้น 'sales' เป็น None
+        # เสมอ (เช็คสด KBANK/BLA/TISCO 2026-08-18) แต่ 'totalRevenue' (รายได้รวม) ยังมีให้ใช้แทนได้
+        # ผิดจากธุรกิจปกติที่ทั้งสอง field ต่างกันจริง (เช่น PTT sales 830B vs totalRevenue 837B
+        # — totalRevenue ปนรายได้อื่นที่ไม่ใช่ธุรกิจหลัก) จึงจำกัด fallback ไว้เฉพาะตอน sales ขาดจริง
+        sales = r.get("sales")
+        if sales is None:
+            sales = r.get("totalRevenue")
+        gpm = r.get("grossProfitMargin")
         gross_profit = (sales * gpm / 100) if (sales is not None and gpm is not None) else None
         cogs = (sales - gross_profit) if (sales is not None and gross_profit is not None) else None
         net_profit = r.get("netProfit")
@@ -2411,6 +2418,322 @@ def get_mirror_index_coverage(base_dir, tickers_by_ex, stale_days=365):
     stale.sort(key=lambda x: -x[3])
     total = sum(len(v) for v in tickers_by_ex.values())
     return {"total": total, "missing": missing, "stale": stale, "fresh": fresh}
+
+
+def _load_set_qpl_all(base_dir, allowed_symbols):
+    """Bulk-load source='set_qpl' ทั้งตาราง (1 query เดียว — เหมือน pattern
+    get_mirror_index_coverage ด้านบน) แปลงเป็น {symbol: {(year_ad,q): row}} เฉพาะ symbol ที่อยู่ใน
+    allowed_symbols (caller กรอง universe เอง เช่นเฉพาะ SET main board) — ใช้ร่วมกันโดย
+    get_sector_qpl_compare (snapshot ไตรมาสเดียว) และ get_market_trend (ย้อนหลังหลายไตรมาส)"""
+    init_db(base_dir)
+    con = _connect(base_dir)
+    try:
+        rows = con.execute(
+            "SELECT symbol, payload FROM financials WHERE source='set_qpl'").fetchall()
+    finally:
+        con.close()
+
+    parsed = {}   # symbol -> {(year_ad,q): row}
+    for sym, payload_raw in rows:
+        if sym not in allowed_symbols:
+            continue
+        try:
+            payload = json.loads(payload_raw)
+        except Exception:
+            continue
+        quarters = {}
+        for key_str, row in (payload or {}).get("quarters", {}).items():
+            try:
+                y_s, q_s = key_str.split("-")
+                quarters[(int(y_s), int(q_s))] = row
+            except (ValueError, AttributeError):
+                continue
+        if quarters:
+            parsed[sym] = quarters
+    return parsed
+
+
+def _target_quarter(parsed):
+    """quarter เป้าหมาย = ค่าที่พบบ่อยที่สุดของ "quarter ล่าสุดที่แต่ละหุ้นมีข้อมูล" (mode) — หุ้นที่ยัง
+    ไม่รายงานงวดนั้นถูกข้ามในการรวมต่อ (จำนวนหุ้นต่อจุดจึงไม่เท่ากันเป็นปกติ) คืน None ถ้า parsed ว่าง"""
+    from collections import Counter
+    if not parsed:
+        return None
+    latest_per_sym = {sym: max(qs) for sym, qs in parsed.items()}
+    counts = Counter(latest_per_sym.values())
+    return max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+
+def _prev_quarter(y, q):
+    return (y - 1, 4) if q == 1 else (y, q - 1)
+
+
+def get_sector_qpl_compare(base_dir, sector_by_symbol):
+    """รวมรายได้/กำไรสุทธิรายไตรมาส (source='set_qpl', official SET เท่านั้น — sync ครบทุกหุ้น
+    ไทยแล้วผ่าน update_financials.py) กลุ่มตาม Sector (SET) ที่ caller ส่งมา (data/set_data.json
+    field 'sector' — ฟังก์ชันนี้ไม่รู้จัก set_data.json เอง เพื่อแยกชั้นเดียวกับ
+    get_mirror_index_coverage ด้านบนที่รับ tickers_by_ex มาจาก caller เหมือนกัน)
+
+    quarter เป้าหมาย: ดู _target_quarter — YoY คำนวณจากผลรวมกลุ่มปีนี้เทียบผลรวมกลุ่มปีก่อน โดยใช้
+    เฉพาะหุ้นที่มีข้อมูลครบทั้งสองงวด (ไม่ผสมหุ้นที่ไม่มี prior เข้าไปในผลรวม ไม่งั้น YoY จะเพี้ยนเพราะ
+    ตัวเศษ/ตัวส่วนมาจากชุดหุ้นคนละชุดกัน)
+
+    'total'/'reported'/'missing_symbols' คือ coverage งวดล่าสุด (นับจากหุ้นทั้งหมดที่ classify
+    ลง sector นั้นใน sector_by_symbol ไม่ใช่แค่หุ้นที่เคย sync set_qpl) — ธนาคาร/ประกัน/เงินทุนฯ
+    (sector การเงิน) จะติด 'ขาดงบ' ค้างถาวรเป็นปกติ ไม่ใช่ล่าช้าจริง เพราะ set_qpl parse จาก
+    บัญชี 'รายได้จากการขายและให้บริการ' ซึ่งผังบัญชีธนาคาร/ประกันไม่มีรายการนี้ (ดู
+    _set_qpl_row_from_amt) — caller ควรตัดกลุ่มนี้ออกก่อนถ้าจะใช้ตัวเลข coverage จริงจัง
+
+    คืน {"quarter": "YYYY-Q" หรือ None, "sectors": [{sector, count, total, reported,
+    missing_symbols, revenue, revenue_yoy, profit, profit_yoy, npm, profit_stocks, loss_stocks,
+    profit_share_pct}, ...]}"""
+    parsed = _load_set_qpl_all(base_dir, sector_by_symbol)
+    if not parsed:
+        return {"quarter": None, "sectors": []}
+
+    target = _target_quarter(parsed)
+    prior_key = (target[0] - 1, target[1])   # YoY เทียบไตรมาสเดียวกันปีก่อน ไม่ใช่ _prev_quarter (QoQ)
+
+    sector_all_symbols = {}   # sector -> set ของหุ้นทั้งหมดที่ classify ลงกลุ่มนี้ (ไม่ว่าจะมีงบหรือไม่)
+    for sym, sector in sector_by_symbol.items():
+        sector_all_symbols.setdefault(sector, set()).add(sym)
+
+    buckets = {}   # sector -> list of per-stock dict
+    for sym, qs in parsed.items():
+        cur = qs.get(target)
+        if not cur:
+            continue
+        rev, net = cur.get("revenue"), cur.get("net_profit")
+        if rev is None and net is None:
+            continue
+        prev = qs.get(prior_key) or {}
+        buckets.setdefault(sector_by_symbol[sym], []).append({
+            "symbol": sym, "revenue": rev, "net_profit": net,
+            "revenue_prior": prev.get("revenue"), "profit_prior": prev.get("net_profit"),
+        })
+
+    total_profit_all = sum(r["net_profit"] for items in buckets.values() for r in items
+                            if r["net_profit"] is not None)
+
+    def _yoy(cur_key, prior_key_):
+        pairs = [(r[cur_key], r[prior_key_]) for r in items
+                 if r[cur_key] is not None and r[prior_key_] is not None]
+        if not pairs:
+            return None
+        cur_sum, prior_sum = sum(p[0] for p in pairs), sum(p[1] for p in pairs)
+        return round((cur_sum / prior_sum - 1) * 100, 1) if prior_sum else None
+
+    sectors_out = []
+    for sector in sector_all_symbols:   # ครบทุก sector แม้ยังไม่มีหุ้นไหนรายงานเลย (count=0)
+        items = buckets.get(sector, [])
+        rev_vals = [r["revenue"] for r in items if r["revenue"] is not None]
+        rev_sum = sum(rev_vals) if rev_vals else None
+        profit_sum = sum(r["net_profit"] for r in items if r["net_profit"] is not None)
+        all_syms = sector_all_symbols.get(sector, set())
+        reported_syms = {r["symbol"] for r in items}
+        missing_syms = sorted(all_syms - reported_syms)
+        sectors_out.append({
+            "sector": sector,
+            "count": len(items),
+            "total": len(all_syms),
+            "reported": len(reported_syms),
+            "missing_symbols": missing_syms,
+            "revenue": rev_sum,
+            "revenue_yoy": _yoy("revenue", "revenue_prior"),
+            "profit": profit_sum,
+            "profit_yoy": _yoy("net_profit", "profit_prior"),
+            "npm": round(profit_sum / rev_sum * 100, 1) if rev_sum else None,
+            "profit_stocks": sum(1 for r in items if r["net_profit"] is not None and r["net_profit"] > 0),
+            "loss_stocks": sum(1 for r in items if r["net_profit"] is not None and r["net_profit"] < 0),
+            "profit_share_pct": round(profit_sum / total_profit_all * 100, 1) if total_profit_all else None,
+        })
+
+    return {"quarter": f"{target[0]}-{target[1]}", "sectors": sectors_out}
+
+
+def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
+    """แนวโน้มตลาดย้อนหลังสูงสุด n_quarters ไตรมาส — ทั้งตลาด ไม่แยก sector (ต่างจาก
+    get_sector_qpl_compare ที่ snapshot ไตรมาสเดียวแต่แยกกลุ่ม) รายได้/กำไร/NPM ตัด
+    excluded_symbols ออก (หุ้นการเงิน+REIT ให้ caller กำหนดเอง — นิยาม 'รายได้' ธุรกิจกลุ่มนี้ไม่
+    เทียบเท่าบริษัททั่วไป) ส่วน ROE/Cash Quality/Breadth ใช้ symbols ทั้งหมด (equity/CFO เทียบกัน
+    ข้ามอุตสาหกรรมได้ปกติ)
+
+    revenue/profit/NPM เป็นรายไตรมาสเดี่ยวจาก set_qpl ตรงๆ ส่วน ROE/Cash Quality เป็น TTM (กำไร/CFO
+    สะสม 4 ไตรมาสล่าสุด) — equity มาจาก finnomena_q (balance sheet ไม่มีใน set_qpl) CFO ก็มาจาก
+    finnomena_q ผ่าน _ttm_by_date (เช็คข้อมูลจริงแล้วว่า Finnomena เก็บ Operating Cash Flow เป็นค่า
+    รายไตรมาสเดี่ยว ไม่ใช่สะสม YTD — สุ่มดู PTT/AOT/KBANK/CPALL/SCC 2026-08-17 — รวม 4 งวดตรงๆ
+    ปลอดภัย)
+
+    คืน {"quarters": [{quarter, revenue, revenue_yoy, revenue_coverage, profit, profit_yoy, npm,
+    npm_median, roe_aggregate, roe_median, roe_coverage, cfo_np_aggregate, cfo_np_median,
+    cfo_np_coverage, pct_revenue_growing, pct_profit_growing, pct_cfo_positive, flipped_profit,
+    flipped_loss}, ...]} เรียงเก่า -> ใหม่"""
+    import statistics
+
+    qpl = _load_set_qpl_all(base_dir, symbols)
+    if not qpl:
+        return {"quarters": []}
+    target = _target_quarter(qpl)
+
+    seq = []   # เก่า -> ใหม่ จบที่ target
+    y, q = target
+    for _ in range(n_quarters):
+        seq.append((y, q))
+        y, q = _prev_quarter(y, q)
+    seq.reverse()
+
+    init_db(base_dir)
+    con = _connect(base_dir)
+    try:
+        fq_rows = con.execute(
+            "SELECT symbol, payload FROM financials WHERE source='finnomena_q'").fetchall()
+    finally:
+        con.close()
+
+    def _bucket_by_quarter(date_val_dict):
+        out = {}
+        for d, v in (date_val_dict or {}).items():
+            if v is None:
+                continue
+            try:
+                yy, mm = int(d[:4]), int(d[5:7])
+            except (ValueError, TypeError):
+                continue
+            qq = _QTR_MONTH.get(mm)
+            if qq:
+                out[(yy, qq)] = v
+        return out
+
+    equity_by_sym, cfo_ttm_by_sym = {}, {}
+    for sym, payload_raw in fq_rows:
+        if sym not in symbols:
+            continue
+        try:
+            payload = json.loads(payload_raw)
+        except Exception:
+            continue
+        eq_by_q = _bucket_by_quarter((payload or {}).get("balance", {}).get("Stockholders Equity"))
+        if eq_by_q:
+            equity_by_sym[sym] = eq_by_q
+        cfo_ttm = _ttm_by_date((payload or {}).get("cashflow", {}).get("Operating Cash Flow") or {})
+        cfo_by_q = _bucket_by_quarter(cfo_ttm)
+        if cfo_by_q:
+            cfo_ttm_by_sym[sym] = cfo_by_q
+
+    def _ttm_profit(sym, y0, q0):
+        qs = qpl.get(sym)
+        if not qs:
+            return None
+        total, yy, qq = 0, y0, q0
+        for _ in range(4):
+            row = qs.get((yy, qq))
+            if not row or row.get("net_profit") is None:
+                return None
+            total += row["net_profit"]
+            yy, qq = _prev_quarter(yy, qq)
+        return total
+
+    def _sum_yoy(pairs):
+        m = [(c, p) for c, p in pairs if c is not None and p is not None]
+        if not m:
+            return None
+        cs, ps = sum(x[0] for x in m), sum(x[1] for x in m)
+        return round((cs / ps - 1) * 100, 1) if ps else None
+
+    quarters_out = []
+    for (y, q) in seq:
+        prior_qoq = _prev_quarter(y, q)
+        prior_yoy = (y - 1, q)
+
+        # ── รายได้/กำไร/NPM รายไตรมาสเดี่ยว (ตัดหุ้นการเงิน+REIT) ──
+        rev_pairs, profit_pairs, npm_vals = [], [], []
+        for sym, qs in qpl.items():
+            if sym in excluded_symbols:
+                continue
+            row = qs.get((y, q))
+            if not row:
+                continue
+            rev, net = row.get("revenue"), row.get("net_profit")
+            prev_row = qs.get(prior_yoy) or {}
+            rev_pairs.append((rev, prev_row.get("revenue")))
+            profit_pairs.append((net, prev_row.get("net_profit")))
+            if rev and net is not None and rev != 0:
+                npm_vals.append(net / rev * 100)
+
+        rev_sum = sum(c for c, _ in rev_pairs if c is not None)
+        rev_n = sum(1 for c, _ in rev_pairs if c is not None)
+        profit_sum = sum(c for c, _ in profit_pairs if c is not None)
+
+        # ── ROE / Cash Quality TTM (ทั้งตลาด ไม่ตัดการเงิน/REIT) ──
+        roe_vals, roe_pairs, cfo_np_vals, cfo_np_pairs = [], [], [], []
+        for sym in symbols:
+            pttm = _ttm_profit(sym, y, q)
+            if pttm is None:
+                continue
+            eq = equity_by_sym.get(sym, {}).get((y, q))
+            if eq and eq > 0:
+                roe_vals.append(pttm / eq * 100)
+                roe_pairs.append((pttm, eq))
+            cfo = cfo_ttm_by_sym.get(sym, {}).get((y, q))
+            if cfo is not None and pttm != 0:
+                cfo_np_vals.append(cfo / pttm)
+                cfo_np_pairs.append((cfo, pttm))
+
+        roe_aggregate = (round(sum(p for p, _ in roe_pairs) / sum(e for _, e in roe_pairs) * 100, 1)
+                          if roe_pairs else None)
+        cfo_np_aggregate = (round(sum(c for c, _ in cfo_np_pairs) / sum(p for _, p in cfo_np_pairs), 2)
+                             if cfo_np_pairs else None)
+
+        # ── Breadth (ทั้งตลาด) — %โต YoY เทียบไตรมาสเดียวกันปีก่อน, พลิกกำไร/ขาดทุนเทียบไตรมาส
+        # ก่อนหน้าติดกัน (QoQ) เพราะ 'พลิก' หมายถึงเปลี่ยนสถานะจากงวดล่าสุดที่รายงาน ไม่ใช่ปีก่อน ──
+        grow_rev = grow_profit = cfo_pos = flip_profit = flip_loss = 0
+        n_grow_rev = n_grow_profit = n_cfo = 0
+        for sym, qs in qpl.items():
+            row = qs.get((y, q))
+            if not row:
+                continue
+            prev_yoy_row = qs.get(prior_yoy) or {}
+            prev_qoq_row = qs.get(prior_qoq) or {}
+            rev, net = row.get("revenue"), row.get("net_profit")
+            if rev is not None and prev_yoy_row.get("revenue") is not None:
+                n_grow_rev += 1
+                if rev > prev_yoy_row["revenue"]:
+                    grow_rev += 1
+            if net is not None and prev_yoy_row.get("net_profit") is not None:
+                n_grow_profit += 1
+                if net > prev_yoy_row["net_profit"]:
+                    grow_profit += 1
+            if net is not None and prev_qoq_row.get("net_profit") is not None:
+                if prev_qoq_row["net_profit"] <= 0 and net > 0:
+                    flip_profit += 1
+                elif prev_qoq_row["net_profit"] > 0 and net <= 0:
+                    flip_loss += 1
+            cfo = cfo_ttm_by_sym.get(sym, {}).get((y, q))
+            if cfo is not None:
+                n_cfo += 1
+                if cfo > 0:
+                    cfo_pos += 1
+
+        quarters_out.append({
+            "quarter": f"{y}-{q}",
+            "revenue": rev_sum, "revenue_yoy": _sum_yoy(rev_pairs), "revenue_coverage": rev_n,
+            "profit": profit_sum, "profit_yoy": _sum_yoy(profit_pairs),
+            "npm": round(profit_sum / rev_sum * 100, 1) if rev_sum else None,
+            "npm_median": round(statistics.median(npm_vals), 1) if npm_vals else None,
+            "roe_aggregate": roe_aggregate,
+            "roe_median": round(statistics.median(roe_vals), 1) if roe_vals else None,
+            "roe_coverage": len(roe_vals),
+            "cfo_np_aggregate": cfo_np_aggregate,
+            "cfo_np_median": round(statistics.median(cfo_np_vals), 2) if cfo_np_vals else None,
+            "cfo_np_coverage": len(cfo_np_vals),
+            "pct_revenue_growing": round(grow_rev / n_grow_rev * 100, 1) if n_grow_rev else None,
+            "pct_profit_growing": round(grow_profit / n_grow_profit * 100, 1) if n_grow_profit else None,
+            "pct_cfo_positive": round(cfo_pos / n_cfo * 100, 1) if n_cfo else None,
+            "flipped_profit": flip_profit,
+            "flipped_loss": flip_loss,
+        })
+
+    return {"quarters": quarters_out}
 
 
 def sync_dividends_batch(base_dir, symbols_by_market, workers=4, min_age_days=30, limit=None, callback=None):

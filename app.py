@@ -115,6 +115,23 @@ _FIN_ANALYTICS_CACHE_TTL = 24 * 3600
 # เดียวกับ _dr_rebuild_lock ของ /api/dr: แท็บแรกคำนวณ แท็บอื่นรอเฉยๆ แล้วได้ผลจาก cache
 _fin_analytics_lock = threading.Lock()
 
+# Sector compare cache — รวมรายได้/กำไร/ROE รายไตรมาสกลุ่มตาม Sector (SET) ทั้งตลาด
+# (เมนู "ดัชนีกลุ่มอุตสาหกรรม SET & mai" มุมมอง "เปรียบเทียบ Sector") event-invalidate
+# พร้อม _fin_analytics_cache ตอน sync งบการเงินหุ้นไทยเสร็จ + TTL 24h กันค้างข้าม restart
+_sector_compare_cache: dict = {}
+_SECTOR_COMPARE_CACHE_TTL = 24 * 3600
+# lock แยกจาก _fin_analytics_lock โดยตั้งใจ — handler ของ endpoint นี้เรียก financials_analytics()
+# ตรงๆ เพื่อ reuse ROE ต่อหุ้นที่คำนวณไว้แล้ว (ดูคอมเมนต์ที่ /api/sector-compare) ซึ่งจะไปขอ
+# _fin_analytics_lock เองข้างใน — ถ้าใช้ lock ตัวเดียวกันครอบทั้งคู่จะ deadlock ทันที (Lock ไม่ reentrant)
+_sector_compare_lock = threading.Lock()
+
+# Market trend cache — แนวโน้มตลาดย้อนหลัง 20 ไตรมาส (หน้า "📈 แนวโน้มตลาด") คำนวณ ROE/Cash
+# Quality เองจาก finnomena_q ไม่ได้ยืม financials_analytics() เหมือน sector-compare จึงไม่เสี่ยง
+# deadlock กับ _fin_analytics_lock แต่ยังแยก cache/lock ของตัวเองเพื่อความชัดเจน
+_market_trend_cache: dict = {}
+_MARKET_TREND_CACHE_TTL = 24 * 3600
+_market_trend_lock = threading.Lock()
+
 # Indices cache — ดัชนีราคากลุ่ม SET/MAI (invalidate แบบ event-driven ตอน refresh เขียนทับ ไม่ใช่ TTL)
 _indices_cache: dict = {}
 # กันกด Quick Update / Full Refresh ซ้อนกัน (เดิมไม่มี lock ต่างจาก endpoint งานหนักอื่นๆ)
@@ -3425,6 +3442,8 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_dat
         result = financials_store.sync_all(BASE_DIR, target, sources=srcs, callback=cb,
                                            is_dr=is_dr, skip_up_to_date=skip_up_to_date)
         _fin_analytics_cache.clear()   # ข้อมูลเปลี่ยน — บังคับคำนวณ growth/PEG/FCF ใหม่รอบถัดไป
+        _sector_compare_cache.clear()
+        _market_trend_cache.clear()
         skipped = result.get("skipped", 0)
         _update(done=True,
                 message=f"เสร็จแล้ว! สำเร็จ {result['ok']}/{result['total']}"
@@ -3627,6 +3646,88 @@ def financials_analytics():
         slot["result"] = result
         slot["ts"] = time.time()
         return jsonify(result)
+
+
+@app.route("/api/sector-compare")
+def sector_compare():
+    """มุมมอง "⚖ เปรียบเทียบ Sector" ในหน้า "ดัชนีกลุ่มอุตสาหกรรม SET & mai" — รวมรายได้/กำไรสุทธิ
+    รายไตรมาส (SET official, source 'set_qpl') กลุ่มตาม Sector (SET) เฉพาะหุ้น SET main board
+    (ไม่รวม mai) ดู financials_store.get_sector_qpl_compare สำหรับ logic การรวม/YoY/เลือก quarter
+
+    ROE ต่อ sector: reuse ผลลัพธ์ ratios['roe'] ต่อหุ้นจาก /api/financials-analytics ตรงๆ (ไม่เปิด
+    sqlite ทีละหุ้นซ้ำเอง — endpoint นั้นแคชอยู่แล้ว คำนวณสดครั้งแรกช้า ~15-23 วิเหมือนกัน)"""
+    cached = _sector_compare_cache.get("result")
+    if cached and (time.time() - _sector_compare_cache.get("ts", 0) < _SECTOR_COMPARE_CACHE_TTL):
+        return jsonify(cached)
+
+    with _sector_compare_lock:
+        cached = _sector_compare_cache.get("result")
+        if cached and (time.time() - _sector_compare_cache.get("ts", 0) < _SECTOR_COMPARE_CACHE_TTL):
+            return jsonify(cached)
+
+        sector_by_symbol = {}
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, encoding="utf-8") as f:
+                    for s in json.load(f).get("stocks", []):
+                        if s.get("market") == "SET" and s.get("sector"):
+                            sector_by_symbol[s["symbol"]] = s["sector"]
+            except Exception:
+                pass
+
+        compare = financials_store.get_sector_qpl_compare(BASE_DIR, sector_by_symbol)
+
+        fin_data = financials_analytics().get_json()
+        roe_by_sector = {}
+        for sym, sector in sector_by_symbol.items():
+            roe = fin_data.get("set", {}).get(sym, {}).get("roe")
+            if roe is not None:
+                roe_by_sector.setdefault(sector, []).append(roe)
+        for row in compare["sectors"]:
+            vals = roe_by_sector.get(row["sector"])
+            row["roe"] = round(sum(vals) / len(vals), 1) if vals else None
+
+        _sector_compare_cache["result"] = compare
+        _sector_compare_cache["ts"] = time.time()
+        return jsonify(compare)
+
+
+@app.route("/api/market-trend")
+def market_trend():
+    """หน้า "📈 แนวโน้มตลาด" — แนวโน้มพื้นฐานตลาด SET ทั้งตลาดย้อนหลังสูงสุด 20 ไตรมาส (ไม่แยก
+    sector ต่างจาก /api/sector-compare) ดู financials_store.get_market_trend สำหรับ logic เต็ม
+
+    รายได้/กำไร/NPM ตัดหุ้นกลุ่มการเงิน (factor_snapshot._financial_sector_symbols, ใช้ตัวเดียวกับ
+    ที่กัน Z-Score ไม่ได้) และ Property Fund & REITs ออก — นิยาม 'รายได้' ธุรกิจสองกลุ่มนี้ไม่เทียบเท่า
+    บริษัททั่วไป ส่วน ROE/Cash Quality/Breadth ใช้ทั้งตลาดตามปกติ"""
+    cached = _market_trend_cache.get("result")
+    if cached and (time.time() - _market_trend_cache.get("ts", 0) < _MARKET_TREND_CACHE_TTL):
+        return jsonify(cached)
+
+    with _market_trend_lock:
+        cached = _market_trend_cache.get("result")
+        if cached and (time.time() - _market_trend_cache.get("ts", 0) < _MARKET_TREND_CACHE_TTL):
+            return jsonify(cached)
+
+        symbols = set()
+        reit_symbols = set()
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, encoding="utf-8") as f:
+                    for s in json.load(f).get("stocks", []):
+                        if s.get("market") == "SET":
+                            symbols.add(s["symbol"])
+                            if s.get("sector") == "Property Fund & REITs":
+                                reit_symbols.add(s["symbol"])
+            except Exception:
+                pass
+
+        excluded = factor_snapshot._financial_sector_symbols(BASE_DIR) | reit_symbols
+        trend = financials_store.get_market_trend(BASE_DIR, symbols, excluded)
+
+        _market_trend_cache["result"] = trend
+        _market_trend_cache["ts"] = time.time()
+        return jsonify(trend)
 
 
 _MIRROR_SYM_NAME_CACHE = {}   # {ex: (ts, [{symbol,market,name}])}
@@ -6981,6 +7082,8 @@ def _run_financials_update_all():
             factor_snapshot.build_mirror_snapshot_yahoo_only(
                 BASE_DIR, "JP", jp_syms, price_by_ticker=jp_price_by_ticker)
         _fin_analytics_cache.clear()
+        _sector_compare_cache.clear()
+        _market_trend_cache.clear()
 
         elapsed_min = (time.time() - t0) / 60
         summary = (f"เสร็จแล้ว! หุ้นไทย {r_th['ok']}/{r_th['total']} (พลาด {r_th['fail']}, "
