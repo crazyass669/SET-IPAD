@@ -324,6 +324,33 @@ def fetch_financial_statement(symbol, account_type="income_statement", period=No
                       f"/api/set/stock/{urllib.parse.quote(sym)}/financialstatement?{q}", timeout=15)
 
 
+def fetch_trading_halts(ctx=None, hdr=None):
+    """รายชื่อหลักทรัพย์ที่หยุดพักการซื้อขายชั่วคราว (SP/H/P) ปัจจุบัน — ขุด endpoint จาก
+    JS bundle (Nuxt) ของหน้า
+    https://www.set.or.th/th/market/news-and-alert/trading-halt-suspension-pause
+    (หน้านั้น render ฝั่ง client ล้วน ดึง HTML ตรงๆ ไม่เห็นข้อมูล เหมือน delisted-list)
+
+    ไม่ส่ง query param ใดๆ = ดึงทุก securityType/sign (ตรงกับปุ่ม "ทั้งหมด" บนหน้าเว็บ)
+    securityType 'S' คือหุ้นสามัญ (ใช้ symbol ตรงกับที่ใช้ทั้ง dashboard ไม่มี suffix) —
+    'F'/'W' คือกระดานต่างชาติ/วอแรนท์ของบริษัทเดียวกัน ปกติหยุดพักพร้อมกับ 'S' เสมอ
+
+    คืน {"as_of": "...ISO datetime...", "items": [{"symbol","sign","name_th","name_en",
+    "security_type","market"}, ...]}"""
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers(
+            referer_path="/th/market/news-and-alert/trading-halt-suspension-pause")
+    d = _get_json(ctx, hdr, "/api/set/market/trading-halts/list", timeout=15)
+    items = [{
+        "symbol": r.get("symbol"),
+        "sign": r.get("sign"),
+        "name_th": r.get("nameTH"),
+        "name_en": r.get("nameEN"),
+        "security_type": r.get("securityType"),
+        "market": r.get("market"),
+    } for r in (d or {}).get("stockList") or []]
+    return {"as_of": (d or {}).get("datetime") or "", "items": items}
+
+
 def fetch_delisted_companies(lang="th", ctx=None, hdr=None):
     """รายชื่อหุ้นเพิกถอนที่ SET ยืนยันแล้วทั้งหมด (official, ไม่ใช่ heuristic เดา
     จากราคานิ่ง) — ขุด endpoint จาก JS bundle ของหน้า
@@ -346,3 +373,63 @@ def fetch_delisted_companies(lang="th", ctx=None, hdr=None):
             "delist_reason": c.get("delistReason") or "",
         } for c in comps],
     }
+
+
+_TH_MONTHS = {
+    "ม.ค.": 1, "ก.พ.": 2, "มี.ค.": 3, "เม.ย.": 4, "พ.ค.": 5, "มิ.ย.": 6,
+    "ก.ค.": 7, "ส.ค.": 8, "ก.ย.": 9, "ต.ค.": 10, "พ.ย.": 11, "ธ.ค.": 12,
+}
+
+
+def _parse_thai_date(s):
+    """'13 ธ.ค. 2567' (พ.ศ.) -> '2024-12-13' (ค.ศ.) — คืน '' ถ้า parse ไม่ได้/เป็น '-'"""
+    if not s or not isinstance(s, str):
+        return ""
+    parts = s.strip().split()
+    if len(parts) != 3:
+        return ""
+    d, mo, y = parts
+    month = _TH_MONTHS.get(mo)
+    if not month:
+        return ""
+    try:
+        return f"{int(y) - 543:04d}-{month:02d}-{int(d):02d}"
+    except ValueError:
+        return ""
+
+
+def parse_delisted_companies_xlsx(path):
+    """อ่านไฟล์ 'delisted-securities-th.xlsx' ที่ดาวน์โหลดมาด้วยมือจากหน้า
+    https://www.set.or.th/th/market/information/securities-list/delisted-list
+    (ปุ่มดาวน์โหลดบนหน้านั้น) — ทางเลือกแทน fetch_delisted_companies() ที่ต้องผ่าน
+    bootstrap cookie/WAF คอลัมน์: หลักทรัพย์, ชื่อบริษัท, ตลาด, กลุ่มอุตสาหกรรม,
+    หมวดธุรกิจ, วันที่ซื้อขายวันแรก, วันที่เพิกถอน, สาเหตุ (แถว 1-2 = หัวเรื่อง/หัวตาราง)
+
+    คืน shape เดียวกับ fetch_delisted_companies(): {"as_of_date", "companies":[...]}"""
+    import re
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    rows = list(ws.iter_rows(values_only=True))
+
+    as_of_date = ""
+    if rows:
+        header_text = " ".join(str(c) for c in rows[0] if c)
+        m = re.search(r"(\d{1,2})\s+(\S+\.)\s+(\d{4})", header_text)
+        if m:
+            as_of_date = _parse_thai_date(f"{m.group(1)} {m.group(2)} {m.group(3)}")
+
+    companies = []
+    for row in rows[2:]:
+        if not row or not row[0]:
+            continue
+        companies.append({
+            "symbol": str(row[0]).strip(),
+            "name": str(row[1]).strip() if row[1] else "",
+            "market": str(row[2]).strip() if row[2] else "",
+            "delist_date": _parse_thai_date(row[6]),
+            "delist_reason": str(row[7]).strip() if row[7] else "",
+        })
+    return {"as_of_date": as_of_date, "companies": companies}

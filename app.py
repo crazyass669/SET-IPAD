@@ -2968,6 +2968,75 @@ def get_financials_qpl_report(symbol):
     return jsonify(report)
 
 
+@app.route("/api/financials-merged-report/<symbol>")
+def get_financials_merged_report(symbol):
+    """แท็บ 'งบรวมทุกแหล่ง' — ผสาน P&L (3 แหล่งเหมือน /api/financials-qpl-report, SET เป็นชั้น
+    ท้ายสุด/แม่นสุด) + งบดุล/กระแสเงินสด รายไตรมาส (Finnomena+Yahoo เท่านั้น — SET.or.th ไม่มี
+    รายไตรมาสจริงของ 2 งบนี้ ดู compute_full_report) ส่วนรายปี หุ้นไทยจะ override
+    total_assets/total_equity/cfo/cfi/cff ด้วยตัวเลขทางการจาก SET company-highlight ปีที่ปิดงบ
+    แล้วทับผลรวม Finnomena+Yahoo อีกที (ดู set_bscf_annual_layer) คืนทั้งรายไตรมาส ("quarters")
+    และรายปี ("years") ในเรสปอนส์เดียว ให้ frontend toggle รายปี/รายไตรมาสได้โดยไม่ต้องยิงซ้ำ
+
+    ดึงจาก cache local ก่อนเสมอ (pattern เดียวกับ /api/financials-qpl-report) ยิงสดเฉพาะ DB
+    ว่างหรือ ?refresh=1"""
+    sym = symbol.upper().strip()
+    is_dr = request.args.get("is_dr") == "1"
+    market = request.args.get("market")
+    refresh = request.args.get("refresh") == "1"
+
+    finn = None if refresh else financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr, market=market)
+    if finn is None:
+        try:
+            fresh = financials_store.fetch_finnomena_quarterly(sym, is_dr=is_dr)
+            financials_store.upsert(BASE_DIR, sym, "finnomena_q", fresh, is_dr=is_dr)
+            finn = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr, market=market)
+        except Exception:
+            finn = None
+
+    yq = None if refresh else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, market=market)
+    if yq is None:
+        try:
+            fresh = financials_store.fetch_yahoo_quarterly(sym, is_dr=is_dr, market=market)
+            financials_store.upsert(BASE_DIR, sym, "yahoo_q", fresh, is_dr=is_dr)
+            yq = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, market=market)
+        except Exception:
+            yq = None
+
+    if not finn and not yq:
+        return jsonify({"error": f"ไม่พบข้อมูลงบการเงินของ {sym} จากทั้ง Finnomena และ Yahoo"}), 404
+
+    set_series = None
+    set_hl = None
+    if not is_dr:   # SET official มีแค่หุ้นไทย — DR ข้าม ไม่ยิง set.or.th เปล่าๆ
+        if not refresh:
+            try:
+                set_series = financials_store.get_set_qpl_series(BASE_DIR, sym)
+            except Exception:
+                set_series = None
+        if set_series is None:
+            try:
+                set_series = financials_store.sync_set_qpl_series(BASE_DIR, sym)
+            except Exception:
+                set_series = None
+        # company-highlight (source 'set') — ใช้ override total_assets/total_equity/cfo/cfi/cff
+        # รายปีทับผลรวมจาก Finnomena+Yahoo (ดู set_bscf_annual_layer) หุ้นไทยเน้นข้อมูลจาก
+        # SET ก่อนเพราะเป็นแหล่งทางการ ตรงตามที่บริษัทยื่นจริง
+        set_hl = None if refresh else financials_store.get(BASE_DIR, sym, "set")
+        if set_hl is None:
+            try:
+                set_hl = financials_store.fetch_set_full(sym)
+                financials_store.upsert(BASE_DIR, sym, "set", set_hl)
+            except Exception:
+                set_hl = None
+
+    report = financials_store.compute_full_report(finn, yq, set_series=set_series)
+    set_annual = financials_store.set_bscf_annual_layer(set_hl) if set_hl else None
+    report["years"] = financials_store.rollup_full_report_annual(report["quarters"], set_annual=set_annual)["years"]
+    report["sym"] = sym
+    report["name"] = (yq or finn or {}).get("name") or sym
+    return jsonify(report)
+
+
 @app.route("/api/financials-qpl-set/<symbol>")
 def get_financials_qpl_set(symbol):
     """ตารางกำไรขาดทุนรายไตรมาสจาก SET.or.th ล้วนๆ (source 'set_qpl' อย่างเดียว ไม่ผสาน
@@ -6118,6 +6187,93 @@ def data_health():
         items.append(_dh_error_item("financials_coverage_by_source",
                                      "งบการเงิน — แจกแจงตามแหล่ง (financials.db)", "งบการเงิน", str(e)[:160]))
 
+    # coverage ของ mirror งบดัชนีหลัก US/HK/JP (source 'yahoo' namespace FINN:/DR:) — แยก
+    # "ไม่เคย sync จริง" ออกจาก "เก่าเกิน 1 ปี" ให้เห็นในแอปเลย ไม่ต้องไล่เช็คมือแบบ 2026-08-15
+    # (วันนั้นเจอ 104 ตัวที่เข้าใจผิดว่า 'ไม่เคย sync' ทั้งที่จริงมีอยู่แล้วใต้ namespace 'DR:' —
+    # get_mirror_index_coverage เช็คถูก namespace แล้ว ไม่เกิด false positive แบบนั้นอีก)
+    try:
+        from sources import us_index_metrics as _mim_us, hk_index_metrics as _mim_hk, jp_index_metrics as _mim_jp
+        _mim_us_syms = [s["symbol"] for s in _mim_us.load_local(BASE_DIR).get("stocks", [])]
+        _mim_hk_syms = [s["symbol"].replace(".HK", "") for s in _mim_hk.load_local(BASE_DIR).get("stocks", [])]
+        _mim_jp_stocks = _mim_jp.load_local(BASE_DIR).get("stocks", [])
+        _mim_jp_syms = [s["symbol"][:-2] for s in _mim_jp_stocks if s["symbol"].endswith(".T")]
+        _mim_cov = financials_store.get_mirror_index_coverage(
+            BASE_DIR, {"US": _mim_us_syms, "HK": _mim_hk_syms, "JP": _mim_jp_syms}, stale_days=365)
+        _mim_total = _mim_cov["total"]
+        _mim_missing = len(_mim_cov["missing"])
+        _mim_stale = len(_mim_cov["stale"])
+        _mim_status = "red" if _mim_missing else ("warn" if _mim_stale else "ok")
+        _mim_stale_rows = "".join(
+            f'<tr><td style="padding:2px 10px 2px 0">{ex}:{name}</td>'
+            f'<td style="text-align:right;color:var(--text2)">{latest} ({age}d)</td></tr>'
+            for ex, name, latest, age in _mim_cov["stale"][:15])
+        items.append({
+            "key": "mirror_index_coverage",
+            "label": "งบดัชนีหลัก US/HK/JP — mirror coverage (financials.db)",
+            "category": "งบการเงิน",
+            "last_at": None, "age_hours": None,
+            "status": _mim_status,
+            "note": (f'สด {_mim_cov["fresh"]}/{_mim_total} · เก่าเกิน 1 ปี {_mim_stale} · '
+                     f'ไม่เคย sync {_mim_missing}'
+                     + (f'<div style="margin-top:6px">ยังไม่เคย sync {_mim_missing} ตัว — กดปุ่ม '
+                        '"🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างเพื่อ sync ให้ครบ</div>' if _mim_missing else "")
+                     + (f'<details style="margin-top:6px"><summary style="cursor:pointer">'
+                        f'ตัวที่เก่าเกิน 1 ปี ({_mim_stale})</summary>'
+                        f'<table style="border-collapse:collapse;margin-top:4px">{_mim_stale_rows}</table>'
+                        f'{"" if _mim_stale <= 15 else f"<div>...และอีก {_mim_stale-15} ตัว</div>"}'
+                        f'</details>' if _mim_stale else "")),
+        })
+    except Exception as e:
+        items.append(_dh_error_item("mirror_index_coverage",
+                                     "งบดัชนีหลัก US/HK/JP — mirror coverage (financials.db)", "งบการเงิน", str(e)[:160]))
+
+    # แจกแจง coverage งบ US แยกตาม 3 ดัชนีหลัก (S&P500/Dow/Nasdaq100) — item ด้านบนรวม
+    # US ทั้งก้อนเป็นตัวเลขเดียว มองไม่ออกว่าดัชนีไหน sync ไม่ครบไปกี่ตัว รูปแบบ "covered/total"
+    # เหมือน financials_coverage_by_source ด้านบน (นับว่า "มีข้อมูล" ไม่ว่าจะเก่าแค่ไหน
+    # ต่างจาก mirror_index_coverage ที่แยกสด/เก่า/ไม่เคย sync)
+    try:
+        from sources import us_index_membership as _uim
+        _uim_local = _uim.load_local(BASE_DIR)
+        _uim_groups = [("SP500", "S&P 500"), ("DOW", "Dow Jones"), ("NDX", "Nasdaq 100")]
+        _uim_rows = []
+        _uim_worst_pct = 100.0
+        _uim_missing_by_group = {}
+        for _gk, _glabel in _uim_groups:
+            _gsyms = [s.upper().strip() for s in (_uim_local.get(_gk) or [])]
+            _gcov = financials_store.get_mirror_index_coverage(BASE_DIR, {"US": _gsyms}, stale_days=365)
+            _gtotal = _gcov["total"]
+            _gmissing = _gcov["missing"]
+            _gcovered = _gtotal - len(_gmissing)
+            _gpct = (_gcovered / _gtotal * 100) if _gtotal else 0.0
+            _uim_worst_pct = min(_uim_worst_pct, _gpct)
+            _gcolor = "var(--green)" if _gpct >= 99.5 else ("var(--yellow)" if _gpct >= 90 else "var(--red)")
+            _uim_rows.append(
+                f'<tr><td style="padding:2px 10px 2px 0">{_glabel}</td>'
+                f'<td style="text-align:right;color:{_gcolor};font-weight:600">'
+                f'{_gcovered}/{_gtotal} ({_gpct:.1f}%)</td></tr>')
+            if _gmissing:
+                _uim_missing_by_group[_glabel] = [name for _, name in _gmissing]
+        _uim_status = ("ok" if _uim_worst_pct >= 99.5
+                        else "warn" if _uim_worst_pct >= 90 else "red")
+        _uim_extra = ""
+        if _uim_missing_by_group:
+            _uim_missing_html = "".join(
+                f'<div style="margin-top:4px"><b>{lbl}</b> ({len(syms)}): {", ".join(syms)}</div>'
+                for lbl, syms in _uim_missing_by_group.items())
+            _uim_extra = (f'<details style="margin-top:6px"><summary style="cursor:pointer">'
+                           f'ตัวที่ยังไม่มีงบ</summary>{_uim_missing_html}</details>')
+        items.append({
+            "key": "us_index_coverage_by_index",
+            "label": "งบการเงิน US — แจกแจงตามดัชนี (S&P500/Dow/Nasdaq100)",
+            "category": "งบการเงิน",
+            "last_at": None, "age_hours": None,
+            "status": _uim_status,
+            "note": f'<table style="border-collapse:collapse">{"".join(_uim_rows)}</table>{_uim_extra}',
+        })
+    except Exception as e:
+        items.append(_dh_error_item("us_index_coverage_by_index",
+                                     "งบการเงิน US — แจกแจงตามดัชนี (S&P500/Dow/Nasdaq100)", "งบการเงิน", str(e)[:160]))
+
     # เก็บเป็น JSON string {"at": "YYYY-MM-DD HH:MM", "ok":.., "empty":.., "fail":.., "total":.., "force":..}
     # ไม่ใช่ plain datetime string เหมือน meta อื่น — ต้องแกะก่อน parse
     try:
@@ -6513,6 +6669,7 @@ _UPDATE_STATUS_LABEL = {
     "restart":        "↺ Restart Server",
     "financials_sync": "🔄 อัพเดทงบการเงิน (update_financials.py)",
     "mirror_finnomena": "📥 Mirror US/HK ทั้งตลาด (mirror_finnomena.py)",
+    "mirror_finnomena_normal": "📥 Mirror ทั้งตลาด (ปกติ — เฉพาะที่ขาด) (mirror_finnomena.py)",
     "build_mirror_names": "🏷️ ดึงชื่อหุ้น mirror ใหม่ (build_mirror_names.py)",
     "mirror_yahoo_index_sync": "🌐 Sync Mirror Yahoo US/HK ทั้ง universe",
     "us_index_full_refresh": "📈 ดึงราคา US Index ย้อนหลังสูงสุด",
@@ -6899,6 +7056,54 @@ def mirror_finnomena_force_full():
         _state.update(running=True, done=False, error=None,
                       current=0, total=100, message="กำลังเริ่ม mirror งบ Finnomena ทั้งตลาด (force)...")
     threading.Thread(target=_run_mirror_finnomena_force_full, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+def _run_mirror_finnomena_normal_full():
+    """เทียบเท่า `python mirror_finnomena.py` (ไม่ใส่ force) แล้วต่อด้วย
+    `python build_snapshot.py` — ต่างจาก force ตรงที่ข้ามตัวที่มีงบ schema ปัจจุบันอยู่แล้ว
+    ยิงเฉพาะตัวที่ยังไม่มี/พลาดไปก่อนหน้า (schema เก่า/marker 'ไม่มีงบ' ก็ยิงซ้ำเพื่อเติม
+    field ใหม่) เร็วกว่า force มาก เหมาะใช้ไล่เก็บตัวที่พลาดหลังรอบ force"""
+    t0 = time.time()
+    try:
+        def cb(current, total, msg):
+            pct = (current / max(total, 1) * 85)
+            _update(current=round(pct), total=100, message=msg)
+        result = financials_store.mirror_finnomena(BASE_DIR, exchanges=("TH", "HK", "US"),
+                                                     callback=cb, force=False)
+        _mirror_diff_cache.clear()
+
+        _update(current=88, total=100, message="กำลังคำนวณ factor snapshot หลัก (ไทย+DR)...")
+        factor_snapshot.build_snapshot(BASE_DIR)
+        _update(current=94, total=100, message="กำลัง rebuild mirror snapshot US/HK...")
+        factor_snapshot.build_mirror_snapshot(BASE_DIR)
+        _fin_analytics_cache.clear()
+
+        elapsed_min = (time.time() - t0) / 60
+        summary = (f"เสร็จแล้ว! ดึงงบได้ {result['ok']} · ไม่มีงบ {result['empty']}"
+                   + (f" · พลาด {result['fail']}" if result["fail"] else "")
+                   + f" · ใช้เวลา {elapsed_min:.0f} นาที")
+        _update(done=True, message=summary)
+        run_log.record_run(BASE_DIR, "mirror_finnomena_normal", True, summary)
+    except Exception as e:
+        run_log.record_run(BASE_DIR, "mirror_finnomena_normal", False, str(e))
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+    finally:
+        _update(running=False)
+
+
+@app.route("/api/mirror-finnomena-normal-full", methods=["POST"])
+def mirror_finnomena_normal_full():
+    """ปุ่ม '📥 Mirror ทั้งตลาด (ปกติ — เฉพาะที่ขาด) + rebuild snapshot' (หน้า Data Health)
+    — แทน `python mirror_finnomena.py` (ไม่ใส่ force) + `python build_snapshot.py`
+    ครอบคลุม TH+HK+US เหมือนปุ่ม force แต่ข้ามตัวที่มีงบ schema ปัจจุบันอยู่แล้ว ยิงเฉพาะ
+    ตัวที่ขาด/พลาดไปก่อนหน้า เร็วกว่า force มาก (นาที ไม่ใช่ชั่วโมง)"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None,
+                      current=0, total=100, message="กำลังเริ่ม mirror งบ Finnomena ทั้งตลาด (ปกติ — เฉพาะที่ขาด)...")
+    threading.Thread(target=_run_mirror_finnomena_normal_full, daemon=True).start()
     return jsonify({"ok": True})
 
 
@@ -7415,22 +7620,36 @@ def refresh_market_stats_monthly():
 _delisted_check_cache = {"result": None, "ts": 0}
 _DELISTED_CHECK_CACHE_TTL = 3600
 
+_trading_halt_check_cache = {"result": None, "ts": 0}
+_TRADING_HALT_CHECK_CACHE_TTL = 900
+
 
 @app.route("/api/check-delisted-th", methods=["POST"])
 def check_delisted_th():
-    """เทียบรายชื่อหุ้นเพิกถอนที่ SET.or.th ยืนยันแล้ว (sources/set_api.py::fetch_delisted_companies)
-    กับ delisted_log.json ในเครื่อง — รายงานเฉพาะตัวที่ (1) ยังไม่มีใน log และ (2) เราเคย
-    เก็บราคาไว้จริงใน set_prices.db (ตัวที่ไม่เคย track ไม่ต้องทำอะไร ไม่โผล่มากวนใจ)
-    ไม่แก้ delisted_log.json ให้อัตโนมัติ — ให้ผู้ใช้รัน mark_delisted.py เองถ้าต้องการบันทึกจริง"""
+    """เทียบรายชื่อหุ้นเพิกถอนที่ SET.or.th ยืนยันแล้วกับ delisted_log.json ในเครื่อง —
+    รายงานเฉพาะตัวที่ (1) ยังไม่มีใน log และ (2) เราเคยเก็บราคาไว้จริงใน set_prices.db
+    (ตัวที่ไม่เคย track ไม่ต้องทำอะไร ไม่โผล่มากวนใจ) ไม่แก้ delisted_log.json ให้อัตโนมัติ —
+    ให้ผู้ใช้รัน mark_delisted.py เองถ้าต้องการบันทึกจริง
+
+    แหล่งข้อมูล: ถ้ามีไฟล์ delisted-securities-th.xlsx (ดาวน์โหลดมือจากหน้า SET.or.th
+    securities-list/delisted-list) วางไว้ในโฟลเดอร์โปรเจกต์/SET_XLS_DIR ใช้ไฟล์นั้นก่อน
+    (เร็ว ไม่เสี่ยงโดน WAF บล็อก) ไม่มีไฟล์ค่อย fallback ไปดึงสดผ่าน
+    sources/set_api.py::fetch_delisted_companies (ต้อง bootstrap cookie ผ่าน Incapsula)"""
     cached = _delisted_check_cache.get("result")
     if cached and (time.time() - _delisted_check_cache.get("ts", 0) < _DELISTED_CHECK_CACHE_TTL):
         return jsonify(cached)
     try:
         from core.delisted_log import read_log
         from core.store import get_last_dates
-        from sources.set_api import fetch_delisted_companies
+        from sources.set_api import fetch_delisted_companies, parse_delisted_companies_xlsx
 
-        official = fetch_delisted_companies()
+        xlsx_path, xlsx_ok = _resolve_xls("delisted-securities-th.xlsx")
+        if xlsx_ok:
+            official = parse_delisted_companies_xlsx(xlsx_path)
+            source = "file"
+        else:
+            official = fetch_delisted_companies()
+            source = "live"
         our_log = read_log(BASE_DIR)
         our_th_symbols = {v["symbol"] for v in our_log.values() if v.get("market") == "TH"}
         last_dates = get_last_dates(BASE_DIR)
@@ -7451,9 +7670,49 @@ def check_delisted_th():
             "as_of_date": official["as_of_date"],
             "official_count": len(official["companies"]),
             "actionable": actionable,
+            "source": source,
         }
         _delisted_check_cache["result"] = result
         _delisted_check_cache["ts"] = time.time()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/check-trading-halt-th", methods=["POST"])
+def check_trading_halt_th():
+    """ดึงรายชื่อหลักทรัพย์ที่หยุดพักการซื้อขายชั่วคราว (SP/H/P) ปัจจุบันจาก SET.or.th
+    (sources/set_api.py::fetch_trading_halts) มาเทียบกับ Watchlist ในเครื่อง (data/watchlist.json)
+    เฉพาะสัญลักษณ์หุ้นไทยล้วน (ไม่มี prefix DR:/US:/HK:) — คืนทั้งลิสต์เต็ม (หุ้นสามัญ) และ
+    ตัวที่ตรงกับ watchlist แยกไว้ให้ frontend เน้นแสดง ไม่แก้ไฟล์ใดๆ ให้อัตโนมัติ"""
+    cached = _trading_halt_check_cache.get("result")
+    if cached and (time.time() - _trading_halt_check_cache.get("ts", 0) < _TRADING_HALT_CHECK_CACHE_TTL):
+        return jsonify(cached)
+    try:
+        from sources.set_api import fetch_trading_halts
+
+        data = fetch_trading_halts()
+        common = [x for x in data["items"] if x["security_type"] == "S"]
+        common.sort(key=lambda x: x["symbol"])
+
+        try:
+            with open(WATCHLIST_FILE, encoding="utf-8") as f:
+                wl_all = json.load(f)
+        except Exception:
+            wl_all = []
+        wl_syms = {s for s in wl_all if isinstance(s, str) and ":" not in s}
+        watchlist_hits = [x for x in common if x["symbol"] in wl_syms]
+
+        result = {
+            "ok": True,
+            "as_of": data["as_of"],
+            "total_count": len(data["items"]),
+            "common_count": len(common),
+            "watchlist_hits": watchlist_hits,
+            "items": common,
+        }
+        _trading_halt_check_cache["result"] = result
+        _trading_halt_check_cache["ts"] = time.time()
         return jsonify(result)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500

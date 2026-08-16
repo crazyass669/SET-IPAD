@@ -2279,8 +2279,20 @@
     <button id="val-check-delisted-btn" onclick="checkDelistedNew()"
       style="font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border);
              background:var(--bg-card2);color:#c8d0dc;cursor:pointer;display:flex;align-items:center;gap:6px"
-      data-vtip="&lt;div class='tip-head'&gt;เช็คหุ้นเพิกถอนใหม่&lt;/div&gt;ดึงรายชื่อหุ้นเพิกถอนที่ &lt;b&gt;SET.or.th ยืนยันแล้ว&lt;/b&gt; (official) มาเทียบกับข้อมูลในเครื่อง&lt;br&gt;แจ้งเฉพาะตัวที่เราเคยเก็บราคาไว้จริง แต่ยังไม่บันทึกว่าเพิกถอน&lt;hr&gt;ไม่แก้ไฟล์ให้อัตโนมัติ — เจอแล้วต้องรัน &lt;b&gt;mark_delisted.py&lt;/b&gt; เองเพื่อบันทึกจริง">
+      data-vtip="&lt;div class='tip-head'&gt;เช็คหุ้นเพิกถอนใหม่&lt;/div&gt;เทียบรายชื่อหุ้นเพิกถอนที่ &lt;b&gt;SET.or.th ยืนยันแล้ว&lt;/b&gt; (official) กับข้อมูลในเครื่อง — แจ้งเฉพาะตัวที่เราเคยเก็บราคาไว้จริง แต่ยังไม่บันทึกว่าเพิกถอน&lt;hr&gt;&lt;b&gt;วิธีอัพเดทแหล่งข้อมูล (แนะนำ ไม่โดน WAF บล็อก):&lt;/b&gt;&lt;br&gt;&lt;b&gt;1.&lt;/b&gt; เข้าเว็บ &lt;b&gt;SET.or.th&lt;/b&gt; → Market Data → Securities List → Delisted List&lt;br&gt;&lt;b&gt;2.&lt;/b&gt; ดาวน์โหลด &lt;b&gt;delisted-securities-th.xlsx&lt;/b&gt;&lt;br&gt;&lt;b&gt;3.&lt;/b&gt; วางทับไฟล์เดิมในโฟลเดอร์ &lt;b&gt;SET_Dashboard&lt;/b&gt;&lt;br&gt;&lt;b&gt;4.&lt;/b&gt; กดปุ่มนี้ได้เลย — ไม่มีไฟล์จะ fallback ไปดึงสด (ต้องผ่าน bootstrap cookie)&lt;hr&gt;ไม่แก้ไฟล์ให้อัตโนมัติ — เจอแล้วต้องรัน &lt;b&gt;mark_delisted.py&lt;/b&gt; เองเพื่อบันทึกจริง">
       🔍 เช็คหุ้นเพิกถอนใหม่
+    </button>
+    <a href="https://www.set.or.th/th/market/information/securities-list/delisted-list" target="_blank" rel="noopener"
+      style="font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border);
+             background:var(--bg-card2);color:#c8d0dc;cursor:pointer;display:flex;align-items:center;gap:6px;text-decoration:none"
+      title="เปิดหน้า Delisted List ของ SET.or.th ในแท็บใหม่ เพื่อดาวน์โหลด delisted-securities-th.xlsx">
+      🔗 ดาวน์โหลดรายชื่อหุ้นเพิกถอน
+    </a>
+    <button id="val-check-halt-btn" onclick="checkTradingHaltNew()"
+      style="font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border);
+             background:var(--bg-card2);color:#c8d0dc;cursor:pointer;display:flex;align-items:center;gap:6px"
+      data-vtip="&lt;div class='tip-head'&gt;หลักทรัพย์ที่หยุดพักการซื้อขายชั่วคราว&lt;/div&gt;ดึงรายชื่อหุ้นที่มีเครื่องหมาย &lt;b&gt;SP/H/P&lt;/b&gt; อยู่ตอนนี้จาก &lt;b&gt;SET.or.th&lt;/b&gt; (สด)&lt;br&gt;เทียบกับ Watchlist ในเครื่องแล้วเน้นแสดงตัวที่เกี่ยวข้อง&lt;hr&gt;ข้อมูลแคช 15 นาที ไม่แก้ไฟล์ใดๆ ให้อัตโนมัติ">
+      🚧 เช็คหุ้นหยุดพักเทรด
     </button>
     <span id="val-refresh-status" style="font-size:11px;color:var(--muted)"></span>
   </div>
@@ -2289,6 +2301,7 @@
   </div>
   <div id="val-data-month" style="font-size:12px;margin:4px 0 2px;color:var(--muted)"></div>
   <div id="val-delisted-result" style="display:none;margin-bottom:14px"></div>
+  <div id="val-halt-result" style="display:none;margin-bottom:14px"></div>
 
   <!-- P/E-P/BV รายวันจาก SET.or.th โดยตรง (คู่กับค่ารายเดือนจาก Excel ด้านล่าง) -->
   <div id="val-daily-box" style="display:none;margin-bottom:14px"></div>
@@ -3234,6 +3247,8 @@
         title="งบทางการจาก SET.or.th (หุ้นไทยเท่านั้น)">🇹🇭 SET.or.th</button>
       <button class="filter-btn" id="fin-view-qpl-btn" onclick="setFinView('qpl',this)" style="min-width:150px"
         title="ตาราง P&L รายไตรมาสสไตล์ broker research (รายได้/ต้นทุนขาย/SG&A แยกขาย-บริหาร/กำไรดำเนินงาน/ภาษี ฯลฯ) — ผสาน Finnomena (ยาว) + Yahoo (ละเอียด)">📋 P&amp;L รายไตรมาส</button>
+      <button class="filter-btn" id="fin-view-merged-btn" onclick="setFinView('merged',this)" style="min-width:150px"
+        title="ผสาน P&L + งบดุล + กระแสเงินสด จากทุกแหล่ง — สลับดูรายปี/รายไตรมาสได้ พร้อม %QoQ/%YoY">🧩 งบรวมทุกแหล่ง</button>
       <button class="filter-btn" id="fin-view-div-btn" onclick="setFinView('dividends',this)" style="border-radius:0 6px 6px 0;min-width:110px"
         title="ประวัติปันผล + streak/CAGR/yield รายปี — TH/US/HK">💵 ปันผล</button>
     </div>
@@ -4014,6 +4029,18 @@
         </div>
       </div>
       <div class="btn-wrap">
+        <button class="refresh-btn" id="mirror-normal-btn" onclick="startMirrorFinnomenaNormalFull()" title="ครอบคลุม TH+HK+US เหมือนปุ่ม force แต่ข้ามตัวที่มีงบอยู่แล้ว (schema ปัจจุบัน) — ยิงเฉพาะตัวที่ยังไม่มีงบ/พลาดไปก่อนหน้า/schema เก่า เร็วกว่า force มาก (นาที ไม่ใช่ชั่วโมง) เหมาะกดไล่เก็บตัวที่พลาดหลังรอบ force แทนที่จะรีรันทั้งตลาดใหม่หมด">📥 Mirror ทั้งตลาด (ปกติ — เฉพาะที่ขาด)</button>
+        <div class="btn-note">
+          <b>📥 Mirror งบ Finnomena ทั้งตลาด (ปกติ) + rebuild snapshot</b>
+          <span class="badge badge-yellow" style="margin-left:4px">Finnomena เท่านั้น</span><br>
+          ครอบคลุม TH+HK+US เหมือนปุ่ม force ด้านบน แต่ <b>ข้ามตัวที่มีงบ schema ปัจจุบันอยู่แล้ว</b> ยิงเฉพาะตัวที่ยังไม่มีงบ/พลาดไปก่อนหน้า/schema เก่า
+          — ไม่ได้ดึงงวดใหม่ของตัวที่มีงบสมบูรณ์แล้ว (ต่างจาก force ที่ยิงซ้ำทุกตัว) เหมาะกดไล่เก็บ "ตัวที่พลาด" หลังรอบ force เร็วกว่ามาก แล้ว
+          rebuild factor snapshot ต่อให้เอง<br>
+          📦 แทน <code>python mirror_finnomena.py</code> (ไม่ใส่ force) + <code>python build_snapshot.py</code><br>
+          ⏱ ไม่กี่นาที — กดได้บ่อยเท่าที่ต้องการ ไม่ต้องรอไตรมาส
+        </div>
+      </div>
+      <div class="btn-wrap">
         <button class="refresh-btn" id="build-mirror-names-btn" onclick="startBuildMirrorNames()">🏷️ ดึงชื่อหุ้น mirror ใหม่</button>
         <div class="btn-note">
           <b>🏷️ ดึงชื่อบริษัทหุ้น mirror US/HK ใหม่</b>
@@ -4754,6 +4781,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260815d"></script>
+<script src="static/dashboard.js?v=20260817e"></script>
 </body>
 </html>

@@ -1222,6 +1222,171 @@ def compute_qpl_report(payload_finn_q, payload_yahoo_q, set_series=None):
     return {"quarters": out}
 
 
+# field งบดุล/กระแสเงินสดที่ผสานได้ — เฉพาะ Finnomena+Yahoo เพราะสอง payload นี้ใช้ชื่อ raw
+# field เดียวกันโดยตั้งใจ (ดู _finn_map_rows field_map ด้านล่าง) SET.or.th ไม่มีรายไตรมาสจริง
+# (company-highlight เป็นรายปี/ยอดสะสมบางส่วนของปีปัจจุบันเท่านั้น) จึงไม่เอามาผสานที่นี่
+_BSCF_RAW_MAP = {
+    "balance": (("Total Assets", "total_assets"), ("Stockholders Equity", "total_equity"),
+                ("Total Debt", "total_debt"), ("Cash And Cash Equivalents", "cash")),
+    "cashflow": (("Operating Cash Flow", "cfo"), ("Investing Cash Flow", "cfi"),
+                 ("Financing Cash Flow", "cff"), ("Depreciation And Amortization", "da")),
+}
+_BSCF_FIELDS = ("total_assets", "total_equity", "total_debt", "cash", "cfo", "cfi", "cff", "da")
+
+
+def _bscf_layer_from_payload(payload):
+    """{(year_ad,q): {field: value}} จาก payload ทรง finnomena_q/yahoo_q (โครงเดียวกัน
+    section->field->{วันที่สิ้นงวด: ค่า}) ใช้ได้กับทั้งสองแหล่งเพราะชื่อ raw field ตรงกัน
+    (ดู _finn_map_rows field_map บรรทัด ~1616)"""
+    out = {}
+    if not payload:
+        return out
+    for section, pairs in _BSCF_RAW_MAP.items():
+        sec = payload.get(section, {}) or {}
+        for raw, ours in pairs:
+            for d, v in sec.get(raw, {}).items():
+                try:
+                    y, m = int(d[:4]), int(d[5:7])
+                except (TypeError, ValueError):
+                    continue
+                q = _QTR_MONTH.get(m)
+                if not q:
+                    continue
+                fv = None
+                try:
+                    fv = float(v) if v is not None else None
+                except (TypeError, ValueError):
+                    fv = None
+                if fv is not None:
+                    out.setdefault((y, q), {})[ours] = fv
+    return out
+
+
+def _merge_bscf_layer(combined, layer_rows, source_name):
+    """เหมือน _qpl_merge_layer แต่สำหรับ _BSCF_FIELDS — เก็บชื่อแหล่งไว้ที่ 'bscf_source' แยก
+    จาก 'source' ของ P&L (ไม่ reuse _qpl_merge_layer ตรงๆ เพราะมันจะไปทับ 'source' ของ P&L
+    layer ที่ผสานไว้ก่อนหน้า เช่นแถวที่ P&L มาจาก SET แต่งบดุลมาจาก Yahoo จะโดนเขียนทับ
+    label 'source' เป็น 'yahoo' ทั้งที่ P&L ยังเป็นของ SET อยู่)"""
+    for key, row in layer_rows.items():
+        dest = combined.setdefault(key, {"year_ad": key[0], "q": key[1], "detail": False})
+        for f in _BSCF_FIELDS:
+            v = row.get(f)
+            if v is not None:
+                dest[f] = v
+        dest["bscf_source"] = source_name
+
+
+def compute_full_report(payload_finn_q, payload_yahoo_q, set_series=None):
+    """ตารางงบผสานทุกแหล่งสำหรับแท็บ 'งบรวมทุกแหล่ง' — P&L ผสานครบ 3 แหล่งเหมือน
+    compute_qpl_report ทุกประการ (เรียกใช้ตรงๆ) ส่วนงบดุล/กระแสเงินสดผสานได้แค่ Finnomena+Yahoo
+    (ดูเหตุผลที่ _BSCF_RAW_MAP) เรียง Finnomena ก่อน (ประวัติยาวกว่า) แล้ว Yahoo ทับ (สดกว่า)
+    เหมือนลำดับชั้นของ P&L คืน {"quarters": [...]} เรียงเก่า->ใหม่ แถวเดียวกันมีทั้ง field P&L
+    และงบดุล/กระแสเงินสด"""
+    pl = compute_qpl_report(payload_finn_q, payload_yahoo_q, set_series=set_series)
+    combined = {}
+    for row in pl["quarters"]:
+        combined[(row["year_ad"], row["q"])] = dict(row)
+
+    _merge_bscf_layer(combined, _bscf_layer_from_payload(payload_finn_q), "finnomena")
+    _merge_bscf_layer(combined, _bscf_layer_from_payload(payload_yahoo_q), "yahoo")
+
+    out = [combined[k] for k in sorted(combined.keys())]
+    return {"quarters": out}
+
+
+_BSCF_FLOW_FIELDS = ("cfo", "cfi", "cff", "da")
+_BSCF_STOCK_FIELDS = ("total_assets", "total_equity", "total_debt", "cash")
+_QPL_FLOW_FIELDS = _QPL_FIELDS   # ทุก field ของ P&L เป็น flow (สะสมได้) ทั้งหมด
+# field ที่ SET company-highlight มีความหมายตรงกับของเราเป๊ะ ใช้ override รายปีได้ — ไม่รวม
+# total_debt (SET มีแค่ totalLiability = หนี้สินรวมทั้งหมด ต่างความหมายจาก total_debt ของ
+# Finnomena/Yahoo ที่หมายถึงเฉพาะหนี้มีภาระดอกเบี้ย) และ cash/da (SET ไม่มี field ตรงๆ)
+_SET_ANNUAL_OVERRIDE_FIELDS = ("total_assets", "total_equity", "cfo", "cfi", "cff")
+
+
+def set_bscf_annual_layer(set_payload):
+    """{year_ad: {total_assets, total_equity, cfo, cfi, cff}} จาก SET.or.th company-highlight
+    (payload ทรง fetch_set_full: {"sym","entries":[...]}) เฉพาะปีที่ปิดงบเต็มปีแล้ว
+    (quarter=='Q9' — ปีปัจจุบันที่ยังไม่ปิดงบเป็นยอดสะสมบางส่วน ไม่ใช่ตัวเลขเต็มปี ข้ามไปกัน
+    rollup_full_report_annual เอาไปแทนที่ผิด) ใช้เป็น override ชั้นสุดท้าย (ทางการ/แม่นสุด) ทับ
+    ผลรวมจาก Finnomena+Yahoo ใน rollup_full_report_annual — เฉพาะหุ้นไทย (DR ไม่มีข้อมูลนี้)
+    คูณ 1000 ทุกค่าเงิน (หน่วย 'พันบาท' เหมือน company-highlight ทุก field อื่น ดู _set_qpl_amt_map)"""
+    out = {}
+    for e in (set_payload or {}).get("entries", []):
+        if e.get("quarter") != "Q9":
+            continue
+        y = e.get("year")
+        if y is None:
+            continue
+        def g(k):
+            v = e.get(k)
+            return v * 1000 if v is not None else None
+        out[int(y)] = {
+            "total_assets": g("totalAsset"), "total_equity": g("equity"),
+            "cfo": g("netOperating"), "cfi": g("netInvesting"), "cff": g("netFinancing"),
+        }
+    return out
+
+
+def rollup_full_report_annual(quarters, set_annual=None):
+    """รวมผลลัพธ์รายไตรมาสของ compute_full_report เป็นรายปี (ไม่ไปดึงงบรายปีแยกจากแหล่งอื่น
+    ป้องกันปัญหา field ไม่ตรงกันข้ามแหล่ง + ปีปัจจุบันของ SET annual เป็นยอดสะสมบางส่วน) —
+    field 'flow' (P&L + cfo/cfi/cff/da) รวมทุกไตรมาสที่มีของปีนั้น, field 'stock' (งบดุล) เอา
+    ค่า ณ ไตรมาสล่าสุดที่มีของปีนั้น (แนวทางเดียวกับ build_annual_from_quarterly) 'complete'=True
+    เฉพาะปีที่มีครบ 4 ไตรมาส (เช็คจาก revenue) — ปีไม่ครบยังคืนผลรวมเท่าที่มีแต่ flag ไว้ให้
+    frontend เตือนผู้ใช้ (เหมือนเครื่องหมาย * ของคอลัมน์ SET ปีที่ยังไม่ปิดงบ)
+
+    set_annual: ผลลัพธ์จาก set_bscf_annual_layer() (เฉพาะหุ้นไทย) — ถ้ามีของปีไหน override
+    total_assets/total_equity/cfo/cfi/cff ของปีนั้นทับผลรวมจาก Finnomena+Yahoo ทันที (SET
+    เป็นแหล่งทางการ แม่นกว่า)"""
+    def _pct_change(cur, prev):
+        if cur is None or prev is None or prev == 0:
+            return None
+        return round((cur - prev) / abs(prev) * 100, 2)
+
+    def _safe_pct(num, den):
+        if num is None or den is None or den == 0:
+            return None
+        return round(num / den * 100, 2)
+
+    by_year = {}
+    for row in quarters:
+        by_year.setdefault(row["year_ad"], []).append(row)
+
+    years = {}
+    for y, rows in by_year.items():
+        rows = sorted(rows, key=lambda r: r["q"])
+        yr = {"year_ad": y, "year_be": y + 543,
+              "complete": any(r.get("revenue") is not None for r in rows) and
+                          len({r["q"] for r in rows if r.get("revenue") is not None}) == 4}
+        for f in _QPL_FLOW_FIELDS + _BSCF_FLOW_FIELDS:
+            vals = [r[f] for r in rows if r.get(f) is not None]
+            yr[f] = round(sum(vals), 4) if vals else None
+        for f in _BSCF_STOCK_FIELDS:
+            latest = next((r[f] for r in reversed(rows) if r.get(f) is not None), None)
+            yr[f] = latest
+        sa = (set_annual or {}).get(y)
+        if sa:
+            for f in _SET_ANNUAL_OVERRIDE_FIELDS:
+                if sa.get(f) is not None:
+                    yr[f] = sa[f]
+        years[y] = yr
+
+    out = []
+    for y in sorted(years.keys()):
+        yr = years[y]
+        prior = years.get(y - 1)
+        rev, pretax = yr.get("revenue"), yr.get("pretax_profit")
+        yr["revenue_yoy"] = _pct_change(rev, prior.get("revenue") if prior else None)
+        yr["gpm"] = _safe_pct(yr.get("gross_profit"), rev)
+        yr["selling_pct"] = _safe_pct(yr.get("selling_exp"), rev)
+        yr["admin_pct"] = _safe_pct(yr.get("admin_exp"), rev)
+        yr["sga_pct"] = _safe_pct(yr.get("sga_total"), rev)
+        yr["pretax_yoy"] = _pct_change(pretax, prior.get("pretax_profit") if prior else None) if pretax is not None else None
+        yr["tax_pct"] = _safe_pct(yr.get("tax_expense"), pretax)
+        yr["npm"] = _safe_pct(yr.get("net_profit"), rev)
+        out.append(yr)
+    return {"years": out}
+
 
 # ชื่อบัญชีเดียวกันที่ SET สะกดไม่คงที่ข้ามงวด/บริษัท (ยืนยันแล้วว่าความหมายเดียวกันเป๊ะ ต่างจาก
 # คู่ fallback อื่นใน _set_qpl_row_from_amt ที่เป็นบัญชีคนละตัวกันจริง) — normalize ให้เป็นชื่อ
@@ -2199,6 +2364,53 @@ def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, call
 
     print(f"[MirrorYahooIndex] จบ: ok={ok} fail={fail} total={total} skipped={skipped}")
     return {"ok": ok, "fail": fail, "total": total, "skipped": skipped}
+
+
+def get_mirror_index_coverage(base_dir, tickers_by_ex, stale_days=365):
+    """เช็ค coverage ของ mirror งบดัชนีหลัก US/HK/JP (source 'yahoo', namespace 'FINN:{ex}:{name}')
+    ใช้ทำ item หน้า Data Health — แยก "ไม่เคย sync จริง" ออกจาก "เก่าเกิน stale_days วัน"
+
+    สำคัญ: ต้องเช็คทั้ง namespace 'FINN:' และ 'DR:' เหมือน logic จริงใน sync_mirror_yahoo_index
+    (ที่ข้าม ticker ที่มี source='yahoo' อยู่แล้วไม่ว่า namespace ไหน เพราะบางตัวซ้ำกับพอร์ต DR/NVDR
+    ที่ sync ไปแล้ว) — เช็คแค่ 'FINN:' อย่างเดียวจะได้ false positive 'ไม่เคย sync' ทั้งที่จริงมี
+    ข้อมูลถูกต้องอยู่แล้วใต้ 'DR:' (เจอเคสนี้จริง 104 ตัวตอนไล่เช็คมือ 2026-08-15 ก่อนจะทำฟังก์ชันนี้)
+
+    คืน {"total": n, "missing": [(ex,name)], "stale": [(ex,name,latest_date,age_days)],
+    "fresh": n} — 'missing' คือของจริงที่ไม่เคย sync เลยไม่ว่า namespace ไหน"""
+    init_db(base_dir)
+    con = _connect(base_dir)
+    try:
+        rows = con.execute(
+            "SELECT symbol, payload FROM financials WHERE source='yahoo'").fetchall()
+    finally:
+        con.close()
+    have = {sym: payload for sym, payload in rows}
+
+    today = date.today()
+    missing, stale, fresh = [], [], 0
+    for ex, names in tickers_by_ex.items():
+        for name in names:
+            name = name.upper().strip()
+            payload_raw = have.get(_mirror_key(ex, name)) or have.get(_dr_key(name))
+            if payload_raw is None:
+                missing.append((ex, name))
+                continue
+            try:
+                payload = json.loads(payload_raw)
+            except Exception:
+                payload = None
+            latest = _payload_latest_period("yahoo", payload)
+            if latest is None:
+                missing.append((ex, name))
+                continue
+            age_days = (today - latest).days
+            if age_days > stale_days:
+                stale.append((ex, name, latest, age_days))
+            else:
+                fresh += 1
+    stale.sort(key=lambda x: -x[3])
+    total = sum(len(v) for v in tickers_by_ex.values())
+    return {"total": total, "missing": missing, "stale": stale, "fresh": fresh}
 
 
 def sync_dividends_batch(base_dir, symbols_by_market, workers=4, min_age_days=30, limit=None, callback=None):

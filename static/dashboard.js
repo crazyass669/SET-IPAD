@@ -569,6 +569,10 @@ function startMirrorFinnomenaForceFull() {
   _startJob("/api/mirror-finnomena-force-full", "mirror-force-btn", "📥 Mirror ทั้งตลาด (force)", null, checkDataHealthBadge);
 }
 
+function startMirrorFinnomenaNormalFull() {
+  _startJob("/api/mirror-finnomena-normal-full", "mirror-normal-btn", "📥 Mirror ทั้งตลาด (ปกติ)", null, checkDataHealthBadge);
+}
+
 function startBuildMirrorNames() {
   _startJob("/api/build-mirror-names", "build-mirror-names-btn", "🏷️ ดึงชื่อหุ้น mirror ใหม่", null, checkDataHealthBadge);
 }
@@ -15066,7 +15070,7 @@ function _finSyncViewButton(source) {
 
 function setFinView(view, btn) {
   _finView = view;
-  document.querySelectorAll('#fin-view-finn-btn,#fin-view-fyear-btn,#fin-view-yyear-btn,#fin-view-yq-btn,#fin-view-set-btn,#fin-view-qpl-btn,#fin-view-div-btn')
+  document.querySelectorAll('#fin-view-finn-btn,#fin-view-fyear-btn,#fin-view-yyear-btn,#fin-view-yq-btn,#fin-view-set-btn,#fin-view-qpl-btn,#fin-view-merged-btn,#fin-view-div-btn')
     .forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('fin-result').innerHTML = '';
@@ -15113,6 +15117,14 @@ async function searchFinancials() {
     _finRecentAdd(sym, _finTab, isDrSym ? _finMirMarket : null);
     history.replaceState(null, '', '#fin/' + _finTab + '/' + (isDrSym ? _finMirMarket + ':' : '') + encodeURIComponent(sym));
     loadFinQplReport(sym, isDrSym, isDrSym ? _finMirMarket : null, hint);
+    return;
+  }
+  // ตาราง 'งบรวมทุกแหล่ง' — P&L+งบดุล+กระแสเงินสด ผสานมาแล้ว มีทั้งรายไตรมาส/รายปีในเรสปอนส์
+  // เดียว (endpoint/renderer แยกเหมือน qpl ด้านบน)
+  if (_finView === 'merged') {
+    _finRecentAdd(sym, _finTab, isDrSym ? _finMirMarket : null);
+    history.replaceState(null, '', '#fin/' + _finTab + '/' + (isDrSym ? _finMirMarket + ':' : '') + encodeURIComponent(sym));
+    loadFinMergedReport(sym, isDrSym, isDrSym ? _finMirMarket : null, hint);
     return;
   }
   // แปลงมุมมองที่ผู้ใช้เลือก -> source ที่ดึง (+ fallback ถ้าแหล่งนั้นไม่มีข้อมูลหุ้นตัวนี้)
@@ -15242,7 +15254,7 @@ function _qplPct(v) {
 // และตาราง "SET.or.th" ล้วนๆ ที่แทรกในแท็บ 🇹🇭 SET.or.th — ดู _loadSetQplTable) คืน
 // {html, hasCoarse} ไม่รวมหัวการ์ด/scroll-to-latest เพื่อให้ผู้เรียกจัดวางเองได้ scrollId
 // ต้องไม่ซ้ำกันถ้าทั้งสองตารางอาจอยู่บนหน้าพร้อมกัน (ปัจจุบันไม่ซ้ำเพราะคนละแท็บ แต่กันไว้)
-function _qplTableCore(qs, scrollId) {
+function _qplTableCore(qs, scrollId, extraRowsFn) {
   // จัดกลุ่มตามปี พ.ศ. -> { 2565: [Q1,Q2,Q3,Q4], ... } ช่องที่ไม่มีข้อมูลเป็น null
   const byYear = {};
   qs.forEach(q => { (byYear[q.year_be] = byYear[q.year_be] || [null, null, null, null])[q.q - 1] = q; });
@@ -15277,7 +15289,12 @@ function _qplTableCore(qs, scrollId) {
     const dim = cell && !cell.detail ? ';color:var(--text2)' : '';
     const hl = opts.hlYellow ? ';background:#f2c94c26' : (opts.hlGreen ? ';background:#3fb95014' : (opts.hlPeach ? ';background:#e8823014' : ''));
     const pctColor = opts.pctColor && v != null ? `;color:${v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text2)'}` : '';
-    return `<td class="r" style="padding:4px 6px;border:1px solid var(--border);font-size:12px${dim}${hl}${pctColor}">${cell ? fmt(v) : '—'}</td>`;
+    // ค่าที่ไม่ควรติดลบตามธรรมชาติ (สินทรัพย์/เงินสด/หนี้) แต่ติดลบจริง — เจอใน Finnomena raw
+    // บางหุ้น (เช่น CHMOBILE, ATP30) เป็นข้อมูลต้นทางคลาดเคลื่อน ไม่ใช่ตัวเลขจริงของบริษัท
+    const warn = opts.warnNegative && v != null && v < 0;
+    const warnStyle = warn ? ';color:var(--red);font-weight:700' : '';
+    const warnAttr = warn ? ' title="⚠ ค่านี้ติดลบผิดปกติ — น่าจะเป็นข้อมูลคลาดเคลื่อนจากต้นทาง (Finnomena/Yahoo) ไม่ใช่ตัวเลขจริงของบริษัท"' : '';
+    return `<td class="r"${warnAttr} style="padding:4px 6px;border:1px solid var(--border);font-size:12px${dim}${hl}${pctColor}${warnStyle}">${warn ? '⚠ ' : ''}${cell ? fmt(v) : '—'}</td>`;
   }).join('')).join('');
 
   const row = (label, getter, fmt, opts = {}) => `<tr>
@@ -15318,7 +15335,7 @@ function _qplTableCore(qs, scrollId) {
     row('กำไรสำหรับงวด', c => c.net_profit, _qplNum, { bold: true, hlYellow: true }),
     growthRows(c => c.net_profit),
     row('% NPM', c => c.npm, _qplPct, { indent: true }),
-  ].join('');
+  ].join('') + (extraRowsFn ? extraRowsFn(row, growthRows, years) : '');
 
   const caveat = hasCoarse ? `
     <div style="margin-top:10px;font-size:11.5px;color:var(--text2);line-height:1.6">
@@ -15398,6 +15415,194 @@ async function _loadSetQplTable(sym) {
   } catch (e) {
     box.innerHTML = `<div style="font-size:11.5px;color:var(--red);padding-top:4px">⚠ ${e.message}</div>`;
   }
+}
+
+// มุมมอง "🧩 งบรวมทุกแหล่ง" — ผสาน P&L (3 แหล่งเหมือน qpl ด้านบน) + งบดุล/กระแสเงินสด
+// (Finnomena+Yahoo เท่านั้น — SET.or.th ไม่มีรายไตรมาสจริงของ 2 งบนี้) มี toggle รายไตรมาส/
+// รายปี — endpoint เดียวคืนทั้งคู่ ("quarters"+"years") จึงสลับ toggle ได้โดยไม่ fetch ซ้ำ
+// ดู compute_full_report()/rollup_full_report_annual() ใน sources/financials_store.py
+let _finMergedData = null;
+let _finMergedPeriod = 'q';
+
+async function loadFinMergedReport(sym, isDr, market, hint) {
+  hint.textContent = 'กำลังโหลด...';
+  document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูลงบการเงิน...</div>';
+  try {
+    const qs = (isDr ? '?is_dr=1' : '') + (market ? (isDr ? '&' : '?') + 'market=' + market : '');
+    const r = await _fetchTimeout(`/api/financials-merged-report/${encodeURIComponent(sym)}${qs}`, 25000,
+      'หมดเวลารอข้อมูล (เกิน 25 วิ) — หุ้นนี้อาจยังไม่เคย sync ในเครื่อง กำลังลองดึงสดแต่ช้าเกินไป ลองใหม่อีกครั้ง');
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    hint.textContent = '';
+    _finMergedData = d;
+    _finMergedPeriod = 'q';
+    _renderFinMergedReport(d);
+  } catch (e) {
+    hint.textContent = '';
+    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${e.message}</div>`;
+  }
+}
+
+// สลับรายไตรมาส/รายปี — re-render จากข้อมูลที่ cache ไว้แล้วใน _finMergedData ไม่ fetch ใหม่
+function setFinMergedPeriod(period) {
+  _finMergedPeriod = period;
+  document.getElementById('fin-merged-period-q')?.classList.toggle('active', period === 'q');
+  document.getElementById('fin-merged-period-y')?.classList.toggle('active', period === 'y');
+  if (_finMergedData) _renderFinMergedReport(_finMergedData);
+}
+
+// รายการแถวงบดุล/กระแสเงินสดที่ใช้ร่วมกันทั้งตารางรายไตรมาส (_mergedExtraQuarterlyRows)
+// และตารางรายปี (_mergedTableAnnual) — 4 ตัวแรกคืองบดุล (stock) ที่เหลือคือกระแสเงินสด (flow)
+// warnNegative: total_assets/total_debt/cash ติดลบไม่ได้ตามธรรมชาติทางบัญชี — ถ้าติดลบคือข้อมูล
+// ต้นทาง (Finnomena/Yahoo) คลาดเคลื่อน ไม่ใช่ตัวเลขจริง (เจอกับ CHMOBILE/ATP30/PTC ฯลฯ ตอนสุ่มตรวจ
+// 2026-08-17) — total_equity ไม่ใส่ warn เพราะติดลบได้จริงสำหรับบริษัทขาดทุนสะสม/เพิ่งเข้าตลาด
+function _mergedBsCfRowDefs() {
+  return [
+    { label: 'สินทรัพย์รวม', key: 'total_assets', opts: { bold: true, warnNegative: true } },
+    { label: 'ส่วนของผู้ถือหุ้น', key: 'total_equity', opts: { bold: true } },
+    { label: 'หนี้สินที่มีภาระดอกเบี้ยรวม (Total Debt)', key: 'total_debt', opts: { warnNegative: true } },
+    { label: 'เงินสดและรายการเทียบเท่าเงินสด', key: 'cash', opts: { warnNegative: true } },
+    { label: 'กระแสเงินสดจากการดำเนินงาน (CFO)', key: 'cfo', opts: { bold: true, hlGreen: true } },
+    { label: 'กระแสเงินสดจากการลงทุน (CFI)', key: 'cfi', opts: {} },
+    { label: 'กระแสเงินสดจากการจัดหาเงิน (CFF)', key: 'cff', opts: {} },
+    { label: 'ค่าเสื่อมราคา/ตัดจำหน่าย (D&A)', key: 'da', opts: {} },
+  ];
+}
+
+// ต่อท้ายตาราง P&L ของ _qplTableCore ด้วยแถวงบดุล/กระแสเงินสด — เรียกผ่านพารามิเตอร์
+// extraRowsFn ของ _qplTableCore (ใช้ helper row()/growthRows() เดียวกัน ได้สไตล์/QoQ-YoY
+// เหมือนแถว P&L ทุกประการ) years.length*4+1 = จำนวนคอลัมน์ทั้งหมดของตาราง ใช้ทำ section header
+function _mergedExtraQuarterlyRows(row, growthRows, years) {
+  const sep = label => `<tr><td colspan="${years.length * 4 + 1}" style="padding:10px 8px 4px;font-size:11.5px;font-weight:700;color:var(--text2);border:none">${label}</td></tr>`;
+  const defs = _mergedBsCfRowDefs();
+  const bsRows = defs.slice(0, 4).map(d => row(d.label, c => c[d.key], _qplNum, d.opts) + growthRows(c => c[d.key])).join('');
+  const cfRows = defs.slice(4).map(d => row(d.label, c => c[d.key], _qplNum, d.opts) + growthRows(c => c[d.key])).join('');
+  return sep('📋 งบดุล (Finnomena + Yahoo)') + bsRows + sep('💵 กระแสเงินสด (Finnomena + Yahoo)') + cfRows;
+}
+
+// ตารางรายปี — คอลัมน์ = ปี (rollup จากรายไตรมาสฝั่ง backend แล้ว) มีแค่ %YoY (ไม่มี QoQ)
+// ปีที่ complete===false (ยังไม่ครบ 4 ไตรมาส เช่นปีปัจจุบัน) ใส่เครื่องหมาย * เตือน
+function _mergedTableAnnual(years, scrollId) {
+  const byYear = {};
+  years.forEach(y => { byYear[y.year_ad] = y; });
+
+  const yoyOf = getter => c => {
+    const prev = byYear[c.year_ad - 1];
+    if (!prev) return null;
+    const cur = getter(c), pv = getter(prev);
+    if (cur == null || pv == null || !pv) return null;
+    return (cur / pv - 1) * 100;
+  };
+
+  const yearHead = years.map(y => `<th style="text-align:center;background:#8b2fc9;color:#fff;padding:6px 4px;border:1px solid var(--border);font-size:12px">${y.year_be}${y.complete ? '' : ' *'}</th>`).join('');
+
+  const cellsOf = (getter, fmt, opts = {}) => years.map(y => {
+    const v = getter(y);
+    const dim = !y.complete ? ';color:var(--text2)' : '';
+    const hl = opts.hlYellow ? ';background:#f2c94c26' : (opts.hlGreen ? ';background:#3fb95014' : (opts.hlPeach ? ';background:#e8823014' : ''));
+    const pctColor = opts.pctColor && v != null ? `;color:${v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text2)'}` : '';
+    const warn = opts.warnNegative && v != null && v < 0;
+    const warnStyle = warn ? ';color:var(--red);font-weight:700' : '';
+    const warnAttr = warn ? ' title="⚠ ค่านี้ติดลบผิดปกติ — น่าจะเป็นข้อมูลคลาดเคลื่อนจากต้นทาง (Finnomena/Yahoo) ไม่ใช่ตัวเลขจริงของบริษัท"' : '';
+    return `<td class="r"${warnAttr} style="padding:4px 6px;border:1px solid var(--border);font-size:12px${dim}${hl}${pctColor}${warnStyle}">${warn ? '⚠ ' : ''}${fmt(v)}</td>`;
+  }).join('');
+
+  const row = (label, getter, fmt, opts = {}) => `<tr>
+    <td style="padding:5px 8px;border:1px solid var(--border);font-size:12.5px;white-space:nowrap${opts.bold ? ';font-weight:700' : ''}${opts.indent ? ';padding-left:18px;color:var(--text2)' : ''}">${label}</td>
+    ${cellsOf(getter, fmt, opts)}
+  </tr>`;
+
+  const growthRow = getter => row('% YoY', yoyOf(getter), _qplPct, { indent: true, pctColor: true });
+
+  const plRows = [
+    row('รายได้จากการขาย', c => c.revenue, _qplNum, { bold: true }),
+    growthRow(c => c.revenue),
+    row('ต้นทุนขาย', c => c.cogs, _qplNum),
+    row('กำไรขั้นต้น', c => c.gross_profit, _qplNum, { bold: true, hlGreen: true }),
+    growthRow(c => c.gross_profit),
+    row('% GPM', c => c.gpm, _qplPct, { indent: true }),
+    row('รวม SG&A', c => c.sga_total, _qplNum, { bold: true, hlPeach: true }),
+    row('กำไรจากการดำเนินงาน', c => c.operating_profit, _qplNum, { bold: true, hlYellow: true }),
+    growthRow(c => c.operating_profit),
+    row('ต้นทุนทางการเงิน', c => c.financial_cost, _qplNumNeg),
+    row('กำไรก่อนภาษี', c => c.pretax_profit, _qplNum, { bold: true, hlYellow: true }),
+    growthRow(c => c.pretax_profit),
+    row('ค่าใช้จ่ายภาษีเงินได้', c => c.tax_expense, _qplNumNeg),
+    row('กำไรสำหรับงวด', c => c.net_profit, _qplNum, { bold: true, hlYellow: true }),
+    growthRow(c => c.net_profit),
+    row('% NPM', c => c.npm, _qplPct, { indent: true }),
+  ].join('');
+
+  const bsCfDefs = _mergedBsCfRowDefs();
+  const sep = label => `<tr><td colspan="${years.length + 1}" style="padding:10px 8px 4px;font-size:11.5px;font-weight:700;color:var(--text2);border:none">${label}</td></tr>`;
+  const bsRows = bsCfDefs.slice(0, 4).map(d => row(d.label, c => c[d.key], _qplNum, d.opts) + growthRow(c => c[d.key])).join('');
+  const cfRows = bsCfDefs.slice(4).map(d => row(d.label, c => c[d.key], _qplNum, d.opts) + growthRow(c => c[d.key])).join('');
+
+  const hasPartial = years.some(y => !y.complete);
+  const caveat = hasPartial ? `
+    <div style="margin-top:10px;font-size:11.5px;color:var(--text2)">
+      * = ปีที่ยังไม่ครบ 4 ไตรมาส (rollup จากไตรมาสเท่าที่มีข้อมูลตอนนี้ ไม่ใช่ยอดเต็มปี) — อย่าเทียบตรงๆ กับปีที่ครบแล้ว
+    </div>` : '';
+
+  return `
+    <div id="${scrollId}" style="overflow-x:auto">
+      <table class="tbl" style="border-collapse:collapse;min-width:500px">
+        <thead><tr><th style="border:1px solid var(--border)"></th>${yearHead}</tr></thead>
+        <tbody>${plRows}${sep('📋 งบดุล (Finnomena + Yahoo)')}${bsRows}${sep('💵 กระแสเงินสด (Finnomena + Yahoo)')}${cfRows}</tbody>
+      </table>
+    </div>
+    ${caveat}`;
+}
+
+function _renderFinMergedReport(d) {
+  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const qs = d.quarters || [];
+  const ys = d.years || [];
+  if (!qs.length && !ys.length) {
+    document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">ไม่พบข้อมูลงบของหุ้นนี้</div>';
+    return;
+  }
+  const periodToggle = `
+    <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:10px">
+      <span style="font-size:10px;color:var(--text2)">ช่วงเวลา</span>
+      <div class="filter-row" style="gap:0;margin:0">
+        <button class="filter-btn ${_finMergedPeriod === 'q' ? 'active' : ''}" id="fin-merged-period-q" onclick="setFinMergedPeriod('q')" style="border-radius:6px 0 0 6px;font-size:11px;padding:4px 10px">รายไตรมาส</button>
+        <button class="filter-btn ${_finMergedPeriod === 'y' ? 'active' : ''}" id="fin-merged-period-y" onclick="setFinMergedPeriod('y')" style="border-radius:0 6px 6px 0;font-size:11px;padding:4px 10px">รายปี</button>
+      </div>
+    </div>`;
+
+  let tableHtml, scrollId;
+  if (_finMergedPeriod === 'q') {
+    scrollId = 'merged-scroll-q';
+    tableHtml = qs.length ? _qplTableCore(qs, scrollId, _mergedExtraQuarterlyRows).html
+                          : '<div class="empty" style="padding:16px">ไม่พบข้อมูลรายไตรมาส</div>';
+  } else {
+    scrollId = 'merged-scroll-y';
+    tableHtml = ys.length ? _mergedTableAnnual(ys, scrollId)
+                          : '<div class="empty" style="padding:16px">ไม่พบข้อมูลรายปี</div>';
+  }
+
+  // เตือนถ้าเจอ สินทรัพย์รวม/หนี้/เงินสด ติดลบในชุดข้อมูลที่กำลังโชว์ (ดู warnNegative ใน
+  // _mergedBsCfRowDefs) — เจอจริงกับบางหุ้น mirror เพราะ Finnomena raw ข้อมูลคลาดเคลื่อน
+  const warnFields = ['total_assets', 'total_debt', 'cash'];
+  const rowsShown = _finMergedPeriod === 'q' ? qs : ys;
+  const hasBsWarn = rowsShown.some(r => warnFields.some(f => r[f] != null && r[f] < 0));
+  const bsWarnCaveat = hasBsWarn ? `
+    <div style="margin-top:10px;font-size:11.5px;color:var(--red);line-height:1.6">
+      ⚠ = สินทรัพย์รวม/หนี้/เงินสดติดลบ (ไม่ปกติทางบัญชี) — น่าจะเป็นข้อมูลคลาดเคลื่อนจากต้นทาง
+      (Finnomena/Yahoo) ไม่ใช่ตัวเลขจริงของบริษัท พบกับหุ้น mirror บางตัวที่ Finnomena เก็บผิด
+      พลาด แนะนำอย่าอ้างอิงตัวเลขช่องที่มีเครื่องหมายนี้
+    </div>` : '';
+
+  document.getElementById('fin-result').innerHTML = `
+    <div class="card" style="padding:14px 16px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:2px">${esc(d.sym)} ${d.name && d.name !== d.sym ? `— ${esc(d.name)}` : ''}</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:10px">งบผสานทุกแหล่ง (หน่วย: พันบาท) — P&L: Finnomena+Yahoo+SET.or.th (SET แม่นสุด ทับก่อนเสมอ) · งบดุล/กระแสเงินสดรายไตรมาส: Finnomena+Yahoo (SET.or.th ไม่มีรายไตรมาสจริงของ 2 งบนี้)${_finTab === 'set' ? ' · รายปี: สินทรัพย์รวม/ส่วนผู้ถือหุ้น/CFO/CFI/CFF ของหุ้นไทยใช้ตัวเลขทางการจาก SET company-highlight ทับผลรวม Finnomena+Yahoo' : ''} · เลื่อนซ้ายเพื่อดูปีเก่ากว่า</div>
+      ${periodToggle}
+      ${tableHtml}
+      ${bsWarnCaveat}
+    </div>`;
+  _qplScrollToLatest(scrollId);
 }
 
 // งาน #5 Dividend History — มุมมอง "💵 ปันผล" ในหน้างบการเงิน (ใช้ endpoint แยก
@@ -17613,6 +17818,7 @@ const DH_SOURCE_MAP = {
                           fn: 'startFinancialsSync', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด', gotoPage: 'financials',
                           fn2: 'startDRFinancialsSyncIncremental', fnLabel2: '🔄 ดึงงบ DR ที่ขาด/เก่า', gotoPage2: 'dr', gotoLabel2: 'ไปหน้า DR/DRx' },
   financials_coverage_by_source: { text: 'ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างในหน้านี้ (sync ครบ 4 แหล่งรวม set_qpl)', fn: 'startFinancialsUpdateAll', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด' },
+  mirror_index_coverage: { text: 'ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างในหน้านี้ (sync งบดัชนีหลัก US/HK/JP ผ่าน Yahoo ให้ตัวที่ยังไม่เคยมี — ตัวที่เก่าเกิน 1 ปีไม่ retry อัตโนมัติ ต้องเปิด Tearsheet ของตัวนั้นแล้วกด refresh เอง)', fn: 'startFinancialsUpdateAll', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด' },
   mirror:               { text: 'ปุ่ม "🌐 Sync Mirror US/HK เต็ม" ด้านบนในหน้านี้ (หรือ python mirror_finnomena.py force)', fn: 'startMirrorYahooIndexSync', fnLabel: '🌐 Sync Mirror US/HK เต็ม' },
   market_stats:         { text: 'หน้า Valuation — ปุ่ม "⟳ อัพเดทข้อมูล P/E & P/BV" (ต้องโหลด Table_PE.xls/Table_PBV.xls มาวางทับก่อน)', fn: 'refreshMarketStats', fnLabel: '⟳ อัพเดท P/E & P/BV', gotoPage: 'valuation' },
   offsite_backup:       { text: 'รันเอง: python backup_financials_offsite.py <โฟลเดอร์ปลายทาง> — ไม่มีปุ่มในแอป (เขียนไฟล์นอกเครื่อง)' },
@@ -17783,6 +17989,7 @@ const _DH_LAST_RUN_GROUPS = [
     { key: 'financials_sync', label: '🔄 อัพเดทงบการเงินทั้งหมด' },
     { key: 'hedge_refresh', label: '🐋 Hedge Holdings (13F — ดีเลย์ ~45 วัน หน้า Hedge Holdings)' },
     { key: 'mirror_finnomena', label: '📥 Mirror ทั้งตลาด (force)' },
+    { key: 'mirror_finnomena_normal', label: '📥 Mirror ทั้งตลาด (ปกติ — เฉพาะที่ขาด)' },
     { key: 'build_mirror_names', label: '🏷️ ดึงชื่อหุ้น mirror ใหม่' },
   ]},
   { title: '🧱 run_static_update.py — sub-step (รันบนเครื่องเท่านั้นถึงจะเห็นที่นี่ — บน GitHub Actions ดูที่ Actions log แทน)', rows: [
@@ -17803,10 +18010,11 @@ function _dhLastRunItemHtml(label, v) {
     : `${(hAgo / 24).toFixed(1)} วันก่อน`;
   const color = !v.ok ? 'var(--red)' : hAgo >= 48 ? 'var(--yellow)' : 'var(--green)';
   const statusIcon = v.ok ? '🟢' : '🔴';
+  const msgColor = !v.ok ? 'var(--red)' : 'var(--text2)';
   return `<div><b>${label}</b><br>
     <span style="color:${color};font-weight:600">${statusIcon} ${v.at}</span>
     <span style="color:var(--text2)"> (${ageTxt})</span>
-    ${!v.ok ? `<br><span style="color:var(--red);font-size:11px">${_escHtml(v.message || '')}</span>` : ''}
+    ${v.message ? `<br><span style="color:${msgColor};font-size:11px">${_escHtml(v.message || '')}</span>` : ''}
   </div>`;
 }
 
@@ -20402,8 +20610,9 @@ async function checkDelistedNew() {
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || 'เช็คไม่สำเร็จ');
 
+    const srcLabel = d.source === 'file' ? ' — จากไฟล์ delisted-securities-th.xlsx' : ' — ดึงสดจาก SET.or.th';
     if (!d.actionable.length) {
-      status.textContent = `✓ ไม่มีหุ้นเพิกถอนใหม่ที่ต้องจัดการ (SET ยืนยันแล้ว ${d.official_count} ตัว ณ ${d.as_of_date})`;
+      status.textContent = `✓ ไม่มีหุ้นเพิกถอนใหม่ที่ต้องจัดการ (SET ยืนยันแล้ว ${d.official_count} ตัว ณ ${d.as_of_date}${srcLabel})`;
       status.style.color = '#96c850';
     } else {
       status.textContent = `⚠ พบ ${d.actionable.length} ตัวที่ SET เพิกถอนแล้ว แต่ยังไม่บันทึกในเครื่อง`;
@@ -20431,6 +20640,54 @@ async function checkDelistedNew() {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '🔍 เช็คหุ้นเพิกถอนใหม่';
+  }
+}
+
+async function checkTradingHaltNew() {
+  const btn = document.getElementById('val-check-halt-btn');
+  const status = document.getElementById('val-refresh-status');
+  const box = document.getElementById('val-halt-result');
+  btn.disabled = true;
+  btn.textContent = '🔍 กำลังเช็ค...';
+  status.textContent = '';
+  box.style.display = 'none';
+
+  try {
+    const r = await _fetchTimeout('/api/check-trading-halt-th', 30000, undefined, { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'เช็คไม่สำเร็จ');
+
+    const asOf = d.as_of ? new Date(d.as_of).toLocaleString('th-TH') : '—';
+    if (!d.watchlist_hits.length) {
+      status.textContent = `✓ ไม่มีหุ้นใน Watchlist ที่หยุดพักเทรด (ทั้งตลาดมี ${d.common_count} ตัว ณ ${asOf})`;
+      status.style.color = '#96c850';
+    } else {
+      status.textContent = `⚠ พบ ${d.watchlist_hits.length} ตัวใน Watchlist ที่หยุดพักเทรดอยู่ตอนนี้ (ทั้งตลาดมี ${d.common_count} ตัว)`;
+      status.style.color = 'var(--red)';
+    }
+
+    const wlSet = new Set(d.watchlist_hits.map(x => x.symbol));
+    const rows = [...d.watchlist_hits, ...d.items.filter(x => !wlSet.has(x.symbol))];
+    box.style.display = 'block';
+    box.innerHTML = `<div class="card" style="padding:14px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">หลักทรัพย์ที่หยุดพักการซื้อขายชั่วคราว (SP/H/P) ณ ${asOf} — ${d.common_count} ตัว</div>
+      <div style="overflow-x:auto;max-height:360px;overflow-y:auto"><table class="tbl" style="min-width:520px">
+        <thead><tr><th>Symbol</th><th>เครื่องหมาย</th><th>ชื่อ</th><th>ตลาด</th></tr></thead>
+        <tbody>${rows.map(x => `
+          <tr${wlSet.has(x.symbol) ? ' style="background:rgba(255,90,90,0.1)"' : ''}>
+            <td><strong>${wlSet.has(x.symbol) ? '⭐ ' : ''}${x.symbol}</strong></td>
+            <td style="font-size:11px;color:var(--red)">${x.sign || '—'}</td>
+            <td style="font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.name_th || x.name_en || '—'}</td>
+            <td style="font-size:11px;color:var(--text2)">${x.market || '—'}</td>
+          </tr>`).join('')}</tbody>
+      </table></div>
+    </div>`;
+  } catch (e) {
+    status.textContent = '✗ เช็คไม่สำเร็จ: ' + e.message;
+    status.style.color = 'var(--red)';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🚧 เช็คหุ้นหยุดพักเทรด';
   }
 }
 
