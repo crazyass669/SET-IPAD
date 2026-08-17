@@ -132,6 +132,14 @@ _market_trend_cache: dict = {}
 _MARKET_TREND_CACHE_TTL = 24 * 3600
 _market_trend_lock = threading.Lock()
 
+# Sector trend cache — เทรนด์ย้อนหลัง 20 ไตรมาสของ sector เดียว (เปิดจาก modal รายละเอียด sector
+# ใน "⚖ เปรียบเทียบ Sector") คีย์ตามชื่อ sector แยกกัน (ต่างจาก _market_trend_cache ที่มีก้อนเดียว
+# ทั้งตลาด) เพราะ scope symbols ต่างกันทุก sector — TTL/invalidate pattern เดียวกับ cache อื่นๆ
+# ที่พึ่งข้อมูลงบการเงิน
+_sector_trend_cache: dict = {}
+_SECTOR_TREND_CACHE_TTL = 24 * 3600
+_sector_trend_lock = threading.Lock()
+
 # Indices cache — ดัชนีราคากลุ่ม SET/MAI (invalidate แบบ event-driven ตอน refresh เขียนทับ ไม่ใช่ TTL)
 _indices_cache: dict = {}
 # กันกด Quick Update / Full Refresh ซ้อนกัน (เดิมไม่มี lock ต่างจาก endpoint งานหนักอื่นๆ)
@@ -3414,6 +3422,21 @@ def financials_coverage():
     return jsonify(coverage)
 
 
+def _warmup_fin_dependent_caches():
+    """เรียกซ้ำ endpoint ที่พึ่ง _fin_analytics_cache/_sector_compare_cache/_market_trend_cache
+    ทันทีหลัง sync เคลียร์ cache พวกนี้ทิ้ง (แทนที่จะปล่อยให้ user คนแรกที่เปิดหน้าเจอ cold
+    path เอง ~20-30 วิ) เรียกจาก thread เดิมของ sync ได้เลยเพราะ sync ก็รันใน background
+    thread อยู่แล้ว — ไม่บล็อก request อื่น"""
+    tc = app.test_client()
+    for ep in ("/api/financials-analytics", "/api/sector-compare", "/api/market-trend"):
+        try:
+            t0 = time.time()
+            tc.get(ep)
+            print(f"[Warmup] {ep} พร้อม ({time.time() - t0:.0f} วิ)", flush=True)
+        except Exception as e:
+            print(f"[Warmup] {ep} ล้มเหลว (ไม่กระทบการใช้งาน): {e}", flush=True)
+
+
 def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_date=False):
     try:
         if is_dr and not symbols:
@@ -3444,6 +3467,8 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_dat
         _fin_analytics_cache.clear()   # ข้อมูลเปลี่ยน — บังคับคำนวณ growth/PEG/FCF ใหม่รอบถัดไป
         _sector_compare_cache.clear()
         _market_trend_cache.clear()
+        _sector_trend_cache.clear()
+        _warmup_fin_dependent_caches()
         skipped = result.get("skipped", 0)
         _update(done=True,
                 message=f"เสร็จแล้ว! สำเร็จ {result['ok']}/{result['total']}"
@@ -3517,9 +3542,13 @@ def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map, yahoo_only=Fa
             streaks = financials_store.compute_growth_streaks(payload)
             ratios = financials_store.compute_ratio_trends(payload)
             q_finn = None
+            # SET official รายไตรมาส (set_qpl) มักมีงวดล่าสุดเร็วกว่า Yahoo/Finnomena ~1 ไตรมาส
+            # (หุ้นไทยเท่านั้น — DR ไม่มีข้อมูล SET.or.th) — เติมงวดล่าสุดให้ QoQ/YoY-Q ไม่ค้าง
+            # ดู _set_qpl_latest_extra (เจอบั๊กจริงกับ BA: QoQ ผ่านเกณฑ์ 50% เพราะเทียบงวดเก่า)
+            sqpl = financials_store.get(BASE_DIR, sym, "set_qpl", is_dr=is_dr) if not is_dr else None
             if yahoo_only:
                 q_used = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
-                qg = financials_store.compute_quarterly_growth(q_used)
+                qg = financials_store.compute_quarterly_growth(q_used, set_qpl_payload=sqpl)
             else:
                 # การเติบโตรายไตรมาส (QoQ / YoY-Q / streak / เร่งตัว) จากงบ quarterly — Finnomena
                 # ลึกกว่า Yahoo เสมอเมื่อมี (ตรวจแล้วทุกกรณี ~60-80 ไตรมาส vs ~5-6) จึงเช็คแค่ตัวเดียว
@@ -3528,12 +3557,12 @@ def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map, yahoo_only=Fa
                 # ตอน cache miss จนแข่งกับปุ่ม "งบการเงิน" ในหน้า DR ที่รอ _finAnalyticsData โหลดเสร็จ)
                 q_finn = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr)
                 q_used = q_finn if q_finn else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
-                qg = financials_store.compute_quarterly_growth(q_used)
+                qg = financials_store.compute_quarterly_growth(q_used, set_qpl_payload=sqpl)
                 # Finnomena สั้นผิดปกติ (<8 ไตรมาส เช่นหุ้นที่ Finnomena เพิ่งเริ่มเก็บ) — เช็ค yahoo_q
                 # เผื่อลึกกว่า ให้เลือกแหล่งแบบเดียวกับ factor_snapshot (ไม่งั้นสองเมนูต่างกันได้)
                 if q_finn is not None and qg["quarters_available"] < 8:
                     q_yah = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
-                    qg_y = financials_store.compute_quarterly_growth(q_yah)
+                    qg_y = financials_store.compute_quarterly_growth(q_yah, set_qpl_payload=sqpl)
                     if qg_y["quarters_available"] > qg["quarters_available"]:
                         qg, q_used = qg_y, q_yah
             # เป็นบวกติดกัน (รายได้/กำไร/EBITDA/OCF) + OCF>กำไรสุทธิงวดล่าสุด — เวอร์ชันรันบนเครื่อง
@@ -3651,8 +3680,11 @@ def financials_analytics():
 @app.route("/api/sector-compare")
 def sector_compare():
     """มุมมอง "⚖ เปรียบเทียบ Sector" ในหน้า "ดัชนีกลุ่มอุตสาหกรรม SET & mai" — รวมรายได้/กำไรสุทธิ
-    รายไตรมาส (SET official, source 'set_qpl') กลุ่มตาม Sector (SET) เฉพาะหุ้น SET main board
-    (ไม่รวม mai) ดู financials_store.get_sector_qpl_compare สำหรับ logic การรวม/YoY/เลือก quarter
+    รายไตรมาส (SET official, source 'set_qpl') กลุ่มตาม Sector (SET) + Industry MAI (หุ้น mai ไม่มี
+    sector ย่อยแบบ SET set_data.json เลยใส่ field 'sector' เท่ากับ 'industry' ให้แล้วตอน sync
+    เช่น 'Services -mai' — จับกลุ่มด้วย field เดียวกันได้เลย ไม่ต้อง merge ปนกับ sector ฝั่ง SET
+    เพราะชื่อมีคำต่อท้าย '-mai' แยกกันชัดเจนอยู่แล้ว) ดู financials_store.get_sector_qpl_compare
+    สำหรับ logic การรวม/YoY/เลือก quarter
 
     ROE ต่อ sector: reuse ผลลัพธ์ ratios['roe'] ต่อหุ้นจาก /api/financials-analytics ตรงๆ (ไม่เปิด
     sqlite ทีละหุ้นซ้ำเอง — endpoint นั้นแคชอยู่แล้ว คำนวณสดครั้งแรกช้า ~15-23 วิเหมือนกัน)"""
@@ -3670,7 +3702,7 @@ def sector_compare():
             try:
                 with open(DATA_FILE, encoding="utf-8") as f:
                     for s in json.load(f).get("stocks", []):
-                        if s.get("market") == "SET" and s.get("sector"):
+                        if s.get("market") in ("SET", "mai") and s.get("sector"):
                             sector_by_symbol[s["symbol"]] = s["sector"]
             except Exception:
                 pass
@@ -3683,9 +3715,12 @@ def sector_compare():
             roe = fin_data.get("set", {}).get(sym, {}).get("roe")
             if roe is not None:
                 roe_by_sector.setdefault(sector, []).append(roe)
+        set_fin = fin_data.get("set", {})
         for row in compare["sectors"]:
             vals = roe_by_sector.get(row["sector"])
             row["roe"] = round(sum(vals) / len(vals), 1) if vals else None
+            for stock in row.get("stocks", []):
+                stock["de_ratio"] = set_fin.get(stock["symbol"], {}).get("de_ratio")
 
         _sector_compare_cache["result"] = compare
         _sector_compare_cache["ts"] = time.time()
@@ -3727,6 +3762,44 @@ def market_trend():
 
         _market_trend_cache["result"] = trend
         _market_trend_cache["ts"] = time.time()
+        return jsonify(trend)
+
+
+@app.route("/api/sector-trend")
+def sector_trend():
+    """เทรนด์ย้อนหลัง 20 ไตรมาสของ sector เดียว (รายได้/กำไร YoY, NPM, ROE) — เปิดจาก modal
+    รายละเอียด sector ในมุมมอง "⚖ เปรียบเทียบ Sector" (ปุ่ม "📈 เทรนด์ย้อนหลัง" ใน
+    openSectorCompareModal ฝั่ง frontend) ต่างจาก /api/market-trend ที่เป็นภาพรวมทั้งตลาดก้อนเดียว
+    — endpoint นี้ scope symbols เหลือเฉพาะหุ้นใน sector ที่ระบุ แล้ว reuse
+    financials_store.get_market_trend ตัวเดียวกัน ไม่ต้อง exclude การเงิน/REIT ซ้ำเพราะ scope
+    ด้วย sector อยู่แล้ว (ถ้า sector ที่เลือกเป็นกลุ่มการเงินเอง รายได้จะเป็น None ตามธรรมชาติ
+    เพราะ set_qpl parse จากบัญชี 'รายได้จากการขายและให้บริการ' ที่ผังบัญชีธนาคาร/ประกันไม่มี — ดู
+    คอมเมนต์ financials_store.get_sector_qpl_compare)"""
+    sector = (request.args.get("sector") or "").strip()
+    if not sector:
+        return jsonify({"error": "ต้องระบุ sector"}), 400
+
+    cached = _sector_trend_cache.get(sector)
+    if cached and (time.time() - cached.get("ts", 0) < _SECTOR_TREND_CACHE_TTL):
+        return jsonify(cached["result"])
+
+    with _sector_trend_lock:
+        cached = _sector_trend_cache.get(sector)
+        if cached and (time.time() - cached.get("ts", 0) < _SECTOR_TREND_CACHE_TTL):
+            return jsonify(cached["result"])
+
+        symbols = set()
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, encoding="utf-8") as f:
+                    for s in json.load(f).get("stocks", []):
+                        if s.get("market") in ("SET", "mai") and s.get("sector") == sector:
+                            symbols.add(s["symbol"])
+            except Exception:
+                pass
+
+        trend = financials_store.get_market_trend(BASE_DIR, symbols, set())
+        _sector_trend_cache[sector] = {"result": trend, "ts": time.time()}
         return jsonify(trend)
 
 
@@ -4158,6 +4231,208 @@ def peer_compare():
                  "base_symbol": symbol or None, "market": mkt, "computed_at": computed_at,
                  "ondemand_note": ondemand_note, "dr_symbol": dr_symbol},
     })
+
+
+def _peer_group_quarters(sym):
+    """ดึงงบไตรมาสผสาน (Finnomena+Yahoo+SET) ของหุ้นไทย 1 ตัว คืน list ไตรมาส (เก่า->ใหม่) หรือ
+    None ถ้าไม่มีข้อมูลเลย — logic เดียวกับ /api/financials-merged-report แต่ตัด SET
+    company-highlight annual override ออก (ใช้แค่รายไตรมาสในเอนด์พอยท์นี้ ไม่มีมุมมองรายปี)"""
+    finn = financials_store.get(BASE_DIR, sym, "finnomena_q")
+    if finn is None:
+        try:
+            fresh = financials_store.fetch_finnomena_quarterly(sym)
+            financials_store.upsert(BASE_DIR, sym, "finnomena_q", fresh)
+            finn = financials_store.get(BASE_DIR, sym, "finnomena_q")
+        except Exception:
+            finn = None
+    yq = financials_store.get(BASE_DIR, sym, "yahoo_q")
+    if yq is None:
+        try:
+            fresh = financials_store.fetch_yahoo_quarterly(sym)
+            financials_store.upsert(BASE_DIR, sym, "yahoo_q", fresh)
+            yq = financials_store.get(BASE_DIR, sym, "yahoo_q")
+        except Exception:
+            yq = None
+    if not finn and not yq:
+        return None
+    try:
+        set_series = financials_store.get_set_qpl_series(BASE_DIR, sym)
+    except Exception:
+        set_series = None
+    if set_series is None:
+        try:
+            set_series = financials_store.sync_set_qpl_series(BASE_DIR, sym)
+        except Exception:
+            set_series = None
+    return financials_store.compute_full_report(finn, yq, set_series=set_series)["quarters"]
+
+
+def _ttm_sum(quarters, field):
+    """ผลรวม field ของ 4 ไตรมาสล่าสุด — None ถ้าไม่ครบ 4 ไตรมาส หรือมีงวดไหนไม่มีค่า field นี้เลย
+    (กันยอด TTM เพี้ยนจากการนับไม่ครบ)"""
+    if len(quarters) < 4:
+        return None
+    vals = [q.get(field) for q in quarters[-4:]]
+    if any(v is None for v in vals):
+        return None
+    return sum(vals)
+
+
+def _peer_group_pct_change(cur, prev):
+    if cur is None or prev is None or prev == 0:
+        return None
+    return round((cur - prev) / abs(prev) * 100, 2)
+
+
+def _avg_last4(quarters, field):
+    """ค่าเฉลี่ย field จาก 4 ไตรมาสล่าสุดที่มีค่าจริง (ไม่ต้องครบ 4 ไตรมาสเป๊ะเหมือน _ttm_sum —
+    ใช้กับ field งบดุล ณ จุดเวลา เช่น total_assets/inventory/accounts_receivable ที่เอาไว้หา
+    ค่าเฉลี่ยไตรมาสสำหรับอัตราส่วนหมุนเวียน) คืน None ถ้าไม่มีค่าเลยสักไตรมาส"""
+    vals = [q.get(field) for q in quarters[-4:] if q.get(field) is not None]
+    return (sum(vals) / len(vals)) if vals else None
+
+
+def _latest_value(quarters, field, lookback=4):
+    """ค่า field ล่าสุดที่ไม่ใช่ None ย้อนดูสูงสุด lookback ไตรมาสจากท้ายสุด — งบดุล/กระแสเงินสด
+    รายไตรมาสจาก Yahoo มักตามหลัง P&L ที่มาจาก SET/Finnomena อยู่ 1 งวด (ไตรมาสล่าสุดสุดของ
+    total_assets/total_debt/current_assets ฯลฯ อาจยังไม่มีค่าทั้งที่ revenue/net_profit มาแล้ว)
+    ใช้แทน quarters[-1].get(field) ตรงๆ สำหรับอัตราส่วน ณ จุดเวลาที่ต้องการค่าล่าสุดเท่าที่มีจริง"""
+    for q in reversed(quarters[-lookback:]):
+        v = q.get(field)
+        if v is not None:
+            return v
+    return None
+
+
+@app.route("/api/peer-group-detail")
+def peer_group_detail():
+    """🆚 มุมมอง 'การ์ดเทียบกลุ่ม' ของหน้า Peer Compare — รายละเอียดงบ TTM + รายไตรมาสล่าสุดของ
+    หุ้นทุกตัวในกลุ่ม sector/industry เดียวกันที่ frontend ส่งมา (ปกติทั้งกลุ่มจาก /api/peer-compare
+    — ผู้ใช้ตัด/เพิ่มหุ้นเองได้ผ่าน checkbox) ต่างจาก /api/peer-compare ที่คืนตัวเลข factor รายปี
+    จาก factor_snapshot — endpoint นี้คำนวณ TTM (ผลรวม 4 ไตรมาสล่าสุด) สดจากงบไตรมาสผสาน
+    (Finnomena+Yahoo+SET) ต่อหุ้น ให้ตรงกับสเปกที่ผู้ใช้ขอ (Margins/ROE/Valuation "TTM 4Q")
+    ส่วน Cash Cycle/DIO/DSO/DPO ยังอิง factor_snapshot (รายปีจากงบ Yahoo — ไม่มี Inventory/AR/AP
+    รายไตรมาสในงบผสาน ดู compute_cash_cycle) เฉพาะหุ้นไทยเท่านั้นในเวอร์ชันนี้ — cap ที่ 100 ตัว
+    กันคำขอผิดปกติ (sector ไทยใหญ่สุดจริงมีแค่ ~64 ตัว ดู set_data.json)"""
+    mkt = (request.args.get("market") or "TH").upper()
+    if mkt != "TH":
+        return jsonify({"rows": [], "meta": {"note": "มุมมองการ์ดเทียบกลุ่มรองรับเฉพาะหุ้นไทยในเวอร์ชันนี้"}}), 501
+
+    symbols = [s.strip().upper() for s in (request.args.get("symbols") or "").split(",") if s.strip()]
+    if not symbols:
+        return jsonify({"rows": [], "meta": {"note": "ต้องระบุ symbols"}})
+    symbols = symbols[:100]
+    base_symbol = (request.args.get("base") or "").upper().strip() or None
+
+    th_map = _tearsheet_universe_map("TH")
+    snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
+
+    rows = []
+    for sym in symbols:
+        entry = th_map.get(sym) or {}
+        f = snap_rows.get(sym) or {}
+        quarters = _peer_group_quarters(sym)
+        if not quarters:
+            rows.append({"symbol": sym, "name": entry.get("name") or sym, "no_data": True})
+            continue
+
+        last = quarters[-1]
+        prior_q = quarters[-2] if len(quarters) >= 2 else None
+        yoy_q = quarters[-5] if len(quarters) >= 5 else None
+
+        rev_ttm = _ttm_sum(quarters, "revenue")
+        np_ttm = _ttm_sum(quarters, "net_profit")
+        gp_ttm = _ttm_sum(quarters, "gross_profit")
+        op_ttm = _ttm_sum(quarters, "operating_profit")
+        cogs_ttm = _ttm_sum(quarters, "cogs")
+        cfo_ttm = _ttm_sum(quarters, "cfo")
+        cfi_ttm = _ttm_sum(quarters, "cfi")
+        capex_ttm = _ttm_sum(quarters, "capex")
+        fcf_approx = (cfo_ttm + cfi_ttm) if (cfo_ttm is not None and cfi_ttm is not None) else None
+
+        equity_avg = _avg_last4(quarters, "total_equity")
+        assets_avg = _avg_last4(quarters, "total_assets")
+        inventory_avg = _avg_last4(quarters, "inventory")
+        ar_avg = _avg_last4(quarters, "accounts_receivable")
+
+        mkt_cap = entry.get("mkt_cap")
+        pe = (mkt_cap / np_ttm) if (mkt_cap and np_ttm and np_ttm > 0) else f.get("pe_value")
+        # PBV จาก mkt_cap/equity งวดล่าสุด (สอดคล้องกับ P/E ที่ TTM ด้านบน) — fallback ไป
+        # pbv_value ของ factor_snapshot (Finnomena) ถ้า total_equity รายไตรมาสไม่มี (ดู docstring
+        # ของฟังก์ชันนี้ — งบดุลรายไตรมาสมีแค่บาง symbol) — ใช้ _latest_value แทน last.get() ตรงๆ
+        # เพราะงบดุลจาก Yahoo มักตามหลัง P&L อยู่ 1 งวด (ไตรมาสล่าสุดสุดมี revenue/net_profit
+        # แต่ total_equity/total_debt/current_assets ยังไม่ sync มา)
+        equity_latest = _latest_value(quarters, "total_equity")
+        pbv = (mkt_cap / equity_latest) if (mkt_cap and equity_latest and equity_latest > 0) else f.get("pbv_value")
+        ibd_latest = _latest_value(quarters, "total_debt")
+        current_assets_latest = _latest_value(quarters, "current_assets")
+        current_liabilities_latest = _latest_value(quarters, "current_liabilities")
+
+        row = {
+            "symbol": sym, "name": entry.get("name") or sym,
+            "sector": entry.get("sector"), "industry": entry.get("industry"),
+            "mkt_cap": mkt_cap,
+            "revenue_ttm": rev_ttm, "net_profit_ttm": np_ttm,
+            "gpm": round(gp_ttm / rev_ttm * 100, 2) if (gp_ttm is not None and rev_ttm) else None,
+            "opm": round(op_ttm / rev_ttm * 100, 2) if (op_ttm is not None and rev_ttm) else None,
+            "npm": round(np_ttm / rev_ttm * 100, 2) if (np_ttm is not None and rev_ttm) else None,
+            "roe": round(np_ttm / equity_avg * 100, 2) if (np_ttm is not None and equity_avg) else f.get("roe"),
+            "roa": f.get("roa"),
+            "de_ratio": f.get("de_ratio"),
+            "pe": round(pe, 2) if pe is not None else None,
+            "pbv": round(pbv, 2) if pbv is not None else None,
+            "div_yield": entry.get("div_yield"),
+            "peg": f.get("peg"),
+            "interest_coverage": f.get("interest_coverage"),
+            "f_score": f.get("f_score"), "f_score_max": f.get("f_score_max"),
+            "z_score": f.get("z_score"), "z_zone": f.get("z_zone"), "z_variant": f.get("z_variant"),
+            "z_excluded_reason": f.get("z_excluded_reason"),
+            "rev_cagr": f.get("rev_cagr"), "profit_cagr": f.get("profit_cagr"),
+            "cfo_ttm": cfo_ttm, "cfi_ttm": cfi_ttm, "fcf_approx": fcf_approx,
+            "cfo_ni_ratio": round(cfo_ttm / np_ttm, 2) if (cfo_ttm is not None and np_ttm) else None,
+            "fcf_margin": round(fcf_approx / rev_ttm * 100, 2) if (fcf_approx is not None and rev_ttm) else None,
+            "cfo_margin": round(cfo_ttm / rev_ttm * 100, 2) if (cfo_ttm is not None and rev_ttm) else None,
+            "cash_cycle": f.get("cash_cycle"), "dio": f.get("dio"), "dso": f.get("dso"), "dpo": f.get("dpo"),
+            "q_revenue": last.get("revenue"), "q_cogs": last.get("cogs"), "q_sga": last.get("sga_total"),
+            "q_ebit": last.get("operating_profit"), "q_net_profit": last.get("net_profit"),
+            "q_cfo": last.get("cfo"), "total_assets": last.get("total_assets"),
+            "total_equity": last.get("total_equity"), "ibd": last.get("total_debt"),
+            "q_net_profit_qoq": _peer_group_pct_change(last.get("net_profit"), (prior_q or {}).get("net_profit")),
+            "q_net_profit_yoy": _peer_group_pct_change(last.get("net_profit"), (yoy_q or {}).get("net_profit")),
+            "q_cfo_yoy": _peer_group_pct_change(last.get("cfo"), (yoy_q or {}).get("cfo")),
+            "ttm_net_profit_yoy": None,
+            "rev_cagr_3y": None, "profit_cagr_3y": None,
+            # อัตราส่วนสภาพคล่อง/หนี้/ประสิทธิภาพใช้สินทรัพย์ — คำนวณจาก field งบดุลรายไตรมาสที่
+            # ผสานไว้แล้ว (ดู _BSCF_RAW_MAP ใน financials_store.py) ไม่ต้องดึงข้อมูลเพิ่ม
+            "current_ratio": round(current_assets_latest / current_liabilities_latest, 2)
+                if (current_assets_latest is not None and current_liabilities_latest)
+                else None,
+            "ibd_equity": round(ibd_latest / equity_latest, 2)
+                if (ibd_latest is not None and equity_latest) else None,
+            "asset_turnover": round(rev_ttm / assets_avg, 2) if (rev_ttm is not None and assets_avg) else None,
+            "inventory_turnover": round(cogs_ttm / inventory_avg, 2) if (cogs_ttm is not None and inventory_avg) else None,
+            "receivable_turnover": round(rev_ttm / ar_avg, 2) if (rev_ttm is not None and ar_avg) else None,
+            "capex_rev": round(abs(capex_ttm) / rev_ttm * 100, 2) if (capex_ttm is not None and rev_ttm) else None,
+            "quarters_available": len(quarters), "ttm_partial": rev_ttm is None,
+        }
+        # YoY ของ TTM กำไรสุทธิ — เทียบ TTM ปัจจุบันกับ TTM ที่จบเมื่อ 4 ไตรมาสก่อน (ต้องมีอย่างน้อย
+        # 8 ไตรมาสถึงจะมีข้อมูลพอทำ TTM สองช่วงที่ไม่ทับกัน)
+        if len(quarters) >= 8 and np_ttm is not None:
+            prior_ttm = _ttm_sum(quarters[:-4], "net_profit")
+            row["ttm_net_profit_yoy"] = _peer_group_pct_change(np_ttm, prior_ttm)
+        # CAGR 3 ปีเป๊ะ (ต่างจาก rev_cagr/profit_cagr ของ factor_snapshot ที่เป็นเต็มช่วงข้อมูล) —
+        # เทียบ TTM ปัจจุบันกับ TTM ที่จบเมื่อ 12 ไตรมาสก่อน ต้องมีอย่างน้อย 16 ไตรมาสถึงจะมีข้อมูล
+        # พอทำ TTM สองช่วงที่ไม่ทับกัน (เฉพาะกรณีทั้งคู่เป็นบวก — ฐานลบ/ศูนย์ทำ CAGR ไม่มีความหมาย)
+        if len(quarters) >= 16:
+            rev_ttm_3y_ago = _ttm_sum(quarters[:-12], "revenue")
+            if rev_ttm and rev_ttm_3y_ago and rev_ttm > 0 and rev_ttm_3y_ago > 0:
+                row["rev_cagr_3y"] = round(((rev_ttm / rev_ttm_3y_ago) ** (1 / 3) - 1) * 100, 2)
+            np_ttm_3y_ago = _ttm_sum(quarters[:-12], "net_profit")
+            if np_ttm and np_ttm_3y_ago and np_ttm > 0 and np_ttm_3y_ago > 0:
+                row["profit_cagr_3y"] = round(((np_ttm / np_ttm_3y_ago) ** (1 / 3) - 1) * 100, 2)
+        rows.append(row)
+
+    return jsonify({"rows": rows, "meta": {"base_symbol": base_symbol, "market": mkt}})
 
 
 def _mirror_sym(mkt, sym):
@@ -7084,6 +7359,8 @@ def _run_financials_update_all():
         _fin_analytics_cache.clear()
         _sector_compare_cache.clear()
         _market_trend_cache.clear()
+        _sector_trend_cache.clear()
+        _warmup_fin_dependent_caches()
 
         elapsed_min = (time.time() - t0) / 60
         summary = (f"เสร็จแล้ว! หุ้นไทย {r_th['ok']}/{r_th['total']} (พลาด {r_th['fail']}, "
@@ -9535,6 +9812,7 @@ if __name__ == "__main__":
         tc = app.test_client()
         for ep in ("/api/market-flow", "/api/breadth?range=1y",
                    "/api/market-internals", "/api/financials-analytics",
+                   "/api/sector-compare", "/api/market-trend",
                    "/api/us-breadth?range=1y", "/api/hk-breadth?range=1y", "/api/jp-breadth?range=1y"):
             try:
                 t0 = _t.time()

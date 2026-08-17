@@ -365,8 +365,10 @@
     <div id="idx-cmp-sort-row" style="display:none;align-items:center;gap:8px;font-size:11px;color:var(--text2)">
       <span>เรียงตาม:</span>
       <button class="filter-btn active" id="idx-cmp-sort-btn-revenue"     onclick="setCmpSort('revenue',this)">ลำดับตลาด</button>
-      <button class="filter-btn"        id="idx-cmp-sort-btn-revenue_yoy" onclick="setCmpSort('revenue_yoy',this)">รายได้โต</button>
-      <button class="filter-btn"        id="idx-cmp-sort-btn-profit_yoy"  onclick="setCmpSort('profit_yoy',this)">กำไรโต</button>
+      <button class="filter-btn"        id="idx-cmp-sort-btn-revenue_yoy" onclick="setCmpSort('revenue_yoy',this)">รายได้โต YoY</button>
+      <button class="filter-btn"        id="idx-cmp-sort-btn-revenue_qoq" onclick="setCmpSort('revenue_qoq',this)">รายได้โต QoQ</button>
+      <button class="filter-btn"        id="idx-cmp-sort-btn-profit_yoy"  onclick="setCmpSort('profit_yoy',this)">กำไรโต YoY</button>
+      <button class="filter-btn"        id="idx-cmp-sort-btn-profit_qoq"  onclick="setCmpSort('profit_qoq',this)">กำไรโต QoQ</button>
       <button class="filter-btn"        id="idx-cmp-sort-btn-roe"         onclick="setCmpSort('roe',this)">ROE</button>
       <button class="filter-btn"        id="idx-cmp-sort-btn-profit"      onclick="setCmpSort('profit',this)">กำไรรวม</button>
     </div>
@@ -376,6 +378,13 @@
       <button class="filter-btn"        id="idx-view-heatmap" onclick="setIdxView('heat',this)">▦ Heatmap</button>
       <button class="filter-btn"        id="idx-view-compare" onclick="setIdxView('compare',this)">⚖ เปรียบเทียบ Sector</button>
     </div>
+  </div>
+  <div id="idx-cmp-chart-wrap" class="card" style="display:none;padding:14px;margin-bottom:12px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+      <div id="idx-cmp-chart-title" style="font-weight:700;font-size:13px">📊 เติบโตรายได้ YoY ตาม Sector — ไตรมาสนี้ sector ไหนโตเด่น</div>
+      <div style="font-size:10px;color:var(--text2)">กราฟตามปุ่ม "เรียงตาม" ด้านบน</div>
+    </div>
+    <div id="idx-cmp-chart-box" style="position:relative;height:380px"><canvas id="idx-cmp-chart"></canvas></div>
   </div>
   <div id="idx-grid"></div>
 
@@ -3147,7 +3156,7 @@
         <option value="">— เลือก Sector ตรง ๆ —</option>
       </select>
     </div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+    <div id="peer-preset-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <span style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">คอลัมน์</span>
       <button class="filter-btn active" id="peer-preset-valuation" onclick="setPeerPreset('valuation',this)" title="PE / PBV / P/S / ปันผล% / PEG">💰 Valuation</button>
       <button class="filter-btn" id="peer-preset-quality" onclick="setPeerPreset('quality',this)" title="ROE / ROA / Gross Margin / Net Margin / D-E / Interest Coverage / OCF-NI / F-Score / Z-Score">🩺 คุณภาพ</button>
@@ -3157,6 +3166,7 @@
       <span style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">มุมมอง</span>
       <button class="filter-btn active" id="peer-view-table" onclick="setPeerViewMode('table',this)" title="ตารางเทียบทุกตัวในกลุ่ม พร้อมสีไล่ตาม percentile ต่อคอลัมน์">📋 ตาราง</button>
       <button class="filter-btn" id="peer-view-scatter" onclick="setPeerViewMode('scatter',this)" title="กระจายจุด PE (แกน X) × ROE (แกน Y) เทียบกับเส้นค่ากลางของกลุ่ม">📊 Scatter PE×ROE</button>
+      <button class="filter-btn" id="peer-view-group" onclick="setPeerViewMode('group',this)" title="หุ้นเทียบกับกลุ่ม — การ์ดเทียบ Margins/Cash Cycle/รายการการเงินรายไตรมาส กับหุ้นทุกตัวในกลุ่มเดียวกัน (ตัดออกทีละตัวได้, หุ้นไทยเท่านั้น)">🗂 หุ้นเทียบกับกลุ่ม</button>
     </div>
   </div>
   <div id="peer-meta" style="font-size:12px;color:var(--text2);margin-bottom:8px"></div>
@@ -4614,9 +4624,19 @@
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
     <div class="modal-stats" id="modal-stats"></div>
+    <div id="sector-trend-chart-wrap" style="display:none;margin:0 20px 10px;padding:10px 14px;border-radius:10px;background:linear-gradient(180deg,#0d1526,#0a0f1c);border:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer" onclick="_toggleSectorTrendChart()">
+        <div>
+          <div id="sector-trend-title" style="font-weight:700;font-size:14px">📈 เทรนด์การเติบโต</div>
+          <div id="sector-trend-sub" style="font-size:11px;color:var(--text2);margin-top:2px">รายได้ YoY และกำไรสุทธิ YoY รายไตรมาส</div>
+        </div>
+        <div id="sector-trend-toggle-icon" style="font-size:12px;color:var(--text2);white-space:nowrap;user-select:none">ซ่อน ▾</div>
+      </div>
+      <div id="sector-trend-canvas-box" style="position:relative;height:160px;margin-top:8px"><canvas id="sector-trend-chart"></canvas></div>
+    </div>
     <div class="modal-body">
       <table class="tbl tbl-clickable" style="width:100%">
-        <thead><tr>
+        <thead><tr id="modal-thead">
           <th>RS<span class="scr-tip-icon">ℹ<div class="scr-tip-box">RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)</div></span></th><th>Symbol<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ</div></span></th><th>ชื่อ<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อบริษัท</div></span></th>
           <th class="r">ราคา<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ราคาปิดล่าสุด (บาท)</div></span></th><th class="r">1D%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนวันนี้ (เทียบราคาปิดเมื่อวาน)</div></span></th><th class="r">1W%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 สัปดาห์</div></span></th>
           <th class="r">1M%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 เดือน</div></span></th><th class="r">3M%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 3 เดือน</div></span></th><th class="r">1Y%<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ผลตอบแทนย้อนหลัง 1 ปี</div></span></th>
@@ -4830,6 +4850,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260817h"></script>
+<script src="static/dashboard.js?v=20260817af"></script>
 </body>
 </html>

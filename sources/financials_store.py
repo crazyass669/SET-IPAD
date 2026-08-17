@@ -919,12 +919,52 @@ def get_mirror_ondemand(base_dir, sym, market, stale_days=1):
         return None, True
 
 
-def compute_quarterly_growth(payload_yahoo_q):
-    """การเติบโตรายไตรมาสจากงบ quarterly (source 'yahoo_q'):
+_QPL_Q_END_MD = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}   # ไตรมาสปฏิทิน -> วันสิ้นงวด
+
+
+def _set_qpl_latest_extra(rev, ni, set_qpl_payload):
+    """เติมไตรมาสล่าสุดจาก SET official (source 'set_qpl') เข้า rev/ni series ถ้าใหม่กว่า
+    งวดล่าสุดที่มีอยู่แล้ว — Yahoo/Finnomena มักอัพเดตงบไตรมาสช้ากว่า SET.or.th เอง ~1 ไตรมาส
+    (เจอกับ BA: yahoo_q/finnomena_q ค้าง Q1/69 ทำให้ QoQ เทียบ Q4/68→Q1/69 (+384%) แทนที่จะเป็น
+    Q1/69→Q2/69 ตัวจริง (-84%) ซึ่งมีอยู่แล้วใน set_qpl ตอนคำนวณ) ไม่แตะงวดเก่าที่ซ้อนทับกัน
+    (ให้ Yahoo/Finnomena เป็นหลักอยู่เหมือนเดิม แค่เติมงวดที่ยังไม่มี)"""
+    quarters = (set_qpl_payload or {}).get("quarters") or {}
+    if not quarters:
+        return rev, ni
+    last_date = rev[-1][0] if rev else (ni[-1][0] if ni else None)
+    extra_rev, extra_ni = [], []
+    for key, row in quarters.items():
+        try:
+            y_s, q_s = key.split("-")
+            y, q = int(y_s), int(q_s)
+        except (ValueError, AttributeError):
+            continue
+        md = _QPL_Q_END_MD.get(q)
+        if not md:
+            continue
+        d = f"{y:04d}-{md[0]:02d}-{md[1]:02d}"
+        if last_date and d <= last_date:
+            continue
+        if row.get("revenue") is not None:
+            extra_rev.append((d, row["revenue"]))
+        if row.get("net_profit") is not None:
+            extra_ni.append((d, row["net_profit"]))
+    if extra_rev:
+        rev = sorted(rev + extra_rev)
+    if extra_ni:
+        ni = sorted(ni + extra_ni)
+    return rev, ni
+
+
+def compute_quarterly_growth(payload_yahoo_q, set_qpl_payload=None):
+    """การเติบโตรายไตรมาสจากงบ quarterly (source 'yahoo_q'/'finnomena_q'):
     - rev_qoq / profit_qoq  : ไตรมาสล่าสุด vs ไตรมาสก่อนหน้า (%)
     - rev_yoy_q / profit_yoy_q: ไตรมาสล่าสุด vs ไตรมาสเดียวกันของปีก่อน (%)
       (ตัวหลังกัน seasonality — ธุรกิจจำนวนมากมี high/low season ทำให้ QoQ เพี้ยนตามฤดู)
-    ฐานติดลบ/ศูนย์ -> None (เปอร์เซ็นต์ไม่มีความหมาย เช่นพลิกจากขาดทุน)"""
+    ฐานติดลบ/ศูนย์ -> None (เปอร์เซ็นต์ไม่มีความหมาย เช่นพลิกจากขาดทุน)
+
+    set_qpl_payload: payload source 'set_qpl' (ถ้ามี) — เติมงวดล่าสุดที่ SET.or.th มีแล้วแต่
+    Yahoo/Finnomena ยังไม่อัพเดต ดู _set_qpl_latest_extra"""
     inc = (payload_yahoo_q or {}).get("income", {})
 
     # ฐานที่เกือบศูนย์ทำให้ % โตพุ่งมหาศาลจนไร้ความหมาย (เจอบ่อยในหุ้น OTC/ข้อมูลเพี้ยน)
@@ -1012,6 +1052,7 @@ def compute_quarterly_growth(payload_yahoo_q):
 
     rev = series("Total Revenue", "Operating Revenue")
     ni  = series("Net Income", "Net Income Common Stockholders")
+    rev, ni = _set_qpl_latest_extra(rev, ni, set_qpl_payload)
 
     # Net margin รายไตรมาส (NI/Rev เป็น %) — จับคู่เฉพาะงวดที่มีทั้งคู่และรายได้ > 0
     rev_map = dict(rev)
@@ -1227,11 +1268,19 @@ def compute_qpl_report(payload_finn_q, payload_yahoo_q, set_series=None):
 # (company-highlight เป็นรายปี/ยอดสะสมบางส่วนของปีปัจจุบันเท่านั้น) จึงไม่เอามาผสานที่นี่
 _BSCF_RAW_MAP = {
     "balance": (("Total Assets", "total_assets"), ("Stockholders Equity", "total_equity"),
-                ("Total Debt", "total_debt"), ("Cash And Cash Equivalents", "cash")),
+                ("Total Debt", "total_debt"), ("Cash And Cash Equivalents", "cash"),
+                ("Current Assets", "current_assets"), ("Current Liabilities", "current_liabilities"),
+                ("Inventory", "inventory"),
+                ("Accounts Receivable", "accounts_receivable"),
+                ("Receivables", "accounts_receivable"),
+                ("Gross Accounts Receivable", "accounts_receivable")),
     "cashflow": (("Operating Cash Flow", "cfo"), ("Investing Cash Flow", "cfi"),
-                 ("Financing Cash Flow", "cff"), ("Depreciation And Amortization", "da")),
+                 ("Financing Cash Flow", "cff"), ("Depreciation And Amortization", "da"),
+                 ("Capital Expenditure", "capex")),
 }
-_BSCF_FIELDS = ("total_assets", "total_equity", "total_debt", "cash", "cfo", "cfi", "cff", "da")
+_BSCF_FIELDS = ("total_assets", "total_equity", "total_debt", "cash",
+                "current_assets", "current_liabilities", "inventory", "accounts_receivable",
+                "cfo", "cfi", "cff", "da", "capex")
 
 
 def _bscf_layer_from_payload(payload):
@@ -1290,7 +1339,13 @@ def compute_full_report(payload_finn_q, payload_yahoo_q, set_series=None):
     _merge_bscf_layer(combined, _bscf_layer_from_payload(payload_finn_q), "finnomena")
     _merge_bscf_layer(combined, _bscf_layer_from_payload(payload_yahoo_q), "yahoo")
 
+    # _merge_bscf_layer อาจสร้างแถวใหม่สำหรับไตรมาสที่มีแต่งบดุล/กระแสเงินสดแต่ไม่มี P&L จากแหล่ง
+    # ไหนเลย (เจอกับ PTTGC 2011Q3/Q4 — Finnomena มีงบดุลแต่ pl ไม่มีแถวนั้น) แถวพวกนี้จะไม่มี
+    # "year_be" (ใส่เฉพาะใน compute_qpl_report) ทำให้ frontend group by year_be พังตอน grouping
+    # (Number(undefined)=NaN -> byYear[NaN] อ่าน [0] จาก undefined) เติมให้ครบตรงนี้
     out = [combined[k] for k in sorted(combined.keys())]
+    for row in out:
+        row.setdefault("year_be", row["year_ad"] + 543)
     return {"quarters": out}
 
 
@@ -2485,14 +2540,35 @@ def get_sector_qpl_compare(base_dir, sector_by_symbol):
     _set_qpl_row_from_amt) — caller ควรตัดกลุ่มนี้ออกก่อนถ้าจะใช้ตัวเลข coverage จริงจัง
 
     คืน {"quarter": "YYYY-Q" หรือ None, "sectors": [{sector, count, total, reported,
-    missing_symbols, revenue, revenue_yoy, profit, profit_yoy, npm, profit_stocks, loss_stocks,
-    profit_share_pct}, ...]}"""
+    missing_symbols, revenue, revenue_yoy, revenue_qoq, profit, profit_yoy, profit_qoq, npm,
+    profit_stocks, loss_stocks, profit_share_pct, stocks: [{symbol, revenue, net_profit,
+    revenue_yoy, profit_yoy, revenue_qoq, profit_qoq, gpm, npm, revenue_ttm, profit_ttm}, ...]}, ...]}
+
+    'stocks' คือรายตัวในกลุ่ม (เฉพาะที่รายงานงวด target แล้ว) เรียงลำดับเอง (revenue มาก->น้อย)
+    ฝั่ง caller/frontend — TTM รวม 4 ไตรมาสล่าสุดนับจาก target ต้องมีครบทั้ง 4 งวดไม่งั้นคืน None
+    (กันผลรวมเพี้ยนจากหุ้นที่เพิ่งเข้าตลาด/ขาดงบเก่า)"""
     parsed = _load_set_qpl_all(base_dir, sector_by_symbol)
     if not parsed:
         return {"quarter": None, "sectors": []}
 
     target = _target_quarter(parsed)
     prior_key = (target[0] - 1, target[1])   # YoY เทียบไตรมาสเดียวกันปีก่อน ไม่ใช่ _prev_quarter (QoQ)
+    prior_qoq_key = _prev_quarter(*target)   # QoQ เทียบไตรมาสก่อนหน้าติดกัน (ต่างจาก prior_key)
+
+    def _ttm_sum(qs, field):
+        total, y, q = 0, target[0], target[1]
+        for _ in range(4):
+            row = qs.get((y, q))
+            if not row or row.get(field) is None:
+                return None
+            total += row[field]
+            y, q = _prev_quarter(y, q)
+        return total
+
+    def _stock_yoy(cur_val, prior_val):
+        if cur_val is None or prior_val is None or prior_val == 0:
+            return None
+        return round((cur_val / prior_val - 1) * 100, 1)
 
     sector_all_symbols = {}   # sector -> set ของหุ้นทั้งหมดที่ classify ลงกลุ่มนี้ (ไม่ว่าจะมีงบหรือไม่)
     for sym, sector in sector_by_symbol.items():
@@ -2507,9 +2583,20 @@ def get_sector_qpl_compare(base_dir, sector_by_symbol):
         if rev is None and net is None:
             continue
         prev = qs.get(prior_key) or {}
+        prev_qoq = qs.get(prior_qoq_key) or {}
+        gross = cur.get("gross_profit")
         buckets.setdefault(sector_by_symbol[sym], []).append({
             "symbol": sym, "revenue": rev, "net_profit": net,
             "revenue_prior": prev.get("revenue"), "profit_prior": prev.get("net_profit"),
+            "revenue_prior_qoq": prev_qoq.get("revenue"), "profit_prior_qoq": prev_qoq.get("net_profit"),
+            "revenue_yoy": _stock_yoy(rev, prev.get("revenue")),
+            "profit_yoy": _stock_yoy(net, prev.get("net_profit")),
+            "revenue_qoq": _stock_yoy(rev, prev_qoq.get("revenue")),
+            "profit_qoq": _stock_yoy(net, prev_qoq.get("net_profit")),
+            "gpm": round(gross / rev * 100, 1) if gross is not None and rev else None,
+            "npm": round(net / rev * 100, 1) if net is not None and rev else None,
+            "revenue_ttm": _ttm_sum(qs, "revenue"),
+            "profit_ttm": _ttm_sum(qs, "net_profit"),
         })
 
     total_profit_all = sum(r["net_profit"] for items in buckets.values() for r in items
@@ -2540,12 +2627,17 @@ def get_sector_qpl_compare(base_dir, sector_by_symbol):
             "missing_symbols": missing_syms,
             "revenue": rev_sum,
             "revenue_yoy": _yoy("revenue", "revenue_prior"),
+            "revenue_qoq": _yoy("revenue", "revenue_prior_qoq"),
             "profit": profit_sum,
             "profit_yoy": _yoy("net_profit", "profit_prior"),
+            "profit_qoq": _yoy("net_profit", "profit_prior_qoq"),
             "npm": round(profit_sum / rev_sum * 100, 1) if rev_sum else None,
             "profit_stocks": sum(1 for r in items if r["net_profit"] is not None and r["net_profit"] > 0),
             "loss_stocks": sum(1 for r in items if r["net_profit"] is not None and r["net_profit"] < 0),
             "profit_share_pct": round(profit_sum / total_profit_all * 100, 1) if total_profit_all else None,
+            "stocks": [{k: r[k] for k in (
+                "symbol", "revenue", "net_profit", "revenue_yoy", "profit_yoy",
+                "revenue_qoq", "profit_qoq", "gpm", "npm", "revenue_ttm", "profit_ttm")} for r in items],
         })
 
     return {"quarter": f"{target[0]}-{target[1]}", "sectors": sectors_out}

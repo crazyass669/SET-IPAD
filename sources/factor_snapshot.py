@@ -97,8 +97,12 @@ def _factors_for(base_dir, sym, is_dr, z_variant=None):
     # การเติบโตรายไตรมาส — ใช้แหล่งที่ลึกกว่า (finnomena_q 65 ไตรมาส vs yahoo_q ~6)
     fq = fs.get(base_dir, sym, "finnomena_q", is_dr=is_dr)
     yq = fs.get(base_dir, sym, "yahoo_q", is_dr=is_dr)
-    qg_f = fs.compute_quarterly_growth(fq)
-    qg_y = fs.compute_quarterly_growth(yq)
+    # SET official (set_qpl) มักมีงวดล่าสุดเร็วกว่า Yahoo/Finnomena ~1 ไตรมาส — เติมให้ QoQ/YoY-Q
+    # ไม่ค้าง (ดู _set_qpl_latest_extra) เฉพาะหุ้นไทยจริง (ไม่ใช่ DR/mirror US-HK-JP ที่ใช้ namespace
+    # 'FINN:{ex}:{name}' แต่ is_dr=False เหมือนกัน — SET.or.th ไม่มีข้อมูลหุ้นต่างประเทศ)
+    sqpl = fs.get(base_dir, sym, "set_qpl", is_dr=is_dr) if (not is_dr and not sym.startswith("FINN:")) else None
+    qg_f = fs.compute_quarterly_growth(fq, set_qpl_payload=sqpl)
+    qg_y = fs.compute_quarterly_growth(yq, set_qpl_payload=sqpl)
     qg = qg_f if qg_f["quarters_available"] >= qg_y["quarters_available"] else qg_y
     q_src = "finnomena_q" if qg is qg_f else "yahoo_q"
 
