@@ -8779,8 +8779,13 @@ async function _peerGroupFetch() {
 function _peerGroupHeaderHtml(rows, baseSym) {
   const level = _peerMeta.level === 'industry' ? 'Industry' : 'Sector';
   const group = _peerMeta.group || '';
+  const tip = `<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:270px">
+    ตัวเลขคำนวณสด (TTM) จากงบการเงินรายไตรมาสของแต่ละบริษัท ผสาน ณ ตอนเปิดหน้านี้ — ไม่ใช่ค่าที่เก็บไว้ล่วงหน้า จึงรองรับเฉพาะหุ้นไทย<br><br>
+    คลิกหัวคอลัมน์เพื่อเรียงลำดับ (หุ้นตั้งต้น ⭐ ปักหมุดบนสุดเสมอ)<br>
+    ติ๊กออกที่ชิปด้านบนได้ถ้าอยากตัดบางตัวออกจากการเทียบ
+  </div></span>`;
   return `<div class="card" style="padding:12px 14px;margin-bottom:12px">
-    <div style="font-weight:700;font-size:14px">${level}: ${group}</div>
+    <div style="font-weight:700;font-size:14px;display:flex;align-items:center;gap:2px">${level}: ${group}${tip}</div>
     <div style="font-size:12px;color:var(--text2);margin-top:4px">เทียบ ${rows.length} ตัวในกลุ่ม | ⭐ = หุ้นที่ดูอยู่ | <span style="color:var(--green,#3fb950)">เขียว</span>=ดีกว่า <span style="color:var(--red,#f85149)">แดง</span>=แย่กว่า เทียบกับ ${baseSym || '-'}</div>
   </div>`;
 }
