@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260812b">
+<link rel="stylesheet" href="static/dashboard.css?v=20260818a">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -3485,6 +3485,62 @@
       <div style="height:260px;margin-top:8px"><canvas id="mt-chart-breadth"></canvas></div>
     </div>
   </div>
+
+  <div class="page-title" style="font-size:15px;margin-top:22px" id="mt-growth-title">🏆 Top 10 เติบโตโดดเด่น ไตรมาสล่าสุด</div>
+  <div class="page-sub">เรียงจากหุ้น/sector ที่มีข้อมูล SET official (set_qpl) งวดล่าสุดครบ · สลับ QoQ/YoY ได้ทีละการ์ด</div>
+  <div id="mt-growth-grid" style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:10px">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+        <div class="card-title" style="margin:0">🏭 Sector รายได้โตเด่น</div>
+        <div class="filter-row" style="margin:0;gap:4px">
+          <button class="filter-btn" id="mt-tog-sectorRevenue-qoq" onclick="_mtSetGrowthMode('sectorRevenue','qoq',this)">QoQ</button>
+          <button class="filter-btn active" id="mt-tog-sectorRevenue-yoy" onclick="_mtSetGrowthMode('sectorRevenue','yoy',this)">YoY</button>
+        </div>
+      </div>
+      <div id="mt-tbl-sectorRevenue" style="overflow-x:auto"></div>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+        <div class="card-title" style="margin:0">🏭 Sector กำไรโตเด่น</div>
+        <div class="filter-row" style="margin:0;gap:4px">
+          <button class="filter-btn" id="mt-tog-sectorProfit-qoq" onclick="_mtSetGrowthMode('sectorProfit','qoq',this)">QoQ</button>
+          <button class="filter-btn active" id="mt-tog-sectorProfit-yoy" onclick="_mtSetGrowthMode('sectorProfit','yoy',this)">YoY</button>
+        </div>
+      </div>
+      <div id="mt-tbl-sectorProfit" style="overflow-x:auto"></div>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+        <div class="card-title" style="margin:0">📈 หุ้นรายได้โตเด่น</div>
+        <div class="filter-row" style="margin:0;gap:4px">
+          <button class="filter-btn" id="mt-tog-stockRevenue-qoq" onclick="_mtSetGrowthMode('stockRevenue','qoq',this)">QoQ</button>
+          <button class="filter-btn active" id="mt-tog-stockRevenue-yoy" onclick="_mtSetGrowthMode('stockRevenue','yoy',this)">YoY</button>
+        </div>
+      </div>
+      <div id="mt-tbl-stockRevenue" class="mini-tbl-scroll" style="overflow-x:auto"></div>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+        <div class="card-title" style="margin:0">📈 หุ้นกำไรโตเด่น <span style="font-weight:400;color:var(--text2)">(ฐาน NP ปีก่อน &gt; 50 ลบ.)</span></div>
+        <div class="filter-row" style="margin:0;gap:4px">
+          <button class="filter-btn" id="mt-tog-stockProfit-qoq" onclick="_mtSetGrowthMode('stockProfit','qoq',this)">QoQ</button>
+          <button class="filter-btn active" id="mt-tog-stockProfit-yoy" onclick="_mtSetGrowthMode('stockProfit','yoy',this)">YoY</button>
+        </div>
+      </div>
+      <div id="mt-tbl-stockProfit" class="mini-tbl-scroll" style="overflow-x:auto"></div>
+    </div>
+    <div class="card" style="grid-column:1 / -1">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+        <div class="card-title" style="margin:0">🔄 หุ้นพลิกกำไร (ไตรมาสก่อนขาดทุน → ไตรมาสนี้กำไร)</div>
+        <div class="filter-row" style="margin:0;gap:4px">
+          <button class="filter-btn" id="mt-tog-stockTurnaround-qoq" onclick="_mtSetGrowthMode('stockTurnaround','qoq',this)">QoQ</button>
+          <button class="filter-btn active" id="mt-tog-stockTurnaround-yoy" onclick="_mtSetGrowthMode('stockTurnaround','yoy',this)">YoY</button>
+        </div>
+      </div>
+      <div class="page-sub" style="margin:0 0 8px">เรียงตามขนาดการพลิก (กำไรตอนนี้ − ขาดทุนก่อนหน้า) — ไม่ใช้ % เพราะฐานติดลบทำให้ % ไม่มีความหมาย</div>
+      <div id="mt-tbl-stockTurnaround" class="mini-tbl-scroll" style="overflow-x:auto"></div>
+    </div>
+  </div>
 </div>
 
 <!-- PAGE: US INDEX HEATMAP — คนละหน้ากับ "Heatmap" เดิม (id="page-heatmap") ที่เป็น Market
@@ -4455,7 +4511,7 @@
         <div class="cm-sub"   id="cm-sub">—</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <div style="display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden">
+        <div style="display:flex;flex-wrap:wrap;border:1px solid var(--border);border-radius:6px;overflow:hidden">
           <button id="cm-mode-chart"  onclick="setCmMode('chart')"  style="background:var(--accent);color:#fff;border:none;font-size:12px;padding:5px 12px;cursor:pointer">📈 กราฟ</button>
           <button id="cm-mode-tv" onclick="setCmMode('tv')" style="background:var(--card2);color:var(--text2);border:none;border-left:1px solid var(--border);font-size:12px;padding:5px 12px;cursor:pointer" title="กราฟสด ฝัง widget จริงจาก TradingView.com — อินดิเคเตอร์/วาดเส้นได้เต็มรูปแบบ ⚠ ใช้ได้เต็มเฉพาะหุ้น US, หุ้นไทย/ตลาดอื่นอาจไม่มีข้อมูล">📉 TradingView</button>
           <button id="cm-mode-stocks" onclick="setCmMode('stocks')" style="display:none;background:var(--card2);color:var(--text2);border:none;border-left:1px solid var(--border);font-size:12px;padding:5px 12px;cursor:pointer">📋 หุ้นในกลุ่ม</button>
@@ -4469,6 +4525,9 @@
           <a id="cm-set-link" href="#" target="_blank" rel="noopener"
             style="display:none;align-items:center;font-size:12px;padding:5px 12px;border-left:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer;white-space:nowrap"
             title="ดูหน้าหุ้นบน SET.or.th">🌐 SET</a>
+          <a id="cm-bullpedia-link" href="#" target="_blank" rel="noopener"
+            style="display:none;align-items:center;font-size:12px;padding:5px 12px;border-left:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer;white-space:nowrap"
+            title="เปิดใน Bullpedia">🐂 Bullpedia</a>
           <button id="cm-peer-btn" onclick="openPeerFromModal()"
             style="align-items:center;font-size:12px;padding:5px 12px;border-left:1px solid var(--border);border-top:none;border-right:none;border-bottom:none;background:var(--card2);color:var(--text2);cursor:pointer;white-space:nowrap"
             title="เทียบกับเพื่อนร่วม sector">🆚 เทียบเพื่อน</button>
@@ -4631,6 +4690,12 @@
           <div id="sector-trend-sub" style="font-size:11px;color:var(--text2);margin-top:2px">รายได้ YoY และกำไรสุทธิ YoY รายไตรมาส</div>
         </div>
         <div id="sector-trend-toggle-icon" style="font-size:12px;color:var(--text2);white-space:nowrap;user-select:none">ซ่อน ▾</div>
+      </div>
+      <div id="sector-trend-metric-toggle" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+        <button type="button" class="sector-trend-metric-btn" data-metric="revenue_yoy" onclick="event.stopPropagation();_setSectorTrendMetric('revenue_yoy')">รายได้ YoY</button>
+        <button type="button" class="sector-trend-metric-btn" data-metric="profit_yoy" onclick="event.stopPropagation();_setSectorTrendMetric('profit_yoy')">กำไร YoY</button>
+        <button type="button" class="sector-trend-metric-btn" data-metric="revenue_qoq" onclick="event.stopPropagation();_setSectorTrendMetric('revenue_qoq')">รายได้ QoQ</button>
+        <button type="button" class="sector-trend-metric-btn" data-metric="profit_qoq" onclick="event.stopPropagation();_setSectorTrendMetric('profit_qoq')">กำไร QoQ</button>
       </div>
       <div id="sector-trend-canvas-box" style="position:relative;height:160px;margin-top:8px"><canvas id="sector-trend-chart"></canvas></div>
     </div>
@@ -4850,6 +4915,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260817af"></script>
+<script src="static/dashboard.js?v=20260818j"></script>
 </body>
 </html>

@@ -164,6 +164,10 @@ def _factors_for(base_dir, sym, is_dr, z_variant=None):
         "latest_quarter": qg["latest_quarter"],
         "rev_qoq": qg["rev_qoq"], "profit_qoq": qg["profit_qoq"],
         "rev_yoy_q": qg["rev_yoy_q"], "profit_yoy_q": qg["profit_yoy_q"],
+        # พลิกกำไรจริง (งวดเทียบขาดทุน/เท่ากับศูนย์ แต่งวดนี้กำไรบวก) — profit_yoy_q/profit_qoq
+        # เป็น None เสมอตอนนี้ (% ไม่มีความหมายเมื่อฐานติดลบ) ต้องใช้ flag นี้หาหุ้นพลิกกำไรแทน
+        "profit_turnaround_qoq": qg["profit_turnaround_qoq"],
+        "profit_turnaround_yoy": qg["profit_turnaround_yoy"],
         "rev_qoq_streak": qg["rev_qoq_streak"], "profit_qoq_streak": qg["profit_qoq_streak"],
         "margin_qoq_streak": qg["margin_qoq_streak"],
         "rev_accel_streak": qg["rev_accel_streak"], "profit_accel_streak": qg["profit_accel_streak"],
@@ -411,6 +415,10 @@ def _factors_from_finn(fq):
         "latest_quarter": qg["latest_quarter"],
         "rev_qoq": qg["rev_qoq"], "profit_qoq": qg["profit_qoq"],
         "rev_yoy_q": qg["rev_yoy_q"], "profit_yoy_q": qg["profit_yoy_q"],
+        # พลิกกำไรจริง (งวดเทียบขาดทุน/เท่ากับศูนย์ แต่งวดนี้กำไรบวก) — profit_yoy_q/profit_qoq
+        # เป็น None เสมอตอนนี้ (% ไม่มีความหมายเมื่อฐานติดลบ) ต้องใช้ flag นี้หาหุ้นพลิกกำไรแทน
+        "profit_turnaround_qoq": qg["profit_turnaround_qoq"],
+        "profit_turnaround_yoy": qg["profit_turnaround_yoy"],
         "rev_qoq_streak": qg["rev_qoq_streak"], "profit_qoq_streak": qg["profit_qoq_streak"],
         "margin_qoq_streak": qg["margin_qoq_streak"],
         "rev_accel_streak": qg["rev_accel_streak"], "profit_accel_streak": qg["profit_accel_streak"],

@@ -961,7 +961,8 @@ def compute_quarterly_growth(payload_yahoo_q, set_qpl_payload=None):
     - rev_qoq / profit_qoq  : ไตรมาสล่าสุด vs ไตรมาสก่อนหน้า (%)
     - rev_yoy_q / profit_yoy_q: ไตรมาสล่าสุด vs ไตรมาสเดียวกันของปีก่อน (%)
       (ตัวหลังกัน seasonality — ธุรกิจจำนวนมากมี high/low season ทำให้ QoQ เพี้ยนตามฤดู)
-    ฐานติดลบ/ศูนย์ -> None (เปอร์เซ็นต์ไม่มีความหมาย เช่นพลิกจากขาดทุน)
+    ฐานติดลบ/ศูนย์ -> None (เปอร์เซ็นต์ไม่มีความหมาย เช่นพลิกจากขาดทุน) — เคสนี้เช็คได้จาก
+    profit_turnaround_qoq/profit_turnaround_yoy (bool) แทน ว่าเป็น "พลิกกำไรจริง" หรือแค่ "ไม่มีข้อมูล"
 
     set_qpl_payload: payload source 'set_qpl' (ถ้ามี) — เติมงวดล่าสุดที่ SET.or.th มีแล้วแต่
     Yahoo/Finnomena ยังไม่อัพเดต ดู _set_qpl_latest_extra"""
@@ -983,22 +984,26 @@ def compute_quarterly_growth(payload_yahoo_q, set_qpl_payload=None):
         return []
 
     def qoq(vals):
+        """คืน (pct หรือ None, turnaround bool) — turnaround = ไตรมาสก่อนขาดทุน/เท่ากับศูนย์แต่
+        ไตรมาสนี้กำไรเป็นบวก (ใช้กับ ni เท่านั้นตอนเรียก ไม่มีความหมายกับ rev ที่ไม่ติดลบอยู่แล้ว)"""
         if len(vals) < 2:
-            return None
+            return None, False
         prev, last = vals[-2][1], vals[-1][1]
+        turn = prev is not None and prev <= 0 and last is not None and last > 0
         if not prev or prev <= 0 or last is None:
-            return None
-        return _cap(round((last - prev) / prev * 100, 2))
+            return None, turn
+        return _cap(round((last - prev) / prev * 100, 2)), turn
 
     def yoy(vals):
-        """หาไตรมาสที่ห่างจากงวดล่าสุด ~1 ปี (330-400 วัน) — ทนกรณีไตรมาสขาดหาย"""
+        """หาไตรมาสที่ห่างจากงวดล่าสุด ~1 ปี (330-400 วัน) — ทนกรณีไตรมาสขาดหาย
+        คืน (pct หรือ None, turnaround bool) เหมือน qoq ด้านบน"""
         if len(vals) < 2:
-            return None
+            return None, False
         from datetime import date
         try:
             ld = date.fromisoformat(vals[-1][0][:10])
         except Exception:
-            return None
+            return None, False
         base = None
         for d, v in vals[:-1]:
             try:
@@ -1008,9 +1013,10 @@ def compute_quarterly_growth(payload_yahoo_q, set_qpl_payload=None):
             if 330 <= gap <= 400:
                 base = v
         last = vals[-1][1]
+        turn = base is not None and base <= 0 and last is not None and last > 0
         if not base or base <= 0 or last is None:
-            return None
-        return _cap(round((last - base) / base * 100, 2))
+            return None, turn
+        return _cap(round((last - base) / base * 100, 2)), turn
 
     def rising_streak(vals):
         """นับจำนวน 'ก้าว' ติดต่อกันจากงวดล่าสุดย้อนหลัง ที่ค่าเพิ่มขึ้นทุกงวด
@@ -1092,9 +1098,19 @@ def compute_quarterly_growth(payload_yahoo_q, set_qpl_payload=None):
         a, b = m(last4), m(prev4)
         return round(a - b, 2) if (a is not None and b is not None) else None
 
+    rev_qoq_v, _ = qoq(rev)
+    profit_qoq_v, profit_qoq_turn = qoq(ni)
+    rev_yoy_v, _ = yoy(rev)
+    profit_yoy_v, profit_yoy_turn = yoy(ni)
+
     return {
-        "rev_qoq": qoq(rev), "profit_qoq": qoq(ni),
-        "rev_yoy_q": yoy(rev), "profit_yoy_q": yoy(ni),
+        "rev_qoq": rev_qoq_v, "profit_qoq": profit_qoq_v,
+        "rev_yoy_q": rev_yoy_v, "profit_yoy_q": profit_yoy_v,
+        # หุ้นพลิกกำไรจริง (งวดเทียบขาดทุน/เท่ากับศูนย์ แต่งวดนี้กำไรบวก) — profit_yoy_q/profit_qoq
+        # เป็น None ในเคสนี้เสมอ (% ไม่มีความหมายเมื่อฐานติดลบ) ต้องใช้ flag นี้แทนถ้าอยากหาหุ้น
+        # พลิกกำไรจริงๆ ไม่ใช่แค่ "โตจากฐานบวกเล็กๆ" — ดู Screener+ preset "🔄 Turnaround"
+        "profit_turnaround_qoq": profit_qoq_turn,
+        "profit_turnaround_yoy": profit_yoy_turn,
         "rev_qoq_streak": rising_streak(rev),          # รายได้โตติดต่อกันกี่ไตรมาส
         "profit_qoq_streak": rising_streak(ni),        # กำไรโตติดต่อกันกี่ไตรมาส
         "margin_qoq_streak": rising_streak(margin),    # net margin เพิ่มติดต่อกันกี่ไตรมาส
@@ -2542,11 +2558,17 @@ def get_sector_qpl_compare(base_dir, sector_by_symbol):
     คืน {"quarter": "YYYY-Q" หรือ None, "sectors": [{sector, count, total, reported,
     missing_symbols, revenue, revenue_yoy, revenue_qoq, profit, profit_yoy, profit_qoq, npm,
     profit_stocks, loss_stocks, profit_share_pct, stocks: [{symbol, revenue, net_profit,
-    revenue_yoy, profit_yoy, revenue_qoq, profit_qoq, gpm, npm, revenue_ttm, profit_ttm}, ...]}, ...]}
+    revenue_yoy, profit_yoy, revenue_qoq, profit_qoq, gpm, npm, revenue_ttm, profit_ttm,
+    profit_prior, profit_prior_qoq}, ...]}, ...]}
 
     'stocks' คือรายตัวในกลุ่ม (เฉพาะที่รายงานงวด target แล้ว) เรียงลำดับเอง (revenue มาก->น้อย)
     ฝั่ง caller/frontend — TTM รวม 4 ไตรมาสล่าสุดนับจาก target ต้องมีครบทั้ง 4 งวดไม่งั้นคืน None
-    (กันผลรวมเพี้ยนจากหุ้นที่เพิ่งเข้าตลาด/ขาดงบเก่า)"""
+    (กันผลรวมเพี้ยนจากหุ้นที่เพิ่งเข้าตลาด/ขาดงบเก่า)
+
+    profit_yoy/profit_qoq (ระดับ sector และรายหุ้น) เป็น None เมื่อฐานเทียบ (งวดก่อน) ติดลบหรือศูนย์
+    — หารด้วยฐานติดลบพลิกเครื่องหมายผลลัพธ์ กลายเป็น % หลอก (หุ้นพลิกกำไรจริงจะโชว์ % ติดลบมหาศาล)
+    caller ที่อยากหาหุ้นพลิกกำไรให้เทียบ net_profit > 0 กับ profit_prior/profit_prior_qoq <= 0 เอง
+    (ดู field ดิบสองตัวนี้ในแต่ละ stock) แทนการอ่านจาก profit_yoy/qoq ตรงๆ"""
     parsed = _load_set_qpl_all(base_dir, sector_by_symbol)
     if not parsed:
         return {"quarter": None, "sectors": []}
@@ -2566,7 +2588,11 @@ def get_sector_qpl_compare(base_dir, sector_by_symbol):
         return total
 
     def _stock_yoy(cur_val, prior_val):
-        if cur_val is None or prior_val is None or prior_val == 0:
+        # prior_val <= 0 (ไม่ใช่แค่ ==0) กันหุ้นพลิกกำไร/ขาดทุนหนักขึ้น — หารด้วยฐานติดลบพลิก
+        # เครื่องหมายผลลัพธ์ กลายเป็น % หลอก (เช่น พลิกจากขาดทุนเป็นกำไรจะโชว์ % ติดลบมหาศาล
+        # ทั้งที่จริงคือข่าวดีที่สุด) กรณีนี้ต้องดู net_profit ตรงๆ ไม่ใช่ %  — ดู
+        # get_market_trend ด้านล่างที่หลบปัญหาเดียวกันด้วย flipped_profit/flipped_loss แทนเปอร์เซ็นต์
+        if cur_val is None or prior_val is None or prior_val <= 0:
             return None
         return round((cur_val / prior_val - 1) * 100, 1)
 
@@ -2608,7 +2634,9 @@ def get_sector_qpl_compare(base_dir, sector_by_symbol):
         if not pairs:
             return None
         cur_sum, prior_sum = sum(p[0] for p in pairs), sum(p[1] for p in pairs)
-        return round((cur_sum / prior_sum - 1) * 100, 1) if prior_sum else None
+        # prior_sum <= 0 กันเคส sector ทั้งกลุ่มพลิกจากขาดทุนรวมเป็นกำไรรวม (ฐานติดลบ) เจอ % หลอก
+        # เหมือน _stock_yoy ด้านบน
+        return round((cur_sum / prior_sum - 1) * 100, 1) if prior_sum > 0 else None
 
     sectors_out = []
     for sector in sector_all_symbols:   # ครบทุก sector แม้ยังไม่มีหุ้นไหนรายงานเลย (count=0)
@@ -2635,9 +2663,13 @@ def get_sector_qpl_compare(base_dir, sector_by_symbol):
             "profit_stocks": sum(1 for r in items if r["net_profit"] is not None and r["net_profit"] > 0),
             "loss_stocks": sum(1 for r in items if r["net_profit"] is not None and r["net_profit"] < 0),
             "profit_share_pct": round(profit_sum / total_profit_all * 100, 1) if total_profit_all else None,
+            # profit_prior/profit_prior_qoq (กำไรงวดก่อนแบบดิบ) ใส่มาด้วยแม้ profit_yoy/qoq จะ
+            # เป็น None ตอนฐานติดลบ — ให้ caller เช็คหุ้นพลิกกำไร (prior<=0 แต่ net_profit>0) ได้เอง
+            # โดยไม่ต้องพึ่ง % ที่ไม่มีความหมายในเคสนี้
             "stocks": [{k: r[k] for k in (
                 "symbol", "revenue", "net_profit", "revenue_yoy", "profit_yoy",
-                "revenue_qoq", "profit_qoq", "gpm", "npm", "revenue_ttm", "profit_ttm")} for r in items],
+                "revenue_qoq", "profit_qoq", "gpm", "npm", "revenue_ttm", "profit_ttm",
+                "profit_prior", "profit_prior_qoq")} for r in items],
         })
 
     return {"quarter": f"{target[0]}-{target[1]}", "sectors": sectors_out}
@@ -2656,7 +2688,8 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
     รายไตรมาสเดี่ยว ไม่ใช่สะสม YTD — สุ่มดู PTT/AOT/KBANK/CPALL/SCC 2026-08-17 — รวม 4 งวดตรงๆ
     ปลอดภัย)
 
-    คืน {"quarters": [{quarter, revenue, revenue_yoy, revenue_coverage, profit, profit_yoy, npm,
+    คืน {"quarters": [{quarter, revenue, revenue_yoy, revenue_qoq, revenue_coverage, profit,
+    profit_yoy, profit_qoq, npm,
     npm_median, roe_aggregate, roe_median, roe_coverage, cfo_np_aggregate, cfo_np_median,
     cfo_np_coverage, pct_revenue_growing, pct_profit_growing, pct_cfo_positive, flipped_profit,
     flipped_loss}, ...]} เรียงเก่า -> ใหม่"""
@@ -2739,6 +2772,7 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
 
         # ── รายได้/กำไร/NPM รายไตรมาสเดี่ยว (ตัดหุ้นการเงิน+REIT) ──
         rev_pairs, profit_pairs, npm_vals = [], [], []
+        rev_qoq_pairs, profit_qoq_pairs = [], []
         for sym, qs in qpl.items():
             if sym in excluded_symbols:
                 continue
@@ -2747,8 +2781,11 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
                 continue
             rev, net = row.get("revenue"), row.get("net_profit")
             prev_row = qs.get(prior_yoy) or {}
+            prev_qoq_fin_row = qs.get(prior_qoq) or {}
             rev_pairs.append((rev, prev_row.get("revenue")))
             profit_pairs.append((net, prev_row.get("net_profit")))
+            rev_qoq_pairs.append((rev, prev_qoq_fin_row.get("revenue")))
+            profit_qoq_pairs.append((net, prev_qoq_fin_row.get("net_profit")))
             if rev and net is not None and rev != 0:
                 npm_vals.append(net / rev * 100)
 
@@ -2773,8 +2810,12 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
 
         roe_aggregate = (round(sum(p for p, _ in roe_pairs) / sum(e for _, e in roe_pairs) * 100, 1)
                           if roe_pairs else None)
-        cfo_np_aggregate = (round(sum(c for c, _ in cfo_np_pairs) / sum(p for _, p in cfo_np_pairs), 2)
-                             if cfo_np_pairs else None)
+        cfo_np_denom = sum(p for _, p in cfo_np_pairs)
+        # pttm มีเครื่องหมายได้ทั้งบวก/ลบ (ต่างจาก eq ของ roe_aggregate ที่การันตี >0 เสมอ) —
+        # ผลรวมทั้งกลุ่มหักล้างกันพอดีเป็นศูนย์ได้ในทางทฤษฎี (โดยเฉพาะ /api/sector-trend ที่ scope
+        # เหลือหุ้นน้อยตัว) ต้องกัน ZeroDivisionError ตรงนี้
+        cfo_np_aggregate = (round(sum(c for c, _ in cfo_np_pairs) / cfo_np_denom, 2)
+                             if cfo_np_pairs and cfo_np_denom else None)
 
         # ── Breadth (ทั้งตลาด) — %โต YoY เทียบไตรมาสเดียวกันปีก่อน, พลิกกำไร/ขาดทุนเทียบไตรมาส
         # ก่อนหน้าติดกัน (QoQ) เพราะ 'พลิก' หมายถึงเปลี่ยนสถานะจากงวดล่าสุดที่รายงาน ไม่ใช่ปีก่อน ──
@@ -2809,7 +2850,9 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
         quarters_out.append({
             "quarter": f"{y}-{q}",
             "revenue": rev_sum, "revenue_yoy": _sum_yoy(rev_pairs), "revenue_coverage": rev_n,
+            "revenue_qoq": _sum_yoy(rev_qoq_pairs),
             "profit": profit_sum, "profit_yoy": _sum_yoy(profit_pairs),
+            "profit_qoq": _sum_yoy(profit_qoq_pairs),
             "npm": round(profit_sum / rev_sum * 100, 1) if rev_sum else None,
             "npm_median": round(statistics.median(npm_vals), 1) if npm_vals else None,
             "roe_aggregate": roe_aggregate,

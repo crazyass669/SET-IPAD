@@ -3697,30 +3697,40 @@ def sector_compare():
         if cached and (time.time() - _sector_compare_cache.get("ts", 0) < _SECTOR_COMPARE_CACHE_TTL):
             return jsonify(cached)
 
-        sector_by_symbol = {}
-        if os.path.exists(DATA_FILE):
-            try:
-                with open(DATA_FILE, encoding="utf-8") as f:
-                    for s in json.load(f).get("stocks", []):
-                        if s.get("market") in ("SET", "mai") and s.get("sector"):
-                            sector_by_symbol[s["symbol"]] = s["sector"]
-            except Exception:
-                pass
+        # try/except ครอบทั้งก้อนคำนวณ — เดิมไม่มี ต่างจาก /api/indices-quick-update ฯลฯ ที่ครอบไว้
+        # exception ที่ไม่คาดคิด (เช่น payload เพี้ยนใน DB) จะหลุดไปเป็นหน้า error 500 แบบ HTML ของ
+        # Flask ตรงๆ ไม่ใช่ JSON — ฝั่ง frontend (renderSectorCompare/loadMarketTrendPage) parse
+        # ไม่ได้ ขึ้นข้อความงงๆ "Unexpected token '<'..." ให้ผู้ใช้เห็นแทนที่จะเป็นข้อความไทยที่เข้าใจง่าย
+        # (endpoint นี้ใช้ร่วมกันทั้งมุมมอง "เปรียบเทียบ Sector" ในหน้านี้ และตาราง Top 10
+        # เติบโตโดดเด่นในหน้า Market Trend เลยกระทบ 2 หน้าพร้อมกันถ้าพัง)
+        try:
+            sector_by_symbol = {}
+            if os.path.exists(DATA_FILE):
+                try:
+                    with open(DATA_FILE, encoding="utf-8") as f:
+                        for s in json.load(f).get("stocks", []):
+                            if s.get("market") in ("SET", "mai") and s.get("sector"):
+                                sector_by_symbol[s["symbol"]] = s["sector"]
+                except Exception:
+                    pass
 
-        compare = financials_store.get_sector_qpl_compare(BASE_DIR, sector_by_symbol)
+            compare = financials_store.get_sector_qpl_compare(BASE_DIR, sector_by_symbol)
 
-        fin_data = financials_analytics().get_json()
-        roe_by_sector = {}
-        for sym, sector in sector_by_symbol.items():
-            roe = fin_data.get("set", {}).get(sym, {}).get("roe")
-            if roe is not None:
-                roe_by_sector.setdefault(sector, []).append(roe)
-        set_fin = fin_data.get("set", {})
-        for row in compare["sectors"]:
-            vals = roe_by_sector.get(row["sector"])
-            row["roe"] = round(sum(vals) / len(vals), 1) if vals else None
-            for stock in row.get("stocks", []):
-                stock["de_ratio"] = set_fin.get(stock["symbol"], {}).get("de_ratio")
+            fin_data = financials_analytics().get_json()
+            roe_by_sector = {}
+            for sym, sector in sector_by_symbol.items():
+                roe = fin_data.get("set", {}).get(sym, {}).get("roe")
+                if roe is not None:
+                    roe_by_sector.setdefault(sector, []).append(roe)
+            set_fin = fin_data.get("set", {})
+            for row in compare["sectors"]:
+                vals = roe_by_sector.get(row["sector"])
+                row["roe"] = round(sum(vals) / len(vals), 1) if vals else None
+                for stock in row.get("stocks", []):
+                    stock["de_ratio"] = set_fin.get(stock["symbol"], {}).get("de_ratio")
+        except Exception as e:
+            traceback.print_exc()
+            return jsonify({"error": f"รวมข้อมูล sector ล้มเหลว: {e}"}), 500
 
         _sector_compare_cache["result"] = compare
         _sector_compare_cache["ts"] = time.time()
@@ -3744,21 +3754,28 @@ def market_trend():
         if cached and (time.time() - _market_trend_cache.get("ts", 0) < _MARKET_TREND_CACHE_TTL):
             return jsonify(cached)
 
-        symbols = set()
-        reit_symbols = set()
-        if os.path.exists(DATA_FILE):
-            try:
-                with open(DATA_FILE, encoding="utf-8") as f:
-                    for s in json.load(f).get("stocks", []):
-                        if s.get("market") == "SET":
-                            symbols.add(s["symbol"])
-                            if s.get("sector") == "Property Fund & REITs":
-                                reit_symbols.add(s["symbol"])
-            except Exception:
-                pass
+        # try/except ครอบทั้งก้อนคำนวณ — เหมือน /api/sector-compare (ดู comment ที่นั่น) exception ที่
+        # ไม่คาดคิด (payload เพี้ยนใน DB, DB ล็อกจาก sync พร้อมกัน, ฯลฯ) จะได้ตอบ JSON error กลับแทน
+        # หน้า 500 HTML ของ Flask ที่ frontend (loadMarketTrendPage) parse ไม่ได้
+        try:
+            symbols = set()
+            reit_symbols = set()
+            if os.path.exists(DATA_FILE):
+                try:
+                    with open(DATA_FILE, encoding="utf-8") as f:
+                        for s in json.load(f).get("stocks", []):
+                            if s.get("market") == "SET":
+                                symbols.add(s["symbol"])
+                                if s.get("sector") == "Property Fund & REITs":
+                                    reit_symbols.add(s["symbol"])
+                except Exception:
+                    pass
 
-        excluded = factor_snapshot._financial_sector_symbols(BASE_DIR) | reit_symbols
-        trend = financials_store.get_market_trend(BASE_DIR, symbols, excluded)
+            excluded = factor_snapshot._financial_sector_symbols(BASE_DIR) | reit_symbols
+            trend = financials_store.get_market_trend(BASE_DIR, symbols, excluded)
+        except Exception as e:
+            traceback.print_exc()
+            return jsonify({"error": f"รวมข้อมูลแนวโน้มตลาดล้มเหลว: {e}"}), 500
 
         _market_trend_cache["result"] = trend
         _market_trend_cache["ts"] = time.time()
@@ -3788,17 +3805,22 @@ def sector_trend():
         if cached and (time.time() - cached.get("ts", 0) < _SECTOR_TREND_CACHE_TTL):
             return jsonify(cached["result"])
 
-        symbols = set()
-        if os.path.exists(DATA_FILE):
-            try:
-                with open(DATA_FILE, encoding="utf-8") as f:
-                    for s in json.load(f).get("stocks", []):
-                        if s.get("market") in ("SET", "mai") and s.get("sector") == sector:
-                            symbols.add(s["symbol"])
-            except Exception:
-                pass
+        try:
+            symbols = set()
+            if os.path.exists(DATA_FILE):
+                try:
+                    with open(DATA_FILE, encoding="utf-8") as f:
+                        for s in json.load(f).get("stocks", []):
+                            if s.get("market") in ("SET", "mai") and s.get("sector") == sector:
+                                symbols.add(s["symbol"])
+                except Exception:
+                    pass
 
-        trend = financials_store.get_market_trend(BASE_DIR, symbols, set())
+            trend = financials_store.get_market_trend(BASE_DIR, symbols, set())
+        except Exception as e:
+            traceback.print_exc()
+            return jsonify({"error": f"รวมข้อมูลเทรนด์ sector ล้มเหลว: {e}"}), 500
+
         _sector_trend_cache[sector] = {"result": trend, "ts": time.time()}
         return jsonify(trend)
 
@@ -4399,6 +4421,8 @@ def peer_group_detail():
             "total_equity": last.get("total_equity"), "ibd": last.get("total_debt"),
             "q_net_profit_qoq": _peer_group_pct_change(last.get("net_profit"), (prior_q or {}).get("net_profit")),
             "q_net_profit_yoy": _peer_group_pct_change(last.get("net_profit"), (yoy_q or {}).get("net_profit")),
+            "q_revenue_qoq": _peer_group_pct_change(last.get("revenue"), (prior_q or {}).get("revenue")),
+            "q_revenue_yoy": _peer_group_pct_change(last.get("revenue"), (yoy_q or {}).get("revenue")),
             "q_cfo_yoy": _peer_group_pct_change(last.get("cfo"), (yoy_q or {}).get("cfo")),
             "ttm_net_profit_yoy": None,
             "rev_cagr_3y": None, "profit_cagr_3y": None,
@@ -5642,7 +5666,14 @@ def _fetch_indices_tv(existing: dict, full_refresh: bool = False) -> dict:
 
         v = old_vals
         def _ret(n, _v=v):
-            return round((_v[-1] - _v[-(n+1)]) / _v[-(n+1)] * 100, 2) if len(_v) > n else None
+            # ป้องกันหารด้วยศูนย์ — ราคาปิดย้อนหลังเป็น 0 ได้จากข้อมูลเพี้ยนของ TradingView
+            # (ไม่เคยเจอจริง แต่ถ้าเกิดจะทำให้ ZeroDivisionError หลุดออกจาก _merge_one ไป
+            # ตัด loop ที่ประมวลผลดัชนีตัวอื่นทั้งหมดในรอบเดียวกันด้วย — ดู try/except รอบ
+            # _merge_one() ด้านล่างที่กันอีกชั้นสำหรับข้อผิดพลาดที่ไม่คาดคิดอื่นๆ)
+            if len(_v) <= n:
+                return None
+            base = _v[-(n+1)]
+            return round((_v[-1] - base) / base * 100, 2) if base else None
 
         result[sym] = {
             "sym": sym, "name": info["name"], "group": info["group"],
@@ -5657,6 +5688,18 @@ def _fetch_indices_tv(existing: dict, full_refresh: bool = False) -> dict:
     max_workers = 10 if not full_refresh else 5
     fetched = 0
     failed_syms = []
+    # _merge_one ห่อ try/except ทีละตัว — เดิมข้อผิดพลาดที่ไม่คาดคิดของดัชนีตัวเดียว (เช่น
+    # ราคาปิดเป็น 0 ทำ ZeroDivisionError) จะหลุดออกจาก loop นี้ทั้งก้อน ทำให้ดัชนีตัวอื่นๆ ที่
+    # fetch สำเร็จแล้วในรอบเดียวกันไม่ถูก merge/บันทึกไปด้วยทั้งที่ไม่เกี่ยวข้องกันเลย —
+    # แยก error ต่อตัวให้เหมือนกับที่ทำกับ fetch failure (failed_syms) อยู่แล้ว
+    def _merge_one_safe(sym, pairs):
+        try:
+            _merge_one(sym, pairs)
+            return True
+        except Exception:
+            print(f"[Indices] merge ล้มเหลว {sym}: {traceback.format_exc()}")
+            return False
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(_fetch_one, sym): sym for sym in all_syms}
         for future in as_completed(futures):
@@ -5664,8 +5707,10 @@ def _fetch_indices_tv(existing: dict, full_refresh: bool = False) -> dict:
             if pairs is None:
                 failed_syms.append(sym)
                 continue
-            fetched += 1
-            _merge_one(sym, pairs)
+            if _merge_one_safe(sym, pairs):
+                fetched += 1
+            else:
+                failed_syms.append(sym)
 
     # retry รอบสอง: TV WebSocket แบบขนาน 10 ตัวพร้อมกัน flaky เป็นปกติ (บางรอบล้ม
     # 10+/50 ตัวแบบสุ่ม) — ตัวที่ล้มซ้ำหลายรอบติดกันจะค้างเป็นข้อมูลเก่าเงียบๆ
@@ -5678,9 +5723,10 @@ def _fetch_indices_tv(existing: dict, full_refresh: bool = False) -> dict:
             _, pairs = _fetch_one(sym, timeout=15)
             if pairs is None:
                 still_failed.append(sym)
-            else:
+            elif _merge_one_safe(sym, pairs):
                 fetched += 1
-                _merge_one(sym, pairs)
+            else:
+                still_failed.append(sym)
         failed_syms = still_failed
 
     failed = len(failed_syms)

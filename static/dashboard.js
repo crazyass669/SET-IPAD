@@ -3995,6 +3995,12 @@ let _marketTrendData = null;
 let _marketTrendLoading = false;
 const _mtCharts = {};   // canvasId -> Chart instance (ทำลายทิ้งก่อนวาดใหม่กันซ้อน)
 
+// ข้อมูล sector/หุ้นรายตัว (revenue_yoy/qoq, profit_yoy/qoq) สำหรับตาราง Top 10 เติบโตโดดเด่น
+// ด้านล่างกราฟ — reuse /api/sector-compare ตรงๆ (cache 24h เดียวกัน invalidate พร้อมกันตอน sync
+// อยู่แล้ว ดู _run_financials_sync ใน app.py) ไม่ต้องเพิ่ม endpoint ใหม่
+let _mtSectorData = null;
+const _mtGrowthMode = { sectorRevenue: 'yoy', sectorProfit: 'yoy', stockRevenue: 'yoy', stockProfit: 'yoy', stockTurnaround: 'yoy' };
+
 async function loadMarketTrendPage() {
   if (_marketTrendData) { _renderMarketTrend(); return; }
   if (_marketTrendLoading) return;
@@ -4012,9 +4018,18 @@ async function loadMarketTrendPage() {
     _renderMarketTrend();
   } catch (e) {
     if (sub) sub.textContent = `โหลดไม่ได้: ${e.message}`;
-  } finally {
     _marketTrendLoading = false;
+    return;
   }
+  _marketTrendLoading = false;
+
+  // ตาราง Top 10 แยก fetch เป็นอิสระจากกราฟหลัก — timeout/พังที่นี่ไม่ควรทำให้กราฟหลักที่โหลดสำเร็จแล้วหายไปด้วย
+  try {
+    const secRes = await _fetchTimeout('/api/sector-compare?t=' + Date.now(), 45000,
+      'หมดเวลารอข้อมูล Top 10 เติบโต (เกิน 45 วิ)');
+    const sd = await secRes.json();
+    if (!sd.error) { _mtSectorData = sd; _renderMarketTrend(); }
+  } catch (e2) { /* ตาราง Top 10 พังไม่ควรทำให้กราฟหลักพังตาม */ }
 }
 
 function _mtQuarterLabel(q) {
@@ -4165,6 +4180,128 @@ function _renderMarketTrend() {
   _mtDrawDualLine('mt-chart-cashquality', labels, q.map(x => x.cfo_np_aggregate), q.map(x => x.cfo_np_median),
     'Aggregate CFO/NP', 'Median CFO/NP', '#58a6ff', '#e8b84b', ratioFmt);
   _mtDrawBreadth('mt-chart-breadth', labels, q);
+  _mtRenderGrowthTables();
+}
+
+// TOP 10 เติบโตโดดเด่น — ไตรมาสล่าสุด (Sector + หุ้นรายตัว, รายได้/กำไร, QoQ/YoY แยกการ์ด
+// สลับได้ด้วยปุ่ม) ข้อมูลมาจาก /api/sector-compare (financials_store.get_sector_qpl_compare)
+// ตัวเดียวกับหน้า "⚖ เปรียบเทียบ Sector" — sectors[].revenue_yoy/qoq/profit_yoy/qoq คือ aggregate
+// ต่อ sector, sectors[].stocks[] คือรายตัวที่มีงวดล่าสุดแล้ว (มี field เดียวกันต่อหุ้น)
+const _mtMedal = i => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`);
+
+function _mtSetGrowthMode(key, mode, btn) {
+  _mtGrowthMode[key] = mode;
+  if (btn && btn.parentElement) {
+    btn.parentElement.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+  _mtRenderGrowthTables();
+}
+
+function _mtSectorGrowthRows(field) {
+  return (_mtSectorData?.sectors || [])
+    .filter(s => s[field] != null && s.count > 0)
+    .sort((a, b) => b[field] - a[field])
+    .slice(0, 10);
+}
+
+// ฐานกำไรงวดก่อนขั้นต่ำ (บาท) สำหรับตาราง "หุ้นกำไรโตเด่น" เท่านั้น — กันหุ้นที่กำไรงวดก่อนจิ๋ว
+// (เช่น 1 ล้านบาท) โต% หลอกจนแซง Top 10 ทั้งที่ตัวเงินจริงเล็กมาก ไม่ใช้กับรายได้ (ฐานรายได้ไม่ค่อย
+// จิ๋วขนาดนั้น) และไม่ใช้กับตาราง Sector (ฐานเป็นผลรวมทั้งกลุ่ม ใหญ่พอเป็นทุนเดิมอยู่แล้ว)
+const _MT_PROFIT_GROWTH_MIN_BASE = 50_000_000;
+
+function _mtStockGrowthRows(field) {
+  const isProfitGrowth = field.startsWith('profit_');
+  const priorKey = field.endsWith('_qoq') ? 'profit_prior_qoq' : 'profit_prior';
+  const rows = [];
+  for (const s of (_mtSectorData?.sectors || [])) {
+    for (const st of (s.stocks || [])) {
+      if (st[field] == null) continue;
+      if (isProfitGrowth && !(st[priorKey] > _MT_PROFIT_GROWTH_MIN_BASE)) continue;
+      rows.push({ ...st, sector: s.sector });
+    }
+  }
+  rows.sort((a, b) => b[field] - a[field]);
+  return rows.slice(0, 20);   // โชว์ 20 ตัว — 10 แรกเห็นเลย อีก 10 เลื่อนดูใน .mini-tbl-scroll
+}
+
+function _mtRenderSectorGrowthTable(containerId, field) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const rows = _mtSectorGrowthRows(field);
+  if (!rows.length) { el.innerHTML = '<div class="text2" style="padding:8px 0;font-size:12px">ไม่มีข้อมูล</div>'; return; }
+  el.innerHTML = `<table class="tbl" style="min-width:280px">
+    <thead><tr><th></th><th>Sector</th><th class="r">โต</th><th class="r">งบครบ</th></tr></thead>
+    <tbody>${rows.map((s, i) => `<tr>
+      <td>${_mtMedal(i)}</td>
+      <td>${s.sector}</td>
+      <td class="r">${pct(s[field], 1)}</td>
+      <td class="r text2">${s.reported}/${s.total}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+function _mtRenderStockGrowthTable(containerId, field) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const rows = _mtStockGrowthRows(field);
+  if (!rows.length) { el.innerHTML = '<div class="text2" style="padding:8px 0;font-size:12px">ไม่มีข้อมูล</div>'; return; }
+  el.innerHTML = `<table class="tbl" style="min-width:280px">
+    <thead><tr><th></th><th>หุ้น</th><th>Sector</th><th class="r">โต</th></tr></thead>
+    <tbody>${rows.map((s, i) => `<tr>
+      <td>${_mtMedal(i)}</td>
+      <td><b class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</b></td>
+      <td class="text2">${s.sector}</td>
+      <td class="r">${pct(s[field], 1)}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+// หุ้นพลิกกำไร (งวดก่อนขาดทุน/เท่ากับศูนย์ -> งวดนี้กำไร) — แยกจากตาราง "หุ้นกำไรโตเด่น" เพราะ
+// profit_yoy/qoq เป็น None เสมอตอนฐานเทียบติดลบ (ดู _stock_yoy ใน financials_store.py — หารด้วย
+// ฐานติดลบพลิกเครื่องหมาย % กลายเป็นค่าหลอก) เรียงด้วยขนาดการพลิกเป็นบาทแทน % ที่ไม่มีความหมาย
+function _mtStockTurnaroundRows(mode) {
+  const priorKey = mode === 'qoq' ? 'profit_prior_qoq' : 'profit_prior';
+  const rows = [];
+  for (const s of (_mtSectorData?.sectors || [])) {
+    for (const st of (s.stocks || [])) {
+      const prior = st[priorKey];
+      if (prior != null && prior <= 0 && st.net_profit != null && st.net_profit > 0) {
+        rows.push({ ...st, sector: s.sector, prior, swing: st.net_profit - prior });
+      }
+    }
+  }
+  rows.sort((a, b) => b.swing - a.swing);
+  return rows.slice(0, 20);   // โชว์ 20 ตัว — 10 แรกเห็นเลย อีก 10 เลื่อนดูใน .mini-tbl-scroll
+}
+
+function _mtRenderTurnaroundTable(containerId, mode) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const rows = _mtStockTurnaroundRows(mode);
+  if (!rows.length) { el.innerHTML = '<div class="text2" style="padding:8px 0;font-size:12px">ไม่มีข้อมูล</div>'; return; }
+  const thbFmt = v => v == null ? '—' : (Math.round(v / 1e6)).toLocaleString('en-US') + ' ลบ.';
+  el.innerHTML = `<table class="tbl" style="min-width:420px">
+    <thead><tr><th></th><th>หุ้น</th><th>Sector</th><th class="r">ไตรมาสก่อน</th><th class="r">ไตรมาสนี้</th></tr></thead>
+    <tbody>${rows.map((s, i) => `<tr>
+      <td>${_mtMedal(i)}</td>
+      <td><b class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</b></td>
+      <td class="text2">${s.sector}</td>
+      <td class="r red">${thbFmt(s.prior)}</td>
+      <td class="r green">${thbFmt(s.net_profit)}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+function _mtRenderGrowthTables() {
+  if (!_mtSectorData) return;
+  const title = document.getElementById('mt-growth-title');
+  if (title) {
+    const q = _mtQuarterLabel(_mtSectorData.quarter);
+    title.textContent = `🏆 Top 10 เติบโตโดดเด่น ไตรมาส ${q}`;
+  }
+  _mtRenderSectorGrowthTable('mt-tbl-sectorRevenue', 'revenue_' + _mtGrowthMode.sectorRevenue);
+  _mtRenderSectorGrowthTable('mt-tbl-sectorProfit', 'profit_' + _mtGrowthMode.sectorProfit);
+  _mtRenderStockGrowthTable('mt-tbl-stockRevenue', 'revenue_' + _mtGrowthMode.stockRevenue);
+  _mtRenderStockGrowthTable('mt-tbl-stockProfit', 'profit_' + _mtGrowthMode.stockProfit);
+  _mtRenderTurnaroundTable('mt-tbl-stockTurnaround', _mtGrowthMode.stockTurnaround);
 }
 
 
@@ -5116,6 +5253,11 @@ let _sectorTrendReqSeq = 0;   // กันกรณีคลิกสลับ s
 // จำสถานะย่อ/ขยายไว้ข้าม sector (ไม่รีเซ็ตทุกครั้งที่เปิด modal ใหม่) — ผู้ใช้กดย่อไว้ครั้งเดียว
 // เพื่อเลื่อนดูตารางหุ้นสะดวกขึ้น ก็ควรย่อค้างไว้ตอนสลับไปดู sector อื่นด้วย ไม่ต้องกดซ้ำทุกครั้ง
 let _sectorTrendCollapsed = false;
+// สลับดูทีละตัว (รายได้ YoY / กำไร YoY) แทนโชว์ 2 เส้นซ้อนกัน — กราฟแท่งค่าสวิงแรง (ติดลบหลักพัน%)
+// เห็น 2 ชุดพร้อมกันจะรกและอ่านสเกลยาก จำสถานะไว้ข้าม sector เหมือน collapsed ด้านบน
+let _sectorTrendMetric = 'revenue_yoy';
+let _sectorTrendRows = [];
+let _sectorTrendSectorName = '';
 
 function _sectorTrendDestroy() {
   if (_sectorTrendChart) { _sectorTrendChart.destroy(); _sectorTrendChart = null; }
@@ -5132,8 +5274,10 @@ function _toggleSectorTrendChart() {
 function _applySectorTrendCollapsed() {
   const box = document.getElementById('sector-trend-canvas-box');
   const icon = document.getElementById('sector-trend-toggle-icon');
+  const metricToggle = document.getElementById('sector-trend-metric-toggle');
   if (!box || !icon) return;
   box.style.display = _sectorTrendCollapsed ? 'none' : 'block';
+  if (metricToggle) metricToggle.style.display = _sectorTrendCollapsed ? 'none' : 'flex';
   icon.textContent = _sectorTrendCollapsed ? 'แสดง ▸' : 'ซ่อน ▾';
 }
 
@@ -5159,102 +5303,107 @@ async function _loadSectorTrend(sectorName) {
   }
 }
 
+const _SECTOR_TREND_METRICS = {
+  revenue_yoy: { key: 'revenue_yoy', label: 'รายได้ YoY' },
+  profit_yoy:  { key: 'profit_yoy',  label: 'กำไร YoY' },
+  revenue_qoq: { key: 'revenue_qoq', label: 'รายได้ QoQ' },
+  profit_qoq:  { key: 'profit_qoq',  label: 'กำไร QoQ' },
+};
+
 function _renderSectorTrendChart(quarters, sectorName) {
   const sub = document.getElementById('sector-trend-sub');
-  const rows = quarters.filter(q => q.revenue_yoy != null || q.profit_yoy != null);
+  const rows = quarters.filter(q => q.revenue_yoy != null || q.profit_yoy != null ||
+                                     q.revenue_qoq != null || q.profit_qoq != null);
   if (!rows.length) {
     sub.textContent = 'ยังไม่มีข้อมูลย้อนหลังพอสำหรับ sector นี้';
+    _sectorTrendDestroy();
     return;
   }
-  sub.textContent = `รายได้ YoY และกำไรสุทธิ YoY รายไตรมาส — ย้อนหลัง ${rows.length} ไตรมาส`;
+  _sectorTrendRows = rows;
+  _sectorTrendSectorName = sectorName;
+  _updateSectorTrendMetricButtons();
 
-  const labels = rows.map(q => {
+  const metric = _SECTOR_TREND_METRICS[_sectorTrendMetric];
+  const rowsForMetric = rows.filter(q => q[metric.key] != null);
+  _sectorTrendDestroy();
+  if (!rowsForMetric.length) {
+    sub.textContent = `ยังไม่มีข้อมูล${metric.label}ย้อนหลังสำหรับ sector นี้`;
+    return;
+  }
+  sub.textContent = `${metric.label} รายไตรมาส — ย้อนหลัง ${rowsForMetric.length} ไตรมาส`;
+
+  const labels = rowsForMetric.map(q => {
     const [y, qq] = q.quarter.split('-');
     return `Q${qq}/${y.slice(-2)}`;
   });
-
-  // จุดวงกลม + ป้ายค่า โชว์เฉพาะไตรมาสล่าสุด (จุดอื่นซ่อนไว้กันรก เหมือนสไตล์กราฟอ้างอิงที่ขอมา)
-  const lastIdx = rows.length - 1;
-  const pointRadii = rows.map((_, i) => i === lastIdx ? 5 : 0);
-
-  const mkGradient = (ctx, color) => {
-    const g = ctx.createLinearGradient(0, 0, 0, 160);
-    g.addColorStop(0, color + '33');
-    g.addColorStop(1, color + '00');
-    return g;
-  };
-
-  const series = [
-    { key: 'revenue_yoy', label: 'รายได้ YoY', color: '#58a6ff' },
-    { key: 'profit_yoy',  label: 'กำไร YoY',   color: '#3fb950' },
-  ];
+  const values = rowsForMetric.map(q => q[metric.key]);
+  const lastIdx = values.length - 1;
+  // แท่งไล่สีตามเครื่องหมาย (diverging) — ค่า YoY สวิงข้ามศูนย์บ่อยและแรง (ถึงหลักพัน%)
+  // ตัดสินใจได้ไวกว่าไล่สีตามชนิดตัวชี้วัด เพราะดูทีละตัวชี้วัดอยู่แล้วจากปุ่มสลับด้านบน
+  const barColors = values.map(v => v >= 0 ? '#3fb950' : '#f85149');
 
   const canvas = document.getElementById('sector-trend-chart');
   const ctx = canvas.getContext('2d');
 
-  // plugin เสริม: วาดค่าตัวเลขลอยข้างจุดล่าสุดของแต่ละเส้น (เลียนแบบสไตล์กราฟอ้างอิง — Chart.js
-  // ไม่มี built-in ให้ ต้องเขียนปลั๊กอินเบาๆ เอง ไม่ต้องพึ่ง plugin ภายนอก) เส้นสองเส้นจบใกล้กันได้
-  // บ่อย (เช่น รายได้/กำไร YoY ไตรมาสเดียวกันมาบรรจบพอดี) ป้ายค่าเลยชนกันอ่านไม่ออก — ไล่ระยะ
-  // แนวตั้งขั้นต่ำ (MIN_GAP) ให้ก่อนวาดจริงเสมอ
-  const endpointLabelPlugin = {
-    id: 'endpointLabel',
+  // plugin เสริม: วาดค่าตัวเลขลอยเหนือ/ใต้แท่งไตรมาสล่าสุด (เลียนแบบสไตล์กราฟอ้างอิงเดิม)
+  const valueLabelPlugin = {
+    id: 'valueLabel',
     afterDatasetsDraw(chart) {
-      const MIN_GAP = 14;
-      const labels = chart.data.datasets.map((ds, i) => {
-        const meta = chart.getDatasetMeta(i);
-        const pt = meta.data[lastIdx];
-        const val = ds.data[lastIdx];
-        if (!pt || val == null) return null;
-        const { x, y } = pt.getProps(['x', 'y'], true);
-        return { x, y, color: ds.borderColor, text: `${val > 0 ? '+' : ''}${val.toFixed(1)}%` };
-      }).filter(Boolean).sort((a, b) => a.y - b.y);
-
-      for (let i = 1; i < labels.length; i++) {
-        const gap = labels[i].y - labels[i - 1].y;
-        if (gap < MIN_GAP) labels[i].y = labels[i - 1].y + MIN_GAP;
-      }
-
+      const meta = chart.getDatasetMeta(0);
+      const pt = meta.data[lastIdx];
+      const val = values[lastIdx];
+      if (!pt || val == null) return;
+      const { x, y } = pt.getProps(['x', 'y'], true);
       ctx.save();
       ctx.font = '700 12px sans-serif';
-      ctx.textBaseline = 'middle';
-      ctx.textAlign = 'left';
-      labels.forEach(l => { ctx.fillStyle = l.color; ctx.fillText(l.text, l.x + 10, l.y); });
+      ctx.textAlign = 'center';
+      ctx.textBaseline = val >= 0 ? 'bottom' : 'top';
+      ctx.fillStyle = val >= 0 ? '#3fb950' : '#f85149';
+      ctx.fillText(`${val > 0 ? '+' : ''}${val.toFixed(1)}%`, x, y + (val >= 0 ? -6 : 6));
       ctx.restore();
     }
   };
 
   _sectorTrendChart = new Chart(canvas, {
-    type: 'line',
+    type: 'bar',
     data: {
       labels,
-      datasets: series.map(s => ({
-        label: s.label,
-        data: rows.map(q => q[s.key]),
-        borderColor: s.color,
-        backgroundColor: (c) => c.chart.ctx ? mkGradient(c.chart.ctx, s.color) : s.color + '22',
-        borderWidth: 2.5,
-        tension: 0.35,
-        fill: 'origin',
-        pointRadius: pointRadii,
-        pointHoverRadius: 5,
-        pointBackgroundColor: s.color,
-        spanGaps: true,
-      }))
+      datasets: [{
+        label: metric.label,
+        data: values,
+        backgroundColor: barColors,
+        borderRadius: 4,
+        maxBarThickness: 28,
+      }]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      layout: { padding: { right: 46 } },   // เผื่อที่ให้ป้ายค่าไตรมาสล่าสุดที่ลอยออกนอกเส้นกราฟ
-      interaction: { mode: 'index', intersect: false },
+      layout: { padding: { top: 20, bottom: 20 } },   // เผื่อที่ให้ป้ายค่าไตรมาสล่าสุดที่ลอยเหนือ/ใต้แท่ง
       plugins: {
-        legend: { position: 'top', align: 'end', labels: { usePointStyle: true, pointStyle: 'circle', boxWidth: 8, font: { size: 11 }, color: '#8b949e' } },
+        legend: { display: false },   // ซีรีส์เดียว ชื่อตัวชี้วัดบอกอยู่แล้วจากปุ่มสลับ ไม่ต้องมี legend
         tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y > 0 ? '+' : ''}${ctx.parsed.y.toFixed(1)}%` } },
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: '#8b949e', font: { size: 10 } } },
-        y: { grid: { color: 'rgba(139,148,158,0.12)' }, ticks: { color: '#8b949e', font: { size: 10 }, callback: v => v + '%' } },
+        y: {
+          grid: { color: c => c.tick.value === 0 ? 'rgba(139,148,158,0.35)' : 'rgba(139,148,158,0.12)' },
+          ticks: { color: '#8b949e', font: { size: 10 }, callback: v => v + '%' },
+        },
       }
     },
-    plugins: [endpointLabelPlugin]
+    plugins: [valueLabelPlugin]
+  });
+}
+
+function _setSectorTrendMetric(metric) {
+  if (_sectorTrendMetric === metric || !_SECTOR_TREND_METRICS[metric]) return;
+  _sectorTrendMetric = metric;
+  _renderSectorTrendChart(_sectorTrendRows, _sectorTrendSectorName);
+}
+
+function _updateSectorTrendMetricButtons() {
+  document.querySelectorAll('.sector-trend-metric-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.metric === _sectorTrendMetric);
   });
 }
 
@@ -6841,6 +6990,10 @@ const FS_FILTERS = [
     tip: '<strong>กำไร QoQ ไตรมาสล่าสุด</strong><br>กำไรสุทธิไตรมาสล่าสุด เทียบ<u>ไตรมาสก่อนหน้า</u> (ไม่ตัด seasonality)<br><br>เช่น ใส่ <b>10</b> = กำไรโตกว่าไตรมาสก่อนหน้า ≥ 10%<br><span style="color:var(--text2)">⚠ ธุรกิจมี high/low season (ท่องเที่ยว เกษตร ค้าปลีก) ค่านี้จะแกว่งตามฤดู — ใช้คู่กับ "กำไร YoY-Q" จะชัวร์กว่า</span>' },
   { k: 'rev_qoq',             label: 'รายได้ QoQ ≥', unit: '%', cmp: 'gte',
     tip: '<strong>รายได้ QoQ ไตรมาสล่าสุด</strong><br>รายได้ไตรมาสล่าสุด เทียบไตรมาสก่อนหน้า (ไม่ตัด seasonality)<br><br>เช่น ใส่ <b>5</b> = รายได้โตกว่าไตรมาสก่อนหน้า ≥ 5%<br><span style="color:var(--text2)">⚠ ใช้คู่กับ "รายได้ YoY-Q" เพื่อกันสัญญาณหลอกจากฤดูกาล</span>' },
+  { k: 'profit_turnaround_yoy', label: 'พลิกกำไร (YoY)', cmp: 'bool',
+    tip: '<strong>พลิกกำไรจริง (YoY)</strong><br>ไตรมาสเดียวกันปีก่อนขาดทุน/เท่ากับศูนย์ แต่ไตรมาสล่าสุดกำไรเป็นบวก<br><br><span style="color:var(--text2)">ต่างจาก "กำไร YoY-Q ≥" ตรงที่ field นั้นเป็น None เสมอตอนฐานติดลบ (% ไม่มีความหมาย) — ตัวนี้เจาะจงหาหุ้นพลิกกำไรที่ field เปอร์เซ็นต์มองไม่เห็นโดยเฉพาะ</span>' },
+  { k: 'profit_turnaround_qoq', label: 'พลิกกำไร (QoQ)', cmp: 'bool',
+    tip: '<strong>พลิกกำไรจริง (QoQ)</strong><br>ไตรมาสก่อนหน้าขาดทุน/เท่ากับศูนย์ แต่ไตรมาสล่าสุดกำไรเป็นบวก<br><br><span style="color:var(--text2)">⚠ ไม่ตัด seasonality — ธุรกิจมี high/low season อาจ "พลิกกำไร" ทุกปีตามฤดู ใช้คู่กับ "พลิกกำไร (YoY)" เพื่อยืนยัน</span>' },
   { k: 'profit_accel_streak', label: 'กำไรเร่งตัวติดกัน ≥', unit: 'ไตรมาส', cmp: 'gte',
     tip: '<strong>กำไรเร่งตัว (acceleration)</strong><br>จำนวนไตรมาสติดกันที่ %YoY กำไร<u>สูงขึ้นเรื่อยๆ</u> — คือ "โตเร็วขึ้น" ไม่ใช่แค่โต<br><br>เช่น ใส่ <b>2</b> = โตเร็วขึ้น 2 ไตรมาสติด<br><span style="color:var(--text2)">หัวใจ CANSLIM · ต้องมีงบไตรมาสหลายงวดค่าถึงจะขึ้น</span>' },
   { k: 'profit_qoq_streak',   label: 'กำไรโตติดกัน ≥', unit: 'ไตรมาส', cmp: 'gte',
@@ -6973,8 +7126,8 @@ const FS_PRESETS = [
     set: { pe_percentile: 25, profit_yoy_q: 0, quarters_available: 12 } },
   { name: '🏦 Net Cash งบแกร่ง', color: '#3fb950', desc: 'เงินสด > หนี้ + จ่ายดอกเบี้ยสบาย',
     set: { interest_coverage: 5, quarters_available: 8 }, bool: ['net_cash_positive'] },
-  { name: '🔄 Turnaround', color: '#e8a33d', desc: 'พลิกจากขาดทุน (โดยประมาณ)',
-    set: { profit_yoy_q: 50, profit_qoq_streak: 2, quarters_available: 8 } },
+  { name: '🔄 Turnaround', color: '#e8a33d', desc: 'พลิกจากขาดทุนจริง (YoY เทียบไตรมาสเดียวกันปีก่อน)',
+    set: { quarters_available: 8 }, bool: ['profit_turnaround_yoy'] },
   { name: '💵 Dividend Safety', color: '#3fb950', desc: 'ปันผลสูง + FCF จ่ายไหว',
     set: { div_yield: 3, dividend_coverage: 1.5, quarters_available: 8 } },
   { name: '📈 Dividend Growth', color: '#39c5cf', desc: 'ปันผลโตติดกัน ≥3 ปี + ยังโตต่อ',
@@ -8481,6 +8634,8 @@ const _PEER_GROUP_TABLE1_GROUPS = [
     { k: 'total_equity',   label: 'Equity',       tip: 'ส่วนผู้ถือหุ้น — งวดล่าสุด', fmt: _finFmt },
   ]},
   { title: 'GROWTH', metrics: [
+    { k: 'q_revenue_yoy',      label: 'Rev YoY (Q)',  tip: 'รายได้ไตรมาสล่าสุด เทียบไตรมาสเดียวกันปีก่อน', fmt: v => _peerGroupSignedPct(v) },
+    { k: 'q_revenue_qoq',      label: 'Rev QoQ (Q)',  tip: 'รายได้ไตรมาสล่าสุด เทียบไตรมาสก่อนหน้า', fmt: v => _peerGroupSignedPct(v) },
     { k: 'q_net_profit_yoy',   label: 'NP YoY (Q)',   tip: 'กำไรสุทธิไตรมาสล่าสุด เทียบไตรมาสเดียวกันปีก่อน', fmt: v => _peerGroupSignedPct(v) },
     { k: 'q_net_profit_qoq',   label: 'NP QoQ (Q)',   tip: 'กำไรสุทธิไตรมาสล่าสุด เทียบไตรมาสก่อนหน้า', fmt: v => _peerGroupSignedPct(v) },
     { k: 'q_cfo_yoy',          label: 'CFO YoY (Q)',  tip: 'CFO ไตรมาสล่าสุด เทียบไตรมาสเดียวกันปีก่อน', fmt: v => _peerGroupSignedPct(v) },
@@ -8789,7 +8944,7 @@ function _peerGroupRankingHtml(rows, baseSym) {
   const ranked = rows.filter(r => r.q_net_profit_yoy != null).slice().sort((a, b) => b.q_net_profit_yoy - a.q_net_profit_yoy);
   if (!ranked.length) return '';
   const baseRank = ranked.findIndex(r => r.symbol === baseSym) + 1;
-  const medal = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1) + '.';
+  const medal = _mtMedal;
   const growthColor = v => v == null ? '' : v >= 0 ? 'color:var(--green,#3fb950)' : 'color:var(--red,#f85149)';
   const rowsHtml = ranked.map((r, i) => {
     const isBase = r.symbol === baseSym;
@@ -11353,6 +11508,8 @@ function openDRChartModal(sym) {
   if (drFsLink) drFsLink.style.display = 'none';
   const drSetLink = document.getElementById('cm-set-link');
   if (drSetLink) drSetLink.style.display = 'none';
+  const drBpLink = document.getElementById('cm-bullpedia-link');
+  if (drBpLink) drBpLink.style.display = 'none';
   // สถิติระยะยาว (cm-lts) — หุ้น DR ไม่มีใน set_prices.db (หุ้นไทยเท่านั้น) ใช้ yfinance
   // สดแทน (s.yf = ticker จริงที่ DR universe แม็บไว้แล้ว เช่น 0700.HK, NVDA)
   _loadPriceAnalytics(sym, 'cm-lts', () => _cmStock?.symbol === sym, s.yf);
@@ -11420,6 +11577,8 @@ function openUsChartModal(symbol, rowOverride) {
   if (fsLink) fsLink.style.display = 'none';
   const setLink = document.getElementById('cm-set-link');
   if (setLink) setLink.style.display = 'none';
+  const bpLinkUsIdx = document.getElementById('cm-bullpedia-link');
+  if (bpLinkUsIdx) bpLinkUsIdx.style.display = 'none';
 
   const mk = (val, lbl, cls = '') =>
     `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
@@ -11511,6 +11670,8 @@ function openHkChartModal(symbol, rowOverride) {
   if (fsLink) fsLink.style.display = 'none';
   const setLink = document.getElementById('cm-set-link');
   if (setLink) setLink.style.display = 'none';
+  const bpLinkHkIdx = document.getElementById('cm-bullpedia-link');
+  if (bpLinkHkIdx) bpLinkHkIdx.style.display = 'none';
 
   const mk = (val, lbl, cls = '') =>
     `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
@@ -11596,6 +11757,8 @@ function openJpChartModal(symbol, rowOverride) {
   if (fsLink) fsLink.style.display = 'none';
   const setLink = document.getElementById('cm-set-link');
   if (setLink) setLink.style.display = 'none';
+  const bpLinkJpIdx = document.getElementById('cm-bullpedia-link');
+  if (bpLinkJpIdx) bpLinkJpIdx.style.display = 'none';
 
   const mk = (val, lbl, cls = '') =>
     `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
@@ -12005,6 +12168,8 @@ function openChartModal(symbol) {
   if (fsLink) { fsLink.href = `https://www.set.or.th/th/market/product/stock/quote/${encodeURIComponent(s.symbol.toLowerCase())}/factsheet`; fsLink.style.display = 'inline-flex'; }
   const setLink = document.getElementById('cm-set-link');
   if (setLink) { setLink.href = `https://www.set.or.th/th/market/product/stock/quote/${encodeURIComponent(s.symbol)}/financial-statement/company-highlights`; setLink.style.display = 'inline-flex'; }
+  const bpLink = document.getElementById('cm-bullpedia-link');
+  if (bpLink) { bpLink.href = `https://bullpedia.ai/?ticker=${encodeURIComponent(s.symbol)}`; bpLink.style.display = 'inline-flex'; }
 
   const mk = (val, lbl, cls = '') =>
     `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
@@ -16103,6 +16268,9 @@ function _qplNumNeg(v) {
   return `(${Math.round(v / 1000).toLocaleString('en-US')})`;
 }
 function _qplPct(v) {
+  // 'TURN' = สัญลักษณ์พิเศษจาก _qplChg/yoyOf ตอนฐานเทียบติดลบ/ศูนย์ (พลิกกำไร/ขาดทุนหนักขึ้น) —
+  // ต้องเช็คก่อน isNaN(v) เพราะ isNaN('TURN') ก็ true เหมือนกัน จะหลุดไปตกเคส '—' เฉยๆ
+  if (v === 'TURN') return '<span style="color:var(--yellow)" title="พลิกกำไร/ขาดทุนหนักขึ้น — ฐานเทียบติดลบ % ไม่มีความหมาย ดูตัวเลขจริงแทน">*</span>';
   if (v == null || isNaN(v)) return '—';
   return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
 }
@@ -16122,11 +16290,17 @@ function _qplTableCore(qs, scrollId, extraRowsFn) {
   // ในตาราง กันกรณีมีไตรมาสขาดหาย (เช่นหุ้นเพิ่งเข้าตลาด) เทียบข้ามไตรมาสผิดโดยไม่รู้ตัว
   const byKey = {};
   qs.forEach(q => { byKey[q.year_be * 4 + q.q] = q; });
+  // pv <= 0 (ไม่ใช่แค่ ==0) กันหุ้นพลิกกำไร/ขาดทุนหนักขึ้น (เช่น กำไรสุทธิ/กำไรก่อนภาษี/ส่วนของ
+  // ผู้ถือหุ้นติดลบได้จริง) หารด้วยฐานติดลบจะพลิกเครื่องหมายผลลัพธ์กลายเป็น % หลอก — ดู
+  // _stock_yoy ใน sources/financials_store.py ที่แก้ปัญหาเดียวกันฝั่ง backend คืน 'TURN' แทน null
+  // เฉพาะเคสนี้ (ไม่ใช่ไม่มีข้อมูลจริง) ให้ _qplPct โชว์ * เตือนแยกจากช่องที่ไม่มีข้อมูลจริงๆ
+  let hasTurnaround = false;
   const _qplChg = (getter, offset) => c => {
     const prev = byKey[c.year_be * 4 + c.q - offset];
     if (!prev) return null;
     const cur = getter(c), pv = getter(prev);
-    if (cur == null || pv == null || !pv) return null;
+    if (cur == null || pv == null) return null;
+    if (pv <= 0) { hasTurnaround = true; return 'TURN'; }
     return (cur / pv - 1) * 100;
   };
   const qoqOf = getter => _qplChg(getter, 1);
@@ -16206,6 +16380,10 @@ function _qplTableCore(qs, scrollId, extraRowsFn) {
       แต่ <b>แยกค่าใช้จ่ายขาย/บริหารไม่ได้ และอาจไม่มีต้นทุนทางการเงิน/กำไรก่อนภาษี/ภาษีเงินได้</b> — ปล่อยว่างไว้ ไม่ใช่ error
       แนะนำอ้างอิงเฉพาะรายได้/กำไรขั้นต้น/กำไรสุทธิสำหรับไตรมาสที่มีเครื่องหมาย †
     </div>` : '';
+  const turnCaveat = hasTurnaround ? `
+    <div style="margin-top:10px;font-size:11.5px;color:var(--text2);line-height:1.6">
+      <span style="color:var(--yellow)">*</span> = พลิกกำไร/ขาดทุนหนักขึ้น (ไตรมาสที่เทียบด้วยติดลบหรือเท่ากับศูนย์) — % ไม่มีความหมายเลยไม่แสดงตัวเลข ดูค่าจริงในแถวด้านบนแทน
+    </div>` : '';
 
   const html = `
     <div id="${scrollId}" style="overflow-x:auto">
@@ -16217,7 +16395,7 @@ function _qplTableCore(qs, scrollId, extraRowsFn) {
         <tbody>${rowsHtml}</tbody>
       </table>
     </div>
-    ${caveat}`;
+    ${caveat}${turnCaveat}`;
   return { html, hasCoarse };
 }
 
@@ -16246,7 +16424,8 @@ function _qplYoySeries(sortedQs, field) {
     const prev = byKey[c.year_be * 4 + c.q - 4];
     if (!prev) return null;
     const cur = c[field], pv = prev[field];
-    if (cur == null || pv == null || !pv) return null;
+    // pv <= 0 กันฐานติดลบพลิกเครื่องหมาย % (หุ้นพลิกกำไร/ขาดทุนหนักขึ้น) — ดู _qplChg ด้านบน
+    if (cur == null || pv == null || pv <= 0) return null;
     return parseFloat(((cur / pv - 1) * 100).toFixed(1));
   });
 }
@@ -16258,7 +16437,7 @@ function _qplYoySeriesAnnual(sortedYears, field) {
     const prev = byYear[y.year_ad - 1];
     if (!prev) return null;
     const cur = y[field], pv = prev[field];
-    if (cur == null || pv == null || !pv) return null;
+    if (cur == null || pv == null || pv <= 0) return null;
     return parseFloat(((cur / pv - 1) * 100).toFixed(1));
   });
 }
@@ -16761,13 +16940,21 @@ function _mergedTableAnnual(years, scrollId) {
   const byYear = {};
   years.forEach(y => { byYear[y.year_ad] = y; });
 
+  // 'TURN' แทน null เฉพาะเคสฐานเทียบติดลบ/ศูนย์ (พลิกกำไร/ขาดทุนหนักขึ้น) — ใช้เครื่องหมาย †
+  // แทน * เพราะ * ในตารางนี้ถูกจองไว้แล้วสำหรับ "ปีที่ยังไม่ครบ 4 ไตรมาส" (ดู yearHead ด้านล่าง)
+  // กันสับสนสองความหมายชนกันในตารางเดียว — ดู _qplChg ใน _qplTableCore ที่แก้ปัญหาเดียวกัน
+  let hasTurnaround = false;
   const yoyOf = getter => c => {
     const prev = byYear[c.year_ad - 1];
     if (!prev) return null;
     const cur = getter(c), pv = getter(prev);
-    if (cur == null || pv == null || !pv) return null;
+    if (cur == null || pv == null) return null;
+    if (pv <= 0) { hasTurnaround = true; return 'TURN'; }
     return (cur / pv - 1) * 100;
   };
+  const _qplPctTurn = v => v === 'TURN'
+    ? '<span style="color:var(--yellow)" title="พลิกกำไร/ขาดทุนหนักขึ้น — ฐานเทียบติดลบ % ไม่มีความหมาย ดูตัวเลขจริงแทน">†</span>'
+    : _qplPct(v);
 
   const yearHead = years.map(y => `<th style="text-align:center;background:#8b2fc9;color:#fff;padding:6px 4px;border:1px solid var(--border);font-size:12px">${y.year_be}${y.complete ? '' : ' *'}</th>`).join('');
 
@@ -16787,7 +16974,7 @@ function _mergedTableAnnual(years, scrollId) {
     ${cellsOf(getter, fmt, opts)}
   </tr>`;
 
-  const growthRow = getter => row('% YoY', yoyOf(getter), _qplPct, { indent: true, pctColor: true });
+  const growthRow = getter => row('% YoY', yoyOf(getter), _qplPctTurn, { indent: true, pctColor: true });
 
   const plRows = [
     row('รายได้จากการขาย', c => c.revenue, _qplNum, { bold: true }),
@@ -16818,6 +17005,10 @@ function _mergedTableAnnual(years, scrollId) {
     <div style="margin-top:10px;font-size:11.5px;color:var(--text2)">
       * = ปีที่ยังไม่ครบ 4 ไตรมาส (rollup จากไตรมาสเท่าที่มีข้อมูลตอนนี้ ไม่ใช่ยอดเต็มปี) — อย่าเทียบตรงๆ กับปีที่ครบแล้ว
     </div>` : '';
+  const turnCaveat = hasTurnaround ? `
+    <div style="margin-top:10px;font-size:11.5px;color:var(--text2)">
+      <span style="color:var(--yellow)">†</span> = พลิกกำไร/ขาดทุนหนักขึ้น (ปีที่เทียบด้วยติดลบหรือเท่ากับศูนย์) — % ไม่มีความหมายเลยไม่แสดงตัวเลข ดูค่าจริงในแถวด้านบนแทน
+    </div>` : '';
 
   return `
     <div id="${scrollId}" style="overflow-x:auto">
@@ -16826,7 +17017,7 @@ function _mergedTableAnnual(years, scrollId) {
         <tbody>${plRows}${sep('📋 งบดุล (Finnomena + Yahoo)')}${bsRows}${sep('💵 กระแสเงินสด (Finnomena + Yahoo)')}${cfRows}</tbody>
       </table>
     </div>
-    ${caveat}`;
+    ${caveat}${turnCaveat}`;
 }
 
 function _renderFinMergedReport(d) {
@@ -18292,9 +18483,11 @@ function _renderFinancialsFull(d, source) {
     if (_finTab === 'set') {
       const fsUrl = `https://www.set.or.th/th/market/product/stock/quote/${encodeURIComponent(d.sym.toLowerCase())}/factsheet`;
       const setUrl = `https://www.set.or.th/th/market/product/stock/quote/${encodeURIComponent(d.sym)}/financial-statement/company-highlights`;
+      const bpUrl = `https://bullpedia.ai/?ticker=${encodeURIComponent(d.sym)}`;
       fsSetHtml = `
         <a href="${fsUrl}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="ดู Factsheet บน SET">📄 Factsheet</a>
-        <a href="${setUrl}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="ดูหน้าหุ้นบน SET.or.th">🌐 SET</a>`;
+        <a href="${setUrl}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="ดูหน้าหุ้นบน SET.or.th">🌐 SET</a>
+        <a href="${bpUrl}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer" title="เปิดใน Bullpedia">🐂 Bullpedia</a>`;
     }
 
     // ผูก context ให้ renderFinCustomAvg() คำนวณช่วงปีที่ผู้ใช้กรอกเองได้ (เฉพาะตาราง Ratios
@@ -20667,7 +20860,7 @@ function openETFChartModal(sym) {
   _cmLivePrice = null; _cmLivePriceSym = null;
   _cmFinLoaded = null;
   // ETF ไม่มีงบการเงิน/สมาชิกดัชนี/factsheet SET รูปแบบหุ้น — ซ่อนปุ่มที่ไม่เกี่ยวข้องทั้งหมด
-  ['cm-mode-stocks', 'cm-mode-fin', 'cm-factsheet-link', 'cm-set-link'].forEach(id => {
+  ['cm-mode-stocks', 'cm-mode-fin', 'cm-factsheet-link', 'cm-set-link', 'cm-bullpedia-link'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   });
@@ -21418,6 +21611,8 @@ function openIdxChartModal(sym) {
   if (fsLinkIdx) fsLinkIdx.style.display = 'none';
   const setLinkIdx = document.getElementById('cm-set-link');
   if (setLinkIdx) setLinkIdx.style.display = 'none';
+  const bpLinkIdx = document.getElementById('cm-bullpedia-link');
+  if (bpLinkIdx) bpLinkIdx.style.display = 'none';
 
   // set chart state
   _cmStock       = fakeStock;
