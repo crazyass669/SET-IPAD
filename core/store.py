@@ -133,23 +133,25 @@ def get_last_dates(base_dir):
 
 
 def iter_all_series(base_dir):
-    """generator: yield (ticker, {'dates','closes','volumes','highs','lows'}) เรียงตาม ticker
-    highs/lows เพิ่มมาแบบ additive (ไว้คำนวณ ATR จริง) — consumer เก่าที่อ่านแค่
-    dates/closes/volumes ไม่กระทบ · ผู้เรียกต้อง consume จนจบ (connection ปิดเมื่อ generator จบ)"""
+    """generator: yield (ticker, {'dates','closes','volumes','highs','lows','adj_closes'}) เรียงตาม ticker
+    highs/lows/adj_closes เพิ่มมาแบบ additive (ไว้คำนวณ ATR จริง + seasonality) — consumer เก่าที่อ่านแค่
+    dates/closes/volumes ไม่กระทบ · ผู้เรียกต้อง consume จนจบ (connection ปิดเมื่อ generator จบ)
+    ใช้ query เดียวจบทั้งกระดาน แทนที่จะเปิด connection ใหม่ต่อหุ้น (ดู annotate_seasonality
+    ที่เคยเรียก get_ohlc_series ทีละตัว 900+ ครั้ง — ซ้ำงาน scan นี้ทั้งหมด)"""
     if db_exists(base_dir):
         con = _connect(base_dir)
         try:
             cur = con.execute(
-                "SELECT ticker, date, close, volume, high, low FROM prices ORDER BY ticker, date")
-            cur_t, d, c, v, h, lo = None, [], [], [], [], []
-            for t, dt, cl, vol, hi, low in cur:
+                "SELECT ticker, date, close, volume, high, low, adj_close FROM prices ORDER BY ticker, date")
+            cur_t, d, c, v, h, lo, aj = None, [], [], [], [], [], []
+            for t, dt, cl, vol, hi, low, adj in cur:
                 if t != cur_t:
                     if cur_t is not None:
-                        yield cur_t, {"dates": d, "closes": c, "volumes": v, "highs": h, "lows": lo}
-                    cur_t, d, c, v, h, lo = t, [], [], [], [], []
-                d.append(dt); c.append(cl); v.append(vol); h.append(hi); lo.append(low)
+                        yield cur_t, {"dates": d, "closes": c, "volumes": v, "highs": h, "lows": lo, "adj_closes": aj}
+                    cur_t, d, c, v, h, lo, aj = t, [], [], [], [], [], []
+                d.append(dt); c.append(cl); v.append(vol); h.append(hi); lo.append(low); aj.append(adj)
             if cur_t is not None:
-                yield cur_t, {"dates": d, "closes": c, "volumes": v, "highs": h, "lows": lo}
+                yield cur_t, {"dates": d, "closes": c, "volumes": v, "highs": h, "lows": lo, "adj_closes": aj}
         finally:
             con.close()
         return

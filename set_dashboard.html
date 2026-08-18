@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260818g">
+<link rel="stylesheet" href="static/dashboard.css?v=20260818h">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -3174,6 +3174,7 @@
       <button class="filter-btn active" id="peer-view-table" onclick="setPeerViewMode('table',this)" title="ตารางเทียบทุกตัวในกลุ่ม พร้อมสีไล่ตาม percentile ต่อคอลัมน์">📋 ตาราง</button>
       <button class="filter-btn" id="peer-view-scatter" onclick="setPeerViewMode('scatter',this)" title="กระจายจุด PE (แกน X) × ROE (แกน Y) เทียบกับเส้นค่ากลางของกลุ่ม">📊 Scatter PE×ROE</button>
       <button class="filter-btn" id="peer-view-group" onclick="setPeerViewMode('group',this)" title="หุ้นเทียบกับกลุ่ม — การ์ดเทียบ Margins/Cash Cycle/รายการการเงินรายไตรมาส กับหุ้นทุกตัวในกลุ่มเดียวกัน (ตัดออกทีละตัวได้, หุ้นไทยเท่านั้น)">🗂 หุ้นเทียบกับกลุ่ม</button>
+      <button class="filter-btn" id="peer-view-workspace" onclick="setPeerViewMode('workspace',this)" title="Sector Workspace — สรุปคุณภาพกลุ่มเป็นการ์ด KPI (median + top zone + coverage) + กราฟจัดอันดับ D/E, Current Ratio, Cash Cycle, CFO/FCF Margin ทั้งกลุ่ม (หุ้นไทยเท่านั้น)">🏭 Sector Workspace</button>
     </div>
   </div>
   <div id="peer-meta" style="font-size:12px;color:var(--text2);margin-bottom:8px"></div>
@@ -3284,6 +3285,36 @@
     <button class="filter-btn" style="font-size:12px" id="fin-coverage-btn" onclick="checkFinCoverage()">🔍 ตรวจสอบความครบถ้วน</button>
     <button class="filter-btn" style="font-size:12px" id="fin-sync-btn" onclick="startFinancialsSync()">🔄 อัพเดทงบการเงินทั้งหมด (local)</button>
   </div>
+
+  <!-- หมายเหตุหุ้นปีบัญชีไม่ตรง ธ.ค. — เจอตอนคุยกับ user 2026-08-18 ว่าตาราง P&L รายไตรมาสแสดงผล
+       ยังไง สแกน 1,108 หุ้นในเครื่องแล้วเจอ 73 ตัว บั๊กคีย์ชนกัน (SET layer ใช้ label Q1-Q4 ของ
+       บริษัทเองแทนเดือนสิ้นงวดจริง) แก้แล้วใน sources/financials_store.py แต่ยังมีข้อจำกัดถาวร
+       สำหรับหุ้นที่ไตรมาสไม่จบเดือน มี.ค./มิ.ย./ก.ย./ธ.ค. เลย (เช่น KSL) — ปิดไว้ default -->
+  <details class="card" id="fin-fye-note" style="padding:14px 16px;margin-bottom:12px">
+    <summary style="font-size:13px;font-weight:600;cursor:pointer;list-style:none">
+      ⚠️ หุ้นปีบัญชีไม่ตรง ธ.ค. — ตาราง P&amp;L รายไตรมาสแสดงผลยังไง
+      <span style="font-weight:400;color:var(--text2);font-size:11px"> (คลิกเพื่ออ่าน)</span>
+    </summary>
+    <div style="font-size:12px;line-height:1.7;margin-top:10px;color:var(--text2)">
+      <p style="margin:0 0 8px">ตาราง <b>📋 P&amp;L รายไตรมาส</b> จัดคอลัมน์ตาม<b>ไตรมาสปฏิทิน</b> (จบเดือน มี.ค./มิ.ย./ก.ย./ธ.ค.)
+        เสมอ หุ้นที่ปีบัญชีไม่ตรง ม.ค.-ธ.ค. จะแสดงผลต่างกันไป 2 แบบ:</p>
+      <ul style="margin:0 0 10px;padding-left:20px">
+        <li style="margin-bottom:6px"><b>ไตรมาสจบตรง มี.ค./มิ.ย./ก.ย./ธ.ค. พอดี</b> (แค่ปีบัญชีเลื่อน ไม่ใช่ตัวไตรมาสเอง —
+          เช่น KTIS, AOT, BTS, VGI) → ระบบจัดเข้าคอลัมน์ปฏิทินให้ถูกต้อง <span style="color:var(--green)">(แก้บั๊กคีย์ชนกันแล้ว 2026-08-18 —
+          ก่อนหน้านี้ข้อมูลจาก SET.or.th อาจถูกจัดผิดคอลัมน์ ปนข้อมูลคนละช่วงเวลาเข้าแถวเดียวกัน)</span></li>
+        <li><b>ไตรมาสจบเดือนอื่น</b> (เช่น KSL จบ ม.ค./เม.ย./ก.ค./ต.ค.) → ตารางจะ<b>ไม่มีข้อมูลให้เลย</b>ในไตรมาสนั้นๆ
+          เพราะ map เข้าคอลัมน์ปฏิทิน 4 ช่องไม่ได้ — เป็นข้อจำกัดถาวรของโครงตาราง ไม่ใช่บั๊ก ไม่มีทางแก้ในโครงสร้างปัจจุบัน</li>
+      </ul>
+      <p style="margin:0 0 6px">สแกน 1,108 หุ้นในเครื่อง (2026-08-18) เจอ <b>73 ตัว</b> ปีบัญชีไม่ตรง ธ.ค. — เด่นๆ ที่ active อยู่ตอนนี้:</p>
+      <p style="margin:0 0 6px"><b>มี.ค.:</b> BCT, BLAND, BTS, BTSGIF, EPG, IMPACT, KYE, LHK, PTL, ROCTEC, STANLY, TR, TSTH, TTT, TURTLE, VGI, WHABT
+        &nbsp;·&nbsp; <b>ก.ย.:</b> AOT, FPT, FTREIT, GVREIT, IRC, KTIS, METCO, SSC, STI, TFFIF, TSC, UV
+        &nbsp;·&nbsp; <b>มิ.ย.:</b> 1DIV, AFC, LUXF, MC, SSPF, UBOT &nbsp;·&nbsp; <b>ต.ค.:</b> KSL, PICO, TAPAC
+        &nbsp;·&nbsp; <b>ก.ค.:</b> CITY, TNH &nbsp;·&nbsp; <b>พ.ย.:</b> ABFTH, CHINA &nbsp;·&nbsp; <b>อื่นๆ:</b> AEONTS, BMSCG, BMSCITH, ENY, INGRS, LPF, BSET100</p>
+      <p style="margin:0">บริษัทดำเนินธุรกิจจริงที่เจอผลกระทบชัดสุด: <b>AOT, BTS, EPG, KSL, KTIS, MC, STANLY, TNH, TSC, TSTH, UV, VGI</b> —
+        ที่เหลือเป็น REIT/กองทุน/ETF (FTREIT/GVREIT/BTSGIF/TFFIF/SSPF/1DIV/GLD/BSET100/CHINA/TIF1 ฯลฯ) ซึ่งปีบัญชีไม่ตรง ธ.ค. เป็นปกติของกลุ่มนี้อยู่แล้ว
+        <br>ข้อมูลเก่าที่เคย sync ไปก่อนแก้บั๊กจะถูกต้องเองอัตโนมัติหลังกด "🔄 อัพเดทงบการเงินทั้งหมด" รอบถัดไป ไม่ต้องแก้อะไรเพิ่ม</p>
+    </div>
+  </details>
 
   <!-- Coverage result -->
   <div id="fin-coverage-result" style="display:none;margin-bottom:12px"></div>
@@ -4927,6 +4958,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260818r"></script>
+<script src="static/dashboard.js?v=20260819d"></script>
 </body>
 </html>

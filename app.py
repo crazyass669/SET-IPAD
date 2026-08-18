@@ -3121,6 +3121,25 @@ def get_financials_merged_report(symbol):
     report["years"] = financials_store.rollup_full_report_annual(report["quarters"], set_annual=set_annual)["years"]
     report["sym"] = sym
     report["name"] = (yq or finn or {}).get("name") or sym
+    # ธนาคาร/ประกัน/เงินทุนฯ — บอก frontend ให้ซ่อน Income Sankey Diagram เพราะ COGS/กำไรขั้นต้น
+    # ที่ผสานมาได้ (มักมาจาก Yahoo/Finnomena ที่ตีความดอกเบี้ยจ่ายเป็น 'Cost Of Revenue') ไม่ใช่
+    # แนวคิดต้นทุนขายแบบธุรกิจทั่วไป ทำให้ Sankey เข้าใจผิดได้ (เช็คแล้วทั้ง KBANK และ JPM: cogs
+    # ไม่ null เสมอไปสำหรับหุ้นกลุ่มนี้ พึ่งแค่ null-heuristic ฝั่ง frontend ไม่พอ) — reuse ตัวเช็ค
+    # กลุ่มการเงินเดียวกับที่ใช้ยกเว้น Z-Score ทั่วทั้งแอป (factor_snapshot.py) แทนที่จะเขียนใหม่:
+    # หุ้นไทยเช็คจาก set_data.json (_financial_sector_symbols, แคชไว้แล้ว) ส่วนหุ้นต่างประเทศ
+    # (US/HK/JP ผ่าน DR) เช็ค GICS sector จาก {market}_index_metrics.json เทียบ FINANCIAL_SECTOR_NAMES
+    # (ครอบ 'Financials'/'Finance'/'Financial Services' — ชื่อ sector สะกดไม่ตรงกันข้ามไฟล์ ดู
+    # comment ที่ FINANCIAL_SECTOR_NAMES) เฉพาะสมาชิกดัชนีหลักที่มี sector เก็บไว้ล่วงหน้า — หุ้น
+    # mirror นอกดัชนีหลักไม่มีข้อมูลนี้ frontend จะ fallback ไปใช้ null-heuristic เอง
+    if not is_dr:
+        report["is_financial_sector"] = sym in factor_snapshot._financial_sector_symbols(BASE_DIR)
+    elif market in ("US", "HK", "JP"):
+        try:
+            entry = _tearsheet_universe_map(market).get(sym)
+            if entry:
+                report["is_financial_sector"] = entry.get("sector") in factor_snapshot.FINANCIAL_SECTOR_NAMES
+        except Exception:
+            pass
     return jsonify(report)
 
 
@@ -4490,6 +4509,21 @@ def peer_group_detail():
         ibd_latest = _latest_value(quarters, "total_debt")
         current_assets_latest = _latest_value(quarters, "current_assets")
         current_liabilities_latest = _latest_value(quarters, "current_liabilities")
+        cash_latest = _latest_value(quarters, "cash")
+        # ROIC = NOPAT TTM (กำไรจากการดำเนินงาน หลังหักภาษี) ÷ Invested Capital (งวดล่าสุด) — สูตร
+        # เดียวกับ ROIC (TTM) ใน "📌 อัตราส่วนหลัก" ของหน้างบรวมทุกแหล่ง (dashboard.js บรรทัด
+        # ~17850) ทำตรงนี้ให้ตรงกันเป๊ะ (เดิมเคยลองใช้ flat 20% แทน แต่จะได้ตัวเลข ROIC ไม่ตรงกับ
+        # ที่หน้าอื่นโชว์สำหรับหุ้นตัวเดียวกัน — clamp อัตราภาษี 0-60% กันไตรมาสขาดทุน/มีรายการพิเศษ
+        # ทำให้ tax_expense/pretax_profit เพี้ยนสุดขั้ว)
+        pretax_ttm = _ttm_sum(quarters, "pretax_profit")
+        tax_ttm = _ttm_sum(quarters, "tax_expense")
+        roic = None
+        if (op_ttm is not None and pretax_ttm and tax_ttm is not None
+                and ibd_latest is not None and equity_latest is not None and cash_latest is not None):
+            tax_rate = min(0.6, max(0, tax_ttm / abs(pretax_ttm)))
+            invested_capital = ibd_latest + equity_latest - cash_latest
+            if invested_capital > 0:
+                roic = round(op_ttm * (1 - tax_rate) / invested_capital * 100, 2)
 
         row = {
             "symbol": sym, "name": entry.get("name") or sym,
@@ -4501,6 +4535,7 @@ def peer_group_detail():
             "npm": round(np_ttm / rev_ttm * 100, 2) if (np_ttm is not None and rev_ttm) else None,
             "roe": round(np_ttm / equity_avg * 100, 2) if (np_ttm is not None and equity_avg) else f.get("roe"),
             "roa": f.get("roa"),
+            "roic": roic,
             "de_ratio": f.get("de_ratio"),
             "pe": round(pe, 2) if pe is not None else None,
             "pbv": round(pbv, 2) if pbv is not None else None,
@@ -4525,7 +4560,7 @@ def peer_group_detail():
             "q_revenue_qoq": _peer_group_pct_change(last.get("revenue"), (prior_q or {}).get("revenue")),
             "q_revenue_yoy": _peer_group_pct_change(last.get("revenue"), (yoy_q or {}).get("revenue")),
             "q_cfo_yoy": _peer_group_pct_change(last.get("cfo"), (yoy_q or {}).get("cfo")),
-            "ttm_net_profit_yoy": None,
+            "ttm_net_profit_yoy": None, "net_profit_ttm_prior": None,
             "rev_cagr_3y": None, "profit_cagr_3y": None,
             # อัตราส่วนสภาพคล่อง/หนี้/ประสิทธิภาพใช้สินทรัพย์ — คำนวณจาก field งบดุลรายไตรมาสที่
             # ผสานไว้แล้ว (ดู _BSCF_RAW_MAP ใน financials_store.py) ไม่ต้องดึงข้อมูลเพิ่ม
@@ -4545,6 +4580,7 @@ def peer_group_detail():
         if len(quarters) >= 8 and np_ttm is not None:
             prior_ttm = _ttm_sum(quarters[:-4], "net_profit")
             row["ttm_net_profit_yoy"] = _peer_group_pct_change(np_ttm, prior_ttm)
+            row["net_profit_ttm_prior"] = prior_ttm
         # CAGR 3 ปีเป๊ะ (ต่างจาก rev_cagr/profit_cagr ของ factor_snapshot ที่เป็นเต็มช่วงข้อมูล) —
         # เทียบ TTM ปัจจุบันกับ TTM ที่จบเมื่อ 12 ไตรมาสก่อน ต้องมีอย่างน้อย 16 ไตรมาสถึงจะมีข้อมูล
         # พอทำ TTM สองช่วงที่ไม่ทับกัน (เฉพาะกรณีทั้งคู่เป็นบวก — ฐานลบ/ศูนย์ทำ CAGR ไม่มีความหมาย)

@@ -390,11 +390,14 @@ def process_stock(info_dict, close, volume, high=None, low=None):
         ret_6m = _calc_return(close, 126)
         ret_1y = _calc_return(close, 250)
 
+        # เดิมวนลูป Python (zip(dates, close) + list comp) ทั้งประวัติราคา — ช้ามาก
+        # เพราะ boxing DatetimeIndex ทีละแท่ง (วัดจริง ~2 วิ ทั้งกระดาน) ใช้ dates.year
+        # (vectorized ระดับ numpy) + boolean mask แทน ได้ผลเหมือนเดิมทุกกรณี เร็วกว่ามาก
         current_year = datetime.now().year
-        ytd_pairs = [(d, p) for d, p in zip(dates, close) if d.year == current_year]
+        ytd_mask = dates.year == current_year
         ret_ytd = None
-        if ytd_pairs:
-            first_price = float(ytd_pairs[0][1])
+        if ytd_mask.any():
+            first_price = float(close.iloc[ytd_mask].iloc[0])
             if first_price > 0:
                 ret_ytd = round((price - first_price) / first_price * 100, 2)
 
@@ -428,8 +431,12 @@ def process_stock(info_dict, close, volume, high=None, low=None):
         _has_ohlc = (high is not None and low is not None
                      and len(high) == len(close) and high.notna().any() and low.notna().any())
         if _has_ohlc and len(close) >= 15:
-            prev_c = close.shift(1)
-            tr = pd.concat([(high - low), (high - prev_c).abs(), (low - prev_c).abs()],
+            # true range ต้องการแค่ 14 แท่งท้าย (+1 แท่งก่อนหน้าไว้ shift) — ตัด slice
+            # ก่อนคำนวณ แทนที่จะ concat/abs ทั้งประวัติ (หลายพันแท่ง) แล้วค่อย tail ทีหลัง
+            # ผลลัพธ์เหมือนเดิมทุกกรณี (14 แท่งท้ายพึ่ง prev_c จาก 15 แท่งท้ายเท่านั้น)
+            h15, l15, c15 = high.tail(15), low.tail(15), close.tail(15)
+            prev_c = c15.shift(1)
+            tr = pd.concat([(h15 - l15), (h15 - prev_c).abs(), (l15 - prev_c).abs()],
                            axis=1).max(axis=1)
             atr = tr.tail(14).mean()
             if atr == atr and price > 0:   # ไม่ใช่ NaN

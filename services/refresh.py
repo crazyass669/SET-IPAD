@@ -164,6 +164,16 @@ def run_with_progress(callback, base_dir=None, period="max"):
     sym_map = {s["ticker"]: s for s in symbols}
     stocks  = []
     done    = 0
+    # คำนวณสถิติฤดูกาลแทรกในลูปเดียวกับ metrics — hist_data (dates/closes/adj_closes)
+    # มีอยู่แล้วในมือจาก iter_all_series ตรงนี้ ไม่ต้องเปิด connection ใหม่ query ทีละหุ้น
+    # ซ้ำ full-history scan ที่เพิ่งทำไป (เดิมทำแยกทีหลังผ่าน annotate_seasonality —
+    # 900+ connection ต่อ Quick Update ครั้งเดียว ช้ากว่ามาก) ห่อ try/except ต่อหุ้น
+    # กันพังทั้งกระดาน (non-critical เหมือนของเดิม)
+    try:
+        from sources.price_analytics import current_month_seasonality as _seas_fn
+        _seas_month = datetime.now().month
+    except Exception:
+        _seas_fn = None
     for tick, hist_data in iter_all_series(base_dir):
         info_dict = sym_map.get(tick)
         if not info_dict or not hist_data.get("dates"):
@@ -178,6 +188,15 @@ def run_with_progress(callback, base_dir=None, period="max"):
             continue
         result = process_stock(info_dict, close, volume, high=high, low=low)
         if result:
+            if _seas_fn:
+                try:
+                    cm = _seas_fn(hist_data, _seas_month)
+                except Exception:
+                    cm = None
+                if cm:
+                    result["seas_ret"] = cm["seas_ret"]
+                    result["seas_hit"] = cm["seas_hit"]
+                    result["seas_n"]   = cm["seas_n"]
             stocks.append(result)
         done += 1
         if done % 100 == 0:
@@ -211,13 +230,6 @@ def run_with_progress(callback, base_dir=None, period="max"):
     callback(total, total, f"ตรวจสอบคุณภาพข้อมูล + คำนวณ RS Rank ({len(stocks)} หุ้น)...")
     dq_summary = validate_stocks(stocks, data_as_of)
     stocks     = rank_rs(stocks)
-
-    # เติมสถิติฤดูกาล "เดือนปัจจุบัน" (seas_ret/seas_hit) สำหรับ screener — non-critical
-    try:
-        from sources.price_analytics import annotate_seasonality
-        annotate_seasonality(base_dir, stocks)
-    except Exception as e:
-        logging.warning(f"[Seasonality] ข้าม: {e}")
 
     industries = summarize_groups(stocks, "industry")
     sectors    = summarize_groups(stocks, "sector")
@@ -454,7 +466,17 @@ def run_quick_update(callback, base_dir=None):
     sym_map = {s["ticker"]: s for s in symbols}
     stocks  = []
     done    = 0
-    # stream จาก SQLite ทีละหุ้น — ไม่ต้องถือ history ทั้งก้อนใน RAM
+    # คำนวณสถิติฤดูกาลแทรกในลูปเดียวกับ metrics — hist_data (dates/closes/adj_closes)
+    # มีอยู่แล้วในมือจาก iter_all_series ตรงนี้ ไม่ต้องเปิด connection ใหม่ query ทีละหุ้น
+    # ซ้ำ full-history scan ที่เพิ่งทำไป (เดิมทำแยกทีหลังผ่าน annotate_seasonality —
+    # 900+ connection ต่อ Quick Update ครั้งเดียว วัดจริง ~8.5 วิ ในนั้น) ห่อ try/except
+    # ต่อหุ้นกันพังทั้งกระดาน (non-critical เหมือนของเดิม) — ยังคง stream ทีละหุ้นไม่ถือ
+    # history ทั้งก้อนใน RAM เหมือนเดิม (ไม่สะสม ohlc_map)
+    try:
+        from sources.price_analytics import current_month_seasonality as _seas_fn
+        _seas_month = datetime.now().month
+    except Exception:
+        _seas_fn = None
     for tick, hist_data in iter_all_series(base_dir):
         info_dict = sym_map.get(tick)
         if not info_dict or not hist_data.get("dates"):
@@ -470,6 +492,15 @@ def run_quick_update(callback, base_dir=None):
             continue
         result = process_stock(info_dict, close, volume, high=high, low=low)
         if result:
+            if _seas_fn:
+                try:
+                    cm = _seas_fn(hist_data, _seas_month)
+                except Exception:
+                    cm = None
+                if cm:
+                    result["seas_ret"] = cm["seas_ret"]
+                    result["seas_hit"] = cm["seas_hit"]
+                    result["seas_n"]   = cm["seas_n"]
             stocks.append(result)
         done += 1
         if done % 100 == 0:
@@ -495,11 +526,6 @@ def run_quick_update(callback, base_dir=None):
     callback(total, total, "ตรวจสอบคุณภาพข้อมูล + คำนวณ RS Rank...")
     dq_summary = validate_stocks(stocks, data_as_of)
     stocks     = rank_rs(stocks)
-    try:
-        from sources.price_analytics import annotate_seasonality
-        annotate_seasonality(base_dir, stocks)
-    except Exception as e:
-        logging.warning(f"[Seasonality] ข้าม: {e}")
     industries = summarize_groups(stocks, "industry")
     sectors    = summarize_groups(stocks, "sector")
     _update_rotation_safe(base_dir, data_as_of, sectors, industries)

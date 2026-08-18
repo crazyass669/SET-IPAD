@@ -1135,6 +1135,18 @@ def compute_quarterly_growth(payload_yahoo_q, set_qpl_payload=None):
 _QTR_MONTH = {3: 1, 6: 2, 9: 3, 12: 4}   # เดือนสิ้นงวด -> ไตรมาสปฏิทิน (บริษัทไทยส่วนใหญ่ FYE ธ.ค.)
 
 
+def _year_quarter_from_date(date_str):
+    """(year, quarter 1-4) จากวันที่สิ้นงวด 'YYYY-MM-DD' หรือ (None, None) ถ้า parse ไม่ได้/ไม่ใช่
+    เดือนปิดไตรมาสปฏิทิน (ผ่าน _QTR_MONTH ด้านบน) — helper กลางที่ใช้ร่วมกันทุกจุดที่ map วันที่
+    สิ้นงวดจริงเป็นไตรมาสปฏิทิน กันแก้ตรรกะ parse/mapping ที่จุดหนึ่งแล้วลืมอีกจุด (ต้นเหตุบั๊ก
+    quarter-key ชนกันของ KTIS ที่เคยเจอมาก่อน — ดูคอมเมนต์ใน fetch_set_qpl_chart_series)"""
+    try:
+        y, m = int(date_str[:4]), int(date_str[5:7])
+    except (TypeError, ValueError, IndexError):
+        return None, None
+    return y, _QTR_MONTH.get(m)
+
+
 _QPL_FIELDS = ("revenue", "cogs", "gross_profit", "selling_exp", "admin_exp", "sga_total",
                "total_expenses", "operating_profit", "financial_cost", "pretax_profit",
                "tax_expense", "net_profit")
@@ -1205,11 +1217,7 @@ def compute_qpl_report(payload_finn_q, payload_yahoo_q, set_series=None):
         ni_m  = inc.get("Net Income", {})
         sga_m = inc.get("Selling General And Administration", {})
         for d in set(rev_m) | set(gp_m) | set(ni_m) | set(sga_m):
-            try:
-                y, m = int(d[:4]), int(d[5:7])
-            except (TypeError, ValueError):
-                continue
-            q = _QTR_MONTH.get(m)
+            y, q = _year_quarter_from_date(d)
             if not q:
                 continue
             r, g, n, s = _f(rev_m.get(d)), _f(gp_m.get(d)), _f(ni_m.get(d)), _f(sga_m.get(d))
@@ -1232,11 +1240,7 @@ def compute_qpl_report(payload_finn_q, payload_yahoo_q, set_series=None):
             return _f(inc.get(field, {}).get(d))
         rev_m = inc.get("Total Revenue", {})
         for d in rev_m:
-            try:
-                y, m = int(d[:4]), int(d[5:7])
-            except (TypeError, ValueError):
-                continue
-            q = _QTR_MONTH.get(m)
+            y, q = _year_quarter_from_date(d)
             if not q:
                 continue
             r     = g("Total Revenue", d)
@@ -1319,11 +1323,7 @@ def _bscf_layer_from_payload(payload):
         sec = payload.get(section, {}) or {}
         for raw, ours in pairs:
             for d, v in sec.get(raw, {}).items():
-                try:
-                    y, m = int(d[:4]), int(d[5:7])
-                except (TypeError, ValueError):
-                    continue
-                q = _QTR_MONTH.get(m)
+                y, q = _year_quarter_from_date(d)
                 if not q:
                     continue
                 fv = None
@@ -1562,13 +1562,16 @@ def fetch_set_qpl_chart_series(symbol, ctx=None, hdr=None):
     rows = fetch_financial_data_chart(symbol, ctx=ctx, hdr=hdr)
     out = {}
     for r in rows:
-        qn = r.get("quarter")
-        q = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}.get(qn)
-        try:
-            year = int(r.get("year"))
-        except (TypeError, ValueError):
-            year = None
-        if not q or not year:
+        # คีย์จาก 'เดือนที่สิ้นงวดจริง' (endDate) ไม่ใช่ label 'quarter'/'year' ที่ SET ให้มา —
+        # label เป็นเลขไตรมาสบัญชีของบริษัทเอง สำหรับหุ้นปีบัญชีไม่ตรงปฏิทิน (เช่น KTIS ต.ค.-ก.ย.,
+        # KSL พ.ย.-ต.ค.) "Q1" ของบริษัทอาจจบเดือน ธ.ค./ม.ค. ไม่ใช่ มี.ค. — ถ้าใช้ label ตรงๆ จะได้
+        # key ชนกับไตรมาสปฏิทินจริงของ Finnomena/Yahoo (ซึ่งคีย์จากเดือนสิ้นงวดจริงอยู่แล้วผ่าน
+        # _QTR_MONTH) ทำให้ field-level merge ปนข้อมูลคนละช่วงเวลาเข้าด้วยกัน (เจอกับ KTIS จริง
+        # 2026-08-18: SET label 'Q1_2022' จบ 31 ธ.ค. 2021 แต่จะถูกคีย์เป็น (2022,1) ชนกับไตรมาส
+        # ปฏิทิน ม.ค.-มี.ค. 2022 จริงของ Finnomena/Yahoo)
+        end_date = r.get("endDate") or r.get("asOfDate")
+        year, q = _year_quarter_from_date(end_date)
+        if not q:
             continue
         # ธนาคาร/ประกัน/เงินทุนฯ ไม่มีแนวคิด 'ยอดขาย' แบบธุรกิจทั่วไป — SET เลยเว้น 'sales' เป็น None
         # เสมอ (เช็คสด KBANK/BLA/TISCO 2026-08-18) แต่ 'totalRevenue' (รายได้รวม) ยังมีให้ใช้แทนได้
@@ -1607,7 +1610,7 @@ def fetch_set_qpl_detail_series(symbol, ctx=None, hdr=None):
     if not periods:
         return {}
 
-    parsed = {}   # period_code -> {"type","year","amt"}
+    parsed = {}   # period_code -> {"type","year","amt","end_year","end_q"}
     for p in periods:
         try:
             ptype, year_s = p.rsplit("_", 1)
@@ -1618,27 +1621,43 @@ def fetch_set_qpl_detail_series(symbol, ctx=None, hdr=None):
             d = fetch_financial_statement(symbol, "income_statement", period=p, ctx=ctx, hdr=hdr)
         except Exception:
             continue
-        parsed[p] = {"type": ptype, "year": year, "amt": _set_qpl_amt_map(d)}
+        end_year, end_q = _year_quarter_from_date((d or {}).get("endDate"))
+        parsed[p] = {"type": ptype, "year": year, "amt": _set_qpl_amt_map(d),
+                     "end_year": end_year, "end_q": end_q}
 
     def sub(a, b):
         keys = set(a) | set(b)
         return {k: (a.get(k) - b.get(k)) if (a.get(k) is not None and b.get(k) is not None) else None
                 for k in keys}
 
+    def real_key(info):
+        # คีย์จาก endDate จริงของงวด ไม่ใช่ 'year' (label ปีบัญชีบริษัท) + ตำแหน่ง Q1-Q4 ที่
+        # derive จาก type — เหตุผลเดียวกับ fetch_set_qpl_chart_series ด้านบน (ดูคอมเมนต์ที่นั่น)
+        # หุ้นปีบัญชีไม่ตรงปฏิทินที่ไตรมาสจบเดือนนอก มี.ค./มิ.ย./ก.ย./ธ.ค. จะไม่มี key ให้เลย —
+        # เจตนา ปล่อยให้ Yahoo/Finnomena ไม่มีเหมือนกัน (ไม่ใช่ mislabel เข้าไปช่องผิด)
+        return (info["end_year"], info["end_q"]) if (info["end_year"] and info["end_q"]) else None
+
     amt_by_qtr = {}   # (year, q) -> amt map เดี่ยว
     by_year = {}
     for info in parsed.values():
-        amt_by_qtr_key = (info["year"], 1) if info["type"] == "Q1" else None
-        if amt_by_qtr_key:
-            amt_by_qtr[amt_by_qtr_key] = info["amt"]
-        by_year.setdefault(info["year"], {})[info["type"]] = info["amt"]
-    for year, by_t in by_year.items():
+        if info["type"] == "Q1":
+            key = real_key(info)
+            if key:
+                amt_by_qtr[key] = info["amt"]
+        by_year.setdefault(info["year"], {})[info["type"]] = info
+    for by_t in by_year.values():
         if "9M" in by_t and "6M" in by_t:
-            amt_by_qtr[(year, 3)] = sub(by_t["9M"], by_t["6M"])
+            key = real_key(by_t["9M"])
+            if key:
+                amt_by_qtr[key] = sub(by_t["9M"]["amt"], by_t["6M"]["amt"])
         if "YE" in by_t and "9M" in by_t:
-            amt_by_qtr[(year, 4)] = sub(by_t["YE"], by_t["9M"])
+            key = real_key(by_t["YE"])
+            if key:
+                amt_by_qtr[key] = sub(by_t["YE"]["amt"], by_t["9M"]["amt"])
         if "6M" in by_t and "Q1" in by_t:
-            amt_by_qtr[(year, 2)] = sub(by_t["6M"], by_t["Q1"])
+            key = real_key(by_t["6M"])
+            if key:
+                amt_by_qtr[key] = sub(by_t["6M"]["amt"], by_t["Q1"]["amt"])
 
     out = {}
     for key, amt in amt_by_qtr.items():
@@ -2746,11 +2765,7 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
         for d, v in (date_val_dict or {}).items():
             if v is None:
                 continue
-            try:
-                yy, mm = int(d[:4]), int(d[5:7])
-            except (ValueError, TypeError):
-                continue
-            qq = _QTR_MONTH.get(mm)
+            yy, qq = _year_quarter_from_date(d)
             if qq:
                 out[(yy, qq)] = v
         return out

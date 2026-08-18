@@ -285,7 +285,10 @@ def fetch_financial_data_chart(symbol, ctx=None, hdr=None):
     """สรุปรายไตรมาส 'เดี่ยวๆ' (ไม่สะสม) ย้อนหลัง ~5 ปี จาก company-highlight/financial-data-chart
     (accumulated=false) — ต่างจาก company-highlight ปกติตรงที่ไม่มีปัญหางวด '6M'/'9M' ปนมา
     (บริษัทที่ยื่นงบล่าสุดเป็นงวดสะสม เช่น PTTEP/AOT) เพราะ endpoint นี้ตัดเป็นรายไตรมาสให้เอง
-    field มีแค่ระดับสรุป (revenue/totalExpense/GPM%/ebit/netProfit) ไม่มี COGS/SG&A แยก
+    field มีแค่ระดับสรุป (revenue/totalExpense/GPM%/ebit/netProfit) ไม่มี COGS/SG&A แยก — มี
+    endDate/asOfDate (ISO datetime วันสิ้นงวดจริง) ให้เสมอด้วย (เช็คสดกับ PTT/KTIS 2026-08-19)
+    ใช้คีย์ไตรมาสปฏิทินจริงแทน label 'quarter'/'year' ที่เป็นไตรมาสบัญชีของบริษัทเอง — ดู
+    fetch_set_qpl_chart_series ใน financials_store.py
     คืน list ของ raw dict เรียงเก่า->ใหม่ เฉพาะ quarter ที่เป็น Q1-Q4 (กันกรณี edge ที่หลุดมา)"""
     sym = symbol[:-3] if symbol.endswith(".BK") else symbol
     if ctx is None or hdr is None:

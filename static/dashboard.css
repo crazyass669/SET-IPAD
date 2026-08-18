@@ -261,6 +261,10 @@
   .static-mode .nav-btn[onclick*="'band'"],
   .static-mode .nav-btn[onclick*="'data-health'"],
   .static-mode .nav-btn[onclick*="'hedge'"],
+  /* แนวโน้มตลาดย้อนหลัง เรียก /api/market-trend + /api/sector-compare ซึ่งคำนวณจาก set_qpl/
+     finnomena_q ที่เก็บอยู่ใน financials.db (local-only) ล้วนๆ — ไม่มีบน CI เลย ไม่ได้ bake ไว้ใน
+     STATIC_MAP เปิดบนเว็บ/iPad แล้วขึ้น error "ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง" เสมอ */
+  .static-mode .nav-btn[onclick*="'market-trend'"],
   /* หุ้น US·HK·JP เรียก /api/{us,hk,jp}-index-metrics ตรงๆ ซึ่งไม่ได้ bake ไว้ใน STATIC_MAP
      (ดู dashboard.js) — เปิดบน GitHub Pages แล้วขึ้น error เสมอ
      (ข่าวหุ้น/รายงานทางการ ซ่อนตามคำขอผู้ใช้ ไม่ได้พังจริงทุกฟีเจอร์) */
