@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260818a">
+<link rel="stylesheet" href="static/dashboard.css?v=20260818g">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -38,6 +38,7 @@
   <button id="nav-openmode-btn" class="nav-toggle-btn mode-new" onclick="toggleNavOpenMode()">🗗 แท็บใหม่</button>
   <button class="nav-btn active" onclick="showPage('overview',this)">Overview</button>
   <button class="nav-btn" onclick="showPage('rotation',this)">Rotation</button>
+  <button class="nav-btn" onclick="showPage('market-trend',this)" title="แนวโน้มตลาดย้อนหลัง — รายได้/กำไร/ROE/Cash Quality/Market Breadth ทั้งตลาด SET ย้อนหลังสูงสุด 20 ไตรมาส (local-only)">📈 แนวโน้มตลาด</button>
   <button class="nav-btn" onclick="showPage('indices',this)">ดัชนีกลุ่ม</button>
   <button class="nav-btn" onclick="showPage('stocks',this)" title="หุ้นทั้งหมด — RS 80+ / Emerging / Stage / 52W High-Low & Breakout / Momentum / EMA Breadth / จัดอันดับ Sector รวมไว้หน้าเดียว (เหมือนหน้าหุ้น US)">หุ้นทั้งหมด</button>
   <button class="nav-btn" onclick="showPage('screener',this)">Screener</button>
@@ -57,7 +58,6 @@
   <button class="nav-btn" onclick="showPage('short',this)" title="Short Sales — ข้อมูลการขายชอร์ตรายหุ้น, Squeeze Radar">Short</button>
   <button class="nav-btn" onclick="showPage('confluence',this)" title="สัญญาณเงินทุนรวม — insider + short + NVDR ที่ตรงกันหลายชั้น">🎯 สัญญาณรวม</button>
   <button class="nav-btn" onclick="showPage('financials',this)">งบการเงิน</button>
-  <button class="nav-btn" onclick="showPage('market-trend',this)" title="แนวโน้มตลาดย้อนหลัง — รายได้/กำไร/ROE/Cash Quality/Market Breadth ทั้งตลาด SET ย้อนหลังสูงสุด 20 ไตรมาส (local-only)">📈 แนวโน้มตลาด</button>
   <button class="nav-btn" onclick="showPage('us-stocks',this)" title="หุ้น US — RS / Stage / 52W High / Momentum / EMA ของสมาชิก S&amp;P 500 · Dow Jones · Nasdaq 100 (ราคา OHLC ใน us_prices.db, คำนวณสูตรเดียวกับหุ้นไทย)"><span class="nav-flag nav-flag-us"></span>หุ้น US</button>
   <button class="nav-btn" onclick="showPage('hk-stocks',this)" title="หุ้น HK — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Hang Seng Index · Hang Seng TECH · Hang Seng China Enterprises (ราคา OHLC ใน hk_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US)"><span class="nav-flag nav-flag-hk"></span>หุ้น HK</button>
   <button class="nav-btn" onclick="showPage('jp-stocks',this)" title="หุ้น JP — RS / Stage / 52W High / Momentum / EMA ของสมาชิก Nikkei 225 (ราคา OHLC ใน jp_prices.db, คำนวณสูตรเดียวกับหุ้นไทย/US/HK) — มี Tearsheet/เทียบเพื่อน/งบการเงินครบแล้ว"><span class="nav-flag nav-flag-jp"></span>หุ้น JP</button>
@@ -4927,6 +4927,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260818k"></script>
+<script src="static/dashboard.js?v=20260818r"></script>
 </body>
 </html>

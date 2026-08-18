@@ -3862,6 +3862,10 @@ function toggleNavOpenMode() {
 // ตามโหมดที่ผู้ใช้เลือกไว้ — forceNew=true เพื่อบังคับแท็บใหม่ (เช่นกด Ctrl ค้าง)
 function openInternalHash(hash, forceNew) {
   if (forceNew || navOpenMode() === 'new') {
+    // หมายเหตุ: window.open(...,'noopener') คืนค่า null เสมอตามสเปก ไม่ว่าจะเปิดสำเร็จหรือไม่
+    // (noopener ตัดการอ้างอิงกลับมาที่ opener โดยเจตนา) ห้ามใช้ return value เช็คว่าสำเร็จหรือ
+    // เปล่าแล้ว fallback ไปหน้าเดิม — เคยลองแล้วทำให้แท็บเดิมโดนลากตามไปหน้าปลายทางด้วยทุกครั้ง
+    // ทั้งที่แท็บใหม่เปิดถูกต้องอยู่แล้ว (แท็บเดิมควรอยู่ที่เดิมตามที่โหมด "แท็บใหม่" ออกแบบไว้)
     window.open(location.pathname + location.search + hash, '_blank', 'noopener');
     return;
   }
@@ -5258,6 +5262,10 @@ let _sectorTrendCollapsed = false;
 let _sectorTrendMetric = 'revenue_yoy';
 let _sectorTrendRows = [];
 let _sectorTrendSectorName = '';
+// true ระหว่างรอ fetch ของ sector ที่เพิ่งเปิด — กัน _setSectorTrendMetric ใช้ _sectorTrendRows/
+// _sectorTrendSectorName ที่ยังเป็นของ sector ก่อนหน้าค้างอยู่ (คลิกสลับ metric เร็วๆ ระหว่างช่วงนี้
+// จะเห็นข้อมูล sector เก่าทับ title sector ใหม่ชั่วครู่ — ตัวเดียวกับที่คุยกันว่าเป็นบัค)
+let _sectorTrendLoading = false;
 
 function _sectorTrendDestroy() {
   if (_sectorTrendChart) { _sectorTrendChart.destroy(); _sectorTrendChart = null; }
@@ -5286,6 +5294,7 @@ async function _loadSectorTrend(sectorName) {
   wrap.style.display = 'block';
   _applySectorTrendCollapsed();
   _sectorTrendDestroy();
+  _sectorTrendLoading = true;
   document.getElementById('sector-trend-title').textContent = `📈 เทรนด์การเติบโต — ${sectorName}`;
   document.getElementById('sector-trend-sub').textContent = 'กำลังโหลด...';
 
@@ -5300,6 +5309,8 @@ async function _loadSectorTrend(sectorName) {
   } catch (e) {
     if (mySeq !== _sectorTrendReqSeq) return;
     document.getElementById('sector-trend-sub').textContent = `โหลดเทรนด์ไม่ได้: ${e.message}`;
+  } finally {
+    if (mySeq === _sectorTrendReqSeq) _sectorTrendLoading = false;
   }
 }
 
@@ -5309,6 +5320,44 @@ const _SECTOR_TREND_METRICS = {
   revenue_qoq: { key: 'revenue_qoq', label: 'รายได้ QoQ' },
   profit_qoq:  { key: 'profit_qoq',  label: 'กำไร QoQ' },
 };
+
+function _quantileSorted(sorted, q) {
+  const pos = (sorted.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  return sorted[base + 1] !== undefined ? sorted[base] + rest * (sorted[base + 1] - sorted[base]) : sorted[base];
+}
+
+// หา fence แบบ Tukey (Q1/Q3 ± 1.5*IQR) เพื่อกันแท่ง outlier (เช่น +70% ไตรมาสเดียว) บี้แท่งปกติที่เหลือให้แบนจนอ่านไม่ออก
+// ต้องมีข้อมูลอย่างน้อย 5 ไตรมาสถึงเชื่อ fence ได้ และต้องมีค่าที่เกินจริงๆ ไม่งั้นคืน null แล้วปล่อย auto-scale ตามเดิม
+function _sectorTrendOutlierCap(values) {
+  if (values.length < 5) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const q1 = _quantileSorted(sorted, 0.25);
+  const q3 = _quantileSorted(sorted, 0.75);
+  const iqr = q3 - q1;
+  if (iqr <= 0) return null;
+  const upper = q3 + 1.5 * iqr;
+  const lower = q1 - 1.5 * iqr;
+  if (!values.some(v => v > upper || v < lower)) return null;
+  return { upper, lower };
+}
+
+// วาดเส้นหยักบอก "แท่งถูกตัดยอด" ที่ตำแหน่งเพดาน cap ของแท่ง outlier — เลียนแบบสัญลักษณ์ axis-break ทั่วไป
+function _drawSectorTrendBreakMark(ctx, x, y, halfWidth) {
+  const amp = 4;
+  const pts = [[-1, 0], [-1 / 3, -amp], [1 / 3, amp], [1, 0]].map(([f, dy]) => [x + f * halfWidth, y + dy]);
+  ctx.save();
+  ctx.strokeStyle = '#e6edf3';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  pts.slice(1).forEach(p => ctx.lineTo(p[0], p[1]));
+  ctx.stroke();
+  ctx.restore();
+}
 
 function _renderSectorTrendChart(quarters, sectorName) {
   const sub = document.getElementById('sector-trend-sub');
@@ -5330,8 +5379,6 @@ function _renderSectorTrendChart(quarters, sectorName) {
     sub.textContent = `ยังไม่มีข้อมูล${metric.label}ย้อนหลังสำหรับ sector นี้`;
     return;
   }
-  sub.textContent = `${metric.label} รายไตรมาส — ย้อนหลัง ${rowsForMetric.length} ไตรมาส`;
-
   const labels = rowsForMetric.map(q => {
     const [y, qq] = q.quarter.split('-');
     return `Q${qq}/${y.slice(-2)}`;
@@ -5342,25 +5389,55 @@ function _renderSectorTrendChart(quarters, sectorName) {
   // ตัดสินใจได้ไวกว่าไล่สีตามชนิดตัวชี้วัด เพราะดูทีละตัวชี้วัดอยู่แล้วจากปุ่มสลับด้านบน
   const barColors = values.map(v => v >= 0 ? '#3fb950' : '#f85149');
 
+  // แท่งบางไตรมาสอาจพุ่ง/ร่วงแรงผิดปกติ (เช่น +70% ไตรมาสเดียว) จน auto-scale บี้แท่งปกติที่เหลือแบนดูไม่ออก
+  // ใช้ fence ทางสถิติ (Tukey) แค่ "คัดว่าแท่งไหนเป็น outlier" — ส่วนสเกลแกน Y ใช้ช่วงของแท่งปกติ
+  // ที่เหลือจริงๆ เป็นหลัก (ไม่ใช่ fence ที่มักกว้างเกินจำเป็น) แท่งปกติเล็กๆ จะได้มีที่ยืนเต็มที่
+  // แท่ง outlier ถูกหนีบไว้ที่ขอบแกนพอดี (ป้ายค่าจริงลอยอยู่ในช่องว่าง padding ด้านบน/ล่างของ canvas)
+  const cap = _sectorTrendOutlierCap(values);
+  let displayValues = values, clipped = values.map(() => false), yMin, yMax;
+  if (cap) {
+    const isOutlier = values.map(v => v > cap.upper || v < cap.lower);
+    const normalVals = values.filter((v, i) => !isOutlier[i]).concat(0);   // รวม 0 กันแกนไม่ตัดเส้นฐาน
+    const normalMax = Math.max(...normalVals);
+    const normalMin = Math.min(...normalVals);
+    const pad = Math.max((normalMax - normalMin) * 0.15, 0.5);
+    yMax = Math.ceil(normalMax + pad);
+    yMin = Math.floor(normalMin - pad);
+    displayValues = values.map(v => v > yMax ? yMax : v < yMin ? yMin : v);
+    clipped = values.map(v => v > yMax || v < yMin);
+  }
+
+  sub.textContent = `${metric.label} รายไตรมาส — ย้อนหลัง ${rowsForMetric.length} ไตรมาส`
+    + (cap ? ' (ตัดยอดแท่งที่พุ่งสูง/ร่วงแรงผิดปกติ — ดูค่าจริงที่ป้ายตัวเลข)' : '');
+
   const canvas = document.getElementById('sector-trend-chart');
   const ctx = canvas.getContext('2d');
 
-  // plugin เสริม: วาดค่าตัวเลขลอยเหนือ/ใต้แท่งไตรมาสล่าสุด (เลียนแบบสไตล์กราฟอ้างอิงเดิม)
+  // plugin เสริม: วาดค่าตัวเลขลอยเหนือ/ใต้แท่งไตรมาสล่าสุดเสมอ + ทุกแท่งที่ถูกตัดยอด (พร้อมเส้นหยักบอกจุดตัด)
   const valueLabelPlugin = {
     id: 'valueLabel',
     afterDatasetsDraw(chart) {
       const meta = chart.getDatasetMeta(0);
-      const pt = meta.data[lastIdx];
-      const val = values[lastIdx];
-      if (!pt || val == null) return;
-      const { x, y } = pt.getProps(['x', 'y'], true);
-      ctx.save();
-      ctx.font = '700 12px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = val >= 0 ? 'bottom' : 'top';
-      ctx.fillStyle = val >= 0 ? '#3fb950' : '#f85149';
-      ctx.fillText(`${val > 0 ? '+' : ''}${val.toFixed(1)}%`, x, y + (val >= 0 ? -6 : 6));
-      ctx.restore();
+      const drawLabel = (idx) => {
+        const pt = meta.data[idx];
+        const val = values[idx];
+        if (!pt || val == null) return;
+        const { x, y } = pt.getProps(['x', 'y'], true);
+        ctx.save();
+        ctx.font = '700 12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = val >= 0 ? 'bottom' : 'top';
+        ctx.fillStyle = val >= 0 ? '#3fb950' : '#f85149';
+        ctx.fillText(`${val > 0 ? '+' : ''}${val.toFixed(1)}%`, x, y + (val >= 0 ? -6 : 6));
+        ctx.restore();
+      };
+      meta.data.forEach((pt, idx) => {
+        if (!clipped[idx]) return;
+        const { x, y, width } = pt.getProps(['x', 'y', 'width'], true);
+        _drawSectorTrendBreakMark(ctx, x, y, (width || 20) / 2);
+        drawLabel(idx);
+      });
+      if (!clipped[lastIdx]) drawLabel(lastIdx);
     }
   };
 
@@ -5370,7 +5447,7 @@ function _renderSectorTrendChart(quarters, sectorName) {
       labels,
       datasets: [{
         label: metric.label,
-        data: values,
+        data: displayValues,
         backgroundColor: barColors,
         borderRadius: 4,
         maxBarThickness: 28,
@@ -5381,13 +5458,17 @@ function _renderSectorTrendChart(quarters, sectorName) {
       layout: { padding: { top: 20, bottom: 20 } },   // เผื่อที่ให้ป้ายค่าไตรมาสล่าสุดที่ลอยเหนือ/ใต้แท่ง
       plugins: {
         legend: { display: false },   // ซีรีส์เดียว ชื่อตัวชี้วัดบอกอยู่แล้วจากปุ่มสลับ ไม่ต้องมี legend
-        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y > 0 ? '+' : ''}${ctx.parsed.y.toFixed(1)}%` } },
+        tooltip: { callbacks: { label: ctx => {
+          const v = values[ctx.dataIndex];
+          return `${ctx.dataset.label}: ${v > 0 ? '+' : ''}${v.toFixed(1)}%${clipped[ctx.dataIndex] ? ' (ตัดยอดแท่งในกราฟ)' : ''}`;
+        } } },
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: '#8b949e', font: { size: 10 } } },
         y: {
+          min: yMin, max: yMax,
           grid: { color: c => c.tick.value === 0 ? 'rgba(139,148,158,0.35)' : 'rgba(139,148,158,0.12)' },
-          ticks: { color: '#8b949e', font: { size: 10 }, callback: v => v + '%' },
+          ticks: { color: '#8b949e', font: { size: 10 }, callback: v => Math.round(v) + '%' },
         },
       }
     },
@@ -5398,6 +5479,11 @@ function _renderSectorTrendChart(quarters, sectorName) {
 function _setSectorTrendMetric(metric) {
   if (_sectorTrendMetric === metric || !_SECTOR_TREND_METRICS[metric]) return;
   _sectorTrendMetric = metric;
+  _updateSectorTrendMetricButtons();   // ไฮไลต์ปุ่มที่กดทันที ไม่ต้องรอข้อมูลโหลดเสร็จ
+  // sector ใหม่ยังโหลดไม่เสร็จ — _sectorTrendRows/_sectorTrendSectorName ตอนนี้ยังเป็นของ sector
+  // เก่าอยู่ ถ้า render ตอนนี้จะเห็นข้อมูล sector ผิดทับ title sector ใหม่ชั่วครู่ ปล่อยให้
+  // _loadSectorTrend เป็นคน render เองตอนข้อมูลจริงมาถึง (ใช้ _sectorTrendMetric ตัวใหม่นี้แน่นอน)
+  if (_sectorTrendLoading) return;
   _renderSectorTrendChart(_sectorTrendRows, _sectorTrendSectorName);
 }
 
@@ -12465,6 +12551,10 @@ function closeChartModal() {
 // ปุ่ม "🔗 หน้างบการเงิน" บน popup กราฟ (chart-modal) — ไปหน้าเมนู "งบการเงิน" จริงพร้อมค้นหุ้น
 // ตัวนี้ให้ทันที คนละอันกับแท็บ "🧾 งบการเงิน" (cm-mode-fin) ที่แค่สลับ panel ภายใน popup เดิม
 // (แท็บนั้นคงไว้เหมือนเดิม ไม่แตะ) — ใช้ hash เดียวกับ _spopGoFin
+// ปิด modal เฉพาะตอนจะนำทางในแท็บเดิม (โหมด "🔗 หน้าเดิม") เท่านั้น — ถ้าอยู่โหมด
+// "🗗 แท็บใหม่" (ค่าเริ่มต้น) หน้างบการเงินจะไปเปิดที่แท็บใหม่ต่างหาก แท็บ/popup ปัจจุบันไม่ควร
+// โดนแตะเลย เคยพลาดปิด modal ทิ้งแบบไม่มีเงื่อนไขมาก่อน ทำให้ดูเหมือน "popup หายไปเฉยๆ"
+// ทั้งที่จริงๆ แท็บใหม่เปิดถูกต้องอยู่แล้ว แค่ผู้ใช้ไม่ทันสังเกต
 // เคลียร์ _cmParentIdx ก่อนเรียก closeChartModal() เพราะถ้าค้างอยู่ (เปิดมาจากแท็บ
 // "หุ้นในกลุ่ม" ของ index modal) closeChartModal จะ setTimeout เปิด index modal ซ้อนทับ
 // หน้างบการเงินที่เรากำลังจะนำทางไป — เคลียร์ก่อนแล้วเรียกปกติ ได้ cleanup ครบ
@@ -12475,8 +12565,10 @@ function closeChartModal() {
 function _cmGoFullFin() {
   if (!_cmStock) return;
   const sym = _cmStock.symbol;
-  _cmParentIdx = null; // กัน closeChartModal() เด้งกลับไปเปิด index modal ซ้อน
-  closeChartModal();
+  if (navOpenMode() !== 'new') {
+    _cmParentIdx = null; // กัน closeChartModal() เด้งกลับไปเปิด index modal ซ้อน
+    closeChartModal();
+  }
   if (_cmStock._isUSIdx) {
     openInternalHash('#fin/dr/US:' + encodeURIComponent(sym));
   } else if (_cmStock._isHKIdx) {

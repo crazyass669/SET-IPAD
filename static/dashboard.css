@@ -431,16 +431,22 @@
   .empty { text-align: center; color: var(--text2); padding: 40px; font-size: 13px; }
 
   /* SECTOR DETAIL MODAL */
+  /* เดิม align-items:flex-start + padding-top:60px ตรึง modal ไว้ใกล้ขอบบนตายตัว —
+     พอ max-height เพิ่มขึ้น เนื้อหาที่สั้น (sector หุ้นน้อย) จะดูลอยค้างชิดบนพร้อมพื้นที่ว่าง
+     เยอะด้านล่างเปล่าประโยชน์ เปลี่ยนเป็น center ใช้พื้นที่จอสมดุลกว่าทั้งเนื้อหาสั้น/ยาว */
   .modal-overlay {
     display: none; position: fixed; inset: 0;
     background: rgba(0,0,0,.75); z-index: 200;
-    align-items: flex-start; justify-content: center; padding-top: 60px;
+    align-items: center; justify-content: center;
   }
   .modal-overlay.open { display: flex; }
+  /* เดิมลอง tiered/สูตรลื่นไหลตามขนาดจอ (min(94vw,1400px) + 84-94vh แยกตาม breakpoint) —
+     ผู้ใช้ขอให้ตัดความซับซ้อนทิ้ง ใช้ 95% เท่ากันหมดทุกขนาดจอแทน ทั้งกว้าง/สูง ไม่มีเพดาน px
+     แยกสำหรับจอกว้าง ไม่มี breakpoint แยกสำหรับจอแคบ/มือถืออีกต่อไป */
   .modal {
     background: var(--bg2); border: 1px solid var(--border);
-    border-radius: 10px; width: 92%; max-width: 920px;
-    max-height: 82vh; display: flex; flex-direction: column;
+    border-radius: 10px; width: 95vw;
+    max-height: 95vh; display: flex; flex-direction: column;
   }
   .modal-header {
     padding: 14px 20px; border-bottom: 1px solid var(--border);
@@ -561,10 +567,14 @@
     align-items: center; justify-content: center;
   }
   .cm-overlay.open { display: flex; }
+  /* เดิมเพดาน 900px — เจอปัญหาเดียวกับ .modal (sector-modal): เนื้อหาในนี้มีทั้งกราฟ/ตาราง
+     งบการเงิน/ตารางหุ้นในกลุ่ม (โหมด "หุ้นในกลุ่ม"/"งบการเงิน") ที่ได้ประโยชน์จากพื้นที่กว้างขึ้น
+     บนจอใหญ่ — ปรับให้เท่ากับ .modal (95vw/95vh ไม่มีเพดาน px) ใช้หลักการเดียวกัน:
+     dialog เนื้อหาหนัก (ตาราง/กราฟ) ขยายเต็มจอ ต่างจาก popup เล็ก/แจ้งเตือนที่ปล่อยขนาดเดิมไว้ */
   .cm-box {
     background: var(--bg2); border: 1px solid var(--border);
-    border-radius: 10px; width: min(900px, 96vw);
-    max-height: 90vh; overflow-y: auto; padding: 20px;
+    border-radius: 10px; width: 95vw;
+    max-height: 95vh; overflow-y: auto; padding: 20px;
   }
   .cm-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
   /* toolbar (กราฟ/TradingView/งบการเงิน/เทียบเพื่อน/ดูสรุปเต็ม/ลิงก์ต่างๆ/✕) โตขึ้นเรื่อยๆ
@@ -952,6 +962,11 @@
      (ให้ประโยชน์เชิงพื้นที่แตะแบบพอเหมาะ + เว้นช่องไฟกันแตะโดนชิดกัน) */
   .filter-btn { padding: 8px 13px; }
   .filter-row { gap: 10px; }
+
+  /* ซ่อนปุ่ม admin/dev (Kill Server ซ้ำ, ปลดล็อก Job) บนจอมือถือ/แท็บเล็ต
+     ผู้ใช้ทั่วไปไม่ต้องใช้ ยังกดได้ปกติบนเดสก์ท็อป — ซ่อนทั้ง .btn-wrap
+     (ปุ่ม+tooltip note) ไม่ใช่แค่ปุ่ม กันเหลือช่องว่าง/tooltip ค้าง */
+  .btn-wrap:has(#kill-dup-btn), .btn-wrap:has(#job-reset-btn) { display: none; }
 
 }
 

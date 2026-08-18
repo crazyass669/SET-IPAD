@@ -138,7 +138,69 @@ _market_trend_lock = threading.Lock()
 # ที่พึ่งข้อมูลงบการเงิน
 _sector_trend_cache: dict = {}
 _SECTOR_TREND_CACHE_TTL = 24 * 3600
-_sector_trend_lock = threading.Lock()
+# lock แยกต่อ sector (ไม่ใช่ lock เดียวคุมทุก sector แบบ _sector_compare_cache/_market_trend_cache
+# เพราะสองอันนั้นมีผลลัพธ์ก้อนเดียวทั้งตลาด แต่ตัวนี้คีย์ตาม sector) — เดิมเคยใช้ lock เดียวรวม แล้วเจอ
+# ว่าคลิกดูหลาย sector ติดกันเร็วๆ หลัง cache ว่าง (เพิ่ง sync/restart) จะต่อคิวรอกันทั้งที่เป็นข้อมูล
+# คนละ sector ไม่เกี่ยวกันเลย — เปลี่ยนเป็น lock แยกต่อ sector ผ่าน _sector_trend_locks (สร้างแบบ
+# lazy ต่อคีย์) sector ต่างกันคำนวณพร้อมกันได้ ส่วน request ซ้ำ sector เดียวกันยังกันคำนวณซ้อนกันอยู่
+# เหมือนเดิม (กัน thundering herd ต่อ sector หนึ่งๆ) universe sector มีจำกัด (~30 ตัว) dict นี้เลย
+# ไม่มีปัญหาโตไม่หยุด
+_sector_trend_locks: dict = {}
+_sector_trend_locks_meta_lock = threading.Lock()
+
+
+def _get_sector_trend_lock(sector):
+    with _sector_trend_locks_meta_lock:
+        if sector not in _sector_trend_locks:
+            _sector_trend_locks[sector] = threading.Lock()
+        return _sector_trend_locks[sector]
+
+
+def _swr_get_or_refresh(cache, lock, ttl, compute_fn):
+    """stale-while-revalidate accessor ใช้ร่วมกับ cache dict {"result":.., "ts":..} แบบ
+    _sector_compare_cache/_market_trend_cache/_fin_analytics_cache[slot] — 3 ตัวนี้คำนวณสด
+    ช้า (~6-13 วิ วัดจริง) แต่ TTL ยาว 24 ชม. เดิมพอ TTL หมดอายุ request แรกที่มาเจอต้องรอ
+    คำนวณสดทั้งก้อนแบบ synchronous (มี cache 24 ชม. + event-invalidate ตอน sync ช่วยไว้อยู่แล้ว
+    แต่ยังมีช่วงคาบเกี่ยว TTL หมดอายุเองตามเวลาที่ไม่มีใคร sync)
+
+    - สด (อายุ < ttl): คืนค่า cache ทันที ไม่ทำอะไรเพิ่ม
+    - เก่าแต่ยังมีค่าอยู่ (อายุ >= ttl): คืนค่าเก่าทันทีให้ request นี้ก่อน แล้วสั่งคำนวณใหม่ใน
+      background thread (กันสั่งซ้อนด้วย flag "_revalidating" ใน cache เดียวกัน — burst ของ
+      request ตอน TTL เพิ่งหมดอายุพร้อมกันจะสั่งคำนวณแค่ครั้งเดียว) ถ้าคำนวณใหม่พัง จะ log
+      แล้วปล่อยให้ค่าเก่าอยู่ต่อ (ดีกว่าเดิมที่ error จะทำให้ endpoint ตอบ 500 ทันที)
+    - ไม่เคยมีค่าเลย (cold — เพิ่ง restart/clear และยังไม่ถูก warmup แตะ): คำนวณ synchronous
+      ใต้ lock เหมือนเดิมทุกประการ (double-checked pattern) — เพื่อไม่ให้ request แรกสุดได้
+      ค่า None ไป ต่างจากเคส "เก่า" ที่มีของเก่าให้คืนก่อนได้"""
+    result = cache.get("result")
+    if result is not None:
+        if time.time() - cache.get("ts", 0) < ttl:
+            return result
+        with lock:
+            if not cache.get("_revalidating"):
+                cache["_revalidating"] = True
+
+                def _bg():
+                    try:
+                        new_result = compute_fn()
+                        cache["result"] = new_result
+                        cache["ts"] = time.time()
+                    except Exception as e:
+                        print(f"[SWR] คำนวณใหม่เบื้องหลังล้มเหลว (ใช้ค่าเก่าต่อ): {e}")
+                    finally:
+                        cache["_revalidating"] = False
+
+                threading.Thread(target=_bg, daemon=True).start()
+        return result
+
+    with lock:
+        result = cache.get("result")
+        if result is not None and time.time() - cache.get("ts", 0) < ttl:
+            return result
+        result = compute_fn()
+        cache["result"] = result
+        cache["ts"] = time.time()
+        return result
+
 
 # Indices cache — ดัชนีราคากลุ่ม SET/MAI (invalidate แบบ event-driven ตอน refresh เขียนทับ ไม่ใช่ TTL)
 _indices_cache: dict = {}
@@ -3353,7 +3415,35 @@ _FIN_UNIVERSE_STALE_DAYS = 180   # ราคาไม่ขยับเกิน
                                   # เพราะ Yahoo/SET.or.th ไม่มีงบให้บริษัทที่หยุดดำเนินการ)
 
 
+# cache universe ตาม (mtime ของ set_prices.db, mtime ของ dr_universe_auto.json, วันที่วันนี้)
+# — เดิมคำนวณใหม่ทุกครั้งที่เปิดหน้า Data Health/ตรวจความครบถ้วน โดยแค่
+# price_store.get_last_dates() ก็กิน ~0.5 วิแล้ว (pattern เดียวกับ _dh_th_universe_cache
+# ด้านล่างและ _load_short_data) ใส่วันที่ในคีย์ด้วยเพราะเกณฑ์ "ราคาไม่ขยับเกิน 180 วัน"
+# อิง now() — ข้ามวันแล้วต้องคำนวณใหม่แม้ไฟล์ไม่เปลี่ยน
+_fin_universe_cache = {"key": None, "result": None}
+
+
+def _fin_universe_cache_key():
+    def _m(p):
+        try:
+            return os.path.getmtime(p)
+        except OSError:
+            return None
+    return (_m(os.path.join(BASE_DIR, price_store.DB_FILE)),
+            _m(os.path.join(BASE_DIR, "dr_universe_auto.json")),
+            time.strftime("%Y-%m-%d"))
+
+
 def _financials_universe():
+    ck = _fin_universe_cache_key()
+    if _fin_universe_cache["key"] != ck:
+        _fin_universe_cache.update(key=ck, result=_financials_universe_uncached())
+    # คืนสำเนาเสมอ — caller บางตัวส่งต่อเป็น target ให้ sync_all/get_coverage
+    # ที่อาจ sort/แก้ list ได้ ไม่ให้กระทบก้อนที่ cache ไว้
+    return list(_fin_universe_cache["result"])
+
+
+def _financials_universe_uncached():
     last_dates = price_store.get_last_dates(BASE_DIR)
     tickers = sorted(last_dates.keys())
     syms = [t[:-3] if t.endswith(".BK") else t for t in tickers]
@@ -3381,17 +3471,21 @@ def _financials_universe():
             return False
 
     out = []
+    stale = []
     for s in syms:
         if s in dr_series or dw_pat.match(s) or s.startswith("!"):
             continue
         if _is_stale(s):
             # บันทึกไว้ให้ backtest รุ่นถัดไปรู้ว่าหุ้นนี้ "ยังอยู่จริง" ถึงวันไหน
             # (upsert — เก็บวันที่ตรวจพบครั้งแรก ไม่ทับทุกรอบที่ universe กรองซ้ำ)
-            delisted_log.record_delisted(
-                BASE_DIR, s, "TH", f"ราคาไม่ขยับเกิน {_FIN_UNIVERSE_STALE_DAYS} วัน (แขวน SP/เพิกถอน)",
-                last_seen=last_dates.get(s + ".BK") or last_dates.get(s))
+            stale.append((s, "TH", f"ราคาไม่ขยับเกิน {_FIN_UNIVERSE_STALE_DAYS} วัน (แขวน SP/เพิกถอน)",
+                          last_dates.get(s + ".BK") or last_dates.get(s)))
             continue
         out.append(s)
+    # เขียน log รอบเดียวหลังจบ loop (และไม่เขียนเลยถ้าไม่มีตัวไหนเปลี่ยน) — เดิมเรียก
+    # record_delisted() ในลูปทีละตัว = อ่าน+เขียนทั้งไฟล์ ~276 รอบต่อการเรียก 1 ครั้ง
+    # กิน ~3 วินาทีของ /api/data-health ทั้งที่ปกติไม่มีอะไรเปลี่ยนสักตัว
+    delisted_log.record_delisted_bulk(BASE_DIR, stale)
     return out
 
 
@@ -3435,6 +3529,23 @@ def _warmup_fin_dependent_caches():
             print(f"[Warmup] {ep} พร้อม ({time.time() - t0:.0f} วิ)", flush=True)
         except Exception as e:
             print(f"[Warmup] {ep} ล้มเหลว (ไม่กระทบการใช้งาน): {e}", flush=True)
+
+
+def _clear_fin_analytics_and_warm():
+    """ล้าง _fin_analytics_cache แล้วอุ่นใหม่เบื้องหลัง — ใช้ท้ายงาน sync ที่แตะงบ
+    (index sync US/HK/JP, mirror sync, full refresh) ซึ่งเดิมเรียก .clear() เปล่าๆ 8 จุด
+    โดยไม่มีใครอุ่นซ้ำ ผลคือคนแรกที่เปิด "ดัชนีกลุ่มอุตสาหกรรม"/"แนวโน้มตลาด"/Screener
+    หลัง sync ต้องรอ cold path ~12-13 วิ (วัดจริง)
+
+    อุ่นใน daemon thread ไม่ใช่ thread ของ job — job จะได้ขึ้น "เสร็จแล้ว" ทันที
+    ไม่ต้องค้างรออุ่นอีก 13 วิ (ต่างจาก _run_financials_sync/financials-update-all
+    ที่เรียก _warmup_fin_dependent_caches() ตรงๆ แบบ synchronous มาแต่เดิม)
+
+    งาน sync กลุ่มนี้แตะข้อมูล mirror US/HK/JP เป็นหลัก ไม่กระทบ sector/แนวโน้มตลาด
+    ฝั่งหุ้นไทย จึงไม่ล้าง _sector_compare_cache/_market_trend_cache เหมือนเดิม —
+    การอุ่นจะไป hit cache เดิมของ 2 ตัวนั้นทันที ไม่มี cost เพิ่ม"""
+    _fin_analytics_cache.clear()
+    threading.Thread(target=_warmup_fin_dependent_caches, daemon=True).start()
 
 
 def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_date=False):
@@ -3530,81 +3641,89 @@ def _compute_fin_analytics_for(symbols, is_dr, pe_map, mktcap_map, yahoo_only=Fa
     from core.metrics import rank_percentile
     result = {}
     growth_raw = {}
-    for sym in symbols:
-        # กัน 1 หุ้นที่ payload/คำนวณพัง (เช่น field รูปทรงแปลกจากแหล่งข้อมูลเก่า) ทำให้
-        # /api/financials-analytics ทั้ง endpoint ตอบ 500 — ข้ามหุ้นนั้นไปแทนที่จะล้มทั้งตลาด
-        try:
-            payload = financials_store.get(BASE_DIR, sym, "yahoo", is_dr=is_dr)
-            if not payload:
+    # connection เดียวใช้ร่วมกันตลอด loop (reuse ผ่าน con= ที่เพิ่งเพิ่มใน financials_store.get)
+    # — เดิม get() เปิด-ปิด sqlite connection ใหม่ทุกครั้งที่เรียก วัดจริงตอน cache miss:
+    # ~2.6 ครั้ง/หุ้น × ~1,300 หุ้น (TH+DR) = 3,419 connection กิน connect+close+PRAGMA
+    # รวม ~5 วิ จาก 13 วิทั้งหมดของ /api/financials-analytics เปิดครั้งเดียวปิดท้าย loop
+    # ปลอดภัย เพราะฟังก์ชันนี้รันในเธรดเดียว ไม่มีการแชร์ connection ข้าม thread
+    con = financials_store._connect(BASE_DIR) if financials_store.db_exists(BASE_DIR) else None
+    try:
+        for sym in symbols:
+            # กัน 1 หุ้นที่ payload/คำนวณพัง (เช่น field รูปทรงแปลกจากแหล่งข้อมูลเก่า) ทำให้
+            # /api/financials-analytics ทั้ง endpoint ตอบ 500 — ข้ามหุ้นนั้นไปแทนที่จะล้มทั้งตลาด
+            try:
+                payload = financials_store.get(BASE_DIR, sym, "yahoo", is_dr=is_dr, con=con)
+                if not payload:
+                    continue
+                gs = financials_store.compute_growth_score(payload)
+                fcf = financials_store.compute_fcf_metrics(payload, mktcap_map.get(sym))
+                streaks = financials_store.compute_growth_streaks(payload)
+                ratios = financials_store.compute_ratio_trends(payload)
+                q_finn = None
+                # SET official รายไตรมาส (set_qpl) มักมีงวดล่าสุดเร็วกว่า Yahoo/Finnomena ~1 ไตรมาส
+                # (หุ้นไทยเท่านั้น — DR ไม่มีข้อมูล SET.or.th) — เติมงวดล่าสุดให้ QoQ/YoY-Q ไม่ค้าง
+                # ดู _set_qpl_latest_extra (เจอบั๊กจริงกับ BA: QoQ ผ่านเกณฑ์ 50% เพราะเทียบงวดเก่า)
+                sqpl = financials_store.get(BASE_DIR, sym, "set_qpl", is_dr=is_dr, con=con) if not is_dr else None
+                if yahoo_only:
+                    q_used = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, con=con)
+                    qg = financials_store.compute_quarterly_growth(q_used, set_qpl_payload=sqpl)
+                else:
+                    # การเติบโตรายไตรมาส (QoQ / YoY-Q / streak / เร่งตัว) จากงบ quarterly — Finnomena
+                    # ลึกกว่า Yahoo เสมอเมื่อมี (ตรวจแล้วทุกกรณี ~60-80 ไตรมาส vs ~5-6) จึงเช็คแค่ตัวเดียว
+                    # ก่อน ไม่ต้อง get() ทั้งคู่ทุกครั้ง
+                    q_finn = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr, con=con)
+                    q_used = q_finn if q_finn else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, con=con)
+                    qg = financials_store.compute_quarterly_growth(q_used, set_qpl_payload=sqpl)
+                    # Finnomena สั้นผิดปกติ (<8 ไตรมาส เช่นหุ้นที่ Finnomena เพิ่งเริ่มเก็บ) — เช็ค yahoo_q
+                    # เผื่อลึกกว่า ให้เลือกแหล่งแบบเดียวกับ factor_snapshot (ไม่งั้นสองเมนูต่างกันได้)
+                    if q_finn is not None and qg["quarters_available"] < 8:
+                        q_yah = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, con=con)
+                        qg_y = financials_store.compute_quarterly_growth(q_yah, set_qpl_payload=sqpl)
+                        if qg_y["quarters_available"] > qg["quarters_available"]:
+                            qg, q_used = qg_y, q_yah
+                # เป็นบวกติดกัน (รายได้/กำไร/EBITDA/OCF) + OCF>กำไรสุทธิงวดล่าสุด — เวอร์ชันรันบนเครื่อง
+                # ใช้ Finnomena รายไตรมาสล้วน (เหมือน factor_snapshot.compute_positive_streaks)
+                # ส่วน yahoo_only (bake เว็บมือถือ/ไอแพด ไม่มี Finnomena) สลับไปนับจากงบ Yahoo
+                # "รายปี" แทน (payload เดิมที่ดึงมาแล้วด้านบน) — field ชื่อเดียวกันแต่หน่วยกลายเป็นปี
+                # ไม่ใช่ไตรมาส ฝั่ง frontend (_patchPosStreakForStatic) แก้ label/tooltip ให้ตรงแล้ว
+                pq = financials_store.compute_positive_streaks(payload if yahoo_only else q_finn)
+                pe = pe_map.get(sym)
+                # PEG = PE ÷ %โตของ 'กำไร' TTM — นิยามเดียวกับ Screener+ (เดิมใช้ CAGR รายได้
+                # หลายปีซึ่งไม่ตรงนิยามสากลและทำให้ค่า PEG สองเมนูไม่ตรงกัน) มีค่าเฉพาะ
+                # growth 1-200%: ต่ำกว่านั้น PEG ระเบิด / เกินนั้นเป็น base effect หลอกตา
+                tg = financials_store.compute_ttm_growth(q_used)
+                g = tg["profit_ttm_yoy"]
+                if yahoo_only and g is None:
+                    # Yahoo รายไตรมาสมักมีแค่ ~5 งวด ไม่พอคำนวณ TTM (ต้องการ ≥8) — fallback ไป
+                    # กำไรโตเฉลี่ยรายปี (CAGR) แทน ยังมีประโยชน์แต่นิยามไม่เหมือน TTM เป๊ะ
+                    # (บอกผู้ใช้ผ่าน tooltip ฝั่ง frontend แล้ว กันเข้าใจผิดว่าตรงกับเวอร์ชันเครื่อง)
+                    g = gs.get("profit_cagr")
+                peg = (pe / g) if (pe and pe > 0 and g is not None and 1 <= g <= 200) else None
+                # P/S = Market Cap / รายได้ปีล่าสุด (Yahoo) — ใช้ได้แม้หุ้นขาดทุนที่ PE คำนวณไม่ได้
+                rev_row = payload.get("income", {}).get("Total Revenue", {})
+                latest_rev = rev_row[max(rev_row)] if rev_row else None
+                mc = mktcap_map.get(sym)
+                ps = (mc / latest_rev) if (mc and latest_rev and latest_rev > 0) else None
+                # F-Score/Z-Score — mkt_cap ที่นี่มาจาก set_data.json (สดกว่า Finnomena valuation
+                # ที่ factor_snapshot ใช้) ธนาคาร/เงินทุน/ประกันไทย ไม่แสดง Z-Score (ดู
+                # factor_snapshot._financial_sector_symbols — งบดุลตีความไม่ได้กับสูตร Altman)
+                fscore = financials_store.compute_fscore(payload)
+                if (not is_dr) and fin_sector_syms and sym in fin_sector_syms:
+                    zscore = {"z_score": None, "z_variant": None, "z_zone": None}
+                else:
+                    zscore = financials_store.compute_zscore(payload, mc, variant=("Z" if is_dr else "Z2"))
+                result[sym] = {**gs, **fcf, **streaks, **ratios, **qg, **tg, **pq, "peg": peg, "ps": ps,
+                               "f_score": fscore["f_score"], "f_score_max": fscore["f_score_max"],
+                               "f_score_detail": fscore["f_score_detail"],
+                               "z_score": zscore["z_score"], "z_variant": zscore["z_variant"],
+                               "z_zone": zscore["z_zone"]}
+                growth_raw[sym] = gs["growth_score"]
+            except Exception as e:
+                print(f"[fin-analytics] ข้าม {sym}: {e}")
                 continue
-            gs = financials_store.compute_growth_score(payload)
-            fcf = financials_store.compute_fcf_metrics(payload, mktcap_map.get(sym))
-            streaks = financials_store.compute_growth_streaks(payload)
-            ratios = financials_store.compute_ratio_trends(payload)
-            q_finn = None
-            # SET official รายไตรมาส (set_qpl) มักมีงวดล่าสุดเร็วกว่า Yahoo/Finnomena ~1 ไตรมาส
-            # (หุ้นไทยเท่านั้น — DR ไม่มีข้อมูล SET.or.th) — เติมงวดล่าสุดให้ QoQ/YoY-Q ไม่ค้าง
-            # ดู _set_qpl_latest_extra (เจอบั๊กจริงกับ BA: QoQ ผ่านเกณฑ์ 50% เพราะเทียบงวดเก่า)
-            sqpl = financials_store.get(BASE_DIR, sym, "set_qpl", is_dr=is_dr) if not is_dr else None
-            if yahoo_only:
-                q_used = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
-                qg = financials_store.compute_quarterly_growth(q_used, set_qpl_payload=sqpl)
-            else:
-                # การเติบโตรายไตรมาส (QoQ / YoY-Q / streak / เร่งตัว) จากงบ quarterly — Finnomena
-                # ลึกกว่า Yahoo เสมอเมื่อมี (ตรวจแล้วทุกกรณี ~60-80 ไตรมาส vs ~5-6) จึงเช็คแค่ตัวเดียว
-                # ก่อน ไม่ต้อง get() ทั้งคู่ทุกครั้ง — ก่อนนี้ทำให้ endpoint นี้ช้าลงเพราะ get() แต่ละครั้ง
-                # เปิด/ปิด sqlite connection ใหม่ (สังเกตได้จาก /api/financials-analytics ช้าลงเป็น ~23 วิ
-                # ตอน cache miss จนแข่งกับปุ่ม "งบการเงิน" ในหน้า DR ที่รอ _finAnalyticsData โหลดเสร็จ)
-                q_finn = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr)
-                q_used = q_finn if q_finn else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
-                qg = financials_store.compute_quarterly_growth(q_used, set_qpl_payload=sqpl)
-                # Finnomena สั้นผิดปกติ (<8 ไตรมาส เช่นหุ้นที่ Finnomena เพิ่งเริ่มเก็บ) — เช็ค yahoo_q
-                # เผื่อลึกกว่า ให้เลือกแหล่งแบบเดียวกับ factor_snapshot (ไม่งั้นสองเมนูต่างกันได้)
-                if q_finn is not None and qg["quarters_available"] < 8:
-                    q_yah = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr)
-                    qg_y = financials_store.compute_quarterly_growth(q_yah, set_qpl_payload=sqpl)
-                    if qg_y["quarters_available"] > qg["quarters_available"]:
-                        qg, q_used = qg_y, q_yah
-            # เป็นบวกติดกัน (รายได้/กำไร/EBITDA/OCF) + OCF>กำไรสุทธิงวดล่าสุด — เวอร์ชันรันบนเครื่อง
-            # ใช้ Finnomena รายไตรมาสล้วน (เหมือน factor_snapshot.compute_positive_streaks)
-            # ส่วน yahoo_only (bake เว็บมือถือ/ไอแพด ไม่มี Finnomena) สลับไปนับจากงบ Yahoo
-            # "รายปี" แทน (payload เดิมที่ดึงมาแล้วด้านบน) — field ชื่อเดียวกันแต่หน่วยกลายเป็นปี
-            # ไม่ใช่ไตรมาส ฝั่ง frontend (_patchPosStreakForStatic) แก้ label/tooltip ให้ตรงแล้ว
-            pq = financials_store.compute_positive_streaks(payload if yahoo_only else q_finn)
-            pe = pe_map.get(sym)
-            # PEG = PE ÷ %โตของ 'กำไร' TTM — นิยามเดียวกับ Screener+ (เดิมใช้ CAGR รายได้
-            # หลายปีซึ่งไม่ตรงนิยามสากลและทำให้ค่า PEG สองเมนูไม่ตรงกัน) มีค่าเฉพาะ
-            # growth 1-200%: ต่ำกว่านั้น PEG ระเบิด / เกินนั้นเป็น base effect หลอกตา
-            tg = financials_store.compute_ttm_growth(q_used)
-            g = tg["profit_ttm_yoy"]
-            if yahoo_only and g is None:
-                # Yahoo รายไตรมาสมักมีแค่ ~5 งวด ไม่พอคำนวณ TTM (ต้องการ ≥8) — fallback ไป
-                # กำไรโตเฉลี่ยรายปี (CAGR) แทน ยังมีประโยชน์แต่นิยามไม่เหมือน TTM เป๊ะ
-                # (บอกผู้ใช้ผ่าน tooltip ฝั่ง frontend แล้ว กันเข้าใจผิดว่าตรงกับเวอร์ชันเครื่อง)
-                g = gs.get("profit_cagr")
-            peg = (pe / g) if (pe and pe > 0 and g is not None and 1 <= g <= 200) else None
-            # P/S = Market Cap / รายได้ปีล่าสุด (Yahoo) — ใช้ได้แม้หุ้นขาดทุนที่ PE คำนวณไม่ได้
-            rev_row = payload.get("income", {}).get("Total Revenue", {})
-            latest_rev = rev_row[max(rev_row)] if rev_row else None
-            mc = mktcap_map.get(sym)
-            ps = (mc / latest_rev) if (mc and latest_rev and latest_rev > 0) else None
-            # F-Score/Z-Score — mkt_cap ที่นี่มาจาก set_data.json (สดกว่า Finnomena valuation
-            # ที่ factor_snapshot ใช้) ธนาคาร/เงินทุน/ประกันไทย ไม่แสดง Z-Score (ดู
-            # factor_snapshot._financial_sector_symbols — งบดุลตีความไม่ได้กับสูตร Altman)
-            fscore = financials_store.compute_fscore(payload)
-            if (not is_dr) and fin_sector_syms and sym in fin_sector_syms:
-                zscore = {"z_score": None, "z_variant": None, "z_zone": None}
-            else:
-                zscore = financials_store.compute_zscore(payload, mc, variant=("Z" if is_dr else "Z2"))
-            result[sym] = {**gs, **fcf, **streaks, **ratios, **qg, **tg, **pq, "peg": peg, "ps": ps,
-                           "f_score": fscore["f_score"], "f_score_max": fscore["f_score_max"],
-                           "f_score_detail": fscore["f_score_detail"],
-                           "z_score": zscore["z_score"], "z_variant": zscore["z_variant"],
-                           "z_zone": zscore["z_zone"]}
-            growth_raw[sym] = gs["growth_score"]
-        except Exception as e:
-            print(f"[fin-analytics] ข้าม {sym}: {e}")
-            continue
+    finally:
+        if con is not None:
+            con.close()
 
     percentiles = rank_percentile(growth_raw)
     for sym, pct in percentiles.items():
@@ -3627,22 +3746,13 @@ def financials_analytics():
     cache แยกจากโหมดปกติ (คนละผลลัพธ์กัน)"""
     yahoo_only = request.args.get("source") == "yahoo"
     cache_key = "yahoo" if yahoo_only else "default"
-    slot = _fin_analytics_cache.get(cache_key, {})
-    cached = slot.get("result")
-    if cached and (time.time() - slot.get("ts", 0) < _FIN_ANALYTICS_CACHE_TTL):
-        return jsonify(cached)
 
-    # lock กันหลายแท็บ/request ที่มาชนตอน cache หมดอายุพร้อมกันคำนวณซ้ำซ้อนกัน (ดูคอมเมนต์
-    # ที่ _fin_analytics_lock) — request ที่มาทีหลังรอเฉยๆ แล้วเช็ค cache ซ้ำหลังได้ lock
-    # ถ้า request แรกคำนวณเสร็จไปแล้วระหว่างรอ ก็ได้ผลจาก cache ทันทีไม่ต้องคำนวณซ้ำ
-    # setdefault ต้องอยู่ใน lock — ถ้า .clear() แทรกระหว่างบรรทัดนี้กับก่อนหน้า slot
+    # setdefault ต้องอยู่ใน lock — ถ้า .clear() แทรกระหว่างอ่าน cache_key กับสร้าง slot
     # ที่ได้จะเป็น dict เก่าที่หลุดจาก _fin_analytics_cache แล้ว เขียนผลไปก็สูญเปล่า
     with _fin_analytics_lock:
         slot = _fin_analytics_cache.setdefault(cache_key, {})
-        cached = slot.get("result")
-        if cached and (time.time() - slot.get("ts", 0) < _FIN_ANALYTICS_CACHE_TTL):
-            return jsonify(cached)
 
+    def _compute():
         pe_map, mktcap_map = {}, {}
         if os.path.exists(DATA_FILE):
             try:
@@ -3667,14 +3777,17 @@ def financials_analytics():
         set_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=False)
         dr_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=True)
         fin_sector_syms = factor_snapshot._financial_sector_symbols(BASE_DIR)
-        result = {
+        return {
             "set": _compute_fin_analytics_for(set_symbols, False, pe_map, mktcap_map, yahoo_only=yahoo_only, fin_sector_syms=fin_sector_syms),
             "dr": _compute_fin_analytics_for(dr_symbols, True, pe_map, dr_mktcap_map, yahoo_only=yahoo_only),
         }
 
-        slot["result"] = result
-        slot["ts"] = time.time()
-        return jsonify(result)
+    # lock กันหลายแท็บ/request ที่มาชนตอน cache หมดอายุพร้อมกันคำนวณซ้ำซ้อนกัน (ดูคอมเมนต์
+    # ที่ _fin_analytics_lock) — stale-while-revalidate (ดู _swr_get_or_refresh): ถ้ามีค่าเก่า
+    # อยู่แล้วแค่หมดอายุ ตอบค่าเก่าทันทีแล้วคำนวณใหม่เบื้องหลัง ไม่บล็อก request คำนวณสด
+    # แบบ synchronous เฉพาะตอนไม่เคยมีค่าเลย (cold หลัง restart/clear)
+    result = _swr_get_or_refresh(slot, _fin_analytics_lock, _FIN_ANALYTICS_CACHE_TTL, _compute)
+    return jsonify(result)
 
 
 @app.route("/api/sector-compare")
@@ -3688,53 +3801,48 @@ def sector_compare():
 
     ROE ต่อ sector: reuse ผลลัพธ์ ratios['roe'] ต่อหุ้นจาก /api/financials-analytics ตรงๆ (ไม่เปิด
     sqlite ทีละหุ้นซ้ำเอง — endpoint นั้นแคชอยู่แล้ว คำนวณสดครั้งแรกช้า ~15-23 วิเหมือนกัน)"""
-    cached = _sector_compare_cache.get("result")
-    if cached and (time.time() - _sector_compare_cache.get("ts", 0) < _SECTOR_COMPARE_CACHE_TTL):
-        return jsonify(cached)
+    def _compute():
+        sector_by_symbol = {}
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, encoding="utf-8") as f:
+                    for s in json.load(f).get("stocks", []):
+                        if s.get("market") in ("SET", "mai") and s.get("sector"):
+                            sector_by_symbol[s["symbol"]] = s["sector"]
+            except Exception:
+                pass
 
-    with _sector_compare_lock:
-        cached = _sector_compare_cache.get("result")
-        if cached and (time.time() - _sector_compare_cache.get("ts", 0) < _SECTOR_COMPARE_CACHE_TTL):
-            return jsonify(cached)
+        compare = financials_store.get_sector_qpl_compare(BASE_DIR, sector_by_symbol)
 
-        # try/except ครอบทั้งก้อนคำนวณ — เดิมไม่มี ต่างจาก /api/indices-quick-update ฯลฯ ที่ครอบไว้
-        # exception ที่ไม่คาดคิด (เช่น payload เพี้ยนใน DB) จะหลุดไปเป็นหน้า error 500 แบบ HTML ของ
-        # Flask ตรงๆ ไม่ใช่ JSON — ฝั่ง frontend (renderSectorCompare/loadMarketTrendPage) parse
-        # ไม่ได้ ขึ้นข้อความงงๆ "Unexpected token '<'..." ให้ผู้ใช้เห็นแทนที่จะเป็นข้อความไทยที่เข้าใจง่าย
-        # (endpoint นี้ใช้ร่วมกันทั้งมุมมอง "เปรียบเทียบ Sector" ในหน้านี้ และตาราง Top 10
-        # เติบโตโดดเด่นในหน้า Market Trend เลยกระทบ 2 หน้าพร้อมกันถ้าพัง)
-        try:
-            sector_by_symbol = {}
-            if os.path.exists(DATA_FILE):
-                try:
-                    with open(DATA_FILE, encoding="utf-8") as f:
-                        for s in json.load(f).get("stocks", []):
-                            if s.get("market") in ("SET", "mai") and s.get("sector"):
-                                sector_by_symbol[s["symbol"]] = s["sector"]
-                except Exception:
-                    pass
+        fin_data = financials_analytics().get_json()
+        roe_by_sector = {}
+        for sym, sector in sector_by_symbol.items():
+            roe = fin_data.get("set", {}).get(sym, {}).get("roe")
+            if roe is not None:
+                roe_by_sector.setdefault(sector, []).append(roe)
+        set_fin = fin_data.get("set", {})
+        for row in compare["sectors"]:
+            vals = roe_by_sector.get(row["sector"])
+            row["roe"] = round(sum(vals) / len(vals), 1) if vals else None
+            for stock in row.get("stocks", []):
+                stock["de_ratio"] = set_fin.get(stock["symbol"], {}).get("de_ratio")
+        return compare
 
-            compare = financials_store.get_sector_qpl_compare(BASE_DIR, sector_by_symbol)
-
-            fin_data = financials_analytics().get_json()
-            roe_by_sector = {}
-            for sym, sector in sector_by_symbol.items():
-                roe = fin_data.get("set", {}).get(sym, {}).get("roe")
-                if roe is not None:
-                    roe_by_sector.setdefault(sector, []).append(roe)
-            set_fin = fin_data.get("set", {})
-            for row in compare["sectors"]:
-                vals = roe_by_sector.get(row["sector"])
-                row["roe"] = round(sum(vals) / len(vals), 1) if vals else None
-                for stock in row.get("stocks", []):
-                    stock["de_ratio"] = set_fin.get(stock["symbol"], {}).get("de_ratio")
-        except Exception as e:
-            traceback.print_exc()
-            return jsonify({"error": f"รวมข้อมูล sector ล้มเหลว: {e}"}), 500
-
-        _sector_compare_cache["result"] = compare
-        _sector_compare_cache["ts"] = time.time()
-        return jsonify(compare)
+    # try/except ครอบทั้งก้อนคำนวณ — เดิมไม่มี ต่างจาก /api/indices-quick-update ฯลฯ ที่ครอบไว้
+    # exception ที่ไม่คาดคิด (เช่น payload เพี้ยนใน DB) จะหลุดไปเป็นหน้า error 500 แบบ HTML ของ
+    # Flask ตรงๆ ไม่ใช่ JSON — ฝั่ง frontend (renderSectorCompare/loadMarketTrendPage) parse
+    # ไม่ได้ ขึ้นข้อความงงๆ "Unexpected token '<'..." ให้ผู้ใช้เห็นแทนที่จะเป็นข้อความไทยที่เข้าใจง่าย
+    # (endpoint นี้ใช้ร่วมกันทั้งมุมมอง "เปรียบเทียบ Sector" ในหน้านี้ และตาราง Top 10
+    # เติบโตโดดเด่นในหน้า Market Trend เลยกระทบ 2 หน้าพร้อมกันถ้าพัง) — ครอบเฉพาะ cold path
+    # เท่านั้น (compute จริงครั้งแรก/หลัง clear) ถ้าพังตอน background revalidate (ดู
+    # _swr_get_or_refresh) จะ log แล้วใช้ค่าเก่าต่อแทน ไม่ทำให้ endpoint ตอบ 500
+    try:
+        compare = _swr_get_or_refresh(_sector_compare_cache, _sector_compare_lock,
+                                       _SECTOR_COMPARE_CACHE_TTL, _compute)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"รวมข้อมูล sector ล้มเหลว: {e}"}), 500
+    return jsonify(compare)
 
 
 @app.route("/api/market-trend")
@@ -3745,41 +3853,34 @@ def market_trend():
     รายได้/กำไร/NPM ตัดหุ้นกลุ่มการเงิน (factor_snapshot._financial_sector_symbols, ใช้ตัวเดียวกับ
     ที่กัน Z-Score ไม่ได้) และ Property Fund & REITs ออก — นิยาม 'รายได้' ธุรกิจสองกลุ่มนี้ไม่เทียบเท่า
     บริษัททั่วไป ส่วน ROE/Cash Quality/Breadth ใช้ทั้งตลาดตามปกติ"""
-    cached = _market_trend_cache.get("result")
-    if cached and (time.time() - _market_trend_cache.get("ts", 0) < _MARKET_TREND_CACHE_TTL):
-        return jsonify(cached)
+    def _compute():
+        symbols = set()
+        reit_symbols = set()
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, encoding="utf-8") as f:
+                    for s in json.load(f).get("stocks", []):
+                        if s.get("market") == "SET":
+                            symbols.add(s["symbol"])
+                            if s.get("sector") == "Property Fund & REITs":
+                                reit_symbols.add(s["symbol"])
+            except Exception:
+                pass
 
-    with _market_trend_lock:
-        cached = _market_trend_cache.get("result")
-        if cached and (time.time() - _market_trend_cache.get("ts", 0) < _MARKET_TREND_CACHE_TTL):
-            return jsonify(cached)
+        excluded = factor_snapshot._financial_sector_symbols(BASE_DIR) | reit_symbols
+        return financials_store.get_market_trend(BASE_DIR, symbols, excluded)
 
-        # try/except ครอบทั้งก้อนคำนวณ — เหมือน /api/sector-compare (ดู comment ที่นั่น) exception ที่
-        # ไม่คาดคิด (payload เพี้ยนใน DB, DB ล็อกจาก sync พร้อมกัน, ฯลฯ) จะได้ตอบ JSON error กลับแทน
-        # หน้า 500 HTML ของ Flask ที่ frontend (loadMarketTrendPage) parse ไม่ได้
-        try:
-            symbols = set()
-            reit_symbols = set()
-            if os.path.exists(DATA_FILE):
-                try:
-                    with open(DATA_FILE, encoding="utf-8") as f:
-                        for s in json.load(f).get("stocks", []):
-                            if s.get("market") == "SET":
-                                symbols.add(s["symbol"])
-                                if s.get("sector") == "Property Fund & REITs":
-                                    reit_symbols.add(s["symbol"])
-                except Exception:
-                    pass
-
-            excluded = factor_snapshot._financial_sector_symbols(BASE_DIR) | reit_symbols
-            trend = financials_store.get_market_trend(BASE_DIR, symbols, excluded)
-        except Exception as e:
-            traceback.print_exc()
-            return jsonify({"error": f"รวมข้อมูลแนวโน้มตลาดล้มเหลว: {e}"}), 500
-
-        _market_trend_cache["result"] = trend
-        _market_trend_cache["ts"] = time.time()
-        return jsonify(trend)
+    # try/except ครอบทั้งก้อนคำนวณ — เหมือน /api/sector-compare (ดู comment ที่นั่น) exception ที่
+    # ไม่คาดคิด (payload เพี้ยนใน DB, DB ล็อกจาก sync พร้อมกัน, ฯลฯ) จะได้ตอบ JSON error กลับแทน
+    # หน้า 500 HTML ของ Flask ที่ frontend (loadMarketTrendPage) parse ไม่ได้ — ครอบเฉพาะ cold
+    # path เท่านั้น พังตอน background revalidate จะ log แล้วใช้ค่าเก่าต่อแทน (ดู _swr_get_or_refresh)
+    try:
+        trend = _swr_get_or_refresh(_market_trend_cache, _market_trend_lock,
+                                     _MARKET_TREND_CACHE_TTL, _compute)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"รวมข้อมูลแนวโน้มตลาดล้มเหลว: {e}"}), 500
+    return jsonify(trend)
 
 
 @app.route("/api/sector-trend")
@@ -3800,7 +3901,7 @@ def sector_trend():
     if cached and (time.time() - cached.get("ts", 0) < _SECTOR_TREND_CACHE_TTL):
         return jsonify(cached["result"])
 
-    with _sector_trend_lock:
+    with _get_sector_trend_lock(sector):
         cached = _sector_trend_cache.get(sector)
         if cached and (time.time() - cached.get("ts", 0) < _SECTOR_TREND_CACHE_TTL):
             return jsonify(cached["result"])
@@ -4862,7 +4963,7 @@ def _run_us_index_sync(min_age_days=None):
             result = financials_store.sync_all(BASE_DIR, extra, sources=("yahoo_q", "yahoo"),
                                                callback=cb, is_dr=True, market="US",
                                                min_age_days=min_age_days)
-            _fin_analytics_cache.clear()
+            _clear_fin_analytics_and_warm()
         else:
             result = {"ok": 0, "fail": 0, "total": 0, "skipped": 0}
 
@@ -4990,7 +5091,7 @@ def _run_hk_index_sync(min_age_days=None):
             result = financials_store.sync_all(BASE_DIR, extra, sources=("yahoo_q", "yahoo"),
                                                callback=cb, is_dr=True, market="HK",
                                                min_age_days=min_age_days)
-            _fin_analytics_cache.clear()
+            _clear_fin_analytics_and_warm()
         else:
             result = {"ok": 0, "fail": 0, "total": 0, "skipped": 0}
 
@@ -5094,7 +5195,7 @@ def _run_jp_index_sync():
         _update(message="กำลัง rebuild factor snapshot JP...")
         n_mirror = factor_snapshot.build_mirror_snapshot_yahoo_only(
             BASE_DIR, "JP", tickers, price_by_ticker=price_by_ticker)
-        _fin_analytics_cache.clear()
+        _clear_fin_analytics_and_warm()
 
         _update(done=True,
                 message=f"เสร็จแล้ว! ดัชนี Nikkei 225 อัพเดท +{added_n}/-{removed_n} · "
@@ -6380,10 +6481,37 @@ def _dh_item(key, label, category, dt, warn_h, red_h,
     }
 
 
+_data_health_cache = {"result": None, "ts": 0}
+_data_health_lock  = threading.Lock()
+_DATA_HEALTH_TTL   = 300   # 5 นาที — หน้านี้วัด "ความสดของข้อมูล" หน่วยชั่วโมง/วัน
+                            # ไม่ต้อง real-time ระดับวินาที (ปุ่มรีเฟรชใช้ ?fresh=1 ข้าม cache ได้)
+
+
 @app.route("/api/data-health")
 def data_health():
     """สถานะความสดของไฟล์/DB หลักทุกตัวที่ dashboard ใช้ — เกณฑ์ ok/warn/red
-    ต่อรายการ (ดู PLAN_universe_data_health.txt ส่วนที่ 6 งาน 1)"""
+    ต่อรายการ (ดู PLAN_universe_data_health.txt ส่วนที่ 6 งาน 1)
+
+    cache 5 นาที (double-checked locking เหมือน /api/sector-compare) — เดิมไม่มี cache เลย
+    คำนวณใหม่ทั้งหน้าทุกครั้งที่เปิด (วัดจริง ~3.6 วิ: สแกน 4 price DB + coverage งบ 4 รอบ)"""
+    fresh = request.args.get("fresh") == "1"
+    if not fresh:
+        cached = _data_health_cache.get("result")
+        if cached and (time.time() - _data_health_cache.get("ts", 0) < _DATA_HEALTH_TTL):
+            return jsonify(cached)
+
+    with _data_health_lock:
+        if not fresh:
+            cached = _data_health_cache.get("result")
+            if cached and (time.time() - _data_health_cache.get("ts", 0) < _DATA_HEALTH_TTL):
+                return jsonify(cached)
+        result = _compute_data_health()
+        _data_health_cache["result"] = result
+        _data_health_cache["ts"] = time.time()
+        return jsonify(result)
+
+
+def _compute_data_health():
     items = []
 
     # ราคา/เทคนิค — auto 3 รอบ/วัน (จ-ศ), gap วันหยุดสุดสัปดาห์ ~59.5 ชม.
@@ -6613,14 +6741,25 @@ def data_health():
     # "ไม่เคย sync จริง" ออกจาก "เก่าเกิน 1 ปี" ให้เห็นในแอปเลย ไม่ต้องไล่เช็คมือแบบ 2026-08-15
     # (วันนั้นเจอ 104 ตัวที่เข้าใจผิดว่า 'ไม่เคย sync' ทั้งที่จริงมีอยู่แล้วใต้ namespace 'DR:' —
     # get_mirror_index_coverage เช็คถูก namespace แล้ว ไม่เกิด false positive แบบนั้นอีก)
+    #
+    # โหลด 'have' (ทุกแถว source='yahoo') ครั้งเดียว ใช้ร่วมกับ 4 การเช็ค coverage ด้านล่าง
+    # (ก้อนรวม US/HK/JP + แยกย่อย SP500/Dow/Nasdaq100 อีก 3 รอบ) — เดิมแต่ละรอบ query DB
+    # ใหม่ทุกครั้ง (วัดจริง ~0.9 วิรวม) ถ้าโหลดพลาดตรงนี้ปล่อยเป็น None ให้แต่ละ try ด้านล่าง
+    # (ที่ยังมี except คลุมแยกอิสระเหมือนเดิม) โหลดซ้ำเองแทน
+    try:
+        _mim_have = financials_store.load_mirror_yahoo_have(BASE_DIR)
+    except Exception:
+        _mim_have = None
+
     try:
         from sources import us_index_metrics as _mim_us, hk_index_metrics as _mim_hk, jp_index_metrics as _mim_jp
         _mim_us_syms = [s["symbol"] for s in _mim_us.load_local(BASE_DIR).get("stocks", [])]
         _mim_hk_syms = [s["symbol"].replace(".HK", "") for s in _mim_hk.load_local(BASE_DIR).get("stocks", [])]
         _mim_jp_stocks = _mim_jp.load_local(BASE_DIR).get("stocks", [])
         _mim_jp_syms = [s["symbol"][:-2] for s in _mim_jp_stocks if s["symbol"].endswith(".T")]
-        _mim_cov = financials_store.get_mirror_index_coverage(
-            BASE_DIR, {"US": _mim_us_syms, "HK": _mim_hk_syms, "JP": _mim_jp_syms}, stale_days=365)
+        _have = _mim_have if _mim_have is not None else financials_store.load_mirror_yahoo_have(BASE_DIR)
+        _mim_cov = financials_store.mirror_index_coverage_from_have(
+            _have, {"US": _mim_us_syms, "HK": _mim_hk_syms, "JP": _mim_jp_syms}, stale_days=365)
         _mim_total = _mim_cov["total"]
         _mim_missing = len(_mim_cov["missing"])
         _mim_stale = len(_mim_cov["stale"])
@@ -6660,9 +6799,10 @@ def data_health():
         _uim_rows = []
         _uim_worst_pct = 100.0
         _uim_missing_by_group = {}
+        _have = _mim_have if _mim_have is not None else financials_store.load_mirror_yahoo_have(BASE_DIR)
         for _gk, _glabel in _uim_groups:
             _gsyms = [s.upper().strip() for s in (_uim_local.get(_gk) or [])]
-            _gcov = financials_store.get_mirror_index_coverage(BASE_DIR, {"US": _gsyms}, stale_days=365)
+            _gcov = financials_store.mirror_index_coverage_from_have(_have, {"US": _gsyms}, stale_days=365)
             _gtotal = _gcov["total"]
             _gmissing = _gcov["missing"]
             _gcovered = _gtotal - len(_gmissing)
@@ -6961,11 +7101,11 @@ def data_health():
     for it in items:
         summary[it["status"]] += 1
 
-    return jsonify({
+    return {
         "checked_at": _dh_dt.now().strftime("%Y-%m-%d %H:%M:%S"),
         "items": items,
         "summary": summary,
-    })
+    }
 
 
 @app.route("/api/data-health-ping")
@@ -7217,7 +7357,7 @@ def _run_mirror_sync_new():
 
         result = financials_store.mirror_finnomena(BASE_DIR, exchanges=exs, callback=cb, force=False)
         _mirror_diff_cache.clear()   # ตัวใหม่ถูกดึงแล้ว — เช็คครั้งหน้าต้องได้ผลใหม่
-        _fin_analytics_cache.clear()
+        _clear_fin_analytics_and_warm()
         _update(done=True,
                 message=f"เสร็จแล้ว! ดึงงบได้ {result['ok']} ตัว · ไม่มีงบ {result['empty']} ตัว"
                         + (f" (ล้มเหลว {result['fail']} — ลองอีกครั้งได้)" if result["fail"] else ""))
@@ -7266,7 +7406,7 @@ def _run_mirror_yahoo_index_sync(limit=None):
 
         _update(message="Sync งบเสร็จ — กำลัง rebuild factor snapshot mirror...")
         mirror_counts = factor_snapshot.build_mirror_snapshot(BASE_DIR, exchanges=("US", "HK"))
-        _fin_analytics_cache.clear()
+        _clear_fin_analytics_and_warm()
 
         summary = (f"เสร็จแล้ว! ดึงงบ Yahoo ได้ {result['ok']} ตัว "
                    f"(ข้าม {result['skipped']} ที่มีอยู่แล้ว"
@@ -7456,7 +7596,7 @@ def _run_mirror_finnomena_force_full():
         factor_snapshot.build_snapshot(BASE_DIR)
         _update(current=94, total=100, message="กำลัง rebuild mirror snapshot US/HK...")
         factor_snapshot.build_mirror_snapshot(BASE_DIR)
-        _fin_analytics_cache.clear()
+        _clear_fin_analytics_and_warm()
 
         elapsed_min = (time.time() - t0) / 60
         summary = (f"เสร็จแล้ว! มีงบ {result['ok']} · ไม่มีงบ {result['empty']}"
@@ -7503,7 +7643,7 @@ def _run_mirror_finnomena_normal_full():
         factor_snapshot.build_snapshot(BASE_DIR)
         _update(current=94, total=100, message="กำลัง rebuild mirror snapshot US/HK...")
         factor_snapshot.build_mirror_snapshot(BASE_DIR)
-        _fin_analytics_cache.clear()
+        _clear_fin_analytics_and_warm()
 
         elapsed_min = (time.time() - t0) / 60
         summary = (f"เสร็จแล้ว! ดึงงบได้ {result['ok']} · ไม่มีงบ {result['empty']}"
@@ -7748,7 +7888,7 @@ def _run_refresh(period="max"):
                 _update(message="Batch fetch เสร็จ — กำลัง rebuild factor snapshot...")
                 factor_snapshot.build_snapshot(BASE_DIR)
                 factor_snapshot.build_mirror_snapshot(BASE_DIR, exchanges=("US", "HK"))
-                _fin_analytics_cache.clear()
+                _clear_fin_analytics_and_warm()
         except Exception as e:
             print(f"[FullRefresh] Batch dividends error: {e}")
             warnings.append(f"Batch fetch ปันผลล้มเหลว: {e}")
@@ -9856,9 +9996,13 @@ if __name__ == "__main__":
         import time as _t
         _t.sleep(3)   # ให้ server เปิดพอร์ตเสร็จก่อน ค่อยเริ่มงานเบื้องหลัง
         tc = app.test_client()
-        for ep in ("/api/market-flow", "/api/breadth?range=1y",
-                   "/api/market-internals", "/api/financials-analytics",
-                   "/api/sector-compare", "/api/market-trend",
+        # เรียงตาม "เมนูที่ผู้ใช้เปิดแล้วรอจริง" ก่อน — เดิม financials-analytics (หนักสุด
+        # ~13 วิ และเป็นตัวที่ sector-compare พึ่งอยู่) ถูกอุ่นเป็นลำดับที่ 4 ต่อจาก
+        # breadth ~6 วิ + market-internals ~10 วิ ทำให้หน้า "ดัชนีกลุ่มอุตสาหกรรม SET & mai"
+        # กับ "แนวโน้มตลาด" ยังเย็นอยู่ ~40 วิแรกหลังเปิดแอป (ตอนนี้พร้อมภายใน ~17 วิ)
+        for ep in ("/api/financials-analytics", "/api/sector-compare", "/api/market-trend",
+                   "/api/data-health",
+                   "/api/market-flow", "/api/market-internals", "/api/breadth?range=1y",
                    "/api/us-breadth?range=1y", "/api/hk-breadth?range=1y", "/api/jp-breadth?range=1y"):
             try:
                 t0 = _t.time()

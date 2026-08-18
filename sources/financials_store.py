@@ -254,11 +254,19 @@ def get_names_bulk(base_dir, prefix, sources=("yahoo_q", "yahoo")):
     return {raw: v[1] for raw, v in best.items()}
 
 
-def get(base_dir, symbol, source, is_dr=False, market=None):
+def get(base_dir, symbol, source, is_dr=False, market=None, con=None):
+    """con=None (ปกติ): เปิด/ปิด connection ของตัวเอง — ใช้ตอนเรียกเดี่ยวๆ
+
+    con=<connection ที่เปิดไว้แล้ว>: reuse connection เดิม ไม่เปิด/ปิดใหม่ — ใช้ตอน caller
+    วนเรียก get() หลายร้อย/พันครั้งติดกัน (เช่น _compute_fin_analytics_for ใน app.py ที่วน
+    ทุกหุ้นในตลาด) เดิมเปิด-ปิด sqlite connection ใหม่ทุกครั้ง วัดจริงตอน /api/financials-analytics
+    cache miss: 3,419 connection กิน connect+close+PRAGMA รวม ~5 วิ จาก 13 วิทั้งหมด"""
     if not db_exists(base_dir):
         return None
     key = _dr_key(symbol) if is_dr else symbol
-    con = _connect(base_dir)
+    _owns_con = con is None
+    if con is None:
+        con = _connect(base_dir)
     try:
         row = con.execute(
             "SELECT payload, synced_at FROM financials WHERE symbol=? AND source=?",
@@ -284,7 +292,8 @@ def get(base_dir, symbol, source, is_dr=False, market=None):
                     row = mrow
                     break
     finally:
-        con.close()
+        if _owns_con:
+            con.close()
     if not row:
         return None
     # payload เสีย (เขียนไฟล์ค้างกลางคัน/backup ตัดไม่สมบูรณ์) ไม่ควรทำให้ caller ทั้งหมด
@@ -2444,17 +2453,11 @@ def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, call
     return {"ok": ok, "fail": fail, "total": total, "skipped": skipped}
 
 
-def get_mirror_index_coverage(base_dir, tickers_by_ex, stale_days=365):
-    """เช็ค coverage ของ mirror งบดัชนีหลัก US/HK/JP (source 'yahoo', namespace 'FINN:{ex}:{name}')
-    ใช้ทำ item หน้า Data Health — แยก "ไม่เคย sync จริง" ออกจาก "เก่าเกิน stale_days วัน"
-
-    สำคัญ: ต้องเช็คทั้ง namespace 'FINN:' และ 'DR:' เหมือน logic จริงใน sync_mirror_yahoo_index
-    (ที่ข้าม ticker ที่มี source='yahoo' อยู่แล้วไม่ว่า namespace ไหน เพราะบางตัวซ้ำกับพอร์ต DR/NVDR
-    ที่ sync ไปแล้ว) — เช็คแค่ 'FINN:' อย่างเดียวจะได้ false positive 'ไม่เคย sync' ทั้งที่จริงมี
-    ข้อมูลถูกต้องอยู่แล้วใต้ 'DR:' (เจอเคสนี้จริง 104 ตัวตอนไล่เช็คมือ 2026-08-15 ก่อนจะทำฟังก์ชันนี้)
-
-    คืน {"total": n, "missing": [(ex,name)], "stale": [(ex,name,latest_date,age_days)],
-    "fresh": n} — 'missing' คือของจริงที่ไม่เคย sync เลยไม่ว่า namespace ไหน"""
+def load_mirror_yahoo_have(base_dir):
+    """คืน {symbol: payload_raw} ของทุกแถว source='yahoo' ในตาราง financials — ใช้แยกจาก
+    get_mirror_index_coverage เพื่อให้ caller ที่ต้องเรียกหลายรอบ (เช่น /api/data-health ที่เช็ค
+    ทั้งก้อน US/HK/JP รวม แล้วแยกย่อย SP500/Dow/Nasdaq100 อีก 3 รอบ) ยิง SELECT ทีเดียวแล้ว reuse
+    ผลลัพธ์ แทนที่จะ query ทั้งตาราง financials ซ้ำทุกรอบ (วัดจริง: 4 เรียก ~0.9 วิ)"""
     init_db(base_dir)
     con = _connect(base_dir)
     try:
@@ -2462,8 +2465,13 @@ def get_mirror_index_coverage(base_dir, tickers_by_ex, stale_days=365):
             "SELECT symbol, payload FROM financials WHERE source='yahoo'").fetchall()
     finally:
         con.close()
-    have = {sym: payload for sym, payload in rows}
+    return {sym: payload for sym, payload in rows}
 
+
+def mirror_index_coverage_from_have(have, tickers_by_ex, stale_days=365):
+    """ส่วนคำนวณล้วนของ get_mirror_index_coverage — รับ `have` (ผลจาก load_mirror_yahoo_have)
+    มาจาก caller แทนที่จะ query DB เอง ดู docstring get_mirror_index_coverage สำหรับ logic
+    namespace FINN:/DR: และความหมายของค่าที่คืน"""
     today = date.today()
     missing, stale, fresh = [], [], 0
     for ex, names in tickers_by_ex.items():
@@ -2489,6 +2497,24 @@ def get_mirror_index_coverage(base_dir, tickers_by_ex, stale_days=365):
     stale.sort(key=lambda x: -x[3])
     total = sum(len(v) for v in tickers_by_ex.values())
     return {"total": total, "missing": missing, "stale": stale, "fresh": fresh}
+
+
+def get_mirror_index_coverage(base_dir, tickers_by_ex, stale_days=365):
+    """เช็ค coverage ของ mirror งบดัชนีหลัก US/HK/JP (source 'yahoo', namespace 'FINN:{ex}:{name}')
+    ใช้ทำ item หน้า Data Health — แยก "ไม่เคย sync จริง" ออกจาก "เก่าเกิน stale_days วัน"
+
+    สำคัญ: ต้องเช็คทั้ง namespace 'FINN:' และ 'DR:' เหมือน logic จริงใน sync_mirror_yahoo_index
+    (ที่ข้าม ticker ที่มี source='yahoo' อยู่แล้วไม่ว่า namespace ไหน เพราะบางตัวซ้ำกับพอร์ต DR/NVDR
+    ที่ sync ไปแล้ว) — เช็คแค่ 'FINN:' อย่างเดียวจะได้ false positive 'ไม่เคย sync' ทั้งที่จริงมี
+    ข้อมูลถูกต้องอยู่แล้วใต้ 'DR:' (เจอเคสนี้จริง 104 ตัวตอนไล่เช็คมือ 2026-08-15 ก่อนจะทำฟังก์ชันนี้)
+
+    คืน {"total": n, "missing": [(ex,name)], "stale": [(ex,name,latest_date,age_days)],
+    "fresh": n} — 'missing' คือของจริงที่ไม่เคย sync เลยไม่ว่า namespace ไหน
+
+    เรียกซ้ำหลายรอบ (เช่นแยกตามดัชนีย่อย) ให้ใช้ load_mirror_yahoo_have() +
+    mirror_index_coverage_from_have() แทน — ตัวนี้ query DB ใหม่ทุกครั้งที่เรียก"""
+    have = load_mirror_yahoo_have(base_dir)
+    return mirror_index_coverage_from_have(have, tickers_by_ex, stale_days=stale_days)
 
 
 def _load_set_qpl_all(base_dir, allowed_symbols):

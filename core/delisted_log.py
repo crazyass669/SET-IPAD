@@ -18,28 +18,15 @@ def _log_path(base_dir):
     return os.path.join(base_dir, "delisted_log.json")
 
 
-def record_delisted(base_dir, symbol, market, reason, last_seen=None):
-    """upsert ตาม (market, symbol) — เก็บ detected_at ของครั้งแรกที่เจอไว้เสมอ
-    (ไม่ทับ แม้ถูกเรียกซ้ำทุกรอบที่ universe ยังกรองตัวเดิมออก) อัพเดตแค่
-    last_seen/reason ถ้าเปลี่ยน"""
-    path = _log_path(base_dir)
+def _read(path):
     try:
         with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+            return json.load(f)
     except Exception:
-        data = {}
-    key = f"{market}:{symbol}"
-    if key in data:
-        data[key]["last_seen"] = last_seen or data[key].get("last_seen")
-        data[key]["reason"] = reason
-    else:
-        data[key] = {
-            "symbol": symbol,
-            "market": market,
-            "reason": reason,
-            "detected_at": datetime.now().strftime("%Y-%m-%d"),
-            "last_seen": last_seen,
-        }
+        return {}
+
+
+def _write(path, data):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1, sort_keys=True)
@@ -54,6 +41,60 @@ def record_delisted(base_dir, symbol, market, reason, last_seen=None):
             if attempt == 4:
                 raise
             time.sleep(0.2 * (attempt + 1))
+
+
+def _apply(data, symbol, market, reason, last_seen=None):
+    """upsert 1 รายการลง dict ที่อ่านมาแล้ว — คืน True ถ้ามีอะไรเปลี่ยนจริง"""
+    key = f"{market}:{symbol}"
+    cur = data.get(key)
+    if cur is not None:
+        new_last_seen = last_seen or cur.get("last_seen")
+        if cur.get("last_seen") == new_last_seen and cur.get("reason") == reason:
+            return False
+        cur["last_seen"] = new_last_seen
+        cur["reason"] = reason
+        return True
+    data[key] = {
+        "symbol": symbol,
+        "market": market,
+        "reason": reason,
+        "detected_at": datetime.now().strftime("%Y-%m-%d"),
+        "last_seen": last_seen,
+    }
+    return True
+
+
+def record_delisted_bulk(base_dir, entries):
+    """upsert หลายรายการในรอบเดียว — อ่านไฟล์ครั้งเดียว เขียนครั้งเดียว และ
+    "ไม่เขียนเลย" ถ้าไม่มีรายการไหนเปลี่ยนจริง (กรณีปกติของ universe ที่กรอง
+    ตัวเดิมซ้ำทุกรอบ) — เดิม caller วน record_delisted() ทีละตัวซึ่งอ่าน+เขียน
+    ทั้งไฟล์ทุกครั้ง (วัดจริง: /api/data-health เขียนไฟล์ 276 รอบ = ~3 วินาที
+    ต่อการเปิดหน้า 1 ครั้ง ทั้งที่ข้อมูลไม่เปลี่ยนเลยสักตัว)
+
+    entries = iterable ของ (symbol, market, reason, last_seen)
+    คืนจำนวนรายการที่เปลี่ยนจริง"""
+    entries = list(entries)
+    if not entries:
+        return 0
+    path = _log_path(base_dir)
+    data = _read(path)
+    changed = 0
+    for symbol, market, reason, last_seen in entries:
+        if _apply(data, symbol, market, reason, last_seen=last_seen):
+            changed += 1
+    if changed:
+        _write(path, data)
+    return changed
+
+
+def record_delisted(base_dir, symbol, market, reason, last_seen=None):
+    """upsert ตาม (market, symbol) — เก็บ detected_at ของครั้งแรกที่เจอไว้เสมอ
+    (ไม่ทับ แม้ถูกเรียกซ้ำทุกรอบที่ universe ยังกรองตัวเดิมออก) อัพเดตแค่
+    last_seen/reason ถ้าเปลี่ยน
+
+    ถ้าต้องบันทึกหลายตัวติดกัน ใช้ record_delisted_bulk() แทน — ตัวนี้อ่าน+เขียน
+    ทั้งไฟล์ต่อ 1 การเรียก"""
+    record_delisted_bulk(base_dir, [(symbol, market, reason, last_seen)])
 
 
 def read_log(base_dir):
