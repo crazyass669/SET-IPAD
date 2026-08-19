@@ -211,9 +211,12 @@ def _fetch_and_parse_insider(date_from, date_to):
             html = r.read().decode("utf-8", "ignore")
         tables = _pd.read_html(_io.StringIO(html))
     except ValueError:
-        return []   # ไม่มี <table> เลย = ช่วงนั้นไม่มีรายการ
-    except Exception:
-        return []
+        return []   # ไม่มี <table> เลย = ช่วงนั้นไม่มีรายการ (ปกติ ไม่ใช่ error)
+    # exception อื่น (network/timeout/เว็บเปลี่ยนโครง) ปล่อยให้หลุดออกไปหา caller
+    # (sync_insider_trades) แทนที่จะกลืนเป็น [] เงียบๆ เหมือนกัน — ไม่งั้น caller
+    # แยกไม่ออกระหว่าง "วันนั้นไม่มีรายการจริง" กับ "ดึงล้มเหลว" แล้วเลื่อน watermark
+    # (_last_synced_at) ไปข้างหน้าทั้งที่ยังไม่ได้ข้อมูลจริง ถ้า SEC ล่ม/เปลี่ยนโครงหน้า
+    # นานเกิน SYNC_OVERLAP_DAYS จะเกิดช่องว่างถาวรในประวัติสะสมโดยไม่มี error ให้เห็นเลย
     if not tables:
         return []
     df = tables[0]
@@ -278,9 +281,8 @@ def _fetch_and_parse_major(date_from, date_to):
             html = r.read().decode("utf-8", "ignore")
         tables = _pd.read_html(_io.StringIO(html))
     except ValueError:
-        return []   # ไม่มี <table> เลย = ช่วงนั้นไม่มีรายการ
-    except Exception:
-        return []
+        return []   # ไม่มี <table> เลย = ช่วงนั้นไม่มีรายการ (ปกติ ไม่ใช่ error)
+    # exception อื่นปล่อยหลุดไปหา caller — ดูเหตุผลเต็มใน _fetch_and_parse_insider
     if not tables:
         return []
     df = tables[0]
@@ -398,7 +400,14 @@ def sync_insider_trades(base_dir):
         date_from = date_to - timedelta(days=SYNC_OVERLAP_DAYS)
     else:
         date_from = date_to - timedelta(days=INITIAL_BACKFILL_DAYS)
-    records = _fetch_and_parse_insider(date_from, date_to)
+    # ถ้า fetch ล้มเหลวจริง (ไม่ใช่แค่ "วันนั้นไม่มีรายการ" — ดู _fetch_and_parse_insider)
+    # ห้ามเลื่อน watermark ไปข้างหน้า ไม่งั้นรอบถัดไปจะไม่ retry ช่วงที่พลาดไปอีกเลย
+    # (SYNC_OVERLAP_DAYS มีไว้กันแค่รายการยื่นช้า ไม่ใช่กัน sync ล้มเหลวทั้งรอบ)
+    try:
+        records = _fetch_and_parse_insider(date_from, date_to)
+    except Exception as e:
+        print(f"[sec_store] sync_insider_trades ล้มเหลว ({e}) — ข้ามรอบนี้ ไม่เลื่อน watermark")
+        return 0
     upsert_insider_trades(base_dir, records)
     _set_meta(base_dir, "insider_last_synced_at", date_to.strftime("%Y-%m-%d %H:%M:%S"))
     return len(records)
@@ -413,7 +422,11 @@ def sync_major_changes(base_dir):
         date_from = date_to - timedelta(days=SYNC_OVERLAP_DAYS)
     else:
         date_from = date_to - timedelta(days=INITIAL_BACKFILL_DAYS)
-    records = _fetch_and_parse_major(date_from, date_to)
+    try:
+        records = _fetch_and_parse_major(date_from, date_to)
+    except Exception as e:
+        print(f"[sec_store] sync_major_changes ล้มเหลว ({e}) — ข้ามรอบนี้ ไม่เลื่อน watermark")
+        return 0
     upsert_major_changes(base_dir, records)
     _set_meta(base_dir, "major_last_synced_at", date_to.strftime("%Y-%m-%d %H:%M:%S"))
     return len(records)

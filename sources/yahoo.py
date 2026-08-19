@@ -97,7 +97,7 @@ def fetch_all_batch(tickers, callback=None, period="max", sleep_s=0.3):
             if len(chunk) == 1:
                 raw = yf.download(
                     chunk[0], period=period, auto_adjust=False,
-                    progress=False, threads=False,
+                    progress=False, threads=False, session=_TimeoutSession(),
                 )
                 rec = _extract_ohlcav(raw, min_bars=5)
                 if rec is not None:
@@ -105,7 +105,7 @@ def fetch_all_batch(tickers, callback=None, period="max", sleep_s=0.3):
             else:
                 raw = yf.download(
                     chunk, period=period, auto_adjust=False,
-                    progress=False, group_by="ticker", threads=True,
+                    progress=False, group_by="ticker", threads=True, session=_TimeoutSession(),
                 )
                 for tick in chunk:
                     try:
@@ -146,7 +146,7 @@ def fetch_gap_batch(tickers, start_date, callback=None, sleep_s=0.3):
             if len(chunk) == 1:
                 raw = yf.download(
                     chunk[0], start=start_date, auto_adjust=False,
-                    progress=False, threads=False,
+                    progress=False, threads=False, session=_TimeoutSession(),
                 )
                 rec = _extract_ohlcav(raw, min_bars=1)
                 if rec is not None:
@@ -154,7 +154,7 @@ def fetch_gap_batch(tickers, start_date, callback=None, sleep_s=0.3):
             else:
                 raw = yf.download(
                     chunk, start=start_date, auto_adjust=False,
-                    progress=False, group_by="ticker", threads=True,
+                    progress=False, group_by="ticker", threads=True, session=_TimeoutSession(),
                 )
                 for tick in chunk:
                     try:

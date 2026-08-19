@@ -37,9 +37,19 @@ def _write(path, data):
         try:
             os.replace(tmp, path)
             return
-        except PermissionError:
+        except PermissionError as e:
             if attempt == 4:
-                raise
+                # เดิม raise ทิ้งที่นี่ขัดกับเจตนาของคอมเมนต์ข้างบน (ไม่ critical, ไม่ควร
+                # crash ทั้ง batch) ถ้า caller (เช่น build_mirror_snapshot เรียกรัวๆ ใน
+                # thread งานพื้นหลัง) ไม่มี try/except ห่ออยู่ exception นี้จะทำให้ job
+                # ทั้งก้อนพังกลางทาง — log เตือนแล้วปล่อยผ่าน ไฟล์ log สะสมนี้จะขาดรายการ
+                # ของรอบนี้ไปแค่รอบเดียว (รอบหน้าที่ universe ยังกรองตัวเดิมซ้ำจะเขียนติดใหม่)
+                print(f"[delisted_log] เขียนไฟล์ไม่สำเร็จหลัง retry 5 ครั้ง ({e}) — ข้าม (ไม่ critical)")
+                try:
+                    os.remove(tmp)
+                except Exception:
+                    pass
+                return
             time.sleep(0.2 * (attempt + 1))
 
 

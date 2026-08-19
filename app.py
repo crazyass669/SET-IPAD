@@ -907,6 +907,13 @@ def _dr_do_rebuild():
 
     yf_tickers = list({s["yf"] for s in _dr_universe})
 
+    from sources.yahoo import _TimeoutSession
+
+    # session เดียวใช้ร่วมกันทุก thread + บังคับ timeout ต่อ request — เดิม yf.download()
+    # ก้อนนี้ไม่มี session เลย เป็นจุดเดียวใน DR pipeline ที่หลุด pattern _TimeoutSession
+    # ของโปรเจกต์ ถ้า Yahoo ค้าง socket กลางทาง thread จะค้างไม่มีกำหนด ยึด
+    # _dr_rebuild_lock ตลอดไป ซึ่ง /api/job-reset ตั้งใจไม่แตะ (ดูคอมเมนต์ที่นั่น) ต้อง
+    # restart ทั้งเซิร์ฟเวอร์ถึงจะกู้คืนได้ — ดู sources/yahoo.py: REQUEST_TIMEOUT
     raw = yf.download(
         yf_tickers,
         period="max",
@@ -914,6 +921,7 @@ def _dr_do_rebuild():
         progress=False,
         group_by="ticker",
         threads=True,
+        session=_TimeoutSession(),
     )
 
     # market cap: เดิมยิง fast_info ทีละตัวแบบ sequential ~283 รอบในลูปด้านล่าง
@@ -921,13 +929,7 @@ def _dr_do_rebuild():
     # 12 threads เหลือ ~15 วิ และถ้าดึงพลาดใช้ค่ารอบก่อนจาก cache แทน
     # (market cap เปลี่ยนช้า ค่าเก่าอายุไม่กี่ชั่วโมงใช้แทนได้สบาย)
     from concurrent.futures import ThreadPoolExecutor
-    from sources.yahoo import _TimeoutSession
 
-    # session เดียวใช้ร่วมกันทุก thread + บังคับ timeout ต่อ request (เดิมสร้าง
-    # yf.Ticker(t) เปล่าๆ ไม่มี session — จุดเดียวใน DR pipeline ที่หลุด pattern
-    # _TimeoutSession ของโปรเจกต์ ถ้า Yahoo ตอบช้า/ไม่ตอบ 12 worker จะรอกันยาว
-    # ค้าง _dr_rebuild_lock ซึ่ง /api/job-reset ตั้งใจไม่แตะ ต้อง restart ทั้งเซิร์ฟเวอร์
-    # ถึงจะกู้คืนได้ — ดู sources/yahoo.py: REQUEST_TIMEOUT)
     _mc_session = _TimeoutSession()
 
     def _mc_one(t):
@@ -1600,6 +1602,7 @@ def dr_quick_update():
     import yfinance as yf
     import pandas as pd
     from datetime import datetime as _dt
+    from sources.yahoo import _TimeoutSession
 
     with _dr_refresh_lock:
         if _dr_refresh_state["running"]:
@@ -1643,7 +1646,7 @@ def dr_quick_update():
                 dl_kwargs = {"period": "30d"}
                 print("[DR quick] no history, fallback to 30d")
 
-            raw = yf.download(yf_tickers, auto_adjust=True,
+            raw = yf.download(yf_tickers, auto_adjust=True, session=_TimeoutSession(),
                               progress=False, group_by="ticker", threads=True, **dl_kwargs)
             is_multi = len(yf_tickers) > 1
 
@@ -2002,12 +2005,15 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
     # Split detector: เทียบแท่ง overlap ก่อนบันทึก — ถ้า Yahoo เพิ่งปรับราคาย้อนหลัง
     # (แตกพาร์ ฯลฯ) ต้อง refetch เต็มเฉพาะตัว ไม่งั้น series จะเป็นฐานเก่าต่อฐานใหม่
     # (ดู detect_ca_mismatch ใน services/refresh.py — ใช้ตัวเดียวกับหุ้นไทย)
+    replace_tickers = set()
     suspects = detect_ca_mismatch(BASE_DIR, data, store=store)
     if suspects:
         print(f"[{label} CA] พบ overlap mismatch: {suspects}")
         repaired = _repair_ca_tickers(BASE_DIR, data, suspects, progress_cb or (lambda *a: None))
-        for t in repaired:
-            store.delete_ticker_bars(BASE_DIR, t)
+        # ลบของเก่าทิ้งพร้อม insert ใหม่ในทรานแซกชันเดียว (ผ่าน upsert_bars ด้านล่าง)
+        # แทนที่จะลบทันทีตรงนี้แล้วค่อย upsert ทีหลัง — เดิมถ้า upsert_bars ล้มเหลว
+        # กลางทาง (ข้อมูลเสีย/exception) ราคาของ ticker เหล่านี้จะหายถาวรเพราะลบไปแล้ว
+        replace_tickers = set(repaired)
 
     # ตัดแท่งล่าสุดทิ้งถ้ายังไม่นิ่ง (ตลาดกำลังเปิด/pre-market/after-hours) — เหตุผล
     # เดียวกับ dr_quick_update (ดูคอมเมนต์ยาวตรงนั้น) timezone ต่างกันตาม region
@@ -2102,7 +2108,7 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
                 break
 
     if data:
-        store.upsert_bars(BASE_DIR, data)
+        store.upsert_bars(BASE_DIR, data, replace_tickers=replace_tickers)
     return len(data), live_map, tickers, advanced
 
 
@@ -3070,7 +3076,14 @@ def get_financials_qpl_report(symbol):
     market = request.args.get("market")
     refresh = request.args.get("refresh") == "1"
 
-    finn = None if refresh else financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr, market=market)
+    # financials_store.get() เปิด connection ใหม่ (busy_timeout=5000) — ถ้า background
+    # job (sync-all/mirror) กำลังเขียน financials.db นานเกิน 5s พอดี อาจได้
+    # sqlite3.OperationalError: database is locked ต้องกันไว้ไม่ให้ endpoint นี้ 500
+    # ทั้งที่ควร fallback ไปยิงสดแทนได้เหมือนกรณี "ไม่มีข้อมูลใน DB เลย"
+    try:
+        finn = None if refresh else financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr, market=market)
+    except Exception:
+        finn = None
     if finn is None:
         try:
             fresh = financials_store.fetch_finnomena_quarterly(sym, is_dr=is_dr)
@@ -3079,7 +3092,10 @@ def get_financials_qpl_report(symbol):
         except Exception:
             finn = None
 
-    yq = None if refresh else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, market=market)
+    try:
+        yq = None if refresh else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, market=market)
+    except Exception:
+        yq = None
     if yq is None:
         try:
             fresh = financials_store.fetch_yahoo_quarterly(sym, is_dr=is_dr, market=market)
@@ -3104,7 +3120,10 @@ def get_financials_qpl_report(symbol):
             except Exception:
                 set_series = None
 
-    report = financials_store.compute_qpl_report(finn, yq, set_series=set_series)
+    try:
+        report = financials_store.compute_qpl_report(finn, yq, set_series=set_series)
+    except Exception as e:
+        return jsonify({"error": f"ประมวลผลงบ {sym} ล้มเหลว: {e}"}), 500
     report["sym"] = sym
     report["name"] = (yq or finn or {}).get("name") or sym
     return jsonify(report)
@@ -3126,7 +3145,14 @@ def get_financials_merged_report(symbol):
     market = request.args.get("market")
     refresh = request.args.get("refresh") == "1"
 
-    finn = None if refresh else financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr, market=market)
+    # financials_store.get() เปิด connection ใหม่ (busy_timeout=5000) — ถ้า background
+    # job (sync-all/mirror) กำลังเขียน financials.db นานเกิน 5s พอดี อาจได้
+    # sqlite3.OperationalError: database is locked ต้องกันไว้ไม่ให้ endpoint นี้ 500
+    # ทั้งที่ควร fallback ไปยิงสดแทนได้เหมือนกรณี "ไม่มีข้อมูลใน DB เลย"
+    try:
+        finn = None if refresh else financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr, market=market)
+    except Exception:
+        finn = None
     if finn is None:
         try:
             fresh = financials_store.fetch_finnomena_quarterly(sym, is_dr=is_dr)
@@ -3135,7 +3161,10 @@ def get_financials_merged_report(symbol):
         except Exception:
             finn = None
 
-    yq = None if refresh else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, market=market)
+    try:
+        yq = None if refresh else financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=is_dr, market=market)
+    except Exception:
+        yq = None
     if yq is None:
         try:
             fresh = financials_store.fetch_yahoo_quarterly(sym, is_dr=is_dr, market=market)
@@ -3163,7 +3192,10 @@ def get_financials_merged_report(symbol):
         # company-highlight (source 'set') — ใช้ override total_assets/total_equity/cfo/cfi/cff
         # รายปีทับผลรวมจาก Finnomena+Yahoo (ดู set_bscf_annual_layer) หุ้นไทยเน้นข้อมูลจาก
         # SET ก่อนเพราะเป็นแหล่งทางการ ตรงตามที่บริษัทยื่นจริง
-        set_hl = None if refresh else financials_store.get(BASE_DIR, sym, "set")
+        try:
+            set_hl = None if refresh else financials_store.get(BASE_DIR, sym, "set")
+        except Exception:
+            set_hl = None
         if set_hl is None:
             try:
                 set_hl = financials_store.fetch_set_full(sym)
@@ -3171,9 +3203,12 @@ def get_financials_merged_report(symbol):
             except Exception:
                 set_hl = None
 
-    report = financials_store.compute_full_report(finn, yq, set_series=set_series)
-    set_annual = financials_store.set_bscf_annual_layer(set_hl) if set_hl else None
-    report["years"] = financials_store.rollup_full_report_annual(report["quarters"], set_annual=set_annual)["years"]
+    try:
+        report = financials_store.compute_full_report(finn, yq, set_series=set_series)
+        set_annual = financials_store.set_bscf_annual_layer(set_hl) if set_hl else None
+        report["years"] = financials_store.rollup_full_report_annual(report["quarters"], set_annual=set_annual)["years"]
+    except Exception as e:
+        return jsonify({"error": f"ประมวลผลงบ {sym} ล้มเหลว: {e}"}), 500
     report["sym"] = sym
     report["name"] = (yq or finn or {}).get("name") or sym
     # ธนาคาร/ประกัน/เงินทุนฯ — บอก frontend ให้ซ่อน Income Sankey Diagram เพราะ COGS/กำไรขั้นต้น
@@ -3221,10 +3256,13 @@ def get_financials_qpl_set(symbol):
     if not set_series:
         return jsonify({"error": f"ไม่พบข้อมูลงบไตรมาสจาก SET.or.th ของ {sym}"}), 404
 
-    report = financials_store.compute_qpl_report(None, None, set_series=set_series)
-    report["sym"] = sym
-    payload = financials_store.get(BASE_DIR, sym, "set_qpl")
-    report["synced_at"] = (payload or {}).get("synced_at")
+    try:
+        report = financials_store.compute_qpl_report(None, None, set_series=set_series)
+        report["sym"] = sym
+        payload = financials_store.get(BASE_DIR, sym, "set_qpl")
+        report["synced_at"] = (payload or {}).get("synced_at")
+    except Exception as e:
+        return jsonify({"error": f"ประมวลผลงบ {sym} ล้มเหลว: {e}"}), 500
     return jsonify(report)
 
 
@@ -4782,16 +4820,21 @@ def get_financials_sankey_sector(symbol):
     con = financials_store._connect(BASE_DIR) if financials_store.db_exists(BASE_DIR) else None
     try:
         for s in members:
-            quarters = _peer_group_quarters(s, con=con)
-            if not quarters:
+            # ห่อ per-member กันหุ้นตัวเดียวพัง (DB lock ชั่วคราว/ข้อมูลรูปแบบแปลก)
+            # ทำให้ทั้ง endpoint 500 แทนที่จะแค่ข้ามหุ้นตัวนั้นไปเหมือนสมาชิกอื่น
+            try:
+                quarters = _peer_group_quarters(s, con=con)
+                if not quarters:
+                    continue
+                rev_ttm = _ttm_sum(quarters, "revenue")
+                if not rev_ttm or rev_ttm <= 0:
+                    continue
+                for f in _SANKEY_SECTOR_PCT_FIELDS:
+                    v = _ttm_sum(quarters, f)
+                    if v is not None:
+                        pct_samples[f].append(v / rev_ttm * 100)
+            except Exception:
                 continue
-            rev_ttm = _ttm_sum(quarters, "revenue")
-            if not rev_ttm or rev_ttm <= 0:
-                continue
-            for f in _SANKEY_SECTOR_PCT_FIELDS:
-                v = _ttm_sum(quarters, f)
-                if v is not None:
-                    pct_samples[f].append(v / rev_ttm * 100)
     finally:
         if con is not None:
             con.close()
@@ -5849,9 +5892,12 @@ def financials_dq_check(symbol):
     """เทียบตัวเลขงบการเงิน Yahoo vs SET.or.th ของหุ้นตัวเดียว (on-demand, ไม่ cache — เร็วอยู่แล้ว)
     เฉพาะหุ้นไทย (DR ไม่มีข้อมูลจาก SET.or.th)"""
     sym = symbol.upper().strip()
-    payload_yahoo = financials_store.get(BASE_DIR, sym, "yahoo")
-    payload_set = financials_store.get(BASE_DIR, sym, "set")
-    return jsonify(financials_store.compare_sources(payload_yahoo, payload_set))
+    try:
+        payload_yahoo = financials_store.get(BASE_DIR, sym, "yahoo")
+        payload_set = financials_store.get(BASE_DIR, sym, "set")
+        return jsonify(financials_store.compare_sources(payload_yahoo, payload_set))
+    except Exception as e:
+        return jsonify({"error": f"เทียบข้อมูลงบ {sym} ล้มเหลว: {e}"}), 500
 
 
 INDICES_FILE = os.path.join(BASE_DIR, "indices_cache.json")
@@ -6341,6 +6387,12 @@ def job_reset():
         region_state["running"] = False
     with _indices_job_lock:
         _indices_job_state["running"] = False
+    # _restart_state["in_progress"] ตั้งเป็น True ก่อนเรียก subprocess.Popen (ดู
+    # _do_restart) แล้วไม่มีทาง reset กลับถ้า Popen ค้างนานผิดปกติ (แอนตี้ไวรัสสแกน
+    # python.exe/disk ช้า) — เพิ่มเข้า reset endpoint นี้ด้วยให้ครบทุก "running" flag
+    # ที่มีในระบบ (ปลอดภัย: ถ้า restart จริงกำลังจะสำเร็จ process จะถูกแทนที่อยู่ดี
+    # ค่า flag ที่ reset ผิดจังหวะไม่มีผลอะไรต่อ)
+    _restart_state["in_progress"] = False
     # หมายเหตุ: _dr_rebuild_lock/_etf_rebuild_lock (threading.Lock ของ /api/dr,
     # /api/etf background rebuild) ตั้งใจไม่แตะที่นี่ — force-release lock ที่
     # thread อื่นอาจกำลังถือจริงและเขียนไฟล์ cache อยู่จะทำให้ 2 thread เขียนไฟล์

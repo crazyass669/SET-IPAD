@@ -10917,11 +10917,19 @@ function _hmLiveUpdate(region, btn, idleLabel, onDone, indexKey, noteId) {
     });
 }
 
-function _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId) {
+function _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId, tries) {
+  tries = tries || 0;
+  // cap จำนวนรอบ poll (เหมือน _drPollRefresh) — กัน backend thread ค้าง (เช่น yf.download
+  // ไม่ตอบระหว่างดึงราคาสด) ทำให้ปุ่มนี้ disabled ค้างถาวรไม่มีทางกู้คืนได้เอง
+  if (tries > 160) {   // ~4 นาที (1.5วิ x 160)
+    if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
+    alert('อัพเดทราคา Live นานผิดปกติ (>4 นาที) — ลองกดใหม่ หรือรีเฟรชหน้า');
+    return;
+  }
   fetch(`/api/heatmap-live-status/${region}`)
     .then(r => r.json())
     .then(st => {
-      if (st.running) { setTimeout(() => _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId), 1500); return; }
+      if (st.running) { setTimeout(() => _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId, tries + 1), 1500); return; }
       if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
       // ต่อท้าย note เดิม (ที่ loadHeatmapPage/loadHkHeatmapPage/loadJpHeatmapPage เซ็ตตอน
       // โหลดข้อมูลใหม่เสร็จ) ด้วยสรุปผลรอบ live-update นี้ — แบบเดียวกับปุ่ม "⚡ ราคาล่าสุด"
@@ -11110,7 +11118,8 @@ async function loadBreadthCharts() {
     if (canvas)  canvas.style.display = 'none';
   });
   try {
-    const r = await fetch('/api/breadth?range=' + encodeURIComponent(rng));
+    const r = await _fetchTimeout('/api/breadth?range=' + encodeURIComponent(rng), 30000,
+      'หมดเวลารอ Market Breadth หุ้นไทย (เกิน 30 วิ) — ลองใหม่อีกครั้ง');
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     _breadthCacheByRange[rng] = d;
@@ -21370,7 +21379,16 @@ function drQuickUpdate() {
       if (res.status === 'running' && btn) {
         btn.textContent = '⏳ มีงานอัปเดตค้างอยู่ กำลังรอผล...';
       }
+      // cap จำนวนรอบ poll (เหมือน _drPollRefresh ด้านล่าง) — กัน backend thread ค้าง
+      // (เช่น yf.download ไม่ตอบ) ทำให้ปุ่มนี้ disabled ค้างถาวรไม่มีทางกู้คืนได้เอง
+      let _drQuickPollTries = 0;
       const poll = setInterval(() => {
+        if (++_drQuickPollTries > 160) {   // ~4 นาที (1.5วิ x 160) — เกินนี้ถือว่าผิดปกติ
+          clearInterval(poll);
+          if (statusEl) statusEl.textContent = 'อัปเดตนานผิดปกติ (>4 นาที) — ลองกดใหม่ หรือรีเฟรชหน้า';
+          if (btn) { btn.disabled = false; btn.textContent = '⚡ อัปเดตราคา'; }
+          return;
+        }
         fetch('/api/dr-quick-status').then(r => r.json()).then(s => {
           if (!s.running) {
             clearInterval(poll);

@@ -73,16 +73,32 @@ def make_store(db_file):
             con.close()
         return dict(rows)
 
-    def upsert_bars(base_dir, all_data_map, chunk_rows=20000):
+    def _safe_vol(x):
+        """int ปัดเศษ หรือ 0 ถ้าเป็น NaN/None/แปลงไม่ได้ — ดูเหตุผลเต็มใน core/store.py::_safe_vol
+        (x==x เดิมจับ NaN ได้แต่ None==None ก็ True เหมือนกัน หลุดไปพัง int(None))"""
+        try:
+            f = float(x)
+        except (TypeError, ValueError):
+            return 0
+        return 0 if f != f else int(f)
+
+    def upsert_bars(base_dir, all_data_map, chunk_rows=20000, replace_tickers=None):
         """all_data_map: {ticker -> {'close','volume'[,'open','high','low','adj_close']: pd.Series}}
         ทุก series align index เดียวกับ close (ดู _extract_ohlcav ใน sources/yahoo.py)
 
         commit เป็นช่วงละ chunk_rows แถวแทน transaction เดียวทั้งก้อน — ลด lock hold time
         กัน writer อื่นเจอ "database is locked" (busy_timeout=5000ms) และกันเสีย full
-        refresh ทั้งรอบถ้าโดนขัดจังหวะกลางคัน (ดูเหตุผลเต็มใน core/store.py::upsert_bars)"""
+        refresh ทั้งรอบถ้าโดนขัดจังหวะกลางคัน (ดูเหตุผลเต็มใน core/store.py::upsert_bars)
+
+        replace_tickers: ticker ที่ต้อง "แทนที่ทั้ง series" — ลบในทรานแซกชันเดียวกับ
+        chunk insert แรก (commit พร้อมกัน) กันราคาหายถาวรถ้า insert ล้มเหลวกลางทาง"""
         init_db(base_dir)
         con = _connect(base_dir)
         try:
+            if replace_tickers:
+                con.executemany("DELETE FROM prices WHERE ticker=?",
+                                 [(t,) for t in replace_tickers])
+
             def rows():
                 for ticker, data in all_data_map.items():
                     close = data["close"]; vol = data["volume"]
@@ -90,14 +106,17 @@ def make_store(db_file):
                     lo = data.get("low"); adj = data.get("adj_close")
                     idx = close.index
                     for i in range(len(idx)):
+                        c = _r4(close.iloc[i])
+                        if c is None:
+                            continue  # close ไม่ valid (None/NaN) — ข้ามแท่งนี้ ห้ามเขียนทับคอลัมน์ NOT NULL
                         ds = idx[i].strftime("%Y-%m-%d")
                         yield (ticker, ds,
                                _r4(op.iloc[i]) if op is not None else None,
                                _r4(hi.iloc[i]) if hi is not None else None,
                                _r4(lo.iloc[i]) if lo is not None else None,
-                               round(float(close.iloc[i]), 4),
+                               c,
                                _r4(adj.iloc[i]) if adj is not None else None,
-                               int(vol.iloc[i]) if vol.iloc[i] == vol.iloc[i] else 0)
+                               _safe_vol(vol.iloc[i]) if vol is not None else 0)
 
             sql = ("INSERT OR REPLACE INTO prices"
                    "(ticker,date,open,high,low,close,adj_close,volume) VALUES (?,?,?,?,?,?,?,?)")
@@ -114,6 +133,9 @@ def make_store(db_file):
             con.execute("INSERT OR REPLACE INTO meta VALUES ('updated_at', ?)",
                         (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
             con.commit()
+        except Exception:
+            con.rollback()
+            raise
         finally:
             con.close()
 

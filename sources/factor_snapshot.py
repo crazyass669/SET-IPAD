@@ -272,6 +272,14 @@ def build_snapshot(base_dir, callback=None):
             f["div_cagr_5y"] = _div_cagr_5y(base_dir, sym, market)
             rows.append((sym, 1 if is_dr else 0, market, name, f))
 
+    # กันเขียนทับตารางทั้งใบด้วยผลว่าง/หดผิดปกติ (เช่น get_synced_symbols คืนว่างเพราะ
+    # bug อื่นต้นทาง, หรือ compute loop ล้มเหลวหมดทุกตัว) — ตารางนี้เป็น cache หลักที่
+    # Screener/factor score ทั้งเว็บอ่าน ถ้าไม่มี guard เลย รอบที่ผิดปกติจะทำให้ทั้ง
+    # Screener ว่างเปล่าทันทีแทนที่จะยังโชว์ผลรอบก่อนหน้า (ผิดพลาดน้อยกว่า)
+    if not rows:
+        print(f"[factor_snapshot] rows ว่าง (0 ตัว) — ข้ามการเขียนทับ {TABLE} เก็บผลรอบก่อนหน้าไว้")
+        return {"set": 0, "dr": 0, "total": 0, "at": None, "skipped_empty": True}
+
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     con = _connect(base_dir)
     try:
@@ -530,6 +538,13 @@ def build_mirror_snapshot(base_dir, exchanges=("US", "HK"), min_quarters=12, min
                 recs.append((name, ex, f))
                 if callback and len(recs) % 200 == 0:
                     callback(ex, len(recs), name)
+            if not recs:
+                # ผลว่างผิดปกติ (เช่น query ต้นทางว่าง/DB ปัญหาชั่วคราว) — ข้ามการเขียนทับ
+                # ตลาดนี้ เก็บ snapshot รอบก่อนหน้าไว้แทนที่จะล้างเหลือ 0 ตัว (ดูเหตุผลเดียวกับ
+                # build_snapshot ด้านบน)
+                print(f"[factor_snapshot] {ex}: recs ว่าง (0 ตัว) — ข้ามการเขียนทับ {MIRROR_TABLE} ตลาดนี้")
+                out[ex] = 0
+                continue
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             con.execute(f"DELETE FROM {MIRROR_TABLE} WHERE market=?", (ex,))
             con.executemany(
@@ -577,6 +592,10 @@ def build_mirror_snapshot_yahoo_only(base_dir, market, tickers, price_by_ticker=
                 f.update(fs.compute_zscore(y, price * f["shares_out"], variant="Z"))
         f["div_cagr_5y"] = _div_cagr_5y(base_dir, ticker, market)
         recs.append((ticker, market, f))
+
+    if not recs:
+        print(f"[factor_snapshot] {market}: recs ว่าง (0 ตัว) — ข้ามการเขียนทับ {MIRROR_TABLE} ตลาดนี้")
+        return 0
 
     con = _connect(base_dir)
     try:

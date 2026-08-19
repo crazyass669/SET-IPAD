@@ -2277,9 +2277,19 @@ def mirror_finnomena(base_dir, exchanges=("TH", "HK", "US"), limit=None,
                 next_break = i + random.randint(2500, 4000)
             try:
                 rows = (_finn_get(f"/stock/summary/{sid}") or {}).get("data") or []
+                if not rows:
+                    # response ว่าง (HTTP 200 แต่ data:[]) เกิดได้ทั้งจาก "หุ้นนี้ไม่มีงบจริง"
+                    # และ "API ตอบว่างชั่วคราว" (rate-limit/edge-case) แยกไม่ออกจากตัว response
+                    # เดียว — ลอง retry สั้นๆ ก่อนสรุปว่า "ไม่มีงบ" เพราะ marker empty:true
+                    # จะทำให้ประวัติ Finnomena สะสมจริงที่มีอยู่แล้ว (ถ้ามี) ถูกซ่อนถาวรจาก
+                    # ทุกจุดที่ใช้ (get() คืน None เมื่อ empty:true) และ non-force run รอบหน้า
+                    # จะข้ามตัวนี้ไปเลย ไม่มีวัน retry เอง (Finnomena ไม่มี API ให้ backfill
+                    # ย้อนหลังได้ถ้าข้อมูลจริงหายไปจาก DB)
+                    time.sleep(2.0)
+                    rows = (_finn_get(f"/stock/summary/{sid}") or {}).get("data") or []
                 payload = _finn_map_rows(rows, name, name, "mirror", cur.get(ex, "—"))
                 if payload is None:
-                    # ไม่มีงบจริง — เก็บ marker กันยิงซ้ำ (upsert ตรง ไม่ผ่าน merge)
+                    # ไม่มีงบจริง (ยืนยันแล้ว 2 ครั้ง) — เก็บ marker กันยิงซ้ำ (upsert ตรง ไม่ผ่าน merge)
                     payload = {"sym": name, "empty": True, "period": "quarter",
                                "schema": FINN_SCHEMA, "source_note": "finnomena",
                                "income": {}, "balance": {}, "cashflow": {}}

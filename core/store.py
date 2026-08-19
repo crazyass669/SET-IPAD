@@ -218,7 +218,18 @@ def _r4(x):
 _UPSERT_CHUNK_ROWS = 20000  # commit ทุกๆ N แถว แทน transaction เดียวทั้งก้อน (ดูเหตุผลด้านล่าง)
 
 
-def upsert_bars(base_dir, all_data_map, chunk_rows=_UPSERT_CHUNK_ROWS):
+def _safe_vol(x):
+    """int ปัดเศษ หรือ 0 ถ้าเป็น NaN/None/แปลงไม่ได้ (ต่างจาก _r4 ตรงคอลัมน์ volume
+    เป็น NOT NULL — ใช้ float(x) เช็คก่อนเสมอ กัน None==None ที่หลุดผ่านเช็ค NaN แบบ
+    x==x เดิม (Python None==None เป็น True) แล้วไปพัง int(None) กลาง batch)"""
+    try:
+        f = float(x)
+    except (TypeError, ValueError):
+        return 0
+    return 0 if f != f else int(f)
+
+
+def upsert_bars(base_dir, all_data_map, chunk_rows=_UPSERT_CHUNK_ROWS, replace_tickers=None):
     """เขียนแท่งราคาลง SQLite (INSERT OR REPLACE) แบ่ง commit เป็นช่วงละ chunk_rows แถว
     แทน transaction เดียวทั้งก้อน — Full Refresh ~900 ตัว x 10 ปี ได้หลักล้านแถว ถ้าถือ
     write lock ยาวเดียวจบ writer อื่น (busy_timeout=5000ms) จะเจอ "database is locked"
@@ -229,10 +240,19 @@ def upsert_bars(base_dir, all_data_map, chunk_rows=_UPSERT_CHUNK_ROWS):
 
     all_data_map: {ticker -> {'close','volume'[,'open','high','low','adj_close']: pd.Series}}
     ทุก series ควร align index เดียวกับ close (ดู _extract_ohlcav ใน sources/yahoo.py)
-    — open/high/low/adj_close เป็น optional; ถ้าไม่มีจะเขียน NULL (แถวเก่าก่อนเพิ่ม OHLC)"""
+    — open/high/low/adj_close เป็น optional; ถ้าไม่มีจะเขียน NULL (แถวเก่าก่อนเพิ่ม OHLC)
+
+    replace_tickers: ticker ที่ต้อง "แทนที่ทั้ง series" (ลบของเก่าทิ้งก่อน insert ใหม่)
+    ลบในทรานแซกชันเดียวกับ chunk insert แรกของก้อนนี้ (commit พร้อมกัน) แทนที่จะ commit
+    การลบแยกต่างหากก่อนแล้วค่อยเรียก upsert_bars ทีหลัง — กันกรณี insert ล้มเหลวกลางทาง
+    (ข้อมูลเสีย/exception) แล้วราคาของ ticker นั้นหายถาวรเพราะลบไปแล้วแต่ไม่มีของใหม่มาแทน"""
     init_db(base_dir)
     con = _connect(base_dir)
     try:
+        if replace_tickers:
+            con.executemany("DELETE FROM prices WHERE ticker=?",
+                             [(t,) for t in replace_tickers])
+
         def rows():
             for ticker, data in all_data_map.items():
                 close = data["close"]; vol = data["volume"]
@@ -240,14 +260,17 @@ def upsert_bars(base_dir, all_data_map, chunk_rows=_UPSERT_CHUNK_ROWS):
                 lo = data.get("low"); adj = data.get("adj_close")
                 idx = close.index
                 for i in range(len(idx)):
+                    c = _r4(close.iloc[i])
+                    if c is None:
+                        continue  # close ไม่ valid (None/NaN) — ข้ามแท่งนี้ ห้ามเขียนทับคอลัมน์ NOT NULL
                     ds = idx[i].strftime("%Y-%m-%d")
                     yield (ticker, ds,
                            _r4(op.iloc[i]) if op is not None else None,
                            _r4(hi.iloc[i]) if hi is not None else None,
                            _r4(lo.iloc[i]) if lo is not None else None,
-                           round(float(close.iloc[i]), 4),
+                           c,
                            _r4(adj.iloc[i]) if adj is not None else None,
-                           int(vol.iloc[i]) if vol.iloc[i] == vol.iloc[i] else 0)
+                           _safe_vol(vol.iloc[i]) if vol is not None else 0)
 
         sql = ("INSERT OR REPLACE INTO prices"
                "(ticker,date,open,high,low,close,adj_close,volume) VALUES (?,?,?,?,?,?,?,?)")
@@ -264,6 +287,9 @@ def upsert_bars(base_dir, all_data_map, chunk_rows=_UPSERT_CHUNK_ROWS):
         con.execute("INSERT OR REPLACE INTO meta VALUES ('updated_at', ?)",
                     (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
         con.commit()
+    except Exception:
+        con.rollback()
+        raise
     finally:
         con.close()
 
@@ -388,11 +414,11 @@ def save_history(all_data_map, base_dir, existing_hist=None, replace_tickers=Non
     Returns merged history dict (JSON path) หรือ None เมื่อปิด dual-write
     """
     replace_tickers = set(replace_tickers or ())
-    for t in replace_tickers:
-        delete_ticker_bars(base_dir, t)
 
-    # SQLite คือ source of truth — upsert เฉพาะแท่งที่ได้มา
-    upsert_bars(base_dir, all_data_map)
+    # SQLite คือ source of truth — upsert เฉพาะแท่งที่ได้มา ลบ replace_tickers ของเก่า
+    # ในทรานแซกชันเดียวกับ insert (ดู upsert_bars) กัน "ลบสำเร็จแต่ insert ล้มเหลว"
+    # ทำให้ราคาหุ้นตัวนั้นหายถาวร (เดิมลบแยก commit ก่อนเรียกฟังก์ชันนี้)
+    upsert_bars(base_dir, all_data_map, replace_tickers=replace_tickers)
 
     if not DUAL_WRITE_JSON:
         return None
