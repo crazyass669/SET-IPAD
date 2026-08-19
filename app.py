@@ -5123,6 +5123,20 @@ def tearsheet(market, symbol):
         "is_financial_sector": is_financial,
         "discount_rate_default": discount_rate_default, "terminal_growth_default": 2.5,
     }
+    if not is_financial:
+        # DCF Model (forecast เต็ม) — ดึงงบ Yahoo สดตรงนี้เอง (ไม่พึ่ง factor_snapshot ที่ cache
+        # ไว้ล่วงหน้า) เพื่อให้ field ใหม่นี้ใช้ได้ทันทีไม่ต้องรอ rebuild snapshot ทั้ง universe —
+        # key/is_dr ต้องตรงกับ namespace ที่ _factors_for ใช้จริงในแต่ละ path (ดู _mirror_sym
+        # ด้านบน): lite -> 'DR:{lite_dr_sym}', TH -> รหัสดิบตรงๆ, mirror US/HK/JP -> 'FINN:{mkt}:{fkey}'
+        if lite:
+            yahoo_key, yahoo_is_dr = lite_dr_sym, True
+        elif mkt == "TH":
+            yahoo_key, yahoo_is_dr = sym, False
+        else:
+            yahoo_key, yahoo_is_dr = f"FINN:{mkt}:{fkey}", False
+        y_payload = financials_store.get(BASE_DIR, yahoo_key, "yahoo", is_dr=yahoo_is_dr)
+        if y_payload:
+            dcf["forecast"] = financials_store.compute_dcf_forecast_inputs(y_payload)
 
     # เติมเครื่องมือประเมินมูลค่าทางเลือก (นอกจาก DCF) — PEG / Graham Number / DDM / Justified P-B
     # คำนวณฝั่ง client ทั้งหมด (เหมือน DCF) ที่นี่แค่ส่งวัตถุดิบ + ค่าเริ่มต้นที่ผู้ใช้ปรับเองได้

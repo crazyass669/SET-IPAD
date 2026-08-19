@@ -3443,6 +3443,81 @@ def compute_balance_quality(payload_yahoo):
     return out
 
 
+def compute_dcf_forecast_inputs(payload_yahoo):
+    """วัตถุดิบสำหรับ DCF Model แบบเต็ม (Revenue→EBIT→NOPLAT→D&A→CapEx→ΔNWC→FCFF) จากงบ Yahoo
+    annual ปีล่าสุดที่มี Revenue+EBIT ครบ — เป็นแค่ 'ค่าเริ่มต้น' ให้ผู้ใช้ปรับเอง ไม่ใช่การพยากรณ์
+    (ทุก % คำนวณจากปีล่าสุดปีเดียว ไม่ได้เฉลี่ยหลายปี) รวม total_debt/cost_of_debt_pretax
+    (ดอกเบี้ยจ่าย÷หนี้รวม) สำหรับ Capital Structure/Cost of Debt ของ WACC เพราะมีในงบจริง —
+    ส่วน Rf/Beta/Equity Risk Premium ไม่คำนวณที่นี่ (ไม่มีในงบเลย ไม่มี beta/risk-free rate
+    เก็บไว้ในระบบ) ฝั่ง UI ให้ผู้ใช้กรอกเองทั้งหมด (ลิงก์ไปหน้า factsheet ของ SET.or.th ที่มีค่า
+    Beta หุ้นรายตัวให้ดูประกอบ)
+    คืน None ถ้าไม่มี Revenue/EBIT ปีล่าสุดให้คำนวณ"""
+    inc = payload_yahoo.get("income", {})
+    bal = payload_yahoo.get("balance", {})
+    cf = payload_yahoo.get("cashflow", {})
+
+    rev_row = inc.get("Total Revenue", {})
+    ebit_row = inc.get("EBIT", {}) or inc.get("Operating Income", {})
+    tax_row = inc.get("Tax Provision", {})
+    pretax_row = inc.get("Pretax Income", {})
+    da_row = inc.get("Reconciled Depreciation", {})
+    capex_row = cf.get("Capital Expenditure", {})
+    nwc_row = cf.get("Change In Working Capital", {})
+    debt_row = bal.get("Total Debt", {})
+    int_row = inc.get("Interest Expense", {})
+
+    if not rev_row or not ebit_row:
+        return None
+    latest_date = max(set(rev_row) & set(ebit_row), default=None)
+    if latest_date is None:
+        return None
+    revenue = rev_row.get(latest_date)
+    ebit = ebit_row.get(latest_date)
+    if not revenue or revenue <= 0:
+        return None
+
+    tax_rate = None
+    if tax_row and pretax_row:
+        td = next((d for d in tax_row if d in pretax_row), None)
+        if td:
+            pretax, tax = pretax_row.get(td), tax_row.get(td)
+            if pretax and pretax > 0 and tax is not None:
+                tax_rate = round(max(0.0, min(tax / pretax, 0.4)) * 100, 2)
+    if tax_rate is None:
+        tax_rate = 20.0   # อัตราภาษีนิติบุคคลไทยมาตรฐาน — fallback เมื่อคำนวณจากงบไม่ได้
+
+    def _pct_of_revenue(row, use_abs=False):
+        if latest_date not in row or row[latest_date] is None:
+            return None
+        v = row[latest_date]
+        return round((abs(v) if use_abs else v) / revenue * 100, 2)
+
+    rev_history = [{"year": int(d[:4]), "revenue": v} for d, v in sorted(rev_row.items()) if v is not None]
+
+    # หนี้สินรวมงวดล่าสุด (สำหรับ Capital Structure ของ WACC) + ดอกเบี้ยจ่ายเฉลี่ยต่อหนี้
+    # (ประมาณ Cost of Debt ก่อนภาษี จากงบจริง — ต่างจาก Rf/Beta/ERP ที่ไม่มีในงบเลย)
+    total_debt = debt_row.get(latest_date) if latest_date in debt_row else None
+    interest_expense = int_row.get(latest_date) if latest_date in int_row else None
+    cost_of_debt_pretax = None
+    if total_debt and total_debt > 0 and interest_expense is not None:
+        cost_of_debt_pretax = round(abs(interest_expense) / total_debt * 100, 2)
+
+    return {
+        "as_of": latest_date[:10] if isinstance(latest_date, str) else latest_date,
+        "revenue": revenue, "ebit": ebit,
+        "ebit_margin": round(ebit / revenue * 100, 2),
+        "tax_rate": tax_rate,
+        "da_pct_revenue": _pct_of_revenue(da_row, use_abs=True),
+        "capex_pct_revenue": _pct_of_revenue(capex_row, use_abs=True),
+        # ΔNWC เก็บเครื่องหมายเดิมตามงบกระแสเงินสด (บวก = ปลดปล่อยเงินสด, ลบ = ใช้เงินสด) —
+        # ฝั่ง UI บวกเข้า FCFF ตรงๆ ไม่ต้องกลับเครื่องหมาย
+        "nwc_pct_revenue": _pct_of_revenue(nwc_row, use_abs=False),
+        "total_debt": total_debt,
+        "cost_of_debt_pretax": cost_of_debt_pretax,
+        "rev_history": rev_history,
+    }
+
+
 FSCORE_CRITERIA_META = (
     ("F1", "ROA เป็นบวก"),
     ("F2", "กระแสเงินสดจากการดำเนินงานเป็นบวก"),

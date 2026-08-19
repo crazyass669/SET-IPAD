@@ -9831,6 +9831,10 @@ function renderTearsheet(d) {
       </div>
     </div>`;
 
+  const peScenarioHtml = _tsPeScenarioHtml(d);
+  const pbvScenarioHtml = _tsPbvScenarioHtml(d);
+  const finExtraHtml = `<div id="ts-fin-extra" style="margin-bottom:12px"></div>`;
+
   const dcfHtml = _tsDcfHtml(d.dcf, h.price);
 
   const quality = _tsQualityHtml(d.quality, h.symbol);
@@ -9918,7 +9922,7 @@ function renderTearsheet(d) {
 
   const altValHtml = _tsAltValHtml(d);
 
-  document.getElementById('ts-body').innerHTML = header + liteBanner + calendarWeek + actionBar + valuation + dcfHtml + altValHtml + quality + dividend + flow + seasonality + news + docs;
+  document.getElementById('ts-body').innerHTML = header + liteBanner + calendarWeek + actionBar + valuation + peScenarioHtml + pbvScenarioHtml + finExtraHtml + dcfHtml + altValHtml + quality + dividend + flow + seasonality + news + docs;
   requestAnimationFrame(() => {
     const canvas = document.getElementById('ts-spark');
     if (canvas && h.sparkline) drawSparkline(canvas, h.sparkline, h.ret_1y);
@@ -9929,9 +9933,526 @@ function renderTearsheet(d) {
     _loadPriceAnalytics(h.symbol, 'ts-lts', () => _tsData?.symbol === h.symbol, mkt !== 'TH' ? h.symbol : null);
     _tsLoadNews(h.symbol);
   }
+  _tsPeScenarioRecalc();
+  _tsPbvScenarioRecalc();
   _tsDcfRecalc();
+  _tsDcfModelRecalc();
   _tsAltValRecalc();
   _tsLoadLiveValuation(d, h);
+  _tsLoadFinExtras(d, h, mkt);
+}
+
+// ---------- Ratios รายไตรมาส + Earnings History รายปี + PE band (Finnomena) — reuse ฟังก์ชัน
+// เดียวกับหน้างบการเงิน/popup กราฟหุ้น (_finTrendSection/_finFullTable/_loadLiveValuationBand)
+// ไม่มี Finnomena coverage สำหรับ JP/lite (DR ตลาดที่ไม่มี cohort) — ข้ามไปเงียบๆ
+function _tsLoadFinExtras(d, h, mkt) {
+  const box = document.getElementById('ts-fin-extra');
+  if (!box) return;
+  box.innerHTML = '';
+  if (d.lite || mkt === 'JP') return;
+  const sym = h.symbol;
+  let qs = '', fetchSym = sym;
+  if (mkt === 'TH') { qs = ''; }
+  else if (mkt === 'US') { qs = '&is_dr=1&market=US'; }
+  else if (mkt === 'HK') { qs = '&is_dr=1&market=HK'; fetchSym = sym.replace(/\.HK$/i, ''); }
+  else return;
+  box.innerHTML = '<div class="empty" style="padding:8px 0;font-size:11px">กำลังโหลดงบการเงินเพิ่มเติม...</div>';
+  _fetchTimeout(`/api/financials-full/${encodeURIComponent(fetchSym)}?source=finnomena_q${qs}`, 30000)
+    .then(r => r.json())
+    .then(fd => {
+      if (_tsData?.symbol !== d.symbol) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
+      if (fd.error) { box.innerHTML = ''; return; }
+      const rat = fd.ratios || {};
+      const allDatesSet = new Set();
+      Object.values(rat).forEach(row => Object.keys(row).forEach(k => allDatesSet.add(k)));
+      const allColsFull = [...allDatesSet].sort();
+      const cols = allColsFull.slice(-8);
+      const colLabels = cols.map(c => c.slice(0, 7));
+      const ratiosTableHtml = allColsFull.length
+        ? _finFullTable('📐 อัตราส่วนการเงิน (Ratios)', cols, colLabels, FIN_FINN_RATIO_GROUP, null,
+            (key, c) => (rat[key] || {})[c], () => false, true, null, false, 1, true, allColsFull)
+        : '';
+      box.innerHTML = _finTrendSection(fd, 'finnomena_q', 'ts-') + ratiosTableHtml + _tsEarningsHistoryHtml(fd);
+      requestAnimationFrame(() => _drawFinTrendCharts(fd, 'ts-'));
+      const isDr = mkt !== 'TH';
+      _loadLiveValuationBand(fd, isDr, mkt === 'TH' ? null : mkt, 'ts-', () => _tsData?.symbol === d.symbol);
+      _tsApplyPeBandDefaults(fd);
+      _tsApplyPbvBandDefaults(fd);
+    })
+    .catch(() => { box.innerHTML = ''; });
+}
+
+// Base/Bear/Bull PE เริ่มต้นจากสถิติ PE ย้อนหลังจริง (มัธยฐาน/ต่ำสุด/สูงสุด หลัง winsorize
+// ตัดขอบสุดโต่ง — เหมือนแถบ "มูลค่าเทียบอดีตตัวเอง" ด้านบน) แทนที่ current PE ±25% เดิม
+// (ค่าเริ่มต้นหยาบตอนยังไม่มีข้อมูลย้อนหลัง) — เขียนทับเฉพาะตอนโหลดข้อมูล Finnomena สำเร็จ
+// ครั้งแรกเท่านั้น (มาถึงหลัง initial render ไม่กี่ร้อย ms ปกติผู้ใช้ยังไม่ทันแก้ค่าเอง)
+function _tsApplyPeBandDefaults(fd) {
+  const baseEl = document.getElementById('ts-pe-base'), bearEl = document.getElementById('ts-pe-bear'),
+        bullEl = document.getElementById('ts-pe-bull'), noteEl = document.getElementById('ts-pe-hist-note');
+  if (!baseEl || !bearEl || !bullEl) return;
+  const inc = fd.income || {}, val = fd.valuation || {};
+  const pe = _annualPeSeries(inc['Basic EPS'], val['Close']);
+  const vals = _winsorize(pe.map(o => o.v).filter(v => v > 0)).sort((a, b) => a - b);
+  if (vals.length < 5) return;
+  const lo = vals[0], hi = vals[vals.length - 1];
+  const q = p => vals[Math.min(vals.length - 1, Math.floor(p * (vals.length - 1)))];
+  const med = q(0.5);
+  const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+  baseEl.value = med.toFixed(1);
+  bearEl.value = lo.toFixed(1);
+  bullEl.value = hi.toFixed(1);
+  if (noteEl) noteEl.textContent = `อิงสถิติ PE รายปีย้อนหลัง (ตัดขอบสุดโต่ง): เฉลี่ย ${mean.toFixed(1)} · มัธยฐาน ${med.toFixed(1)} · ต่ำสุด ${lo.toFixed(1)} · สูงสุด ${hi.toFixed(1)} — ใช้เป็นค่าเริ่มต้น Base/Bear/Bull ด้านบน (แก้เองได้)`;
+  _tsPeScenarioRecalc();
+}
+
+// เหมือน _tsApplyPeBandDefaults ทุกประการ แต่ใช้ field PBV ดิบของ Finnomena ตรงๆ (ไม่ต้องคำนวณเอง
+// เหมือน PE — ดู _finValuationSeries) เป็นรายไตรมาส ไม่ใช่รายปี เพราะ PBV ไม่มีปัญหา EPS ไตรมาสเดียว
+// ทำให้ค่าเพี้ยนแบบ PE (ดูคอมเมนต์ที่ _finTrendSectionImpl)
+function _tsApplyPbvBandDefaults(fd) {
+  const baseEl = document.getElementById('ts-pbv-base'), bearEl = document.getElementById('ts-pbv-bear'),
+        bullEl = document.getElementById('ts-pbv-bull'), noteEl = document.getElementById('ts-pbv-hist-note');
+  if (!baseEl || !bearEl || !bullEl) return;
+  const pbvSeries = _finSeries((fd.valuation || {})['PBV']);
+  const vals = _winsorize(pbvSeries.map(o => o.v).filter(v => v > 0)).sort((a, b) => a - b);
+  if (vals.length < 8) return;
+  const lo = vals[0], hi = vals[vals.length - 1];
+  const q = p => vals[Math.min(vals.length - 1, Math.floor(p * (vals.length - 1)))];
+  const med = q(0.5);
+  const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+  baseEl.value = med.toFixed(2);
+  bearEl.value = lo.toFixed(2);
+  bullEl.value = hi.toFixed(2);
+  if (noteEl) noteEl.textContent = `อิงสถิติ PBV รายไตรมาสย้อนหลัง (ตัดขอบสุดโต่ง): เฉลี่ย ${mean.toFixed(2)} · มัธยฐาน ${med.toFixed(2)} · ต่ำสุด ${lo.toFixed(2)} · สูงสุด ${hi.toFixed(2)} — ใช้เป็นค่าเริ่มต้น Base/Bear/Bull ด้านบน (แก้เองได้)`;
+  _tsPbvScenarioRecalc();
+}
+
+// Earnings History รายปี (EPS/NP/ROE/NPM) — รวมจากไตรมาส Finnomena เฉพาะปีที่ครบ 4 ไตรมาสจริง
+// (เหตุผลเดียวกับ _annualPeSeries ด้านบน) ROE ใช้ค่า ณ ไตรมาสสุดท้ายของปี (Finnomena เก็บเป็น
+// TTM อยู่แล้ว ไม่ใช่ค่าต่อไตรมาสเดี่ยว) ส่วน NPM คำนวณจากผลรวมทั้งปีเอง (กำไรสุทธิ÷รายได้)
+function _tsFinAnnualEarnings(fd) {
+  const inc = fd.income || {}, rat = fd.ratios || {};
+  const epsItems = _finSeries(inc['Basic EPS']);
+  const niItems = _finSeries(inc['Net Income']);
+  const revItems = _finSeries(inc['Total Revenue']);
+  const roeItems = _finSeries(rat['ROE']);
+  if (epsItems.length < 4 && niItems.length < 4) return [];
+  const byYear = {};
+  const group = (items, field) => items.forEach(o => {
+    const y = o.d.slice(0, 4);
+    byYear[y] = byYear[y] || {};
+    (byYear[y][field] = byYear[y][field] || []).push(o);
+  });
+  group(epsItems, 'eps'); group(niItems, 'ni'); group(revItems, 'rev'); group(roeItems, 'roe');
+  const years = Object.keys(byYear).sort().reverse().slice(0, 5);
+  const sum = arr => arr.reduce((a, o) => a + o.v, 0);
+  return years.map(y => {
+    const g = byYear[y];
+    const eps = (g.eps && g.eps.length === 4) ? sum(g.eps) : null;
+    const np = (g.ni && g.ni.length === 4) ? sum(g.ni) : null;
+    const rev = (g.rev && g.rev.length === 4) ? sum(g.rev) : null;
+    const npm = (np != null && rev) ? np / rev * 100 : null;
+    const roe = (g.roe && g.roe.length) ? g.roe[g.roe.length - 1].v : null;
+    return { year: y, eps, np, roe, npm };
+  }).filter(r => r.eps != null || r.np != null);
+}
+
+function _tsEarningsHistoryHtml(fd) {
+  const rows = _tsFinAnnualEarnings(fd);
+  if (!rows.length) return '';
+  const fmtNp = v => v == null ? '—' : Math.round(v / 1e6).toLocaleString();
+  const body = rows.map(r => `<tr><td style="font-size:12px;padding:5px 8px">${r.year}</td>
+    <td class="r" style="font-size:12px">${r.eps != null ? r.eps.toFixed(2) : '—'}</td>
+    <td class="r" style="font-size:12px">${fmtNp(r.np)}</td>
+    <td class="r" style="font-size:12px">${r.roe != null ? (r.roe >= 0 ? '+' : '') + r.roe.toFixed(1) + '%' : '—'}</td>
+    <td class="r" style="font-size:12px">${r.npm != null ? (r.npm >= 0 ? '+' : '') + r.npm.toFixed(1) + '%' : '—'}</td></tr>`).join('');
+  return `<div style="margin-top:16px">
+    <div style="font-size:13px;font-weight:600;color:var(--blue);margin-bottom:6px">📑 Earnings History (รายปี)</div>
+    <div style="font-size:10px;color:var(--text2);margin-bottom:4px">รวมจากงบไตรมาส Finnomena เฉพาะปีที่ครบ 4 ไตรมาสจริง (ปีปัจจุบัน/ปีไม่ครบข้าม) · NP หน่วยล้าน (สกุลเงินของหุ้น) · ROE = ค่า ณ ไตรมาสสุดท้ายของปี (TTM) · NPM = กำไรสุทธิรวมปี ÷ รายได้รวมปี</div>
+    <div style="overflow-x:auto"><table class="tbl" style="min-width:320px">
+      <thead><tr><th>ปี</th><th class="r">EPS</th><th class="r">NP (ล้าน)</th><th class="r">ROE</th><th class="r">NPM</th></tr></thead>
+      <tbody>${body}</tbody></table></div>
+  </div>`;
+}
+
+// ---------- PE Valuation (Bear/Base/Bull) — Forward EPS × PE band + sensitivity + verdict ----------
+// คำนวณฝั่ง client ล้วนจาก d.valuation_models (มีอยู่แล้วในทุก response ของ /api/tearsheet — ดู
+// _tsAltValHtml ด้านล่างที่ใช้วัตถุดิบชุดเดียวกัน) ค่าเริ่มต้น Forward EPS = TTM EPS × (1+growth%
+// เริ่มต้นจาก profit_ttm_yoy/profit_cagr), Base PE = PE ปัจจุบัน, Bear/Bull = Base ∓25%
+function _tsPeVerdict(basePct) {
+  if (basePct == null) return ['—', 'var(--text2)'];
+  if (basePct >= 15) return ['ถูก / มี Margin', 'var(--green)'];
+  if (basePct <= -15) return ['แพง', 'var(--red)'];
+  return ['ใกล้เคียงมูลค่า', 'var(--text)'];
+}
+
+function _tsPeScenarioHtml(d) {
+  const v = d.valuation, vm = d.valuation_models, price = d.header?.price;
+  const epsTtm = vm?.eps;
+  if (epsTtm == null || epsTtm <= 0 || !price) {
+    return `<div class="card" style="padding:16px;margin-bottom:12px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:6px">📈 PE Valuation (Bear/Base/Bull)</div>
+      <div class="empty" style="padding:4px 0;font-size:11.5px">ข้อมูลไม่พอสำหรับคำนวณ (ต้องมี EPS ล่าสุดเป็นบวก + ราคา)</div>
+    </div>`;
+  }
+  const growthDefault = vm.growth_pct_default != null ? Math.max(-30, Math.min(vm.growth_pct_default, 60)) : 8;
+  const fwdEpsDefault = epsTtm * (1 + growthDefault / 100);
+  const curPe = v?.pe?.value;
+  const baseDefault = (curPe != null && curPe > 0) ? curPe : 15;
+  return `<div class="card" style="padding:16px;margin-bottom:12px">
+    <div style="font-size:13px;font-weight:700;margin-bottom:4px">📈 PE Valuation (Bear/Base/Bull)</div>
+    <div style="font-size:10.5px;color:var(--text2);margin-bottom:10px">ประเมินมูลค่าจาก Forward EPS × PE — หุ้นวัฏจักรควรใช้ normalized earnings แทน EPS ปีล่าสุดเดี่ยวๆ ทุกช่องแก้ค่าเองได้ ไม่ใช่คำแนะนำซื้อ/ขาย</div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px;align-items:flex-end">
+      <label style="font-size:11px;color:var(--text2)">Forward EPS
+        <input id="ts-pe-fwdeps" type="number" step="0.01" value="${fwdEpsDefault.toFixed(2)}"
+          class="scr-input" style="display:block;width:100px;margin-top:3px" oninput="_tsPeScenarioRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">EPS Growth %/ปี
+        <input id="ts-pe-growth" type="number" step="0.5" value="${growthDefault.toFixed(1)}"
+          class="scr-input" style="display:block;width:90px;margin-top:3px" oninput="_tsPeScenarioRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">Base PE
+        <input id="ts-pe-base" type="number" step="0.5" value="${baseDefault.toFixed(1)}"
+          class="scr-input" style="display:block;width:80px;margin-top:3px" oninput="_tsPeScenarioRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">Bear PE
+        <input id="ts-pe-bear" type="number" step="0.5" value="${(baseDefault * 0.75).toFixed(1)}"
+          class="scr-input" style="display:block;width:80px;margin-top:3px" oninput="_tsPeScenarioRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">Bull PE
+        <input id="ts-pe-bull" type="number" step="0.5" value="${(baseDefault * 1.25).toFixed(1)}"
+          class="scr-input" style="display:block;width:80px;margin-top:3px" oninput="_tsPeScenarioRecalc()"></label>
+    </div>
+    <div id="ts-pe-growth-note" style="font-size:10.5px;color:var(--text2);margin-bottom:4px"></div>
+    <div id="ts-pe-hist-note" style="font-size:10.5px;color:var(--text2);margin-bottom:8px"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <button class="btn-secondary" style="font-size:10.5px;padding:4px 8px" onclick="_tsPeUseTtmEps()">ใช้ TTM EPS</button>
+      <button class="btn-secondary" style="font-size:10.5px;padding:4px 8px" onclick="_tsPeUseTtmGrowth()">ใช้ TTM × Growth</button>
+    </div>
+    <div id="ts-pe-verdict" style="margin-bottom:12px"></div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px">
+      <div style="flex:2;min-width:280px">
+        <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Fair Value Band</div>
+        <div id="ts-pe-band"></div>
+      </div>
+      <div style="flex:1;min-width:200px">
+        <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Sensitivity</div>
+        <div id="ts-pe-chart" style="display:flex;align-items:flex-end;gap:10px;height:110px;padding-top:6px"></div>
+      </div>
+    </div>
+    <div id="ts-pe-reason"></div>
+  </div>`;
+}
+
+function _tsPeUseTtmEps() {
+  const vm = _tsData?.valuation_models;
+  const el = document.getElementById('ts-pe-fwdeps');
+  if (!vm?.eps || !el) return;
+  el.value = vm.eps.toFixed(2);
+  _tsPeScenarioRecalc();
+}
+
+function _tsPeUseTtmGrowth() {
+  const vm = _tsData?.valuation_models;
+  const epsTtm = vm?.eps;
+  const growth = parseFloat(document.getElementById('ts-pe-growth')?.value);
+  const el = document.getElementById('ts-pe-fwdeps');
+  if (epsTtm == null || !Number.isFinite(growth) || !el) return;
+  el.value = (epsTtm * (1 + growth / 100)).toFixed(2);
+  _tsPeScenarioRecalc();
+}
+
+function _tsPeScenarioRecalc() {
+  const d = _tsData;
+  const vm = d?.valuation_models;
+  const bandBox = document.getElementById('ts-pe-band');
+  if (!vm || !bandBox) return;
+  const price = d.header?.price;
+  const epsTtm = vm.eps;
+
+  const growthNote = document.getElementById('ts-pe-growth-note');
+  const growth = parseFloat(document.getElementById('ts-pe-growth')?.value);
+  if (growthNote && epsTtm != null) {
+    const g = Number.isFinite(growth) ? growth : 0;
+    growthNote.textContent = `TTM EPS: ${epsTtm.toFixed(3)} · ที่โต ${g}%/ปี: ${(epsTtm * (1 + g / 100)).toFixed(3)}`;
+  }
+
+  const fwdEps = parseFloat(document.getElementById('ts-pe-fwdeps')?.value);
+  const basePe = parseFloat(document.getElementById('ts-pe-base')?.value);
+  const bearPe = parseFloat(document.getElementById('ts-pe-bear')?.value);
+  const bullPe = parseFloat(document.getElementById('ts-pe-bull')?.value);
+  if (!Number.isFinite(fwdEps) || fwdEps <= 0 || !price) {
+    bandBox.innerHTML = `<div class="empty" style="padding:4px 0;font-size:11.5px">ข้อมูลไม่พอ (ต้องมี Forward EPS เป็นบวก)</div>`;
+    const chartBox0 = document.getElementById('ts-pe-chart'); if (chartBox0) chartBox0.innerHTML = '';
+    const verdictBox0 = document.getElementById('ts-pe-verdict'); if (verdictBox0) verdictBox0.innerHTML = '';
+    const reasonBox0 = document.getElementById('ts-pe-reason'); if (reasonBox0) reasonBox0.innerHTML = '';
+    return;
+  }
+
+  const scenarios = [
+    { key: 'bear', label: 'Bear', pe: bearPe },
+    { key: 'base', label: 'Base', pe: basePe },
+    { key: 'bull', label: 'Bull', pe: bullPe },
+  ].map(sc => {
+    const fv = (Number.isFinite(sc.pe) && sc.pe > 0) ? fwdEps * sc.pe : null;
+    const upside = fv != null ? (fv / price - 1) * 100 : null;
+    return { ...sc, fv, upside };
+  });
+
+  const tileColor = up => up > 0 ? 'var(--green)' : up < 0 ? 'var(--red)' : 'var(--text2)';
+  const rows = scenarios.map(sc => `
+    <tr><td style="font-weight:600">${sc.label}</td>
+      <td style="text-align:right">${fwdEps.toFixed(3)}</td>
+      <td style="text-align:right">${Number.isFinite(sc.pe) ? sc.pe.toFixed(1) + 'x' : '—'}</td>
+      <td style="text-align:right;font-weight:700">${sc.fv != null ? sc.fv.toFixed(2) : '—'}</td>
+      <td style="text-align:right;color:${tileColor(sc.upside)}">${sc.upside != null ? (sc.upside > 0 ? '+' : '') + sc.upside.toFixed(1) + '%' : '—'}</td></tr>`).join('');
+  bandBox.innerHTML = `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      ${scenarios.map(sc => `<div class="card" style="padding:8px 12px;flex:1;min-width:100px;text-align:center">
+        <div style="font-size:9px;color:var(--text2);text-transform:uppercase">${sc.label} · ${Number.isFinite(sc.pe) ? sc.pe.toFixed(1) + 'x' : '—'}</div>
+        <div style="font-size:17px;font-weight:800">${sc.fv != null ? sc.fv.toFixed(2) : '—'}</div>
+        <div style="font-size:10.5px;font-weight:600;color:${tileColor(sc.upside)}">${sc.upside != null ? (sc.upside > 0 ? '+' : '') + sc.upside.toFixed(1) + '%' : '—'}</div>
+      </div>`).join('')}
+    </div>
+    <div style="overflow-x:auto"><table class="tbl" style="width:100%;max-width:480px">
+      <thead><tr><th>Case</th><th style="text-align:right">Forward EPS</th><th style="text-align:right">Target PE</th><th style="text-align:right">Fair Value</th><th style="text-align:right">Upside</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+
+  const chartBox = document.getElementById('ts-pe-chart');
+  if (chartBox) {
+    const maxFv = Math.max(...scenarios.map(s => s.fv || 0), price, 1);
+    const barColor = { bear: 'var(--red)', base: 'var(--blue)', bull: 'var(--green)' };
+    chartBox.innerHTML = scenarios.map(sc => {
+      const hpx = sc.fv != null ? Math.max(4, Math.round(sc.fv / maxFv * 90)) : 4;
+      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%">
+        <div style="font-size:10px;font-weight:700;margin-bottom:2px">${sc.fv != null ? sc.fv.toFixed(1) : '—'}</div>
+        <div style="width:100%;max-width:44px;height:${hpx}px;background:${barColor[sc.key]};border-radius:3px 3px 0 0"></div>
+        <div style="font-size:9.5px;color:var(--text2);margin-top:4px;text-align:center">${sc.label}<br>${Number.isFinite(sc.pe) ? sc.pe.toFixed(1) + 'x' : ''}</div>
+      </div>`;
+    }).join('');
+  }
+
+  const verdictBox = document.getElementById('ts-pe-verdict');
+  if (verdictBox) {
+    const baseSc = scenarios.find(s => s.key === 'base');
+    const [lbl, lblColor] = _tsPeVerdict(baseSc?.upside);
+    let growthNeeded = null;
+    if (Number.isFinite(basePe) && basePe > 0 && epsTtm > 0) {
+      growthNeeded = (price / (epsTtm * basePe) - 1) * 100;
+    }
+    verdictBox.innerHTML = `<div class="card" style="padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:baseline">
+        <div style="font-size:11px;color:var(--text2);text-transform:uppercase">Investment Verdict</div>
+        <div style="font-size:15px;font-weight:800;color:${lblColor}">${lbl}</div>
+      </div>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px">
+        <div><div style="font-size:16px;font-weight:700;color:${tileColor(baseSc?.upside)}">${baseSc?.upside != null ? (baseSc.upside > 0 ? '+' : '') + baseSc.upside.toFixed(1) + '%' : '—'}</div><div style="font-size:10px;color:var(--text2)">Base upside</div></div>
+        <div><div style="font-size:16px;font-weight:700">${growthNeeded != null ? (growthNeeded > 0 ? '+' : '') + growthNeeded.toFixed(1) + '%' : '—'}</div><div style="font-size:10px;color:var(--text2)">EPS growth ที่ justify ราคาปัจจุบัน (ที่ Base PE)</div></div>
+      </div>
+    </div>`;
+  }
+
+  const reasonBox = document.getElementById('ts-pe-reason');
+  if (reasonBox) {
+    const curPe = d.valuation?.pe?.value;
+    const fwdPe = (price && fwdEps > 0) ? price / fwdEps : null;
+    reasonBox.innerHTML = `<details>
+      <summary style="cursor:pointer;font-size:11px;color:var(--text2)">🔍 Reasonableness Check</summary>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px">
+        <div><div style="font-size:14px;font-weight:700">${curPe != null ? curPe.toFixed(1) + 'x' : '—'}</div><div style="font-size:10px;color:var(--text2)">Current PE (TTM)</div></div>
+        <div><div style="font-size:14px;font-weight:700">${fwdPe != null ? fwdPe.toFixed(1) + 'x' : '—'}</div><div style="font-size:10px;color:var(--text2)">Forward PE</div></div>
+      </div>
+      <div style="font-size:10.5px;color:var(--text2);margin-top:6px">Historical/Peer PE ยังเป็น manual reference — เทียบกับ percentile เทียบอดีตตัวเองใน Valuation Snapshot ด้านบน หรือหน้า "เทียบเพื่อน" ประกอบ</div>
+    </details>`;
+  }
+}
+
+// ---------- PBV Valuation (Bear/Base/Bull) — โครงสร้างเดียวกับ PE Valuation ด้านบนทุกอย่าง
+// แค่เปลี่ยนตัวแปรอ้างอิงเป็น BVPS × PBV แทน EPS × PE — ค่าเริ่มต้น "BVPS Growth %" ใช้ sustainable
+// growth rate = ROE × (1 − payout ratio) เพราะ book value โตจากกำไรสะสม (retained earnings) ไม่ใช่
+// สมมติฐานโตกำไรแบบ EPS — Base/Bear/Bull PBV เริ่มจากปัจจุบัน±25% แล้วถูกแทนที่ด้วยสถิติ PBV
+// ย้อนหลังจริง (มัธยฐาน/ต่ำสุด/สูงสุด) ตอน _tsLoadFinExtras โหลด Finnomena เสร็จ (ดู _tsApplyPbvBandDefaults)
+function _tsPbvGrowthDefault(d) {
+  const vm = d.valuation_models;
+  const roe = vm?.roe;
+  const payout = d.dividend?.payout_ratio_pct;
+  let g;
+  if (roe != null && payout != null) g = roe * (1 - payout / 100);
+  else if (roe != null) g = roe * 0.5;   // ไม่รู้ payout — ประมาณ retention 50%
+  else g = vm?.growth_pct_default ?? 5;
+  return Math.max(-30, Math.min(g, 60));
+}
+
+function _tsPbvScenarioHtml(d) {
+  const v = d.valuation, vm = d.valuation_models, price = d.header?.price;
+  const bvps = vm?.bvps;
+  if (bvps == null || bvps <= 0 || !price) {
+    return `<div class="card" style="padding:16px;margin-bottom:12px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:6px">📘 PBV Valuation (Bear/Base/Bull)</div>
+      <div class="empty" style="padding:4px 0;font-size:11.5px">ข้อมูลไม่พอสำหรับคำนวณ (ต้องมี BVPS เป็นบวก + ราคา)</div>
+    </div>`;
+  }
+  const growthDefault = _tsPbvGrowthDefault(d);
+  const fwdBvpsDefault = bvps * (1 + growthDefault / 100);
+  const curPbv = v?.pbv?.value;
+  const baseDefault = (curPbv != null && curPbv > 0) ? curPbv : 1.5;
+  return `<div class="card" style="padding:16px;margin-bottom:12px">
+    <div style="font-size:13px;font-weight:700;margin-bottom:4px">📘 PBV Valuation (Bear/Base/Bull)</div>
+    <div style="font-size:10.5px;color:var(--text2);margin-bottom:10px">ประเมินมูลค่าจาก Forward BVPS × PBV — เหมาะกับกลุ่มการเงิน/REIT ที่ DCF ใช้ไม่ได้ ทุกช่องแก้ค่าเองได้ ไม่ใช่คำแนะนำซื้อ/ขาย</div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px;align-items:flex-end">
+      <label style="font-size:11px;color:var(--text2)">Forward BVPS
+        <input id="ts-pbv-fwdbvps" type="number" step="0.01" value="${fwdBvpsDefault.toFixed(2)}"
+          class="scr-input" style="display:block;width:100px;margin-top:3px" oninput="_tsPbvScenarioRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">BVPS Growth %/ปี
+        <input id="ts-pbv-growth" type="number" step="0.5" value="${growthDefault.toFixed(1)}"
+          class="scr-input" style="display:block;width:90px;margin-top:3px" oninput="_tsPbvScenarioRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">Base PBV
+        <input id="ts-pbv-base" type="number" step="0.1" value="${baseDefault.toFixed(2)}"
+          class="scr-input" style="display:block;width:80px;margin-top:3px" oninput="_tsPbvScenarioRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">Bear PBV
+        <input id="ts-pbv-bear" type="number" step="0.1" value="${(baseDefault * 0.75).toFixed(2)}"
+          class="scr-input" style="display:block;width:80px;margin-top:3px" oninput="_tsPbvScenarioRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">Bull PBV
+        <input id="ts-pbv-bull" type="number" step="0.1" value="${(baseDefault * 1.25).toFixed(2)}"
+          class="scr-input" style="display:block;width:80px;margin-top:3px" oninput="_tsPbvScenarioRecalc()"></label>
+    </div>
+    <div id="ts-pbv-growth-note" style="font-size:10.5px;color:var(--text2);margin-bottom:4px"></div>
+    <div id="ts-pbv-hist-note" style="font-size:10.5px;color:var(--text2);margin-bottom:8px"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <button class="btn-secondary" style="font-size:10.5px;padding:4px 8px" onclick="_tsPbvUseCurrentBvps()">ใช้ BVPS ปัจจุบัน</button>
+      <button class="btn-secondary" style="font-size:10.5px;padding:4px 8px" onclick="_tsPbvUseBvpsGrowth()">ใช้ BVPS × Growth</button>
+    </div>
+    <div id="ts-pbv-verdict" style="margin-bottom:12px"></div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px">
+      <div style="flex:2;min-width:280px">
+        <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Fair Value Band</div>
+        <div id="ts-pbv-band"></div>
+      </div>
+      <div style="flex:1;min-width:200px">
+        <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Sensitivity</div>
+        <div id="ts-pbv-chart" style="display:flex;align-items:flex-end;gap:10px;height:110px;padding-top:6px"></div>
+      </div>
+    </div>
+    <div id="ts-pbv-reason"></div>
+  </div>`;
+}
+
+function _tsPbvUseCurrentBvps() {
+  const vm = _tsData?.valuation_models;
+  const el = document.getElementById('ts-pbv-fwdbvps');
+  if (!vm?.bvps || !el) return;
+  el.value = vm.bvps.toFixed(2);
+  _tsPbvScenarioRecalc();
+}
+
+function _tsPbvUseBvpsGrowth() {
+  const vm = _tsData?.valuation_models;
+  const bvps = vm?.bvps;
+  const growth = parseFloat(document.getElementById('ts-pbv-growth')?.value);
+  const el = document.getElementById('ts-pbv-fwdbvps');
+  if (bvps == null || !Number.isFinite(growth) || !el) return;
+  el.value = (bvps * (1 + growth / 100)).toFixed(2);
+  _tsPbvScenarioRecalc();
+}
+
+function _tsPbvScenarioRecalc() {
+  const d = _tsData;
+  const vm = d?.valuation_models;
+  const bandBox = document.getElementById('ts-pbv-band');
+  if (!vm || !bandBox) return;
+  const price = d.header?.price;
+  const bvps = vm.bvps;
+
+  const growthNote = document.getElementById('ts-pbv-growth-note');
+  const growth = parseFloat(document.getElementById('ts-pbv-growth')?.value);
+  if (growthNote && bvps != null) {
+    const g = Number.isFinite(growth) ? growth : 0;
+    growthNote.textContent = `BVPS ปัจจุบัน: ${bvps.toFixed(3)} · ที่โต ${g}%/ปี: ${(bvps * (1 + g / 100)).toFixed(3)}`;
+  }
+
+  const fwdBvps = parseFloat(document.getElementById('ts-pbv-fwdbvps')?.value);
+  const basePbv = parseFloat(document.getElementById('ts-pbv-base')?.value);
+  const bearPbv = parseFloat(document.getElementById('ts-pbv-bear')?.value);
+  const bullPbv = parseFloat(document.getElementById('ts-pbv-bull')?.value);
+  if (!Number.isFinite(fwdBvps) || fwdBvps <= 0 || !price) {
+    bandBox.innerHTML = `<div class="empty" style="padding:4px 0;font-size:11.5px">ข้อมูลไม่พอ (ต้องมี Forward BVPS เป็นบวก)</div>`;
+    const chartBox0 = document.getElementById('ts-pbv-chart'); if (chartBox0) chartBox0.innerHTML = '';
+    const verdictBox0 = document.getElementById('ts-pbv-verdict'); if (verdictBox0) verdictBox0.innerHTML = '';
+    const reasonBox0 = document.getElementById('ts-pbv-reason'); if (reasonBox0) reasonBox0.innerHTML = '';
+    return;
+  }
+
+  const scenarios = [
+    { key: 'bear', label: 'Bear', pbv: bearPbv },
+    { key: 'base', label: 'Base', pbv: basePbv },
+    { key: 'bull', label: 'Bull', pbv: bullPbv },
+  ].map(sc => {
+    const fv = (Number.isFinite(sc.pbv) && sc.pbv > 0) ? fwdBvps * sc.pbv : null;
+    const upside = fv != null ? (fv / price - 1) * 100 : null;
+    return { ...sc, fv, upside };
+  });
+
+  const tileColor = up => up > 0 ? 'var(--green)' : up < 0 ? 'var(--red)' : 'var(--text2)';
+  const rows = scenarios.map(sc => `
+    <tr><td style="font-weight:600">${sc.label}</td>
+      <td style="text-align:right">${fwdBvps.toFixed(3)}</td>
+      <td style="text-align:right">${Number.isFinite(sc.pbv) ? sc.pbv.toFixed(2) + 'x' : '—'}</td>
+      <td style="text-align:right;font-weight:700">${sc.fv != null ? sc.fv.toFixed(2) : '—'}</td>
+      <td style="text-align:right;color:${tileColor(sc.upside)}">${sc.upside != null ? (sc.upside > 0 ? '+' : '') + sc.upside.toFixed(1) + '%' : '—'}</td></tr>`).join('');
+  bandBox.innerHTML = `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      ${scenarios.map(sc => `<div class="card" style="padding:8px 12px;flex:1;min-width:100px;text-align:center">
+        <div style="font-size:9px;color:var(--text2);text-transform:uppercase">${sc.label} · ${Number.isFinite(sc.pbv) ? sc.pbv.toFixed(2) + 'x' : '—'}</div>
+        <div style="font-size:17px;font-weight:800">${sc.fv != null ? sc.fv.toFixed(2) : '—'}</div>
+        <div style="font-size:10.5px;font-weight:600;color:${tileColor(sc.upside)}">${sc.upside != null ? (sc.upside > 0 ? '+' : '') + sc.upside.toFixed(1) + '%' : '—'}</div>
+      </div>`).join('')}
+    </div>
+    <div style="overflow-x:auto"><table class="tbl" style="width:100%;max-width:480px">
+      <thead><tr><th>Case</th><th style="text-align:right">Forward BVPS</th><th style="text-align:right">Target PBV</th><th style="text-align:right">Fair Value</th><th style="text-align:right">Upside</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+
+  const chartBox = document.getElementById('ts-pbv-chart');
+  if (chartBox) {
+    const maxFv = Math.max(...scenarios.map(s => s.fv || 0), price, 1);
+    const barColor = { bear: 'var(--red)', base: 'var(--blue)', bull: 'var(--green)' };
+    chartBox.innerHTML = scenarios.map(sc => {
+      const hpx = sc.fv != null ? Math.max(4, Math.round(sc.fv / maxFv * 90)) : 4;
+      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%">
+        <div style="font-size:10px;font-weight:700;margin-bottom:2px">${sc.fv != null ? sc.fv.toFixed(1) : '—'}</div>
+        <div style="width:100%;max-width:44px;height:${hpx}px;background:${barColor[sc.key]};border-radius:3px 3px 0 0"></div>
+        <div style="font-size:9.5px;color:var(--text2);margin-top:4px;text-align:center">${sc.label}<br>${Number.isFinite(sc.pbv) ? sc.pbv.toFixed(2) + 'x' : ''}</div>
+      </div>`;
+    }).join('');
+  }
+
+  const verdictBox = document.getElementById('ts-pbv-verdict');
+  if (verdictBox) {
+    const baseSc = scenarios.find(s => s.key === 'base');
+    const [lbl, lblColor] = _tsPeVerdict(baseSc?.upside);
+    let growthNeeded = null;
+    if (Number.isFinite(basePbv) && basePbv > 0 && bvps > 0) {
+      growthNeeded = (price / (bvps * basePbv) - 1) * 100;
+    }
+    verdictBox.innerHTML = `<div class="card" style="padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:baseline">
+        <div style="font-size:11px;color:var(--text2);text-transform:uppercase">Investment Verdict</div>
+        <div style="font-size:15px;font-weight:800;color:${lblColor}">${lbl}</div>
+      </div>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px">
+        <div><div style="font-size:16px;font-weight:700;color:${tileColor(baseSc?.upside)}">${baseSc?.upside != null ? (baseSc.upside > 0 ? '+' : '') + baseSc.upside.toFixed(1) + '%' : '—'}</div><div style="font-size:10px;color:var(--text2)">Base upside</div></div>
+        <div><div style="font-size:16px;font-weight:700">${growthNeeded != null ? (growthNeeded > 0 ? '+' : '') + growthNeeded.toFixed(1) + '%' : '—'}</div><div style="font-size:10px;color:var(--text2)">BVPS growth ที่ justify ราคาปัจจุบัน (ที่ Base PBV)</div></div>
+      </div>
+    </div>`;
+  }
+
+  const reasonBox = document.getElementById('ts-pbv-reason');
+  if (reasonBox) {
+    const curPbv = d.valuation?.pbv?.value;
+    const fwdPbv = (price && fwdBvps > 0) ? price / fwdBvps : null;
+    reasonBox.innerHTML = `<details>
+      <summary style="cursor:pointer;font-size:11px;color:var(--text2)">🔍 Reasonableness Check</summary>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px">
+        <div><div style="font-size:14px;font-weight:700">${curPbv != null ? curPbv.toFixed(2) + 'x' : '—'}</div><div style="font-size:10px;color:var(--text2)">Current PBV</div></div>
+        <div><div style="font-size:14px;font-weight:700">${fwdPbv != null ? fwdPbv.toFixed(2) + 'x' : '—'}</div><div style="font-size:10px;color:var(--text2)">Forward PBV</div></div>
+      </div>
+      <div style="font-size:10.5px;color:var(--text2);margin-top:6px">Historical/Peer PBV ยังเป็น manual reference — เทียบกับ percentile เทียบอดีตตัวเองใน Valuation Snapshot ด้านบน หรือหน้า "เทียบเพื่อน" ประกอบ</div>
+    </details>`;
+  }
 }
 
 // อัพเดท PE/PBV/P/S ใน "Valuation Snapshot" ให้ใช้ราคาสดจาก Yahoo แทนราคาสิ้นงวด/สิ้นวัน
@@ -10034,6 +10555,252 @@ function _tsDcfHtml(dcf, price) {
     </div>
 
     <div style="font-size:10px;color:var(--text2);margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">⚠ เป็นกรอบคิดคร่าวๆ ไม่ใช่คำแนะนำซื้อ/ขาย — ผลลัพธ์ไวมากต่อสมมติฐาน growth/discount rate ที่ใส่ ใช้ FCF ปีล่าสุด (ไม่ใช่ TTM หรือค่าเฉลี่ยหลายปี) หุ้นที่ FCF ผันผวน/เป็นวัฏจักรควรดูย้อนหลังหลายปีประกอบก่อนเชื่อตัวเลขนี้</div>
+    ${dcf.forecast ? _tsDcfModelHtml(dcf.forecast, dcf) : ''}
+  </div>`;
+}
+
+// ---------- DCF Model (พยากรณ์เต็มรูปแบบ): Revenue -> EBIT -> NOPLAT -> D&A -> CapEx -> ΔNWC -> FCFF ----------
+// ต่างจาก Reverse/Forward DCF ด้านบนตรงที่ไม่ใช้ FCF ก้อนเดียวโตอัตราเดียว แต่ build รายบรรทัด
+// จากงบ Yahoo ปีล่าสุด (ทุก % แก้เองได้) — WACC build จาก 3 ขั้น (Cost of Equity/Cost of Debt/
+// Capital Structure) เหมือนหน้า factsheet ทั่วไป ไม่ใช่ช่องเดียวกรอกเอง: ค่าที่มีในงบจริง
+// (ดอกเบี้ยจ่าย÷หนี้รวม, Equity/Debt value, Tax Rate) ดึงจากข้อมูลจริงเป็นค่าเริ่มต้น ส่วนที่ไม่มี
+// ในงบเลย (Risk-free rate/Beta/Equity Risk Premium) เป็นช่องกรอกเองล้วนๆ (Beta หุ้นไทยรายตัว
+// ดูได้จากหน้า factsheet ของ SET.or.th)
+// override รายปีของ D&A/CapEx/ΔNWC ที่กดแก้เองในตาราง (key = t, value = บาทเต็ม) — รีเซ็ตทุกครั้ง
+// ที่เปิด Tearsheet หุ้นตัวใหม่ (ดู _tsDcfModelHtml) แต่คงอยู่ข้าม recalc ของหุ้นตัวเดิม (เปลี่ยน
+// growth/WACC/forecast period ไม่ล้าง override ที่กดไว้)
+let _tsDcfModelOverrides = { da: {}, capex: {}, nwc: {} };
+
+function _tsDcfModelCellEdit(el) {
+  const t = parseInt(el.dataset.t, 10);
+  const field = el.dataset.field;
+  const v = parseFloat(el.value);
+  if (Number.isFinite(v)) {
+    _tsDcfModelOverrides[field][t] = v * 1e6;
+  } else {
+    delete _tsDcfModelOverrides[field][t];
+  }
+  _tsDcfModelRecalc();
+}
+
+function _tsDcfModelHtml(fc, dcf) {
+  _tsDcfModelOverrides = { da: {}, capex: {}, nwc: {} };
+  const isTH = _tsData?.market === 'TH';
+  const factsheetUrl = isTH
+    ? `https://www.set.or.th/th/market/product/stock/quote/${(_tsData?.symbol || '').toLowerCase()}/factsheet` : null;
+  const n = (v, d) => Number.isFinite(v) ? v : d;
+  const equityDefault = (dcf.mkt_cap || 0) / 1e6;
+  const debtDefault = (fc.total_debt || 0) / 1e6;
+  return `<div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+    <div style="font-size:13px;font-weight:700;margin-bottom:4px">🧮 DCF Model — พยากรณ์เต็มรูปแบบ</div>
+    <div style="font-size:10.5px;color:var(--text2);margin-bottom:4px">
+      ทุกช่องด้านล่างแก้ตัวเลขเองได้ทั้งหมด ค่าเริ่มต้นบางช่องดึงจากงบปีล่าสุด (${fc.as_of || '—'}) บางช่องเป็นค่าสมมติ ไม่ได้มาจากงบจริง — ดูหมายเหตุด้านล่าง
+      ${factsheetUrl ? `(<a href="${factsheetUrl}" target="_blank" rel="noopener">หน้า factsheet ของ SET.or.th</a> มีค่า Beta หุ้นตัวนี้ให้ดูประกอบ)` : ''}
+    </div>
+    <div style="font-size:10.5px;color:var(--text2);margin-bottom:10px;line-height:1.7">
+      <div>📊 <b style="color:var(--text)">ดึงจากงบจริง</b> (ปีล่าสุด เป็นค่าเริ่มต้น แก้เองได้): EBIT Margin, Tax Rate, D&amp;A/CapEx/ΔNWC %Revenue, ดอกเบี้ยจ่ายเฉลี่ยต่อหนี้, มูลค่า Equity (E)/Debt (D)</div>
+      <div>✏️ <b style="color:var(--text)">ค่าสมมติ ไม่มีในงบการเงิน</b> ต้องกะเอง/หาข้อมูลเพิ่ม: Risk-free Rate, Beta, Equity Risk Premium, Terminal Growth</div>
+      <div>📈 <b style="color:var(--text)">กึ่งกลาง</b> — ตั้งต้นจาก CAGR รายได้ในอดีต (จากงบจริง) แต่เป็นการ<i>คาดการณ์อนาคต</i>ไม่ใช่ตัวเลขจริง: Rev Growth ปี1-3/ปี4-5</div>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      <label style="font-size:11px;color:var(--text2)">Rev Growth ปี1-3 %
+        <input id="ts-dm-g13" type="number" step="0.5" value="${n(dcf.rev_cagr, 5).toFixed(1)}"
+          class="scr-input" style="display:block;width:88px;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">Rev Growth ปี4-5 %
+        <input id="ts-dm-g45" type="number" step="0.5" value="${(n(dcf.rev_cagr, 5) * 0.6).toFixed(1)}"
+          class="scr-input" style="display:block;width:88px;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">EBIT Margin %
+        <input id="ts-dm-ebitm" type="number" step="0.1" value="${n(fc.ebit_margin, 10).toFixed(1)}"
+          class="scr-input" style="display:block;width:88px;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">Tax Rate %
+        <input id="ts-dm-tax" type="number" step="0.5" value="${n(fc.tax_rate, 20).toFixed(1)}"
+          class="scr-input" style="display:block;width:88px;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">D&amp;A % Revenue
+        <input id="ts-dm-da" type="number" step="0.1" value="${n(fc.da_pct_revenue, 3).toFixed(1)}"
+          class="scr-input" style="display:block;width:88px;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">CapEx % Revenue
+        <input id="ts-dm-capex" type="number" step="0.1" value="${n(fc.capex_pct_revenue, 3).toFixed(1)}"
+          class="scr-input" style="display:block;width:88px;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">ΔNWC % Revenue
+        <input id="ts-dm-nwc" type="number" step="0.1" value="${n(fc.nwc_pct_revenue, 0).toFixed(1)}"
+          class="scr-input" style="display:block;width:88px;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">Terminal Growth %
+        <input id="ts-dm-tg" type="number" step="0.25" value="${dcf.terminal_growth_default}"
+          class="scr-input" style="display:block;width:88px;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+      <label style="font-size:11px;color:var(--text2)">Forecast Period
+        <select id="ts-dm-years" class="scr-input" style="display:block;width:88px;margin-top:3px" onchange="_tsDcfModelRecalc()">
+          <option value="3">3 ปี</option><option value="5" selected>5 ปี</option><option value="10">10 ปี</option>
+        </select></label>
+    </div>
+
+    <div class="card" style="padding:12px;margin-bottom:14px;background:var(--card2)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <div style="font-size:11.5px;font-weight:700">⚖ WACC — ต้นทุนเงินทุนถัวเฉลี่ยถ่วงน้ำหนัก</div>
+        ${factsheetUrl ? `<a href="${factsheetUrl}" target="_blank" rel="noopener" class="btn" style="font-size:10.5px;padding:2px 8px;text-decoration:none">📄 ดู Beta ที่ factsheet SET.or.th</a>` : ''}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
+        <div>
+          <div style="font-size:10.5px;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">ขั้น 1 — Cost of Equity (CAPM)</div>
+          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:6px">Risk-free Rate (Rf) %
+            <input id="ts-dm-rf" type="number" step="0.1" value="2.5"
+              class="scr-input" style="display:block;width:100%;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:6px">Beta (β)
+            <input id="ts-dm-beta" type="number" step="0.05" value="1.00"
+              class="scr-input" style="display:block;width:100%;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+          <label style="font-size:11px;color:var(--text2);display:block">Equity Risk Premium %
+            <input id="ts-dm-erp" type="number" step="0.1" value="5.5"
+              class="scr-input" style="display:block;width:100%;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+          <div id="ts-dm-coe-out" style="font-size:11px;color:var(--text2);margin-top:8px"></div>
+        </div>
+        <div>
+          <div style="font-size:10.5px;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">ขั้น 2 — Cost of Debt</div>
+          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:6px">ดอกเบี้ยจ่ายเฉลี่ยต่อหนี้ %
+            <input id="ts-dm-kd" type="number" step="0.1" value="${n(fc.cost_of_debt_pretax, 4.5).toFixed(1)}"
+              class="scr-input" style="display:block;width:100%;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+          <div style="font-size:10.5px;color:var(--text2)">Tax Rate ใช้ค่าจากช่อง Tax Rate ด้านบน</div>
+          <div id="ts-dm-cod-out" style="font-size:11px;color:var(--text2);margin-top:8px"></div>
+        </div>
+        <div>
+          <div style="font-size:10.5px;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">ขั้น 3 — Capital Structure</div>
+          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:6px">มูลค่าส่วนของผู้ถือหุ้น (E) ล้านบาท
+            <input id="ts-dm-eq" type="number" step="1" value="${equityDefault.toFixed(0)}"
+              class="scr-input" style="display:block;width:100%;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+          <label style="font-size:11px;color:var(--text2);display:block">มูลค่าหนี้สินที่มีดอกเบี้ย (D) ล้านบาท
+            <input id="ts-dm-debt" type="number" step="1" value="${debtDefault.toFixed(0)}"
+              class="scr-input" style="display:block;width:100%;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
+          <div id="ts-dm-capstruct-out" style="font-size:11px;color:var(--text2);margin-top:8px"></div>
+        </div>
+      </div>
+      <div id="ts-dm-wacc-out" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)"></div>
+    </div>
+
+    <div id="ts-dm-table"></div>
+    <div id="ts-dm-summary" style="margin-top:10px"></div>
+    <div style="font-size:10px;color:var(--text2);margin-top:8px">⚠ D&amp;A / CapEx / ΔNWC / Cost of Debt ตั้งต้นจาก % ต่อ Revenue หรือ % ต่อหนี้ของปีล่าสุดปีเดียว (ไม่ใช่ค่าเฉลี่ยหลายปี) — หุ้นที่เพิ่งลงทุนหนัก/มี one-off ควรปรับเองก่อนเชื่อผลลัพธ์ · Rf/Beta/ERP เป็นค่ากรอกเองล้วนๆ ไม่มีในงบการเงิน</div>
+  </div>`;
+}
+
+function _tsDcfModelRecalc() {
+  const dcf = _tsData?.dcf;
+  const fc = dcf?.forecast;
+  const tblBox = document.getElementById('ts-dm-table');
+  const sumBox = document.getElementById('ts-dm-summary');
+  const coeBox = document.getElementById('ts-dm-coe-out');
+  const codBox = document.getElementById('ts-dm-cod-out');
+  const capBox = document.getElementById('ts-dm-capstruct-out');
+  const waccBox = document.getElementById('ts-dm-wacc-out');
+  if (!fc || !tblBox || !sumBox || !waccBox) return;
+  const num = (id, dflt) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : dflt; };
+  const g13 = num('ts-dm-g13', 5) / 100, g45 = num('ts-dm-g45', 3) / 100;
+  const ebitM = num('ts-dm-ebitm', 10) / 100, tax = num('ts-dm-tax', 20) / 100;
+  const daPct = num('ts-dm-da', 3) / 100, capexPct = num('ts-dm-capex', 3) / 100, nwcPct = num('ts-dm-nwc', 0) / 100;
+  const tg = num('ts-dm-tg', dcf.terminal_growth_default) / 100;
+  const years = parseInt(document.getElementById('ts-dm-years')?.value || '5', 10);
+
+  // ---- WACC: ขั้น 1 Cost of Equity (CAPM) ----
+  const rf = num('ts-dm-rf', 2.5) / 100, beta = num('ts-dm-beta', 1) , erp = num('ts-dm-erp', 5.5) / 100;
+  const costEquity = rf + beta * erp;
+  coeBox.innerHTML = `Cost of Equity (Re) = ${(rf * 100).toFixed(2)}% + ${beta.toFixed(2)} × ${(erp * 100).toFixed(2)}% = <b style="color:var(--text)">${(costEquity * 100).toFixed(2)}%</b>`;
+
+  // ---- ขั้น 2 Cost of Debt (หลังภาษี) ----
+  const kdPretax = num('ts-dm-kd', 4.5) / 100;
+  const costDebtAfterTax = kdPretax * (1 - tax);
+  codBox.innerHTML = `Cost of Debt หลังภาษี = ${(kdPretax * 100).toFixed(2)}% × (1 − ${(tax * 100).toFixed(1)}%) = <b style="color:var(--text)">${(costDebtAfterTax * 100).toFixed(2)}%</b>`;
+
+  // ---- ขั้น 3 Capital Structure ----
+  const eqVal = Math.max(0, num('ts-dm-eq', 0)), debtVal = Math.max(0, num('ts-dm-debt', 0));
+  const totalV = eqVal + debtVal;
+  const eOverV = totalV > 0 ? eqVal / totalV : 1, dOverV = totalV > 0 ? debtVal / totalV : 0;
+  capBox.innerHTML = totalV > 0
+    ? `E/V = ${(eOverV * 100).toFixed(1)}% · D/V = ${(dOverV * 100).toFixed(1)}%`
+    : `<span style="color:var(--red)">ต้องมี E หรือ D มากกว่า 0</span>`;
+
+  const wacc = eOverV * costEquity + dOverV * costDebtAfterTax;
+  waccBox.innerHTML = `<div style="font-size:11px;color:var(--text2)">WACC = (E/V × Re) + (D/V × Rd หลังภาษี) = (${(eOverV * 100).toFixed(1)}% × ${(costEquity * 100).toFixed(2)}%) + (${(dOverV * 100).toFixed(1)}% × ${(costDebtAfterTax * 100).toFixed(2)}%)</div>
+    <div style="font-size:22px;font-weight:800;margin-top:4px">WACC = ${(wacc * 100).toFixed(2)}%</div>`;
+
+  if (wacc <= tg) {
+    tblBox.innerHTML = '';
+    sumBox.innerHTML = `<div class="empty" style="padding:4px 0;font-size:11.5px;color:var(--red)">⚠ WACC ต้องมากกว่า Terminal Growth ถึงจะคำนวณ Terminal Value ได้</div>`;
+    return;
+  }
+
+  const fmt = v => Number.isFinite(v) ? (v / 1e6).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
+
+  // แถว TTM (ฐาน) — ข้อมูลจริงจากงบปีล่าสุด (ไม่ใช่พยากรณ์ ไม่รวมใน PV) แสดงไว้เทียบกับปีพยากรณ์
+  const ttmDa = fc.revenue * (fc.da_pct_revenue || 0) / 100;
+  const ttmCapex = fc.revenue * (fc.capex_pct_revenue || 0) / 100;
+  const ttmNwc = fc.revenue * (fc.nwc_pct_revenue || 0) / 100;
+  const ttmNoplat = fc.ebit * (1 - tax);
+  const ttmFcff = ttmNoplat + ttmDa - ttmCapex + ttmNwc;
+  const ttmRowHtml = `<tr style="color:var(--blue)">
+    <td style="font-weight:700">TTM (ฐาน)</td><td style="text-align:right">—</td>
+    <td style="text-align:right">${fmt(fc.revenue)}</td><td style="text-align:right">${fmt(fc.ebit)}</td>
+    <td style="text-align:right">${(fc.ebit_margin || 0).toFixed(1)}%</td><td style="text-align:right">${fmt(ttmNoplat)}</td>
+    <td style="text-align:right">${fmt(ttmDa)}</td><td style="text-align:right">${fmt(ttmCapex)}</td>
+    <td style="text-align:right;color:${ttmNwc < 0 ? 'var(--red)' : 'var(--text)'}">${fmt(ttmNwc)}</td>
+    <td style="text-align:right;font-weight:700">${fmt(ttmFcff)}</td></tr>`;
+
+  // D&A/CapEx/ΔNWC ต่อปี: ตั้งต้นจาก % ต่อ Revenue ด้านบน แต่กดแก้ตัวเลขตรงในตารางรายปีเองได้
+  // (เก็บ override ไว้ใน _tsDcfModelOverrides คงอยู่ข้าม recalc จนกว่าจะโหลดหุ้นตัวใหม่)
+  let revenue = fc.revenue;
+  const rows = [];
+  let pvSum = 0, lastFcff = 0;
+  for (let t = 1; t <= years; t++) {
+    const g = t <= 3 ? g13 : g45;
+    revenue = revenue * (1 + g);
+    const ebit = revenue * ebitM;
+    const noplat = ebit * (1 - tax);
+    const daDefault = revenue * daPct, capexDefault = revenue * capexPct, nwcDefault = revenue * nwcPct;
+    const da = _tsDcfModelOverrides.da[t] ?? daDefault;
+    const capex = _tsDcfModelOverrides.capex[t] ?? capexDefault;
+    const nwc = _tsDcfModelOverrides.nwc[t] ?? nwcDefault;
+    const fcff = noplat + da - capex + nwc;
+    const pv = fcff / Math.pow(1 + wacc, t);
+    pvSum += pv;
+    lastFcff = fcff;
+    rows.push({ t, g, revenue, ebit, ebitPct: ebit / revenue * 100, noplat, da, capex, nwc, fcff });
+  }
+  const tv = lastFcff * (1 + tg) / (wacc - tg);
+  const pvTv = tv / Math.pow(1 + wacc, years);
+
+  const cellInput = (field, t, v) => `<input type="number" step="1" value="${(v / 1e6).toFixed(0)}"
+    data-field="${field}" data-t="${t}" onchange="_tsDcfModelCellEdit(this)"
+    class="scr-input" style="width:76px;text-align:right;font-size:11px;padding:2px 4px">`;
+  const rowsHtml = rows.map(r => `<tr>
+    <td>ปี ${r.t}</td><td style="text-align:right;color:${r.g >= 0 ? 'var(--green)' : 'var(--red)'}">${r.g >= 0 ? '+' : ''}${(r.g * 100).toFixed(1)}%</td>
+    <td style="text-align:right">${fmt(r.revenue)}</td><td style="text-align:right">${fmt(r.ebit)}</td>
+    <td style="text-align:right">${r.ebitPct.toFixed(1)}%</td><td style="text-align:right">${fmt(r.noplat)}</td>
+    <td style="text-align:right">${cellInput('da', r.t, r.da)}</td>
+    <td style="text-align:right">${cellInput('capex', r.t, r.capex)}</td>
+    <td style="text-align:right">${cellInput('nwc', r.t, r.nwc)}</td>
+    <td style="text-align:right;font-weight:700;color:${r.fcff >= 0 ? 'var(--green)' : 'var(--red)'}">${fmt(r.fcff)}</td>
+  </tr>`).join('');
+  tblBox.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%;font-size:11px">
+    <thead><tr><th></th><th style="text-align:right">โต%</th><th style="text-align:right">Revenue</th>
+    <th style="text-align:right">EBIT</th><th style="text-align:right">EBIT%</th><th style="text-align:right">NOPLAT</th>
+    <th style="text-align:right">D&amp;A ✏️</th><th style="text-align:right">CapEx ✏️</th><th style="text-align:right">ΔNWC ✏️</th>
+    <th style="text-align:right">FCFF</th></tr></thead><tbody>${ttmRowHtml}${rowsHtml}</tbody></table></div>
+    <div style="font-size:10px;color:var(--text2);margin-top:4px">หน่วย: ล้านบาท/หน่วยเดียวกับ Market Cap · ✏️ = กดตัวเลขในช่อง D&amp;A/CapEx/ΔNWC เพื่อแก้เป็นค่าที่ตั้งเองรายปีได้ (เว้นว่างเพื่อกลับไปใช้ % ต่อ Revenue ด้านบน)</div>`;
+
+  const netCash = dcf.net_cash || 0, netDebt = -netCash;
+  const ev = pvSum + pvTv;
+  const equityValue = ev - netDebt;
+  const price = dcf.price, shares = (dcf.mkt_cap && price) ? dcf.mkt_cap / price : null;
+  const intrinsic = shares ? equityValue / shares : null;
+  const upside = (intrinsic != null && price) ? (intrinsic / price - 1) * 100 : null;
+
+  sumBox.innerHTML = `<div class="card" style="padding:12px;background:var(--card2)">
+    <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:11.5px;margin-bottom:8px">
+      <div>PV of Forecast FCFF<br><b>${fmt(pvSum)}</b></div>
+      <div>PV of Terminal Value<br><b>${fmt(pvTv)}</b></div>
+      <div>Enterprise Value<br><b>${fmt(ev)}</b></div>
+      <div>Net Debt<br><b>${fmt(netDebt)}</b></div>
+      <div>Market Cap (Equity)<br><b>${fmt(equityValue)}</b></div>
+    </div>
+    <div style="font-size:20px;font-weight:800">${intrinsic != null ? intrinsic.toFixed(2) : '—'} บาท/หุ้น
+      ${upside != null ? `<span style="font-size:13px;font-weight:600;margin-left:6px;color:${upside > 0 ? 'var(--green)' : 'var(--red)'}">(${upside > 0 ? '+' : ''}${upside.toFixed(1)}%)</span>` : ''}</div>
+    <div style="font-size:10.5px;color:var(--text2)">ราคาปัจจุบัน ${price != null ? price.toFixed(2) : '—'} บาท · Intrinsic Price = Market Cap (Equity) ÷ จำนวนหุ้น (${shares != null ? (shares / 1e6).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'} ล้านหุ้น)</div>
   </div>`;
 }
 
