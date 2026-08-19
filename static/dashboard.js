@@ -5183,6 +5183,10 @@ function openSectorModal(sectorName, nhOnly = false) {
   if (!DATA) return;
   document.getElementById('sector-trend-chart-wrap').style.display = 'none';
   _sectorTrendDestroy();
+  // เผื่อสลับมาจาก compare-modal ตอนที่ fetch เทรนด์ยังค้างอยู่ (ไม่ได้รอโหลดเสร็จก่อนปิด) —
+  // ตัว fetch เดิมจะเช็ค mySeq เองอยู่แล้วว่าโดนแทนที่หรือยัง (self-heal ตอนเปิด sector ถัดไป
+  // จริงๆ) แต่รีเซ็ตตรงนี้ด้วยกันสถานะค้างเป็น true เปล่าๆ ระหว่างที่ modal นี้เปิดอยู่
+  _sectorTrendLoading = false;
   const thead = document.getElementById('modal-thead');
   if (_modalTheadDefault === null) _modalTheadDefault = thead.innerHTML;
   else thead.innerHTML = _modalTheadDefault;
@@ -8995,6 +8999,7 @@ function _peerGroupChartsHtml() {
     <div class="card" style="padding:12px 14px">
       <div style="font-weight:700;margin-bottom:8px;font-size:13px">📊 Margins เทียบ Peer</div>
       <div style="position:relative;height:260px"><canvas id="peer-group-margins-chart"></canvas></div>
+      <div id="peer-group-margins-clip-note" style="font-size:10px;color:#8b949e;margin-top:4px;display:none">* แกน Y ตัดขอบอัตโนมัติเพื่อไม่ให้ค่าผิดปกติบดบังตัวอื่น — เลื่อนเมาส์ชี้แท่งเพื่อดูค่าจริง</div>
     </div>
     <div class="card" style="padding:12px 14px">
       <div style="font-weight:700;margin-bottom:8px;font-size:13px">🎯 P/E เทียบ Peer</div>
@@ -9003,12 +9008,34 @@ function _peerGroupChartsHtml() {
   </div>`;
 }
 
+// หา min/max แกน Y แบบตัด outlier (Tukey IQR fence) กันค่าผิดปกติตัวเดียวดึงสเกลจนตัวอื่นแบนหมด
+function _peerGroupAxisBounds(values) {
+  const vals = values.filter(v => typeof v === 'number' && isFinite(v)).sort((a, b) => a - b);
+  if (!vals.length) return { min: undefined, max: undefined, clipped: false };
+  const q = p => vals[Math.min(vals.length - 1, Math.floor(p * (vals.length - 1)))];
+  const q1 = q(0.25), q3 = q(0.75);
+  const iqr = q3 - q1 || Math.abs(q3) || 10;
+  const dataMin = vals[0], dataMax = vals[vals.length - 1];
+  let lo = Math.max(q1 - 1.5 * iqr, dataMin);
+  let hi = Math.min(q3 + 1.5 * iqr, dataMax);
+  const pad = Math.max((hi - lo) * 0.15, 5);
+  lo = Math.min(lo - pad, 0);
+  hi = Math.max(hi + pad, 0);
+  const clipped = dataMin < lo || dataMax > hi;
+  return { min: Math.round(lo), max: Math.round(hi), clipped };
+}
+
 function _peerGroupRenderCharts(rows, baseSym) {
   const labels = rows.map(r => r.symbol);
   const gridColor = 'rgba(139,148,158,0.15)';
 
   const marginsCanvas = document.getElementById('peer-group-margins-chart');
   if (marginsCanvas) {
+    const marginVals = [];
+    rows.forEach(r => { [r.gpm, r.npm, r.roe].forEach(v => marginVals.push(v)); });
+    const bounds = _peerGroupAxisBounds(marginVals);
+    const clipNote = document.getElementById('peer-group-margins-clip-note');
+    if (clipNote) clipNote.style.display = bounds.clipped ? '' : 'none';
     _peerGroupCharts.push(new Chart(marginsCanvas, {
       type: 'bar',
       data: {
@@ -9023,7 +9050,7 @@ function _peerGroupRenderCharts(rows, baseSym) {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { position: 'top', labels: { boxWidth: 10, font: { size: 10 } } } },
         scales: {
-          y: { ticks: { callback: v => v + '%' }, grid: { color: gridColor } },
+          y: { min: bounds.min, max: bounds.max, ticks: { callback: v => v + '%' }, grid: { color: gridColor } },
           x: { grid: { display: false } },
         }
       }
@@ -9162,19 +9189,20 @@ function _workspaceKpiCardsHtml(rows) {
     const stats = _workspaceMetricStats(rows, m.k, m.lowerBetter);
     if (!stats) {
       return `<div class="card" style="padding:12px 14px">
-        <div style="font-weight:700;font-size:13px;margin-bottom:6px">${m.label}</div>
+        <div style="font-weight:700;font-size:13px;margin-bottom:6px">${m.label}${_tipIconHtml(m.tip)}</div>
         <div style="color:var(--text2);font-size:12px">ไม่มีข้อมูล</div>
       </div>`;
     }
-    return `<div class="card" style="padding:12px 14px" title="${m.tip}">
-      <div style="font-weight:700;font-size:13px;margin-bottom:6px">${m.label}</div>
+    return `<div class="card" style="padding:12px 14px">
+      <div style="font-weight:700;font-size:13px;margin-bottom:6px">${m.label}${_tipIconHtml(m.tip)}</div>
       <div style="font-size:12px;color:var(--text2)">median: <b style="color:var(--text,#e6edf3)">${_workspaceFmtVal(stats.median, m.unit)}</b></div>
       <div style="font-size:12px;color:var(--text2)">top zone: <b style="color:var(--green,#3fb950)">${_workspaceFmtVal(stats.topZone, m.unit)}</b></div>
       <div style="font-size:11px;color:var(--text2);margin-top:4px">${stats.coverage}/${stats.total} หุ้นมีข้อมูล</div>
     </div>`;
   }).join('');
   return `<div class="card" style="padding:12px 14px;margin-bottom:12px">
-    <div style="font-weight:700;font-size:13px;margin-bottom:10px">✏️ ตัวชี้วัดที่ใช้คัดคุณภาพกลุ่ม</div>
+    <div style="font-weight:700;font-size:13px;margin-bottom:2px">✏️ ตัวชี้วัดที่ใช้คัดคุณภาพกลุ่ม</div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:10px">median = ค่ากลางของกลุ่ม (ตัดผลกระทบตัวสุดโต่ง) · top zone = ค่าเฉลี่ยของ 25% หุ้นที่ดีที่สุดในตัวชี้วัดนั้น · แตะไอคอน ℹ ที่แต่ละการ์ดเพื่อดูคำอธิบายตัวชี้วัด</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px">${cards}</div>
   </div>`;
 }
@@ -9223,7 +9251,8 @@ function _workspaceShareSummaryHtml(stats) {
   const fmtPct = v => v != null ? v.toFixed(1) + '%' : '–';
   const fmtHhi = v => v != null ? `${Math.round(v)} (${_hhiLabel(v)})` : '–';
   return `<div class="card" style="padding:12px 14px;margin-bottom:12px">
-    <div style="font-weight:700;font-size:13px;margin-bottom:8px">🎯 ส่วนแบ่งในกลุ่ม — Share / Concentration</div>
+    <div style="font-weight:700;font-size:13px;margin-bottom:4px">🎯 ส่วนแบ่งในกลุ่ม — Share / Concentration${_tipIconHtml('Top 5 = สัดส่วนรายได้/กำไรของ 5 หุ้นที่ใหญ่สุดในกลุ่มเทียบทั้งกลุ่ม (ยิ่งสูงยิ่งกระจุกอยู่ไม่กี่ตัว)<br><br>HHI (Herfindahl-Hirschman Index) = Σ(ส่วนแบ่ง%)² วัดการกระจุกตัวทั้งกลุ่ม:<br>&lt;1500 กระจายตัวดี · 1500-2500 กระจุกตัวปานกลาง · &gt;2500 กระจุกตัวสูง')}</div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:8px">รายได้/กำไรรวมคิดเฉพาะหุ้นที่มีค่าเป็นบวก — หุ้นขาดทุนแสดงแยกเป็นลิสต์ด้านล่างแทนเพราะหาร % ส่วนแบ่ง "กำไร" ไม่ได้ความหมาย</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;font-size:12px;color:var(--text2)">
       <div>รายได้รวม (${stats.revCount} ตัว): <b style="color:var(--text,#e6edf3)">${_finFmt(stats.revTotal)}</b><br>Top 5 = <b style="color:var(--text,#e6edf3)">${fmtPct(stats.top5Rev)}</b> · HHI <b style="color:var(--text,#e6edf3)">${fmtHhi(stats.hhiRev)}</b></div>
       <div>กำไรรวม (เฉพาะตัวมีกำไร ${stats.profitCount} ตัว): <b style="color:var(--text,#e6edf3)">${_finFmt(stats.profitTotal)}</b><br>Top 5 = <b style="color:var(--text,#e6edf3)">${fmtPct(stats.top5Profit)}</b> · HHI <b style="color:var(--text,#e6edf3)">${fmtHhi(stats.hhiProfit)}</b></div>
@@ -9238,14 +9267,14 @@ function _workspaceShareSummaryHtml(stats) {
 // ×100 เป็น "equal-weight percentile average" ไม่ใช่สูตรถ่วงน้ำหนักตามดุลยพินิจ (แบบเดียวกับที่
 // _peerPercentile ใช้อยู่แล้วทั้งหน้า) — จงใจไม่ทำ weighting เองเพราะไม่มีเกณฑ์มาตรฐานให้ยึด
 const _WORKSPACE_HEATMAP_METRICS = [
-  { k: 'q_revenue_yoy',    label: 'Rev YoY',  unit: 'pct', lowerBetter: false },
-  { k: 'q_net_profit_yoy', label: 'NP YoY',   unit: 'pct', lowerBetter: false },
-  { k: 'gpm',              label: 'GPM',      unit: 'pct', lowerBetter: false },
-  { k: 'npm',              label: 'NPM',      unit: 'pct', lowerBetter: false },
-  { k: 'fcf_margin',       label: 'FCF Mg',   unit: 'pct', lowerBetter: false },
+  { k: 'q_revenue_yoy',    label: 'Rev YoY',  unit: 'pct', lowerBetter: false, tip: 'รายได้ไตรมาสล่าสุดเทียบไตรมาสเดียวกันปีก่อน (YoY)' },
+  { k: 'q_net_profit_yoy', label: 'NP YoY',   unit: 'pct', lowerBetter: false, tip: 'กำไรสุทธิไตรมาสล่าสุดเทียบไตรมาสเดียวกันปีก่อน (YoY)' },
+  { k: 'gpm',              label: 'GPM',      unit: 'pct', lowerBetter: false, tip: 'อัตรากำไรขั้นต้น (Gross Profit Margin) = กำไรขั้นต้น ÷ รายได้ ไตรมาสล่าสุด' },
+  { k: 'npm',              label: 'NPM',      unit: 'pct', lowerBetter: false, tip: 'อัตรากำไรสุทธิ (Net Profit Margin) = กำไรสุทธิ ÷ รายได้ ไตรมาสล่าสุด' },
+  { k: 'fcf_margin',       label: 'FCF Mg',   unit: 'pct', lowerBetter: false, tip: 'กระแสเงินสดอิสระ (FCF) TTM ÷ รายได้ TTM' },
   { k: 'roic',             label: 'ROIC',     unit: 'pct', lowerBetter: false, tip: 'NOPAT TTM (กำไรดำเนินงาน×(1-อัตราภาษี effective)) ÷ (หนี้สินรวม+ส่วนผู้ถือหุ้น-เงินสด งวดล่าสุด) — สูตรเดียวกับ ROIC (TTM) ในหน้างบรวมทุกแหล่ง' },
-  { k: 'roe',              label: 'ROE',      unit: 'pct', lowerBetter: false },
-  { k: 'de_ratio',         label: 'D/E',      unit: 'x',   lowerBetter: true },
+  { k: 'roe',              label: 'ROE',      unit: 'pct', lowerBetter: false, tip: 'ผลตอบแทนต่อส่วนผู้ถือหุ้น (Return on Equity) TTM' },
+  { k: 'de_ratio',         label: 'D/E',      unit: 'x',   lowerBetter: true,  tip: 'หนี้สินรวม ÷ ส่วนผู้ถือหุ้น งวดล่าสุด — ยิ่งต่ำยิ่งปลอดภัย (สีเขียว)' },
 ];
 
 // เขียน r._composite ลงทุกแถวใน rows (ผลข้างเคียง เหมือน _workspaceComputeShares) — ต้อง cover
@@ -9294,7 +9323,7 @@ function _workspaceHeatmapTableHtml(rows) {
 
   const headCells = [{ k: 'symbol', label: 'Ticker' }]
     .concat(_WORKSPACE_HEATMAP_METRICS)
-    .concat([{ k: '_composite', label: 'Composite' }])
+    .concat([{ k: '_composite', label: 'Composite', tip: 'ค่าเฉลี่ย percentile (0-100) ของทุกคอลัมน์ที่หุ้นนี้มีข้อมูล — ยิ่งสูงยิ่งเด่นรอบด้านเทียบกลุ่มนี้ (equal-weight, ไม่ถ่วงน้ำหนักเป็นพิเศษคอลัมน์ไหน)' }])
     .map(c => `<th class="${c.k === 'symbol' ? '' : 'r'}" style="cursor:pointer" title="${c.tip || ''}" onclick="_workspaceHeatmapSortBy('${c.k}')">${c.label}${_workspaceHeatmapSortArrow(c.k)}</th>`)
     .join('');
 
@@ -9374,22 +9403,30 @@ function _workspaceRenderContributionChart(rows) {
 // pseudo-field ที่ _workspaceComputeShares เขียนลง rows ไว้ก่อนแล้ว (ดูคอมเมนต์ด้านบน) ต้องเรียก
 // ฟังก์ชันนั้นก่อนเสมอถึงจะมีค่าให้กราฟ 2 อันนี้อ่าน
 const _WORKSPACE_RANK_METRICS = [
-  { k: 'de_ratio',      canvasId: 'ws-rank-de',   title: 'D/E Ratio เปรียบเทียบ',        unit: 'x',   lowerBetter: true },
-  { k: 'current_ratio', canvasId: 'ws-rank-cr',   title: 'Current Ratio เปรียบเทียบ',    unit: 'x',   lowerBetter: false },
-  { k: 'cash_cycle',    canvasId: 'ws-rank-cc',   title: 'Cash Cycle เปรียบเทียบ (วัน)', unit: 'day', lowerBetter: true },
-  { k: 'cfo_margin',    canvasId: 'ws-rank-cfom', title: 'CFO Margin % เปรียบเทียบ',     unit: 'pct', lowerBetter: false },
-  { k: 'fcf_margin',    canvasId: 'ws-rank-fcfm', title: 'FCF Margin % เปรียบเทียบ',     unit: 'pct', lowerBetter: false },
-  { k: '_rev_share',    canvasId: 'ws-rank-revshare',    title: 'Revenue Share % เปรียบเทียบ',                    unit: 'pct', lowerBetter: false },
-  { k: '_profit_share', canvasId: 'ws-rank-profitshare', title: 'Profit Share % เปรียบเทียบ (เฉพาะตัวมีกำไร)',   unit: 'pct', lowerBetter: false },
+  { k: 'de_ratio',      canvasId: 'ws-rank-de',   title: 'D/E Ratio เปรียบเทียบ',        unit: 'x',   lowerBetter: true,
+    tip: 'หนี้สินรวม ÷ ส่วนผู้ถือหุ้น — ยิ่งต่ำยิ่งปลอดภัย (เรียงจากต่ำสุด = ดีสุด อยู่บนสุด)' },
+  { k: 'current_ratio', canvasId: 'ws-rank-cr',   title: 'Current Ratio เปรียบเทียบ',    unit: 'x',   lowerBetter: false,
+    tip: 'สินทรัพย์หมุนเวียน ÷ หนี้สินหมุนเวียน — ยิ่งสูงยิ่งมีสภาพคล่องจ่ายหนี้ระยะสั้นได้ (เรียงจากสูงสุด = ดีสุด อยู่บนสุด)' },
+  { k: 'cash_cycle',    canvasId: 'ws-rank-cc',   title: 'Cash Cycle เปรียบเทียบ (วัน)', unit: 'day', lowerBetter: true,
+    tip: 'จำนวนวันตั้งแต่จ่ายเงินซื้อวัตถุดิบจนได้เงินสดคืนจากการขาย — ยิ่งสั้นยิ่งหมุนเงินเร็ว (เรียงจากสั้นสุด = ดีสุด อยู่บนสุด)' },
+  { k: 'cfo_margin',    canvasId: 'ws-rank-cfom', title: 'CFO Margin % เปรียบเทียบ',     unit: 'pct', lowerBetter: false,
+    tip: 'กระแสเงินสดจากดำเนินงาน (CFO) TTM ÷ รายได้ TTM (เรียงจากสูงสุด = ดีสุด อยู่บนสุด)' },
+  { k: 'fcf_margin',    canvasId: 'ws-rank-fcfm', title: 'FCF Margin % เปรียบเทียบ',     unit: 'pct', lowerBetter: false,
+    tip: 'กระแสเงินสดอิสระ (FCF) TTM ÷ รายได้ TTM (เรียงจากสูงสุด = ดีสุด อยู่บนสุด)' },
+  { k: '_rev_share',    canvasId: 'ws-rank-revshare',    title: 'Revenue Share % เปรียบเทียบ',                    unit: 'pct', lowerBetter: false,
+    tip: 'สัดส่วนรายได้ TTM ของหุ้นนี้เทียบรายได้รวมทั้งกลุ่ม (เฉพาะหุ้นที่มีรายได้เป็นบวก)' },
+  { k: '_profit_share', canvasId: 'ws-rank-profitshare', title: 'Profit Share % เปรียบเทียบ (เฉพาะตัวมีกำไร)',   unit: 'pct', lowerBetter: false,
+    tip: 'สัดส่วนกำไรสุทธิ TTM ของหุ้นนี้เทียบกำไรรวมทั้งกลุ่ม (เฉพาะหุ้นที่มีกำไรเป็นบวก — หุ้นขาดทุนไม่นับรวม)' },
 ];
 
 function _workspaceRankChartsHtml() {
   const boxes = _WORKSPACE_RANK_METRICS.map(m => `
     <div class="card" style="padding:12px 14px">
-      <div style="font-weight:700;margin-bottom:8px;font-size:13px" id="${m.canvasId}-title">${m.title}</div>
+      <div style="font-weight:700;margin-bottom:8px;font-size:13px" id="${m.canvasId}-title">${m.title}${_tipIconHtml(m.tip)}</div>
       <div style="position:relative" id="${m.canvasId}-box"><canvas id="${m.canvasId}"></canvas></div>
     </div>`).join('');
-  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-bottom:12px">${boxes}</div>`;
+  return `<div style="font-size:11px;color:var(--text2);margin-bottom:8px">🎨 สี 3 โซนคือ อันดับภายในกลุ่มนี้เอง (เขียว = 1/3 แรกที่ดีสุด, เหลือง = 1/3 กลาง, แดง = 1/3 ท้ายที่แย่สุด) ไม่ใช่เกณฑ์ตายตัวข้ามกลุ่ม — แตะไอคอน ℹ ที่แต่ละกราฟเพื่อดูคำอธิบายตัวชี้วัด</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-bottom:12px">${boxes}</div>`;
 }
 
 function _workspaceRankFmtVal(v, unit) {
@@ -9499,13 +9536,15 @@ async function _workspaceFetchAndRenderTrend(sectorName) {
 }
 
 function _workspaceTrendHtml() {
+  const marginTip = 'NPM/ROE "aggregate" = คำนวณจากผลรวมกำไร/รายได้/ส่วนผู้ถือหุ้นของทั้ง sector ต่อไตรมาส (ไม่ใช่ค่าเฉลี่ยแบบถ่วงน้ำหนักเท่ากันทุกตัว) จึงถูกถ่วงน้ำหนักโดยหุ้นตัวใหญ่ในกลุ่มโดยธรรมชาติ — ดูทั้ง sector ไม่ผูกกับหุ้นที่ติ๊กเลือก/ตัดออกด้านบน';
+  const breadthTip = '% ของหุ้นในกลุ่มที่ผ่านเกณฑ์แต่ละข้อ ณ ไตรมาสล่าสุด: รายได้/กำไรโต YoY หรือ CFO เป็นบวก (TTM) — <span style="color:#3fb950">เขียว</span> = ผ่าน ≥50% ของกลุ่ม, <span style="color:#f85149">แดง</span> = ต่ำกว่า 50%';
   return `<div style="display:grid;grid-template-columns:2fr 1fr;gap:12px">
     <div class="card" style="padding:12px 14px">
-      <div style="font-weight:700;margin-bottom:8px;font-size:13px">📈 Sector Margin Trend — NPM/ROE เฉลี่ยกลุ่มย้อนหลัง 20 ไตรมาส</div>
+      <div style="font-weight:700;margin-bottom:8px;font-size:13px">📈 Sector Margin Trend — NPM/ROE เฉลี่ยกลุ่มย้อนหลัง 20 ไตรมาส${_tipIconHtml(marginTip)}</div>
       <div style="position:relative;height:260px"><canvas id="ws-margin-trend"></canvas></div>
     </div>
     <div class="card" style="padding:12px 14px">
-      <div style="font-weight:700;margin-bottom:4px;font-size:13px">🌊 Breadth <span id="ws-breadth-quarter" style="color:var(--text2);font-weight:400"></span></div>
+      <div style="font-weight:700;margin-bottom:4px;font-size:13px">🌊 Breadth <span id="ws-breadth-quarter" style="color:var(--text2);font-weight:400"></span>${_tipIconHtml(breadthTip)}</div>
       <div style="font-size:11px;color:var(--text2);margin-bottom:8px">การฟื้นตัวกระจายแค่ไหนในกลุ่ม (ไตรมาสล่าสุด)</div>
       <div style="position:relative;height:220px"><canvas id="ws-breadth"></canvas></div>
     </div>
@@ -17649,15 +17688,71 @@ function _mergedTableAnnual(years, scrollId) {
 // Rev -> COGS+GP -> GP -> SGA+EBIT -> EBIT -> FinCost+Pretax -> Pretax -> Tax+NetProfit
 // ความสูงกล่องทุกกล่องคำนวณจาก value/revenue (global scale เดียวกันหมด) ทำให้กล่องลูกรวมกัน
 // เท่ากล่องแม่พอดีโดยอัตโนมัติ ไม่ต้องพึ่ง recursive proportion
-const _FIN_SANKEY_CLR = { revenue: '#58a6ff', cost: '#f85149', profit: '#3fb950' };
+const _FIN_SANKEY_CLR = { revenue: '#58a6ff', cost: '#f85149', grossProfit: '#39c5cf', profit: '#3fb950' };
+
+// วัดความกว้างข้อความจริงด้วย canvas 2D (แม่นกว่าเดาจากจำนวนตัวอักษร โดยเฉพาะภาษาไทยที่ความกว้าง
+// ต่อตัวอักษรไม่เท่ากัน) ใช้ font-family เดียวกับที่ --font กำหนดไว้ให้ body (SVG text ไม่ได้ตั้ง
+// font-family เอง เลย inherit มาจาก body) แคช context ไว้ตัวเดียวไม่ต้องสร้างใหม่ทุกครั้ง
+let _finSankeyMeasureCtx = null;
+function _finSankeyTextWidth(text, fontSize, weight) {
+  if (!_finSankeyMeasureCtx) _finSankeyMeasureCtx = document.createElement('canvas').getContext('2d');
+  const fam = getComputedStyle(document.body).fontFamily || 'sans-serif';
+  _finSankeyMeasureCtx.font = `${weight} ${fontSize}px ${fam}`;
+  return _finSankeyMeasureCtx.measureText(text).width;
+}
+
+// ตัดบรรทัด label ยาวๆ (เช่น "กำไรจากการดำเนินงาน (EBIT)" ที่กว้างเกิน colW ที่ font-size ปกติ) ให้
+// ขึ้นบรรทัดใหม่ตรงช่องว่างแทนโดน clip-path ตัดกลางคำดิบๆ — greedy word-wrap ธรรมดา จำกัดไม่เกิน
+// maxLines บรรทัด (เกินนั้นตัดทิ้ง ปล่อยให้ clip-path ที่มีอยู่แล้วเป็นตาข่ายกันสุดท้ายเหมือนเดิม)
+function _wrapSankeyLabel(text, maxWidth, fontSize, weight, maxLines) {
+  const words = text.split(' ');
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    const trial = cur ? cur + ' ' + w : w;
+    if (cur && _finSankeyTextWidth(trial, fontSize, weight) > maxWidth) {
+      lines.push(cur);
+      cur = w;
+    } else {
+      cur = trial;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines.slice(0, maxLines);
+}
 
 // ผลรวม TTM 4 ไตรมาสล่าสุดจาก qs (เรียงเก่า->ใหม่แล้ว) — เข้มงวดแบบเดียวกับ _ttm_sum ฝั่ง backend
 // ใน sources/financials_store.py (ต้องมี 4 ไตรมาสติดกันจริง ฟิลด์ไหน null แม้แค่ 1 งวดใน 4 ให้ทั้ง
 // ฟิลด์นั้นเป็น null กันผลรวมครึ่งๆ กลางๆ หลอกตา) คืน null ถ้าข้อมูลไม่พอหรือ revenue ไม่มี
-function _computeFinSankeyTtm(qs) {
-  if (!qs || qs.length < 4) return null;
-  const sorted = [...qs].sort((a, b) => a.year_ad - b.year_ad || a.q - b.q);
-  const last4 = sorted.slice(-4);
+// เติมฟิลด์ที่ขาดหายระหว่างกลาง (financial_cost/pretax_profit/tax_expense) จากฟิลด์ข้างเคียงที่มีครบ
+// — Yahoo บางบริษัทไม่คืนค่าฟิลด์เหล่านี้ตรงๆ ทั้งที่คำนวณย้อนจากอัตลักษณ์ทางบัญชีได้ (เช่น AAPL ที่
+// ดอกเบี้ยรับสุทธิเป็นบวก [EBIT<Pretax] Yahoo เลยไม่ส่ง financial_cost มา, หรือ AMZN/WMT/NVDA ที่ไม่มี
+// "Pretax Income"/"Interest Expense" แยกให้เลย) เดิมพลาดฟิลด์เดียวใน 1 งวดก็ทำให้ _computeFinSankeyTtm
+// (strict-null ทั้ง TTM) ตัดสเตจที่เหลือทั้งหมดทิ้ง (ภาษี/กำไรสุทธิหายไปด้วยทั้งที่มีข้อมูลจริง) —
+// สืบย้อนจาก EBIT-FinCost=Pretax และ Pretax-Tax=Net แทน ยังเข้มงวดเหมือนเดิม: ถ้าฟิลด์ข้างเคียงที่ต้อง
+// ใช้ derive ก็ไม่มีอยู่ดี ปล่อย null ต่อ ไม่เดาสุ่ม
+function _deriveFinQuarterFields(r) {
+  const out = { ...r };
+  if (out.pretax_profit == null && out.operating_profit != null && out.financial_cost != null) {
+    out.pretax_profit = out.operating_profit - out.financial_cost;
+  }
+  if (out.pretax_profit == null && out.tax_expense != null && out.net_profit != null) {
+    out.pretax_profit = out.tax_expense + out.net_profit;
+  }
+  if (out.financial_cost == null && out.operating_profit != null && out.pretax_profit != null) {
+    out.financial_cost = out.operating_profit - out.pretax_profit;
+  }
+  if (out.tax_expense == null && out.pretax_profit != null && out.net_profit != null) {
+    out.tax_expense = out.pretax_profit - out.net_profit;
+  }
+  return out;
+}
+
+// ประมวลผลหน้าต่าง 4 ไตรมาสเดียว (เรียงเก่า->ใหม่, ผ่าน _deriveFinQuarterFields แล้ว) — คืน null ถ้า
+// ไม่ติดกันจริงหรือไม่มีรายได้ ไม่งั้นคืน out พร้อม out._complete บอกว่าฟิลด์สาย financial_cost/
+// pretax_profit/tax_expense/net_profit ครบหรือไม่ (แบงก์/สถาบันการเงินนับว่า "ครบ" เสมอเพราะไม่มี
+// แนวคิดพวกนี้อยู่แล้วโดยธรรมชาติ ไม่ใช่ data gap)
+function _tryFinSankeyTtmWindow(last4) {
   // ต้องเป็น 4 ไตรมาสติดกันจริง ไม่ใช่แค่ 4 แถวหลังสุดของอาเรย์ — หุ้นที่ sync ไม่ครบ (มักเจอกับ
   // DR/mirror) อาจมีช่วงขาดหายกลางทาง ถ้าไม่เช็คจะรวมไตรมาสไม่ติดกันแล้วติดป้าย "TTM 4Q" ผิด
   // ความหมายแบบไม่มีคำเตือน (ให้เข้มงวดแบบเดียวกับ _ttm_sum ฝั่ง backend จริงๆ ตามที่คอมเมนต์บอก)
@@ -17682,6 +17777,32 @@ function _computeFinSankeyTtm(qs) {
   out.isBankLike = last4.every(r => r.cogs == null && r.gross_profit == null);
   const first = last4[0], lastQ = last4[3];
   out.periodLabel = `Q${first.q}'${String(first.year_be).slice(-2)} → Q${lastQ.q}'${String(lastQ.year_be).slice(-2)}`;
+  out._complete = out.isBankLike ||
+    (out.financial_cost != null && out.pretax_profit != null && out.tax_expense != null && out.net_profit != null);
+  return out;
+}
+
+function _computeFinSankeyTtm(qs) {
+  if (!qs || qs.length < 4) return null;
+  const sorted = [...qs].sort((a, b) => a.year_ad - b.year_ad || a.q - b.q).map(_deriveFinQuarterFields);
+  // ลองหน้าต่าง TTM ล่าสุดก่อนเสมอ ถ้าไตรมาสล่าสุดสุดยังมาไม่ครบจากต้นทาง (เช่น Yahoo ยังไม่อัพเดต
+  // pretax/tax ของไตรมาสที่เพิ่งปิดงวด — ปกติมาช้ากว่า revenue/net_profit ที่มาจาก Finnomena คนละชั้น
+  // เจอจริงกับ AMZN 2026-08-19) ให้ถอยทั้งหน้าต่างไปทีละไตรมาส สูงสุด MAX_BACK แทนที่จะโชว์ Sankey
+  // ตัดครึ่งไปเรื่อยๆ — เลื่อนทั้งหน้าต่างพร้อมกันเสมอ (ไม่ใช่แยกทีละ field) ทุกกล่องเลยยังอ้างอิง
+  // ช่วงเวลาเดียวกันแน่นอน ไม่ผสมกัน periodLabel จะโชว์ช่วงจริงที่ใช้เสมอให้เห็นว่าไม่ใช่ TTM ล่าสุด
+  // สุดถ้าต้องถอย — ถ้าไม่มีหน้าต่างไหนครบเลยภายใน MAX_BACK ก็ fallback กลับไปโชว์หน้าต่างล่าสุดสุด
+  // (ของเดิม บางส่วนดีกว่าไม่มีเลย)
+  const MAX_BACK = 2;
+  let fallback = null;
+  for (let back = 0; back <= MAX_BACK && sorted.length - 4 - back >= 0; back++) {
+    const last4 = back === 0 ? sorted.slice(-4) : sorted.slice(-4 - back, -back);
+    const result = _tryFinSankeyTtmWindow(last4);
+    if (!result) continue;
+    if (!fallback) fallback = result;
+    if (result._complete) return result;
+  }
+  const out = fallback;
+  if (!out) return null;
   return out;
 }
 
@@ -17692,23 +17813,37 @@ function _renderFinSankeySvg(v) {
     { costKey: 'financial_cost', costLabel: 'ต้นทุนทางการเงิน', contKey: 'pretax_profit', contLabel: 'กำไรก่อนภาษี' },
     { costKey: 'tax_expense', costLabel: 'ค่าใช้จ่ายภาษีเงินได้', contKey: 'net_profit', contLabel: 'กำไรสุทธิ' },
   ];
-  const OFF = 8, colW = 172, colGap = 78, x0 = 8;
+  const OFF = 8, barW = 10, colGap = 200, x0 = 8, LABEL_TAIL_W = 140;
   const rev = v.revenue;
   const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const fmtM = n => n == null ? '—' : (n / 1e6).toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' ลบ.';
   const fmtPct = n => n == null ? '' : (n / rev * 100).toFixed(1) + '% of Rev';
+  const fmtPctShort = n => n == null ? '' : (n / rev * 100).toFixed(1) + '%';
 
-  // สัดส่วน cost/cont ที่แต่ละจุดแยกกิ่งเป็นเชิงเส้นล้วน ไม่ขึ้นกับ H ที่เลือก (H ใดๆ >0 ให้สัดส่วน
-  // เดียวกันเป๊ะ) เลย build ด้วย H อ้างอิงก่อนเพื่อหาสัดส่วนกล่องที่เล็กที่สุด แล้วค่อยเลือก H จริง
-  // ที่ทำให้กล่องเล็กสุดนั้นสูงพออ่านออก (MIN_H) แทนที่จะ clamp ทีละคู่แบบเดิม — วิธีเดิมพังกับหุ้น
-  // มาร์จิ้นบางมาก (เช่น PTT: COGS กิน 84% ของรายได้ตั้งแต่กิ่งแรก เหลือให้ EBIT/Pretax/Tax แบ่งกัน
-  // ต่ออีก 3 ชั้นแค่ ~15% ของรายได้ กล่องท้ายๆ เหลือไม่กี่ px ตัวหนังสือทับกัน) วิธีนี้คงสัดส่วนจริง
-  // 100% ทุกกล่อง แค่ขยายความสูงรวมของทั้งแผนภาพแทน
-  function buildTree(H) {
+  // buildTree แบ่ง "พื้นที่ยืน" (slot, y0/y1) ต่อโหนดล้วนๆ เพื่อกันไม่ให้ label ที่วางไว้ข้างแท่งชนกัน
+  // — MIN_H=52 ตรงกับพื้นที่แนวตั้งที่ label เต็ม (ชื่อ/มูลค่า/% of Rev) ต้องใช้ ไม่เกี่ยวกับความหนา
+  // ของแท่งที่วาดจริง (คำนวณแยกจาก value/revenue ตรงๆ ด้านล่าง หลัง buildTree) จองพื้นที่ล่วงหน้า
+  // (reserveAfter) ให้พอสำหรับ label ของทุกสเตจที่เหลือ + label กำไรตัวสุดท้าย ไม่ใช่แค่กิ่งถัดไปกิ่ง
+  // เดียว — ถ้าจองแค่กิ่งถัดไป (ของเดิม) กิ่งกำไรจะไปโดนบีบต่ออีกทีตอนแยกกิ่งลึกถัดๆไป จนบางกล่องท้ายสุด
+  // (เช่น ภาษี/กำไรสุทธิ) ยังเล็กกว่า MIN_H อยู่ดี
+  //
+  // ⚠ ข้อบังคับที่ buildTree ต้องการจริงๆ: H >= (stages.length+1) * MIN_H เสมอ (พิสูจน์: แต่ละสเตจ
+  // "เฉือน" กล่องต้นทุนสูง MIN_H ออกจากด้านบนของพื้นที่ที่เหลือ 4 ครั้ง + เหลือกล่องกำไรสุทธิท้ายสุดอีก
+  // MIN_H = 5*MIN_H รวม) เจอบั๊กจริง 2026-08-19: ตอนย่อขนาดทั้งภาพลง H เคยลดเหลือ 200 แต่ MIN_H ยังอยู่
+  // 52 (5*52=260 > 200) ทำให้ parentH หดจนต่ำกว่า MIN_H*2 ตั้งแต่สเตจที่ 3 (ต้นทุนทางการเงิน/กำไรก่อน
+  // ภาษี) เงื่อนไข fallback ทั้ง 2 ชั้นใน buildTree ไม่ผ่านสักอัน เลยไม่มีการบังคับขั้นต่ำใดๆ เหลือแค่
+  // สัดส่วนจริงดิบๆ (สไลซ์เหลือ 0.69px!) กล่อง "ต้นทุนทางการเงิน" ยุบจนกล่อง "กำไรก่อนภาษี" ทับซ้อน —
+  // แก้โดยเพิ่ม H กลับให้ผ่านเงื่อนไข (270 > 260 มีเผื่อนิดหน่อย) แล้วชดเชยด้วยการขยาย colGap ให้ภาพ
+  // แบนลง (landscape มากขึ้น) รักษาความสูงพิกเซลจริงตอน render ให้ใกล้เคียงเดิม ไม่งั้นจะย้อนกลับไปเป็น
+  // ปัญหา "ต้องเลื่อนดู" ที่เพิ่งแก้ไปก่อนหน้านี้
+  const MIN_H = 52, H = 270;
+
+  function buildTree() {
     const nodes = [{ col: 0, label: 'รายได้จากการขาย', value: rev, y0: 0, y1: H, color: _FIN_SANKEY_CLR.revenue }];
     const links = [];
     let parentNode = nodes[0];
-    for (const st of stages) {
+    for (let k = 0; k < stages.length; k++) {
+      const st = stages[k];
       const costVal = v[st.costKey], contVal = v[st.contKey];
       if (costVal == null || contVal == null) break;
       const parentH = parentNode.y1 - parentNode.y0;
@@ -17717,11 +17852,25 @@ function _renderFinSankeySvg(v) {
       // clamp ไว้ใน [0, parentH] เสมอ — ถ้า contVal (กำไรขั้นต้น/EBIT/กำไรก่อนภาษี) ติดลบ (ขาดทุน
       // จริงในไตรมาสนั้น) ขณะ costVal ยังบวก costVal จะเกิน denom ทำให้ costH เกิน parentH ได้
       // ถ้าไม่ clamp จะทำให้ contNode.y0 > contNode.y1 (สูงติดลบ) แล้วพัง cascade ไปทุกกล่องถัดไป
-      const costH = Math.max(0, Math.min(parentH, costHRaw));
+      let costH = Math.max(0, Math.min(parentH, costHRaw));
+      // reserveAfter คือพื้นที่ขั้นต่ำที่กิ่งกำไร (contH) ต้อง "เหลือติดตัว" ไว้ให้พอสำหรับกล่องต้นทุน
+      // ของทุกสเตจที่เหลือ (คนละ MIN_H) บวกกล่องกำไรตัวสุดท้ายอีก MIN_H — ถ้า parent เหลือพอจองได้เต็ม
+      // ใช้แบบนั้น ถ้าไม่พอ (parent เองก็โดนบีบมาจากชั้นก่อนหน้าจนเหลือน้อย) ถอยไปแค่การันตี MIN_H ให้
+      // ทั้ง 2 กิ่งของสเตจนี้พอ (เท่าที่ทำได้)
+      const stagesLeftAfter = stages.length - k - 1;
+      const reserveAfter = (stagesLeftAfter + 1) * MIN_H;
+      if (parentH >= MIN_H + reserveAfter) {
+        costH = Math.min(Math.max(costH, MIN_H), parentH - reserveAfter);
+      } else if (parentH >= MIN_H * 2) {
+        costH = Math.min(Math.max(costH, MIN_H), parentH - MIN_H);
+      }
       const costNode = { col: parentNode.col + 1, label: st.costLabel, value: costVal,
                           y0: parentNode.y0, y1: parentNode.y0 + costH, color: _FIN_SANKEY_CLR.cost };
+      // สเตจแรก (k===0) เท่านั้นที่ contNode คือ "กำไรขั้นต้น" — ให้สีต่างจากกำไรที่เหลือขั้นถัดๆไป
+      // (EBIT/กำไรก่อนภาษี/กำไรสุทธิ ยังใช้สี profit ปกติ) ตามที่ legend อ้างอิงแยก Gross Profit ไว้
       const contNode = { col: parentNode.col + 1, label: st.contLabel, value: contVal,
-                          y0: parentNode.y0 + costH, y1: parentNode.y1, color: _FIN_SANKEY_CLR.profit };
+                          y0: parentNode.y0 + costH, y1: parentNode.y1,
+                          color: k === 0 ? _FIN_SANKEY_CLR.grossProfit : _FIN_SANKEY_CLR.profit };
       nodes.push(costNode, contNode);
       links.push({ from: parentNode, to: costNode });
       links.push({ from: parentNode, to: contNode });
@@ -17730,60 +17879,110 @@ function _renderFinSankeySvg(v) {
     return { nodes, links };
   }
 
-  const MIN_H = 30, H_DEFAULT = 420, H_MAX = 1100;
-  const probe = buildTree(1000);
-  if (probe.nodes.length < 3) return '';   // แม้แต่ COGS/กำไรขั้นต้นก็ไม่มี — ไม่พอวาดอะไรที่มีความหมาย
-  const minFrac = Math.min(...probe.nodes.map(n => (n.y1 - n.y0) / 1000));
-  const H = minFrac > 0 ? Math.max(H_DEFAULT, Math.min(H_MAX, MIN_H / minFrac)) : H_DEFAULT;
-  const { nodes, links } = buildTree(H);
+  const { nodes, links } = buildTree();
+  if (nodes.length < 3) return '';   // แม้แต่ COGS/กำไรขั้นต้นก็ไม่มี — ไม่พอวาดอะไรที่มีความหมาย
 
-  const cx = col => x0 + col * (colW + colGap);
-  let gradDefs = '', linkPaths = '';
-  links.forEach((lk, i) => {
-    // lk.to.y0/y1 คือทั้ง (ก) กล่องปลายทางในคอลัมน์ถัดไป และ (ข) เศษของกล่องต้นทางที่ลิงก์เส้นนี้
-    // "หิ้ว" มา (เพราะสร้างมาเท่ากันเป๊ะตอน buildTree) จุดเริ่ม/จบของริบบอนจึงอยู่ y เดียวกันเสมอ
-    // (แนวนอนล้วน) — ใช้ y ของ "from" (จุดกึ่งกลางทั้งกล่องต้นทาง) แทนจะทำให้ริบบอน 2 เส้นที่ออก
-    // จากกล่องเดียวกัน (ฝั่งต้นทุน/ฝั่งกำไรที่เหลือ) ไปจุดเริ่มต้นซ้อนทับกันที่จุดเดียว แล้วไขว้กันไป
-    // คนละทิศ (บั๊กที่เจอจริงตอนทดสอบ ADVANC — ริบบอนไขว้เป็นรูปโบว์ไท)
-    const sx = cx(lk.from.col) + colW, tx = cx(lk.to.col);
-    const y = OFF + (lk.to.y0 + lk.to.y1) / 2;
-    const midX = (sx + tx) / 2;
-    const w = Math.max(1, lk.to.y1 - lk.to.y0);
-    const gid = `finSankeyGrad${i}`;
-    // gradientUnits="userSpaceOnUse" จำเป็น — ค่าเริ่มต้น objectBoundingBox คำนวณจาก bounding box
-    // ของ path เอง ซึ่งเส้นแนวนอนล้วน (y เท่ากันหัวท้าย) ทำให้ bounding box สูง=0 (degenerate) สเปค
-    // SVG สั่งไม่วาดเอฟเฟกต์ gradient เลยถ้า bounding box มีด้านใดเป็น 0 (เจอจริง: ริบบอนหายไปทั้ง
-    // เส้นตอนทดสอบ ADVANC หลังแก้บั๊กไขว้ให้ริบบอนเป็นเส้นแนวนอน) ใช้พิกัดจริงของ path แทนจะไม่พึ่ง
-    // bounding box ของตัวเองเลย
-    gradDefs += `<linearGradient id="${gid}" gradientUnits="userSpaceOnUse" x1="${sx}" x2="${tx}" y1="${y}" y2="${y}">
-      <stop offset="0" stop-color="${lk.from.color}" stop-opacity=".5"/>
-      <stop offset="1" stop-color="${lk.to.color}" stop-opacity=".5"/>
-    </linearGradient>`;
-    linkPaths += `<path d="M${sx},${y} C${midX},${y} ${midX},${y} ${tx},${y}" stroke="url(#${gid})" stroke-width="${w}" fill="none"/>`;
+  const cx = col => x0 + col * (barW + colGap);
+
+  // ความหนาของแท่ง/ริบบอนคงที่ทุกกล่องทุกหุ้นเสมอ (FIXED_THICK) — ไม่ผูกกับ value/revenue อีกต่อไป
+  // เดิมเคยคำนวณตามสัดส่วนจริง (ต้นทุนขายแท่งใหญ่ ภาษี/ดอกเบี้ยแท่งเรียวบาง แบบ Sankey ทั่วไป) แต่ผล
+  // คือขนาดรวมของภาพ "ขยาย/บวม" ต่างกันไปตามโครงสร้างมาร์จิ้นของแต่ละหุ้น (หุ้นมาร์จิ้นสูงเช่น AAPL
+  // ริบบอนหลายเส้นหนาพร้อมกันจนภาพดูใหญ่กว่าหุ้นทั่วไปทั้งที่ viewBox ขนาดเท่ากัน) ผู้ใช้ต้องการให้ทุก
+  // หุ้นหน้าตาเท่ากันเป๊ะไม่ว่าตัวเลขจะใหญ่/มาร์จิ้นจะเบี้ยวแค่ไหน เลยล็อกความหนาคงที่แทน (สัดส่วนจริง
+  // ยังอ่านได้จากตัวเลข/% ที่ label ข้างแท่งอยู่แล้ว ไม่ต้องพึ่งพาความหนาเป็นตัวสื่อสาร)
+  const FIXED_THICK = 18;
+  nodes.forEach(n => {
+    const slotH = n.y1 - n.y0;
+    n.thick = Math.min(slotH, FIXED_THICK);
+    n.cy = OFF + (n.y0 + n.y1) / 2;
+    n.by0 = n.cy - n.thick / 2;
+    n.by1 = n.cy + n.thick / 2;
   });
 
-  const maxCol = Math.max(...nodes.map(n => n.col));
-  const vbW = cx(maxCol) + colW + 8, vbH = H + OFF * 2;
+  // ประมวลผลลิงก์เป็นคู่ (cost, cont) ต่อจุดแยกกิ่งหนึ่งจุด (buildTree push เข้าคู่กันเสมอ) เพื่อแบ่ง
+  // จุดออกบนแท่งของ parent ตามสัดส่วนมูลค่าจริง (บนลงล่าง: ฝั่งต้นทุนก่อน ฝั่งกำไรที่เหลือ) แล้วโค้ง
+  // เป็นเส้น bezier ไปยังจุดศูนย์กลางของแท่งปลายทาง — sy กับ ty ต่างกันได้ ทำให้ริบบอนโค้งขึ้น/ลงจริง
+  // (ต่างจากเวอร์ชันกล่องเดิมที่ปลายทั้งคู่ยึด y เดียวกันเสมอจนได้แต่เส้นตรงแนวนอน)
+  let gradDefs = '', linkPaths = '';
+  for (let i = 0; i < links.length; i += 2) {
+    const lkCost = links[i], lkCont = links[i + 1];
+    const parent = lkCost.from;
+    const costVal = lkCost.to.value, contVal = lkCont.to.value;
+    const denom = costVal + contVal;
+    const costFrac = denom > 0 ? Math.max(0, Math.min(1, costVal / denom)) : 0.5;
+    const costSliceH = parent.thick * costFrac;
+    const branchSy = [parent.by0 + costSliceH / 2, parent.by0 + costSliceH + (parent.thick - costSliceH) / 2];
+    [lkCost, lkCont].forEach((lk, bi) => {
+      const sx = cx(lk.from.col) + barW, tx = cx(lk.to.col);
+      const sy = branchSy[bi], ty = lk.to.cy, midX = (sx + tx) / 2;
+      const w = Math.max(1, lk.to.thick);
+      const gid = `finSankeyGrad${i}_${bi}`;
+      // gradientUnits="userSpaceOnUse" จำเป็น (ดู docstring เดิม) — ตอนนี้ sy!=ty เกือบทุกเส้นอยู่แล้ว
+      // เลยไม่ค่อยเจอ bounding-box สูง=0 แบบเดิม แต่ใส่ไว้เผื่อกรณี sy==ty พอดี (parent/child อยู่แนว
+      // เดียวกันเป๊ะ) ยังปลอดภัยเหมือนเดิม
+      gradDefs += `<linearGradient id="${gid}" gradientUnits="userSpaceOnUse" x1="${sx}" x2="${tx}" y1="${sy}" y2="${ty}">
+        <stop offset="0" stop-color="${lk.from.color}" stop-opacity=".55"/>
+        <stop offset="1" stop-color="${lk.to.color}" stop-opacity=".55"/>
+      </linearGradient>`;
+      linkPaths += `<path d="M${sx},${sy} C${midX},${sy} ${midX},${ty} ${tx},${ty}" stroke="url(#${gid})" stroke-width="${w}" fill="none" stroke-linecap="round"/>`;
+    });
+  }
 
+  // ใช้ stages.length คงที่เสมอ (ไม่ใช่ maxCol จาก nodes จริง) — หุ้นบางตัวมีบางฟิลด์ null (เช่น
+  // financial_cost/tax_expense งวดนั้นไม่มี) ทำให้ buildTree break ก่อนครบ 4 สเตจ nodes สั้นกว่าปกติ
+  // ถ้าใช้ maxCol จริง vbW จะแคบลงตามจำนวนคอลัมน์ที่เหลือ ขณะ vbH คงที่เท่าเดิม อัตราส่วนภาพเลยเพี้ยน
+  // (แคบ+สูงกว่าเดิม) พอ scale ให้เต็มความกว้าง container เท่ากัน ภาพเลยดู "ใหญ่กว่า" หุ้นที่มีข้อมูล
+  // ครบ 4 สเตจ — ตรงข้ามกับที่ผู้ใช้ต้องการ (ทุกหุ้นต้องมีอัตราส่วนภาพเดียวกันเป๊ะไม่ว่าข้อมูลจะครบแค่ไหน)
+  const vbW = cx(stages.length) + barW + LABEL_TAIL_W + 8, vbH = H + OFF * 2;
+
+  // label วางข้างแท่ง (ไม่ใช่ในกล่องที่หดตามความหนาแท่งอีกต่อไป) เลยมีที่ยืนเท่ากับ MIN_H เสมอไม่ว่า
+  // แท่งจะบางแค่ไหน — ตัดขึ้นบรรทัดใหม่ตรงช่องว่างถ้ากว้างเกิน colGap (เช่น "กำไรจากการดำเนินงาน
+  // (EBIT)") ด้วย _wrapSankeyLabel ตัวเดียวกับที่ใช้ตอนยังเป็นกล่อง — มูลค่า+% รวมบรรทัดเดียวกัน (คนละสี
+  // ผ่าน tspan) แทนที่จะแยก 2 บรรทัดแบบเดิม เพื่อลดจำนวนบรรทัดที่ MIN_H ต้องจองพื้นที่ให้ (ยิ่งน้อย
+  // บรรทัด ยิ่งลด MIN_H ได้มาก ทำให้ทั้งแผนภาพเตี้ยลงและกว้างน้อยลงตามไปด้วย โดยไม่เสียข้อมูลอะไรเลย)
+  const LABEL_MAXW = colGap - 16;
   const nodeBoxes = nodes.map(n => {
-    const h = Math.max(1, n.y1 - n.y0);
-    const x = cx(n.col), y = OFF + n.y0, textY = y + h / 2;
-    const compact = h < 56;   // ต่ำกว่านี้ไม่พอสำหรับ label 3 บรรทัด (ชื่อ/มูลค่า/%) ยุบเหลือบรรทัดเดียว
+    const nameLines = _wrapSankeyLabel(n.label, LABEL_MAXW, 10.5, 700, 2);
+    const LINE_H = 12.5;
+    const tx = cx(n.col) + barW + 8;
+    const valStr = fmtM(n.value), pctStr = fmtPctShort(n.value), pctStrFull = fmtPct(n.value);
+    // มูลค่า+% รวมบรรทัดเดียวกัน (คนละสีผ่าน tspan) เมื่อพอมีที่ — ประหยัดบรรทัดกว่าแยก 2 บรรทัดแบบเดิม
+    // ทำให้ MIN_H เล็กลงได้มาก แต่ตัวเลขบางหุ้นยาวเกิน budget ต่อคอลัมน์ (colGap-16) ได้ เช่นรายได้หลัก
+    // ล้านบาทที่มีหลายหลัก เจอจริงตอนทดสอบ AMZN (ตัวเลขยาวจนล้นทับคอลัมน์ถัดไป) เลยวัดความกว้างจริงก่อน
+    // ถ้าไม่พอค่อย fallback แยกเป็น 2 บรรทัดเหมือนเดิม รับประกันไม่ล้นไม่ว่าตัวเลขจะยาวแค่ไหน
+    const combinedW = _finSankeyTextWidth(valStr, 9.5, 400) + 5 + _finSankeyTextWidth(pctStr, 9.5, 600);
+    const splitValuePct = combinedW > LABEL_MAXW;
+    const totalLines = nameLines.length + (splitValuePct ? 2 : 1);
+    const startY = n.cy - (totalLines - 1) * LINE_H / 2 + 4;
+    const nameTextEls = nameLines.map((t, i) =>
+      `<text x="${tx}" y="${startY + i * LINE_H}" fill="var(--text)" font-size="10.5" font-weight="700">${esc(t)}</text>`
+    ).join('');
+    const valueY = startY + nameLines.length * LINE_H;
+    const valueLine = splitValuePct
+      ? `<text x="${tx}" y="${valueY}" fill="var(--text)" font-size="9.5">${valStr}</text>
+         <text x="${tx}" y="${valueY + LINE_H}" fill="${n.color}" font-size="9.5" font-weight="600">${pctStrFull}</text>`
+      : `<text x="${tx}" y="${valueY}" font-size="9.5">` +
+        `<tspan fill="var(--text)">${valStr}</tspan>` +
+        `<tspan fill="${n.color}" font-weight="600" dx="5">${pctStr}</tspan></text>`;
+    // ริบบอนพี่น้อง (เช่น SG&A ที่หนา) ยังแวะผ่านแถวเดียวกันได้ก่อนจะโค้งแยกออกไปสุดทาง ทำให้ label
+    // ที่วางไว้ข้างแท่งของตัวเองมีโอกาสโดนริบบอนอื่นพาดผ่านทับจนอ่านยาก (ต่างจากบั๊กก่อนหน้าที่ล้น
+    // ออกนอกกรอบ — อันนี้คือทับกับเส้นกราฟ) แก้ด้วยการใส่ชิปพื้นหลังสีเดียวกับการ์ด (var(--bg2))
+    // หลัง text เพื่อ "ลบ" ริบบอนที่พาดผ่านทิ้งเฉพาะโซนตัวหนังสือ อ่านชัดเจนเสมอไม่ว่าเส้นจะพาดตรงไหน
+    const pctFullW = splitValuePct ? _finSankeyTextWidth(pctStrFull, 9.5, 600) : 0;
+    const maxLineW = Math.max(combinedW, pctFullW, ...nameLines.map(t => _finSankeyTextWidth(t, 10.5, 700)), 1);
+    const chipY0 = startY - 10.5 - 3, chipY1 = valueY + (splitValuePct ? LINE_H : 0) + 4;
     return `<g>
-      <rect x="${x}" y="${y}" width="${colW}" height="${h}" rx="6"
-        fill="${n.color}" fill-opacity="0.08" stroke="${n.color}" stroke-opacity="0.9" stroke-width="1.5"/>
-      ${compact
-        ? `<text x="${x + 8}" y="${textY - 3}" fill="var(--text)" font-size="9.5" font-weight="700">${esc(n.label)}</text>
-           <text x="${x + 8}" y="${textY + 9}" fill="var(--text)" font-size="9.5">${fmtM(n.value)}</text>`
-        : `<text x="${x + 10}" y="${textY - 8}" fill="var(--text)" font-size="12.5" font-weight="700">${esc(n.label)}</text>
-           <text x="${x + 10}" y="${textY + 8}" fill="var(--text)" font-size="11.5">${fmtM(n.value)}</text>
-           <text x="${x + 10}" y="${textY + 22}" fill="${n.color}" font-size="10.5" font-weight="600">${fmtPct(n.value)}</text>`}
+      <rect x="${cx(n.col)}" y="${n.by0}" width="${barW}" height="${n.thick}" rx="${barW / 2}" fill="${n.color}"/>
+      <title>${esc(n.label)}: ${valStr} ${pctStrFull}</title>
+      <rect x="${tx - 4}" y="${chipY0}" width="${maxLineW + 8}" height="${chipY1 - chipY0}" rx="4" fill="var(--bg2)" fill-opacity="0.9"/>
+      ${nameTextEls}
+      ${valueLine}
     </g>`;
   }).join('');
 
   return `
     <div style="overflow-x:auto;margin-bottom:6px">
-      <svg viewBox="0 0 ${vbW} ${vbH}" style="width:100%;min-width:760px;height:auto;display:block">
+      <svg viewBox="0 0 ${vbW} ${vbH}" style="width:100%;min-width:640px;height:auto;display:block">
         <defs>${gradDefs}</defs>
         ${linkPaths}
         ${nodeBoxes}
@@ -17812,6 +18011,7 @@ function _finSankeyCardHtml(qs, isFinancialSector) {
       <div style="display:flex;gap:14px;margin-bottom:10px;font-size:10.5px;color:var(--text2)">
         <span>${dot(_FIN_SANKEY_CLR.revenue)}รายได้</span>
         <span>${dot(_FIN_SANKEY_CLR.cost)}ต้นทุน/ค่าใช้จ่าย/ภาษี</span>
+        <span>${dot(_FIN_SANKEY_CLR.grossProfit)}กำไรขั้นต้น</span>
         <span>${dot(_FIN_SANKEY_CLR.profit)}กำไรที่เหลือ</span>
       </div>
       ${svg}

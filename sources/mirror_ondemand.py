@@ -6,6 +6,7 @@ universe — ดึงเฉพาะตัวที่ผู้ใช้เป�
 
 RS/stage คำนวณเทียบกับสมาชิกดัชนีหลักที่มีราคาอยู่แล้วใน <mkt>_prices.db (ไม่ fetch เพิ่มสำหรับ
 สมาชิกเดิม — ดู index_metrics_common.compute_ondemand_row)"""
+import threading
 from datetime import datetime
 
 from sources import financials_store as fs
@@ -14,6 +15,21 @@ from sources import index_metrics_common
 from sources import yahoo as yahoo_src
 
 _CFG_BY_EX = {}
+
+# กัน request พร้อมกันหลายชุด (เปิดหลายแท็บ/หลายอุปกรณ์ไปที่หุ้นตัวเดียวกันตอน cache หมดอายุ)
+# ยิง fetch Yahoo + เขียนทับ DB ซ้อนกัน — เดิมไม่มี lock เลย ทุก thread ที่เจอ cache miss/stale
+# พร้อมกันจะยิง yfinance ซ้ำกันหมด (เปลือง quota โดยไม่จำเป็น + "ใครเขียนทีหลังชนะ") lock แยกต่อ
+# (base_dir, kind, key1, key2) แบบ lazy สร้าง (pattern เดียวกับ _get_sector_trend_lock ใน app.py)
+# ไม่ใช่ lock เดียวรวม เพราะหุ้นคนละตัวไม่ควรรอกัน
+_fetch_locks: dict = {}
+_fetch_locks_meta_lock = threading.Lock()
+
+
+def _get_fetch_lock(key):
+    with _fetch_locks_meta_lock:
+        if key not in _fetch_locks:
+            _fetch_locks[key] = threading.Lock()
+        return _fetch_locks[key]
 
 
 def _cfg_for(ex):
@@ -70,34 +86,43 @@ def fetch_header(base_dir, ex, ticker, force=False):
         if cached and not stale:
             return cached
 
-    ohlc = yahoo_src.fetch_all_batch([yf_ticker], period="2y")
-    rec = ohlc.get(yf_ticker)
-    if rec is None or rec.get("close") is None or len(rec["close"]) < 5:
-        return None
+    with _get_fetch_lock((base_dir, "header", ex, ticker)):
+        # เช็คซ้ำหลังได้ lock (double-checked) — ถ้า thread อื่นที่มาถึงก่อนเพิ่ง fetch+cache
+        # เสร็จระหว่างที่เรารอ lock ก็ได้ค่าที่เพิ่งเขียนไปเลย ไม่ต้องยิง Yahoo ซ้ำ (ข้ามเช็คนี้
+        # เมื่อ force=True — ผู้เรียกต้องการข้อมูลสดจริงๆ ไม่ใช่ของที่เพิ่งมีคนอื่น cache ไว้)
+        if not force:
+            cached, stale = fs.get_mirror_ondemand(base_dir, ticker, ex, stale_days=1)
+            if cached and not stale:
+                return cached
 
-    info = yahoo_src.fetch_company_info(yf_ticker)
-    name = info.get("long_name") or ticker
-    sector = _normalize_sector(info.get("sector"))
-    industry = info.get("industry")
+        ohlc = yahoo_src.fetch_all_batch([yf_ticker], period="2y")
+        rec = ohlc.get(yf_ticker)
+        if rec is None or rec.get("close") is None or len(rec["close"]) < 5:
+            return None
 
-    cfg = _cfg_for(ex)
-    row = index_metrics_common.compute_ondemand_row(
-        base_dir, cfg, ticker, rec["close"], rec["volume"], rec["high"], rec["low"],
-        name, sector, industry)
-    if row is None:
-        return None
+        info = yahoo_src.fetch_company_info(yf_ticker)
+        name = info.get("long_name") or ticker
+        sector = _normalize_sector(info.get("sector"))
+        industry = info.get("industry")
 
-    row["mkt_cap"] = info.get("mkt_cap")
-    row["pe"] = info.get("pe")
-    row["pbv"] = info.get("pbv")
-    row["div_yield"] = info.get("div_yield")
-    row["pct_off_high52"] = (round((row["price"] / row["high_52w"] - 1) * 100, 2)
-                              if row.get("price") and row.get("high_52w") else None)
+        cfg = _cfg_for(ex)
+        row = index_metrics_common.compute_ondemand_row(
+            base_dir, cfg, ticker, rec["close"], rec["volume"], rec["high"], rec["low"],
+            name, sector, industry)
+        if row is None:
+            return None
 
-    _ensure_factors(base_dir, ex, ticker)
+        row["mkt_cap"] = info.get("mkt_cap")
+        row["pe"] = info.get("pe")
+        row["pbv"] = info.get("pbv")
+        row["div_yield"] = info.get("div_yield")
+        row["pct_off_high52"] = (round((row["price"] / row["high_52w"] - 1) * 100, 2)
+                                  if row.get("price") and row.get("high_52w") else None)
 
-    fs.save_mirror_ondemand(base_dir, ticker, ex, row)
-    return row
+        _ensure_factors(base_dir, ex, ticker)
+
+        fs.save_mirror_ondemand(base_dir, ticker, ex, row)
+        return row
 
 
 def fetch_header_lite(base_dir, yf_ticker, dr_sym, region, name_hint=None, force=False):
@@ -120,39 +145,45 @@ def fetch_header_lite(base_dir, yf_ticker, dr_sym, region, name_hint=None, force
         if cached and not stale:
             return cached
 
-    ohlc = yahoo_src.fetch_all_batch([yf_ticker], period="2y")
-    rec = ohlc.get(yf_ticker)
-    if rec is None or rec.get("close") is None or len(rec["close"]) < 5:
-        return None
+    with _get_fetch_lock((base_dir, "lite", region, dr_sym)):
+        if not force:
+            cached, stale = fs.get_mirror_ondemand(base_dir, dr_sym, region, stale_days=1)
+            if cached and not stale:
+                return cached
 
-    info_co = yahoo_src.fetch_company_info(yf_ticker)
-    name = name_hint or info_co.get("long_name") or dr_sym
-    sector = _normalize_sector(info_co.get("sector"))
-    industry = info_co.get("industry")
+        ohlc = yahoo_src.fetch_all_batch([yf_ticker], period="2y")
+        rec = ohlc.get(yf_ticker)
+        if rec is None or rec.get("close") is None or len(rec["close"]) < 5:
+            return None
 
-    info = {"symbol": dr_sym, "ticker": dr_sym, "name": name, "market": region,
-            "industry": industry or sector or "Unknown", "sector": sector or "Unknown"}
-    row = process_stock(info, rec["close"], rec["volume"], high=rec["high"], low=rec["low"])
-    if row is None:
-        return None
-    row["rs_score"] = None       # ไม่มี cohort ให้ rank เทียบ
-    row["rs_momentum"] = None
-    # stage เป็นสูตรต่อหุ้นล้วน (EMA200 + slope) ไม่พึ่ง cohort — ปกติ rank_rs เซ็ตให้ แต่ path
-    # lite ไม่ผ่าน rank_rs เลยต้องเรียก classify_stage เอง (single source of truth เดียวกัน)
-    from core.metrics import classify_stage
-    row["stage"] = classify_stage(row.get("above_ema200"), row.get("ema200_slope_pct"))
-    row["mkt_cap"] = info_co.get("mkt_cap")
-    row["pe"] = info_co.get("pe")
-    row["pbv"] = info_co.get("pbv")
-    row["div_yield"] = info_co.get("div_yield")
-    row["pct_off_high52"] = (round((row["price"] / row["high_52w"] - 1) * 100, 2)
-                              if row.get("price") and row.get("high_52w") else None)
+        info_co = yahoo_src.fetch_company_info(yf_ticker)
+        name = name_hint or info_co.get("long_name") or dr_sym
+        sector = _normalize_sector(info_co.get("sector"))
+        industry = info_co.get("industry")
 
-    _ensure_factors_dr(base_dir, dr_sym, region)
+        info = {"symbol": dr_sym, "ticker": dr_sym, "name": name, "market": region,
+                "industry": industry or sector or "Unknown", "sector": sector or "Unknown"}
+        row = process_stock(info, rec["close"], rec["volume"], high=rec["high"], low=rec["low"])
+        if row is None:
+            return None
+        row["rs_score"] = None       # ไม่มี cohort ให้ rank เทียบ
+        row["rs_momentum"] = None
+        # stage เป็นสูตรต่อหุ้นล้วน (EMA200 + slope) ไม่พึ่ง cohort — ปกติ rank_rs เซ็ตให้ แต่ path
+        # lite ไม่ผ่าน rank_rs เลยต้องเรียก classify_stage เอง (single source of truth เดียวกัน)
+        from core.metrics import classify_stage
+        row["stage"] = classify_stage(row.get("above_ema200"), row.get("ema200_slope_pct"))
+        row["mkt_cap"] = info_co.get("mkt_cap")
+        row["pe"] = info_co.get("pe")
+        row["pbv"] = info_co.get("pbv")
+        row["div_yield"] = info_co.get("div_yield")
+        row["pct_off_high52"] = (round((row["price"] / row["high_52w"] - 1) * 100, 2)
+                                  if row.get("price") and row.get("high_52w") else None)
 
-    row = sanitize([row])[0]
-    fs.save_mirror_ondemand(base_dir, dr_sym, region, row)
-    return row
+        _ensure_factors_dr(base_dir, dr_sym, region)
+
+        row = sanitize([row])[0]
+        fs.save_mirror_ondemand(base_dir, dr_sym, region, row)
+        return row
 
 
 def _ensure_factors_dr(base_dir, dr_sym, region):
