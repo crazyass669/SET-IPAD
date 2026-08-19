@@ -4292,6 +4292,29 @@ def factor_screener():
     return jsonify({"rows": rows, "meta": factor_snapshot.snapshot_meta(BASE_DIR)})
 
 
+def _widen_sector_group(candidates, level, group_key, base=None, sector_q=None):
+    """คืน (members, level, group_key, widened) จาก candidates ({symbol: entry}) ตาม level/
+    group_key ที่ให้มา — auto ขยับจาก sector เป็น industry เองถ้าสมาชิก < 4 ตัวและขยายแล้วได้
+    กลุ่มใหญ่ขึ้นจริง ใช้ร่วมกันระหว่าง /api/peer-compare และ /api/financials-sankey-sector
+    (เดิม copy โค้ดสองที่ก่อน drift กัน — รวมเป็นจุดเดียวแก้ทีเดียวจบ)
+
+    caller กรอง self/หุ้นที่ไม่ต้องการนับออกจาก candidates ก่อนเรียกเองถ้าต้องการ (เช่น
+    financials-sankey-sector กรองตัวเอง+หุ้นกลุ่มการเงินออกก่อน กันนับพองจน threshold <4
+    ไม่ trigger ทั้งที่เหลือ peer จริงน้อยกว่านั้น) — peer_compare ส่ง th_map เต็มแบบเดิม"""
+    members = [s for s, v in candidates.items() if v.get(level) == group_key]
+    widened = False
+    if level == "sector" and len(members) < 4:
+        ind = (base or {}).get("industry") if base else None
+        if not ind and sector_q:
+            sample = candidates.get(members[0]) if members else None
+            ind = sample.get("industry") if sample else None
+        if ind:
+            wide_members = [s for s, v in candidates.items() if v.get("industry") == ind]
+            if len(wide_members) > len(members):
+                members, level, group_key, widened = wide_members, "industry", ind, True
+    return members, level, group_key, widened
+
+
 @app.route("/api/peer-compare")
 def peer_compare():
     """🆚 เทียบเพื่อนร่วม sector/industry ในตารางเดียว — งาน #3 ของ PLAN_stock_study_suite.txt
@@ -4388,18 +4411,8 @@ def peer_compare():
         return jsonify({"rows": [], "median": None, "count": 0,
                         "meta": {"note": f"หุ้น {symbol} ไม่มีข้อมูล {level}"}})
 
-    members = [sym for sym, s in th_map.items() if s.get(level) == group_key]
-    widened = False
-    if level == "sector" and len(members) < 4:
-        ind = (base or {}).get("industry") if base else None
-        if not ind and sector_q:
-            # ผู้ใช้เลือก sector ตรง ๆ (ไม่มีหุ้นตั้งต้น) — หา industry จากสมาชิกกลุ่มเดิม
-            sample = th_map.get(members[0]) if members else None
-            ind = sample.get("industry") if sample else None
-        if ind:
-            wide_members = [sym for sym, s in th_map.items() if s.get("industry") == ind]
-            if len(wide_members) > len(members):
-                members, level, group_key, widened = wide_members, "industry", ind, True
+    members, level, group_key, widened = _widen_sector_group(
+        th_map, level, group_key, base=base, sector_q=sector_q)
 
     if mkt == "TH":
         snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
@@ -4707,6 +4720,89 @@ def peer_group_detail():
             con.close()
 
     return jsonify({"rows": rows, "meta": {"base_symbol": base_symbol, "market": mkt}})
+
+
+# field ที่ต้องใช้สร้างต้นไม้ Sankey ฝั่ง sector — ตรงกับ stages ที่ _renderFinSankeySvg (dashboard.js)
+# วาด (Rev -> COGS/GP -> SG&A/EBIT -> FinCost/Pretax -> Tax/NetProfit) ไม่รวม 'revenue' เพราะ
+# revenue ของฝั่ง sector ใช้ของหุ้นตั้งต้นเอง (ให้สองต้นไม้สเกลเท่ากัน เทียบด้วยตาง่ายกว่า)
+_SANKEY_SECTOR_PCT_FIELDS = ['cogs', 'gross_profit', 'sga_total', 'operating_profit',
+                             'financial_cost', 'pretax_profit', 'tax_expense', 'net_profit']
+
+
+def _median(vals):
+    if not vals:
+        return None
+    s = sorted(vals)
+    n = len(s)
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+@app.route("/api/financials-sankey-sector/<symbol>")
+def get_financials_sankey_sector(symbol):
+    """ข้อมูลเปรียบเทียบสำหรับปุ่ม '🆚 เทียบกับกลุ่ม' บนการ์ด Income Sankey Diagram (แท็บ
+    🧩 งบรวมทุกแหล่ง) — คำนวณ median ของแต่ละ % ต่อรายได้ (COGS%, GPM%, SG&A%, OPM%,
+    ต้นทุนการเงิน%, กำไรก่อนภาษี%, ภาษี%, NPM%) ข้ามทุกหุ้นในกลุ่ม sector/industry เดียวกับ
+    symbol — ใช้ median ของอัตราส่วน (ไม่ใช่ weighted-sum) ตามที่ผู้ใช้เลือก เพื่อไม่ให้หุ้นใหญ่
+    ตัวเดียวครอบงำภาพรวม "โครงสร้างต้นทุนทั่วไปของกลุ่ม" — reuse การจัดกลุ่ม sector/widen เป็น
+    industry เดียวกับ /api/peer-compare (ดู group_key/widened ด้านล่าง) และ TTM ต่อหุ้นเดียวกับ
+    /api/peer-group-detail (_peer_group_quarters + _ttm_sum) เฉพาะหุ้นไทยเท่านั้น (เหมือน
+    peer-group-detail — sector/industry grouping มีแค่ TH ใน set_data.json)
+
+    ⚠ ข้อจำกัดของ median ratio: median ของแต่ละ % คำนวณแยกอิสระต่อ field ไม่ได้บังคับอัตลักษณ์
+    ทางบัญชี (เช่น cogs%+gpm% อาจไม่รวมเป็น 100% เป๊ะ) เพราะเป็นค่ากลางของหุ้นคนละบริษัท ไม่ใช่
+    งบของบริษัทเดียว — frontend ต้องอธิบายจุดนี้ให้ผู้ใช้เห็นชัด (tip/helper text) ไม่ใช่นำเสนอ
+    เหมือนงบจริงบริษัทเดียว"""
+    sym = symbol.upper().strip()
+    th_map = _tearsheet_universe_map("TH")
+    base = th_map.get(sym)
+    if not base:
+        return jsonify({"error": f"ไม่พบหุ้น {sym} ในข้อมูล sector ของหุ้นไทย"}), 404
+
+    fin_syms = factor_snapshot._financial_sector_symbols(BASE_DIR)
+    if sym in fin_syms:
+        return jsonify({"error": "หุ้นกลุ่มการเงิน/ธนาคาร ไม่มีแนวคิด COGS/กำไรขั้นต้นแบบธุรกิจทั่วไป "
+                                  "— เทียบกลุ่มแบบนี้ไม่มีความหมาย"}), 400
+
+    level = "sector"
+    group_key = base.get("sector")
+    if not group_key:
+        return jsonify({"error": f"หุ้น {sym} ไม่มีข้อมูล sector"}), 404
+
+    # ตัดตัวเอง + หุ้นกลุ่มการเงินออกจาก "ผู้สมัคร" ก่อนนับ/ตัดสินใจ widen เสมอ (เทียบกับ "กลุ่ม
+    # อื่นที่ไม่ใช่ตัวเอง") — เดิมนับก่อนตัดออกทำให้ sector ที่มีสมาชิกดิบพอดี 4 ตัว (ตัวเอง+peer
+    # จริงแค่ 3) ไม่ trigger widen ทั้งที่เหลือ peer จริงน้อยกว่า threshold
+    candidates = {s: v for s, v in th_map.items() if s not in fin_syms and s != sym}
+    members, level, group_key, widened = _widen_sector_group(candidates, level, group_key, base=base)
+    # cap กันคำขอผิดปกติ (sector ไทยใหญ่สุดจริงมีแค่ ~64 ตัว ดู set_data.json — เหมือน peer_group_detail)
+    members = members[:80]
+    if not members:
+        return jsonify({"error": f"กลุ่ม {group_key} ไม่มีหุ้นอื่นให้เทียบ"}), 404
+
+    pct_samples = {f: [] for f in _SANKEY_SECTOR_PCT_FIELDS}
+    con = financials_store._connect(BASE_DIR) if financials_store.db_exists(BASE_DIR) else None
+    try:
+        for s in members:
+            quarters = _peer_group_quarters(s, con=con)
+            if not quarters:
+                continue
+            rev_ttm = _ttm_sum(quarters, "revenue")
+            if not rev_ttm or rev_ttm <= 0:
+                continue
+            for f in _SANKEY_SECTOR_PCT_FIELDS:
+                v = _ttm_sum(quarters, f)
+                if v is not None:
+                    pct_samples[f].append(v / rev_ttm * 100)
+    finally:
+        if con is not None:
+            con.close()
+
+    median_pct = {f: _median(pct_samples[f]) for f in _SANKEY_SECTOR_PCT_FIELDS}
+    coverage = {f: len(pct_samples[f]) for f in _SANKEY_SECTOR_PCT_FIELDS}
+
+    return jsonify({
+        "sector_name": group_key, "level": level, "widened": widened,
+        "member_count": len(members), "median_pct": median_pct, "coverage": coverage,
+    })
 
 
 def _mirror_sym(mkt, sym):
