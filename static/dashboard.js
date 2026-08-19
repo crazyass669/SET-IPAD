@@ -9630,6 +9630,11 @@ function _workspaceRenderBreadthBars(quarters) {
 // ============================================================
 let _tsData = null;
 let _tsMarket = 'TH';
+// ค่าเริ่มต้นล่าสุดของ PE/PBV Valuation (ปุ่ม "↺ ค่าเริ่มต้น") — อัพเดทตอน render ครั้งแรก
+// (naive: current PE/PBV ±25%) แล้วถูกเขียนทับด้วยสถิติย้อนหลังจริงตอน _tsApplyPeBandDefaults/
+// _tsApplyPbvBandDefaults โหลดเสร็จ (ดู _tsLoadFinExtras) — ปุ่มรีเซ็ตอ่านค่าล่าสุดจากตรงนี้เสมอ
+let _tsPeDefaults = null;
+let _tsPbvDefaults = null;
 let _mirrorSymbolsCache = null;
 
 async function _loadMirrorSymbols() {
@@ -9962,22 +9967,38 @@ function _tsLoadFinExtras(d, h, mkt) {
     .then(fd => {
       if (_tsData?.symbol !== d.symbol) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
       if (fd.error) { box.innerHTML = ''; return; }
-      const rat = fd.ratios || {};
-      const allDatesSet = new Set();
-      Object.values(rat).forEach(row => Object.keys(row).forEach(k => allDatesSet.add(k)));
-      const allColsFull = [...allDatesSet].sort();
-      const cols = allColsFull.slice(-8);
-      const colLabels = cols.map(c => c.slice(0, 7));
-      const ratiosTableHtml = allColsFull.length
-        ? _finFullTable('📐 อัตราส่วนการเงิน (Ratios)', cols, colLabels, FIN_FINN_RATIO_GROUP, null,
-            (key, c) => (rat[key] || {})[c], () => false, true, null, false, 1, true, allColsFull)
-        : '';
-      box.innerHTML = _finTrendSection(fd, 'finnomena_q', 'ts-') + ratiosTableHtml + _tsEarningsHistoryHtml(fd);
+      box.innerHTML = _finTrendSection(fd, 'finnomena_q', 'ts-') + '<div id="ts-ratios-annual"></div>' + _tsEarningsHistoryHtml(fd);
       requestAnimationFrame(() => _drawFinTrendCharts(fd, 'ts-'));
       const isDr = mkt !== 'TH';
       _loadLiveValuationBand(fd, isDr, mkt === 'TH' ? null : mkt, 'ts-', () => _tsData?.symbol === d.symbol);
       _tsApplyPeBandDefaults(fd);
       _tsApplyPbvBandDefaults(fd);
+      _tsLoadAnnualRatios(fetchSym, qs, d.symbol);
+    })
+    .catch(() => { box.innerHTML = ''; });
+}
+
+// อัตราส่วนการเงิน (Ratios) — รายปี (finnomena_y, รวมจากไตรมาสฝั่ง backend) แทนรายไตรมาสเดิม
+// margin/ROE/ROA คำนวณใหม่จากยอดรวมทั้งปี (แม่นกว่าเอา Q4 เดี่ยวๆ มาโชว์ — ดู
+// build_annual_from_quarterly ฝั่ง backend) ส่วน D/E และ Cash Cycle ใช้ค่า ณ สิ้นปี (Q4)
+// ยิงแยกจาก finnomena_q ด้านบน (คนละ endpoint) ไม่บล็อกกราฟ/band ที่ต้องใช้ข้อมูลรายไตรมาส
+function _tsLoadAnnualRatios(fetchSym, qs, staleGuardSymbol) {
+  const box = document.getElementById('ts-ratios-annual');
+  if (!box) return;
+  _fetchTimeout(`/api/financials-full/${encodeURIComponent(fetchSym)}?source=finnomena_y${qs}`, 30000)
+    .then(r => r.json())
+    .then(fdY => {
+      if (_tsData?.symbol !== staleGuardSymbol) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
+      if (fdY.error) { box.innerHTML = ''; return; }
+      const rat = fdY.ratios || {};
+      const allDatesSet = new Set();
+      Object.values(rat).forEach(row => Object.keys(row).forEach(k => allDatesSet.add(k)));
+      const allColsFull = [...allDatesSet].sort();
+      if (!allColsFull.length) { box.innerHTML = ''; return; }
+      const cols = allColsFull.slice(-10);
+      const colLabels = cols.map(c => c.slice(0, 4));
+      box.innerHTML = _finFullTable('📐 อัตราส่วนการเงิน (Ratios รายปี)', cols, colLabels, FIN_FINN_RATIO_GROUP, null,
+        (key, c) => (rat[key] || {})[c], () => false, true, null, false, 1, true, allColsFull);
     })
     .catch(() => { box.innerHTML = ''; });
 }
@@ -10002,6 +10023,7 @@ function _tsApplyPeBandDefaults(fd) {
   bearEl.value = lo.toFixed(1);
   bullEl.value = hi.toFixed(1);
   if (noteEl) noteEl.textContent = `อิงสถิติ PE รายปีย้อนหลัง (ตัดขอบสุดโต่ง): เฉลี่ย ${mean.toFixed(1)} · มัธยฐาน ${med.toFixed(1)} · ต่ำสุด ${lo.toFixed(1)} · สูงสุด ${hi.toFixed(1)} — ใช้เป็นค่าเริ่มต้น Base/Bear/Bull ด้านบน (แก้เองได้)`;
+  if (_tsPeDefaults) { _tsPeDefaults.base = med; _tsPeDefaults.bear = lo; _tsPeDefaults.bull = hi; }
   _tsPeScenarioRecalc();
 }
 
@@ -10023,6 +10045,7 @@ function _tsApplyPbvBandDefaults(fd) {
   bearEl.value = lo.toFixed(2);
   bullEl.value = hi.toFixed(2);
   if (noteEl) noteEl.textContent = `อิงสถิติ PBV รายไตรมาสย้อนหลัง (ตัดขอบสุดโต่ง): เฉลี่ย ${mean.toFixed(2)} · มัธยฐาน ${med.toFixed(2)} · ต่ำสุด ${lo.toFixed(2)} · สูงสุด ${hi.toFixed(2)} — ใช้เป็นค่าเริ่มต้น Base/Bear/Bull ด้านบน (แก้เองได้)`;
+  if (_tsPbvDefaults) { _tsPbvDefaults.base = med; _tsPbvDefaults.bear = lo; _tsPbvDefaults.bull = hi; }
   _tsPbvScenarioRecalc();
 }
 
@@ -10098,8 +10121,13 @@ function _tsPeScenarioHtml(d) {
   const fwdEpsDefault = epsTtm * (1 + growthDefault / 100);
   const curPe = v?.pe?.value;
   const baseDefault = (curPe != null && curPe > 0) ? curPe : 15;
+  _tsPeDefaults = { fwdEps: fwdEpsDefault, growth: growthDefault, base: baseDefault,
+                     bear: baseDefault * 0.75, bull: baseDefault * 1.25 };
   return `<div class="card" style="padding:16px;margin-bottom:12px">
-    <div style="font-size:13px;font-weight:700;margin-bottom:4px">📈 PE Valuation (Bear/Base/Bull)</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:4px">📈 PE Valuation (Bear/Base/Bull)</div>
+      <button class="btn-secondary" style="font-size:10.5px;padding:4px 8px;white-space:nowrap" onclick="_tsPeResetDefaults()" title="คืนค่าทุกช่องกลับเป็นค่าเริ่มต้น (สถิติ PE ย้อนหลังจริงถ้าโหลดแล้ว)">↺ ค่าเริ่มต้น</button>
+    </div>
     <div style="font-size:10.5px;color:var(--text2);margin-bottom:10px">ประเมินมูลค่าจาก Forward EPS × PE — หุ้นวัฏจักรควรใช้ normalized earnings แทน EPS ปีล่าสุดเดี่ยวๆ ทุกช่องแก้ค่าเองได้ ไม่ใช่คำแนะนำซื้อ/ขาย</div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px;align-items:flex-end">
       <label style="font-size:11px;color:var(--text2)">Forward EPS
@@ -10137,6 +10165,18 @@ function _tsPeScenarioHtml(d) {
     </div>
     <div id="ts-pe-reason"></div>
   </div>`;
+}
+
+function _tsPeResetDefaults() {
+  const def = _tsPeDefaults;
+  if (!def) return;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v.toFixed(id === 'ts-pe-fwdeps' ? 2 : 1); };
+  set('ts-pe-fwdeps', def.fwdEps);
+  set('ts-pe-growth', def.growth);
+  set('ts-pe-base', def.base);
+  set('ts-pe-bear', def.bear);
+  set('ts-pe-bull', def.bull);
+  _tsPeScenarioRecalc();
 }
 
 function _tsPeUseTtmEps() {
@@ -10291,8 +10331,13 @@ function _tsPbvScenarioHtml(d) {
   const fwdBvpsDefault = bvps * (1 + growthDefault / 100);
   const curPbv = v?.pbv?.value;
   const baseDefault = (curPbv != null && curPbv > 0) ? curPbv : 1.5;
+  _tsPbvDefaults = { fwdBvps: fwdBvpsDefault, growth: growthDefault, base: baseDefault,
+                      bear: baseDefault * 0.75, bull: baseDefault * 1.25 };
   return `<div class="card" style="padding:16px;margin-bottom:12px">
-    <div style="font-size:13px;font-weight:700;margin-bottom:4px">📘 PBV Valuation (Bear/Base/Bull)</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:4px">📘 PBV Valuation (Bear/Base/Bull)</div>
+      <button class="btn-secondary" style="font-size:10.5px;padding:4px 8px;white-space:nowrap" onclick="_tsPbvResetDefaults()" title="คืนค่าทุกช่องกลับเป็นค่าเริ่มต้น (สถิติ PBV ย้อนหลังจริงถ้าโหลดแล้ว)">↺ ค่าเริ่มต้น</button>
+    </div>
     <div style="font-size:10.5px;color:var(--text2);margin-bottom:10px">ประเมินมูลค่าจาก Forward BVPS × PBV — เหมาะกับกลุ่มการเงิน/REIT ที่ DCF ใช้ไม่ได้ ทุกช่องแก้ค่าเองได้ ไม่ใช่คำแนะนำซื้อ/ขาย</div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px;align-items:flex-end">
       <label style="font-size:11px;color:var(--text2)">Forward BVPS
@@ -10330,6 +10375,18 @@ function _tsPbvScenarioHtml(d) {
     </div>
     <div id="ts-pbv-reason"></div>
   </div>`;
+}
+
+function _tsPbvResetDefaults() {
+  const def = _tsPbvDefaults;
+  if (!def) return;
+  const set = (id, v, dp) => { const el = document.getElementById(id); if (el) el.value = v.toFixed(dp); };
+  set('ts-pbv-fwdbvps', def.fwdBvps, 2);
+  set('ts-pbv-growth', def.growth, 1);
+  set('ts-pbv-base', def.base, 2);
+  set('ts-pbv-bear', def.bear, 2);
+  set('ts-pbv-bull', def.bull, 2);
+  _tsPbvScenarioRecalc();
 }
 
 function _tsPbvUseCurrentBvps() {
@@ -10569,7 +10626,7 @@ function _tsDcfHtml(dcf, price) {
 // override รายปีของ D&A/CapEx/ΔNWC ที่กดแก้เองในตาราง (key = t, value = บาทเต็ม) — รีเซ็ตทุกครั้ง
 // ที่เปิด Tearsheet หุ้นตัวใหม่ (ดู _tsDcfModelHtml) แต่คงอยู่ข้าม recalc ของหุ้นตัวเดิม (เปลี่ยน
 // growth/WACC/forecast period ไม่ล้าง override ที่กดไว้)
-let _tsDcfModelOverrides = { da: {}, capex: {}, nwc: {} };
+let _tsDcfModelOverrides = { revenue: {}, ebit: {}, noplat: {}, da: {}, capex: {}, nwc: {} };
 
 function _tsDcfModelCellEdit(el) {
   const t = parseInt(el.dataset.t, 10);
@@ -10583,16 +10640,37 @@ function _tsDcfModelCellEdit(el) {
   _tsDcfModelRecalc();
 }
 
+// พิมพ์ในช่อง WACC กรอกเอง -> สลับ radio ไปโหมด "กรอกเอง" ให้อัตโนมัติ (ไม่ต้องกดเลือกเอง)
+function _tsDcfModelWaccManualInput() {
+  const radio = document.getElementById('ts-dm-wacc-mode-manual');
+  if (radio) radio.checked = true;
+  _tsDcfModelRecalc();
+}
+
+// ปุ่ม "คืนค่าเริ่มต้น" — วาด section นี้ใหม่ทั้งก้อนจาก fc/dcf เดิม (ล้าง override รายเซลล์ +
+// ค่าที่กรอกเองทุกช่องกลับไปเป็นค่าตั้งต้นจากงบ/ค่า default ทั้งหมด) แทนที่จะรีเซ็ตทีละช่อง
+function _tsDcfModelReset() {
+  const dcf = _tsData?.dcf;
+  const fc = dcf?.forecast;
+  const section = document.getElementById('ts-dm-section');
+  if (!dcf || !fc || !section) return;
+  section.outerHTML = _tsDcfModelHtml(fc, dcf);
+  _tsDcfModelRecalc();
+}
+
 function _tsDcfModelHtml(fc, dcf) {
-  _tsDcfModelOverrides = { da: {}, capex: {}, nwc: {} };
+  _tsDcfModelOverrides = { revenue: {}, ebit: {}, noplat: {}, da: {}, capex: {}, nwc: {} };
   const isTH = _tsData?.market === 'TH';
   const factsheetUrl = isTH
     ? `https://www.set.or.th/th/market/product/stock/quote/${(_tsData?.symbol || '').toLowerCase()}/factsheet` : null;
   const n = (v, d) => Number.isFinite(v) ? v : d;
   const equityDefault = (dcf.mkt_cap || 0) / 1e6;
   const debtDefault = (fc.total_debt || 0) / 1e6;
-  return `<div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
-    <div style="font-size:13px;font-weight:700;margin-bottom:4px">🧮 DCF Model — พยากรณ์เต็มรูปแบบ</div>
+  return `<div id="ts-dm-section" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap">
+      <div style="font-size:13px;font-weight:700">🧮 DCF Model — พยากรณ์เต็มรูปแบบ</div>
+      <button class="btn" style="font-size:10.5px;padding:2px 8px" onclick="_tsDcfModelReset()">↺ คืนค่าเริ่มต้น</button>
+    </div>
     <div style="font-size:10.5px;color:var(--text2);margin-bottom:4px">
       ทุกช่องด้านล่างแก้ตัวเลขเองได้ทั้งหมด ค่าเริ่มต้นบางช่องดึงจากงบปีล่าสุด (${fc.as_of || '—'}) บางช่องเป็นค่าสมมติ ไม่ได้มาจากงบจริง — ดูหมายเหตุด้านล่าง
       ${factsheetUrl ? `(<a href="${factsheetUrl}" target="_blank" rel="noopener">หน้า factsheet ของ SET.or.th</a> มีค่า Beta หุ้นตัวนี้ให้ดูประกอบ)` : ''}
@@ -10672,6 +10750,16 @@ function _tsDcfModelHtml(fc, dcf) {
         </div>
       </div>
       <div id="ts-dm-wacc-out" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)"></div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);display:flex;gap:20px;flex-wrap:wrap;align-items:center">
+        <label style="font-size:11.5px;color:var(--text2);display:flex;align-items:center;gap:5px;cursor:pointer">
+          <input type="radio" name="ts-dm-wacc-mode" id="ts-dm-wacc-mode-calc" checked onchange="_tsDcfModelRecalc()">
+          ใช้ WACC ที่คำนวณให้ (3 ขั้นด้านบน)</label>
+        <label style="font-size:11.5px;color:var(--text2);display:flex;align-items:center;gap:5px;cursor:pointer">
+          <input type="radio" name="ts-dm-wacc-mode" id="ts-dm-wacc-mode-manual" onchange="_tsDcfModelRecalc()">
+          กรอก WACC เอง:
+          <input id="ts-dm-wacc-manual" type="number" step="0.25" value="${dcf.discount_rate_default}"
+            class="scr-input" style="width:80px" oninput="_tsDcfModelWaccManualInput()">%</label>
+      </div>
     </div>
 
     <div id="ts-dm-table"></div>
@@ -10715,9 +10803,13 @@ function _tsDcfModelRecalc() {
     ? `E/V = ${(eOverV * 100).toFixed(1)}% · D/V = ${(dOverV * 100).toFixed(1)}%`
     : `<span style="color:var(--red)">ต้องมี E หรือ D มากกว่า 0</span>`;
 
-  const wacc = eOverV * costEquity + dOverV * costDebtAfterTax;
-  waccBox.innerHTML = `<div style="font-size:11px;color:var(--text2)">WACC = (E/V × Re) + (D/V × Rd หลังภาษี) = (${(eOverV * 100).toFixed(1)}% × ${(costEquity * 100).toFixed(2)}%) + (${(dOverV * 100).toFixed(1)}% × ${(costDebtAfterTax * 100).toFixed(2)}%)</div>
-    <div style="font-size:22px;font-weight:800;margin-top:4px">WACC = ${(wacc * 100).toFixed(2)}%</div>`;
+  const waccCalc = eOverV * costEquity + dOverV * costDebtAfterTax;
+  // เลือกได้ว่าจะใช้ WACC ที่คำนวณจาก 3 ขั้นด้านบน หรือกรอกเองตรงๆ (radio ts-dm-wacc-mode)
+  const waccManualMode = document.getElementById('ts-dm-wacc-mode-manual')?.checked;
+  const waccManual = num('ts-dm-wacc-manual', dcf.discount_rate_default) / 100;
+  const wacc = waccManualMode ? waccManual : waccCalc;
+  waccBox.innerHTML = `<div style="font-size:11px;color:var(--text2)">WACC ที่คำนวณ = (E/V × Re) + (D/V × Rd หลังภาษี) = (${(eOverV * 100).toFixed(1)}% × ${(costEquity * 100).toFixed(2)}%) + (${(dOverV * 100).toFixed(1)}% × ${(costDebtAfterTax * 100).toFixed(2)}%) = ${(waccCalc * 100).toFixed(2)}%</div>
+    <div style="font-size:22px;font-weight:800;margin-top:4px">WACC ที่ใช้จริง = ${(wacc * 100).toFixed(2)}% <span style="font-size:11px;font-weight:400;color:var(--text2)">(${waccManualMode ? 'กรอกเอง' : 'คำนวณให้'})</span></div>`;
 
   if (wacc <= tg) {
     tblBox.innerHTML = '';
@@ -10741,17 +10833,27 @@ function _tsDcfModelRecalc() {
     <td style="text-align:right;color:${ttmNwc < 0 ? 'var(--red)' : 'var(--text)'}">${fmt(ttmNwc)}</td>
     <td style="text-align:right;font-weight:700">${fmt(ttmFcff)}</td></tr>`;
 
-  // D&A/CapEx/ΔNWC ต่อปี: ตั้งต้นจาก % ต่อ Revenue ด้านบน แต่กดแก้ตัวเลขตรงในตารางรายปีเองได้
-  // (เก็บ override ไว้ใน _tsDcfModelOverrides คงอยู่ข้าม recalc จนกว่าจะโหลดหุ้นตัวใหม่)
+  // ทุกช่อง (Revenue/EBIT/NOPLAT/D&A/CapEx/ΔNWC) ต่อปี: ตั้งต้นจากสูตร (โต% × Revenue ปีก่อน,
+  // EBIT Margin, Tax Rate, % ต่อ Revenue ด้านบน) แต่กดแก้ตัวเลขตรงในตารางรายปีเองได้ทุกช่อง —
+  // แก้ Revenue ปีไหน ปีถัดไปคำนวณสูตรต่อจากค่าที่แก้แล้ว (ไม่ใช่ค่าตามสูตรเดิม) เก็บ override ไว้
+  // ใน _tsDcfModelOverrides คงอยู่ข้าม recalc จนกว่าจะโหลดหุ้นตัวใหม่ · EBIT% เป็นอัตราส่วน
+  // (EBIT/Revenue) คำนวณจากค่าจริงเสมอ ไม่ใช่ช่องแก้ตรงๆ
   let revenue = fc.revenue;
   const rows = [];
   let pvSum = 0, lastFcff = 0;
   for (let t = 1; t <= years; t++) {
     const g = t <= 3 ? g13 : g45;
-    revenue = revenue * (1 + g);
-    const ebit = revenue * ebitM;
-    const noplat = ebit * (1 - tax);
-    const daDefault = revenue * daPct, capexDefault = revenue * capexPct, nwcDefault = revenue * nwcPct;
+    const revDefault = revenue * (1 + g);
+    const rev = _tsDcfModelOverrides.revenue[t] ?? revDefault;
+    const gDisplay = revenue ? (rev / revenue - 1) : g;
+
+    const ebitDefault = rev * ebitM;
+    const ebit = _tsDcfModelOverrides.ebit[t] ?? ebitDefault;
+
+    const noplatDefault = ebit * (1 - tax);
+    const noplat = _tsDcfModelOverrides.noplat[t] ?? noplatDefault;
+
+    const daDefault = rev * daPct, capexDefault = rev * capexPct, nwcDefault = rev * nwcPct;
     const da = _tsDcfModelOverrides.da[t] ?? daDefault;
     const capex = _tsDcfModelOverrides.capex[t] ?? capexDefault;
     const nwc = _tsDcfModelOverrides.nwc[t] ?? nwcDefault;
@@ -10759,29 +10861,32 @@ function _tsDcfModelRecalc() {
     const pv = fcff / Math.pow(1 + wacc, t);
     pvSum += pv;
     lastFcff = fcff;
-    rows.push({ t, g, revenue, ebit, ebitPct: ebit / revenue * 100, noplat, da, capex, nwc, fcff });
+    rows.push({ t, g: gDisplay, revenue: rev, ebit, ebitPct: rev ? ebit / rev * 100 : 0, noplat, da, capex, nwc, fcff });
+    revenue = rev;
   }
   const tv = lastFcff * (1 + tg) / (wacc - tg);
   const pvTv = tv / Math.pow(1 + wacc, years);
 
-  const cellInput = (field, t, v) => `<input type="number" step="1" value="${(v / 1e6).toFixed(0)}"
+  const cellInput = (field, t, v, w) => `<input type="number" step="1" value="${(v / 1e6).toFixed(0)}"
     data-field="${field}" data-t="${t}" onchange="_tsDcfModelCellEdit(this)"
-    class="scr-input" style="width:76px;text-align:right;font-size:11px;padding:2px 4px">`;
+    class="scr-input" style="width:${w || 76}px;text-align:right;font-size:11px;padding:2px 4px">`;
   const rowsHtml = rows.map(r => `<tr>
     <td>ปี ${r.t}</td><td style="text-align:right;color:${r.g >= 0 ? 'var(--green)' : 'var(--red)'}">${r.g >= 0 ? '+' : ''}${(r.g * 100).toFixed(1)}%</td>
-    <td style="text-align:right">${fmt(r.revenue)}</td><td style="text-align:right">${fmt(r.ebit)}</td>
-    <td style="text-align:right">${r.ebitPct.toFixed(1)}%</td><td style="text-align:right">${fmt(r.noplat)}</td>
-    <td style="text-align:right">${cellInput('da', r.t, r.da)}</td>
-    <td style="text-align:right">${cellInput('capex', r.t, r.capex)}</td>
-    <td style="text-align:right">${cellInput('nwc', r.t, r.nwc)}</td>
+    <td style="text-align:right">${cellInput('revenue', r.t, r.revenue, 92)}</td>
+    <td style="text-align:right">${cellInput('ebit', r.t, r.ebit, 88)}</td>
+    <td style="text-align:right">${r.ebitPct.toFixed(1)}%</td>
+    <td style="text-align:right">${cellInput('noplat', r.t, r.noplat, 88)}</td>
+    <td style="text-align:right">${cellInput('da', r.t, r.da, 76)}</td>
+    <td style="text-align:right">${cellInput('capex', r.t, r.capex, 76)}</td>
+    <td style="text-align:right">${cellInput('nwc', r.t, r.nwc, 76)}</td>
     <td style="text-align:right;font-weight:700;color:${r.fcff >= 0 ? 'var(--green)' : 'var(--red)'}">${fmt(r.fcff)}</td>
   </tr>`).join('');
   tblBox.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%;font-size:11px">
-    <thead><tr><th></th><th style="text-align:right">โต%</th><th style="text-align:right">Revenue</th>
-    <th style="text-align:right">EBIT</th><th style="text-align:right">EBIT%</th><th style="text-align:right">NOPLAT</th>
+    <thead><tr><th></th><th style="text-align:right">โต%</th><th style="text-align:right">Revenue ✏️</th>
+    <th style="text-align:right">EBIT ✏️</th><th style="text-align:right">EBIT%</th><th style="text-align:right">NOPLAT ✏️</th>
     <th style="text-align:right">D&amp;A ✏️</th><th style="text-align:right">CapEx ✏️</th><th style="text-align:right">ΔNWC ✏️</th>
     <th style="text-align:right">FCFF</th></tr></thead><tbody>${ttmRowHtml}${rowsHtml}</tbody></table></div>
-    <div style="font-size:10px;color:var(--text2);margin-top:4px">หน่วย: ล้านบาท/หน่วยเดียวกับ Market Cap · ✏️ = กดตัวเลขในช่อง D&amp;A/CapEx/ΔNWC เพื่อแก้เป็นค่าที่ตั้งเองรายปีได้ (เว้นว่างเพื่อกลับไปใช้ % ต่อ Revenue ด้านบน)</div>`;
+    <div style="font-size:10px;color:var(--text2);margin-top:4px">หน่วย: ล้านบาท/หน่วยเดียวกับ Market Cap · ✏️ = กดตัวเลขในช่องนั้นๆ เพื่อแก้เป็นค่าที่ตั้งเองรายปีได้ (เว้นว่างเพื่อกลับไปใช้สูตรจากช่อง % ด้านบน) — แก้ Revenue ปีไหน ปีถัดไปจะคำนวณต่อจากค่าที่แก้แล้ว, EBIT% เป็นอัตราส่วนคำนวณจาก EBIT/Revenue เสมอไม่มีช่องแก้ตรงๆ, TTM (ฐาน) เป็นข้อมูลจริงแก้ไม่ได้</div>`;
 
   const netCash = dcf.net_cash || 0, netDebt = -netCash;
   const ev = pvSum + pvTv;
