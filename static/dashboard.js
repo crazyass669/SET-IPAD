@@ -3998,6 +3998,7 @@ function showPage(id, btn) {
   if (id === "indices")        loadIndicesPage();
   if (id === "data-health")    loadDataHealth();
   if (id === "hedge")          loadHedgePage();
+  if (id === "dcf-screener")   loadDcfScreenerPage();
   if (id === "overview")       { setTimeout(() => { if (!_nhLoaded) loadNewHighChart(); }, 100); }
 }
 
@@ -4320,6 +4321,244 @@ function _mtRenderGrowthTables() {
   _mtRenderTurnaroundTable('mt-tbl-stockTurnaround', _mtGrowthMode.stockTurnaround);
 }
 
+
+// ============================================================
+// DCF SCREENER — DCF Model (พยากรณ์เต็มรูปแบบ) รันวนทุกหุ้นไทยที่คำนวณได้
+// ดู sources/dcf_screener.py + routes /api/dcf-screener* ใน app.py — สูตรเดียวกับ
+// _tsDcfModelRecalc ด้านบน (WACC โหมด 'คำนวณให้' เสมอ, Beta=1.00 คงที่ทุกตัว) พอร์ตไป Python
+// แล้วรันเป็น batch คนละชุดโค้ดกัน ไม่ได้ derive จากตารางหน้า Tearsheet ตรงๆ — คำนวณฝั่ง server
+// ล้วนๆ หน้านี้แค่ fetch ผลลัพธ์ที่ cache ไว้แล้วมาแสดง/กรอง/เรียงเท่านั้น
+// ============================================================
+let _dcfScreenerData = null;
+// เรียงตาม upside% มาก->น้อยเป็นค่าเริ่มต้น — กดหัวตารางเปลี่ยนได้ (asc/desc สลับกันทุกครั้งที่กด
+// คอลัมน์เดิมซ้ำ, กดคอลัมน์ใหม่เริ่มที่ desc เสมอยกเว้นชื่อ/ticker ที่เริ่ม asc เพราะเรียง A-Z อ่านง่ายกว่า)
+let _dcfScrSort = { key: 'upside_pct', dir: 'desc' };
+const DCF_SCR_COLS = [
+  { key: 'symbol', label: 'หุ้น', align: 'left' },
+  { key: 'name', label: 'ชื่อ', align: 'left' },
+  { key: 'price', label: 'ราคา', align: 'right' },
+  { key: 'intrinsic', label: 'มูลค่าเหมาะสม', align: 'right' },
+  { key: 'upside_pct', label: 'Upside', align: 'right' },
+  { key: 'wacc_pct', label: 'WACC', align: 'right' },
+  { key: 'g13_pct', label: 'Growth ปี1-3', align: 'right' },
+];
+
+function _dcfScrEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function loadDcfScreenerPage() {
+  if (_dcfScreenerData) { renderDcfScreener(); return; }
+  fetchDcfScreener();
+}
+
+// field ที่ override ทั้งตลาดได้ (เว้นว่าง = ใช้ค่าจริงของหุ้นนั้น) — id ช่อง input คู่กับ key ที่
+// ส่งให้ /api/dcf-screener/rebuild (ต้องตรงกับ resolve_assumptions() ใน sources/dcf_screener.py)
+const DCF_SCR_OPTIONAL_FIELDS = [
+  ['dcf-screener-g13', 'g13_pct'], ['dcf-screener-g45', 'g45_pct'],
+  ['dcf-screener-ebitm', 'ebit_margin_pct'], ['dcf-screener-tax', 'tax_rate_pct'],
+  ['dcf-screener-da', 'da_pct'], ['dcf-screener-capex', 'capex_pct'],
+  ['dcf-screener-nwc', 'nwc_pct'], ['dcf-screener-wacc-override', 'wacc_pct'],
+];
+
+function fetchDcfScreener() {
+  const box = document.getElementById('dcf-screener-table');
+  if (box) box.innerHTML = '<div class="empty">กำลังโหลด...</div>';
+  return fetch('/api/dcf-screener').then(r => r.json()).then(d => {
+    _dcfScreenerData = d;
+    // แสดงสมมติฐานที่ใช้จริงในรอบล่าสุดในช่องกรอก (ไม่ทับช่องที่ผู้ใช้กำลังพิมพ์อยู่)
+    const a = d.meta && d.meta.assumptions;
+    if (a) {
+      const setv = (id, v) => {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el && v != null) el.value = v;
+      };
+      // ช่อง override: null แปลว่ารอบล่าสุดไม่ได้กรอก (ใช้ค่าจริงของหุ้น) -> เคลียร์ให้ว่างเหมือนกัน
+      const setvOpt = (id, v) => {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el) el.value = (v == null ? '' : v);
+      };
+      setv('dcf-screener-rf', a.rf_pct);
+      setv('dcf-screener-beta', a.beta);
+      setv('dcf-screener-erp', a.erp_pct);
+      setv('dcf-screener-tg', a.terminal_growth_pct);
+      setv('dcf-screener-years', a.years);
+      DCF_SCR_OPTIONAL_FIELDS.forEach(([id, key]) => setvOpt(id, a[key]));
+    }
+    renderDcfScreener();
+  }).catch(() => {
+    if (box) box.innerHTML = '<div class="empty">โหลดข้อมูลไม่สำเร็จ</div>';
+  });
+}
+
+// ค่าเริ่มต้นเดียวกับ RISK_FREE_PCT/BETA/ERP_PCT/TERMINAL_GROWTH_PCT/FORECAST_YEARS ใน
+// sources/dcf_screener.py — ต้องแก้คู่กันถ้าเปลี่ยนค่าเริ่มต้นฝั่งใดฝั่งหนึ่ง
+const DCF_SCR_DEFAULTS = { rf_pct: 2.5, beta: 1.00, erp_pct: 5.5, terminal_growth_pct: 2.5, years: 5 };
+
+function resetDcfScreenerAssumptions() {
+  const el = id => document.getElementById(id);
+  el('dcf-screener-rf').value = DCF_SCR_DEFAULTS.rf_pct;
+  el('dcf-screener-beta').value = DCF_SCR_DEFAULTS.beta.toFixed(2);
+  el('dcf-screener-erp').value = DCF_SCR_DEFAULTS.erp_pct;
+  el('dcf-screener-tg').value = DCF_SCR_DEFAULTS.terminal_growth_pct;
+  el('dcf-screener-years').value = String(DCF_SCR_DEFAULTS.years);
+  // ช่อง override ทั้ง 8 กลับเป็นว่าง = ใช้ค่าจริงของหุ้นนั้น (ไม่มี "ค่าเริ่มต้น" กลางที่ใช้ได้ทุกหุ้น)
+  DCF_SCR_OPTIONAL_FIELDS.forEach(([id]) => { const e = el(id); if (e) e.value = ''; });
+  // แค่รีเซ็ตช่องกรอก ยังไม่คำนวณใหม่ — ให้ผู้ใช้ตรวจค่าก่อนกด ⟳ เอง (เหมือนปุ่ม "คืนค่าเริ่มต้น"
+  // ในหน้า Tearsheet ที่ก็ไม่ auto-submit ให้)
+}
+
+function startDcfScreenerRebuild() {
+  const btn = document.getElementById('dcf-screener-rebuild-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ กำลังคำนวณ...'; }
+  const numVal = (id, dflt) => {
+    const v = parseFloat(document.getElementById(id)?.value);
+    return Number.isFinite(v) ? v : dflt;
+  };
+  // ว่าง/พิมพ์ไม่ถูก -> null (ไม่ override ทั้งตลาด ใช้ค่าจริงของหุ้นนั้นแทน — ดู resolve_assumptions
+  // ฝั่ง server) ต่างจาก numVal ด้านบนที่มี default กลางเสมอ (Rf/Beta/ERP/Terminal Growth)
+  const optVal = id => {
+    const raw = document.getElementById(id)?.value;
+    if (raw == null || String(raw).trim() === '') return null;
+    const v = parseFloat(raw);
+    return Number.isFinite(v) ? v : null;
+  };
+  const body = {
+    rf_pct: numVal('dcf-screener-rf', 2.5),
+    beta: numVal('dcf-screener-beta', 1.0),
+    erp_pct: numVal('dcf-screener-erp', 5.5),
+    terminal_growth_pct: numVal('dcf-screener-tg', 2.5),
+    years: parseInt(document.getElementById('dcf-screener-years')?.value || '5', 10),
+  };
+  DCF_SCR_OPTIONAL_FIELDS.forEach(([id, key]) => { body[key] = optVal(id); });
+  fetch('/api/dcf-screener/rebuild', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }).then(r => r.json())
+    .then(() => fetchDcfScreener())
+    .catch(() => {
+      const meta = document.getElementById('dcf-screener-meta');
+      if (meta) meta.textContent = 'คำนวณไม่สำเร็จ ลองใหม่อีกครั้ง';
+    })
+    .finally(() => {
+      if (btn) { btn.disabled = false; btn.textContent = '⟳ คำนวณ DCF ใหม่ทั้งตลาด'; }
+    });
+}
+
+function _dcfScrSetSort(key) {
+  if (_dcfScrSort.key === key) {
+    _dcfScrSort.dir = _dcfScrSort.dir === 'desc' ? 'asc' : 'desc';
+  } else {
+    _dcfScrSort.key = key;
+    _dcfScrSort.dir = (key === 'symbol' || key === 'name') ? 'asc' : 'desc';
+  }
+  renderDcfScreener();
+}
+
+// ใช้ร่วมกันทั้งตอน render ตารางและตอน export CSV — export เอาแถวที่กรอง/เรียงตามที่เห็นบนจอ
+function _dcfScrFilteredSorted() {
+  const d = _dcfScreenerData;
+  if (!d || !d.rows) return [];
+  const q = (document.getElementById('dcf-screener-search')?.value || '').toUpperCase().trim();
+  const hideErr = document.getElementById('dcf-screener-hide-na')?.checked;
+  let rows = d.rows.filter(r => !q || r.symbol.includes(q) || (r.name || '').toUpperCase().includes(q));
+  if (hideErr) rows = rows.filter(r => !r.error);
+  const key = _dcfScrSort.key, dir = _dcfScrSort.dir === 'asc' ? 1 : -1;
+  rows = rows.slice().sort((a, b) => {
+    const av = a[key], bv = b[key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'string') return dir * av.localeCompare(bv);
+    return dir * (av - bv);
+  });
+  return rows;
+}
+
+function renderDcfScreener() {
+  const d = _dcfScreenerData;
+  const box = document.getElementById('dcf-screener-table');
+  const metaBox = document.getElementById('dcf-screener-meta');
+  const countBox = document.getElementById('dcf-screener-count');
+  if (!box) return;
+  if (!d || !d.rows || !d.rows.length) {
+    if (metaBox) metaBox.textContent = 'ยังไม่เคยคำนวณ';
+    box.innerHTML = '<div class="empty">ยังไม่มีข้อมูล กดปุ่ม "⟳ คำนวณ DCF ใหม่ทั้งตลาด" ด้านบนก่อน</div>';
+    return;
+  }
+  if (metaBox) {
+    const a = d.meta.assumptions || {};
+    const overrideCount = DCF_SCR_OPTIONAL_FIELDS.filter(([, key]) => a[key] != null).length;
+    metaBox.textContent = `คำนวณล่าสุด ${d.meta.computed_at || '—'} · คำนวณได้ ${d.meta.ok_count}/${d.meta.count} ตัว`
+      + (a.rf_pct != null ? ` · Rf ${a.rf_pct}% · β ${a.beta} · ERP ${a.erp_pct}% · TG ${a.terminal_growth_pct}% · ${a.years} ปี` : '')
+      + (overrideCount > 0 ? ` · กำหนดเองทั้งตลาด ${overrideCount} ช่อง` : '');
+  }
+  const rows = _dcfScrFilteredSorted();
+  if (countBox) countBox.textContent = `${rows.length} ตัว`;
+  if (!rows.length) { box.innerHTML = '<div class="empty">ไม่พบหุ้นตรงเงื่อนไข</div>'; return; }
+
+  const rowsHtml = rows.map(r => {
+    if (r.error) {
+      return `<tr style="opacity:.55">
+        <td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a></td>
+        <td>${_dcfScrEsc(r.name || '')}</td>
+        <td colspan="5" style="color:var(--text2)">— ${_dcfScrEsc(r.error)}</td>
+      </tr>`;
+    }
+    const up = r.upside_pct;
+    const color = up > 0 ? 'var(--green)' : 'var(--red)';
+    // ผลลัพธ์เกิน ±300% ส่วนใหญ่มาจาก denominator ราคาเล็ก/หนี้-เงินสดผิดปกติ ไม่ใช่ signal จริง —
+    // เตือนแทนการซ่อน (ยังอยากให้เห็นแถวไว้เผื่ออยากตรวจสอบเอง)
+    const extreme = Math.abs(up) > 300;
+    return `<tr>
+      <td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a></td>
+      <td>${_dcfScrEsc(r.name || '')}</td>
+      <td style="text-align:right">${r.price != null ? r.price.toFixed(2) : '—'}</td>
+      <td style="text-align:right">${r.intrinsic != null ? r.intrinsic.toFixed(2) : '—'}</td>
+      <td style="text-align:right;font-weight:700;color:${color}">${up != null ? (up > 0 ? '+' : '') + up.toFixed(1) + '%' : '—'}${extreme ? ' ⚠️' : ''}</td>
+      <td style="text-align:right">${r.wacc_pct != null ? r.wacc_pct.toFixed(2) + '%' : '—'}</td>
+      <td style="text-align:right">${r.g13_pct != null ? r.g13_pct.toFixed(1) + '%' : '—'}</td>
+    </tr>`;
+  }).join('');
+  const headHtml = DCF_SCR_COLS.map(c => {
+    const arrow = _dcfScrSort.key === c.key ? (_dcfScrSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
+    return `<th style="text-align:${c.align};cursor:pointer;user-select:none;white-space:nowrap" onclick="_dcfScrSetSort('${c.key}')" title="กดเรียงลำดับ">${c.label}${arrow}</th>`;
+  }).join('');
+  box.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%">
+    <thead><tr>${headHtml}</tr></thead>
+    <tbody>${rowsHtml}</tbody></table></div>
+    <div style="font-size:10.5px;color:var(--text2);margin-top:6px">⚠️ = |upside| เกิน 300% — ส่วนใหญ่เกิดจากราคาต่อหุ้นเล็กมาก/โครงสร้างหนี้-เงินสดผิดปกติ ไม่ใช่ signal ที่เชื่อถือได้ตรงๆ ควรเปิด Tearsheet ตรวจดูก่อนเสมอ · กดหัวตารางเพื่อเรียงลำดับ</div>`;
+}
+
+function exportDcfScreenerCsv() {
+  const rows = _dcfScrFilteredSorted();
+  if (!rows.length) { alert('ไม่มีข้อมูลให้ export'); return; }
+  const csvEsc = v => {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const headers = ['Symbol', 'Name', 'Sector', 'Price', 'Intrinsic', 'Upside %', 'WACC %', 'Growth ปี1-3 %', 'As of', 'Error'];
+  const lines = [headers.map(csvEsc).join(',')];
+  rows.forEach(r => {
+    lines.push([
+      r.symbol, r.name || '', r.sector || '',
+      r.price ?? '', r.intrinsic ?? '', r.upside_pct ?? '', r.wacc_pct ?? '', r.g13_pct ?? '',
+      r.as_of || '', r.error || '',
+    ].map(csvEsc).join(','));
+  });
+  const csv = '﻿' + lines.join('\r\n');   // BOM กัน Excel เปิดภาษาไทยเพี้ยน
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  a.href = url;
+  a.download = `dcf_screener_${ts}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 // ============================================================
 // HEDGE HOLDINGS (13F / superinvestors จาก Dataroma)
@@ -10747,14 +10986,22 @@ function _tsDcfHtml(dcf, price) {
   </div>`;
 }
 
-// ---------- DCF Model (พยากรณ์เต็มรูปแบบ): Revenue -> EBIT -> NOPLAT -> D&A -> CapEx -> ΔNWC -> FCFF ----------
+// ---------- DCF Model (พยากรณ์เต็มรูปแบบ): Revenue -> EBIT -> NOPLAT -> D&A -> CapEx -> NWC -> FCFF ----------
 // ต่างจาก Reverse/Forward DCF ด้านบนตรงที่ไม่ใช้ FCF ก้อนเดียวโตอัตราเดียว แต่ build รายบรรทัด
 // จากงบ Yahoo ปีล่าสุด (ทุก % แก้เองได้) — WACC build จาก 3 ขั้น (Cost of Equity/Cost of Debt/
 // Capital Structure) เหมือนหน้า factsheet ทั่วไป ไม่ใช่ช่องเดียวกรอกเอง: ค่าที่มีในงบจริง
 // (ดอกเบี้ยจ่าย÷หนี้รวม, Equity/Debt value, Tax Rate) ดึงจากข้อมูลจริงเป็นค่าเริ่มต้น ส่วนที่ไม่มี
 // ในงบเลย (Risk-free rate/Beta/Equity Risk Premium) เป็นช่องกรอกเองล้วนๆ (Beta หุ้นไทยรายตัว
 // ดูได้จากหน้า factsheet ของ SET.or.th)
-// override รายปีของ D&A/CapEx/ΔNWC ที่กดแก้เองในตาราง (key = t, value = บาทเต็ม) — รีเซ็ตทุกครั้ง
+//
+// nwc_pct_revenue (จาก compute_dcf_forecast_inputs) = ระดับ Working Capital ÷ Revenue ปีล่าสุด
+// (ไม่ใช่ 'การเปลี่ยนแปลง' — เปลี่ยนนิยาม 2026-08-21 หลังเทียบกับเครื่องมืออ้างอิงภายนอกแล้วนิยาม
+// เดิม (ΔNWC จากงบกระแสเงินสด) ห่างจากค่าอ้างอิงมาก ~10pp ทุกตัวที่ทดสอบ ส่วนนิยามระดับตรงกับ
+// PTT เป๊ะ 12.75% vs 12.7%) ผลกระทบต่อ FCFF แต่ละปีพยากรณ์จึงต้องคูณกับ 'ส่วนต่างรายได้ปีนั้นๆ
+// เทียบปีก่อน' (nwcDefault = -(nwcPct × ΔRevenue)) ไม่ใช่คูณรายได้เต็มปีเหมือนเดิม — ดู nwcDefault
+// ใน loop ด้านล่าง
+//
+// override รายปีของ D&A/CapEx/NWC ที่กดแก้เองในตาราง (key = t, value = บาทเต็ม) — รีเซ็ตทุกครั้ง
 // ที่เปิด Tearsheet หุ้นตัวใหม่ (ดู _tsDcfModelHtml) แต่คงอยู่ข้าม recalc ของหุ้นตัวเดิม (เปลี่ยน
 // growth/WACC/forecast period ไม่ล้าง override ที่กดไว้)
 let _tsDcfModelOverrides = { revenue: {}, ebit: {}, noplat: {}, da: {}, capex: {}, nwc: {} };
@@ -10807,7 +11054,7 @@ function _tsDcfModelHtml(fc, dcf) {
       ${factsheetUrl ? `(<a href="${factsheetUrl}" target="_blank" rel="noopener">หน้า factsheet ของ SET.or.th</a> มีค่า Beta หุ้นตัวนี้ให้ดูประกอบ)` : ''}
     </div>
     <div style="font-size:10.5px;color:var(--text2);margin-bottom:10px;line-height:1.7">
-      <div>📊 <b style="color:var(--text)">ดึงจากงบจริง</b> (ปีล่าสุด เป็นค่าเริ่มต้น แก้เองได้): EBIT Margin, Tax Rate, D&amp;A/CapEx/ΔNWC %Revenue, ดอกเบี้ยจ่ายเฉลี่ยต่อหนี้, มูลค่า Equity (E)/Debt (D)</div>
+      <div>📊 <b style="color:var(--text)">ดึงจากงบจริง</b> (ปีล่าสุด เป็นค่าเริ่มต้น แก้เองได้): EBIT Margin, Tax Rate, D&amp;A/CapEx %Revenue, NWC %Revenue (ระดับ Working Capital ปีล่าสุด), ดอกเบี้ยจ่ายเฉลี่ยต่อหนี้, มูลค่า Equity (E)/Debt (D)</div>
       <div>✏️ <b style="color:var(--text)">ค่าสมมติ ไม่มีในงบการเงิน</b> ต้องกะเอง/หาข้อมูลเพิ่ม: Risk-free Rate, Beta, Equity Risk Premium, Terminal Growth</div>
       <div>📈 <b style="color:var(--text)">กึ่งกลาง</b> — ตั้งต้นจาก CAGR รายได้ในอดีต (จากงบจริง) แต่เป็นการ<i>คาดการณ์อนาคต</i>ไม่ใช่ตัวเลขจริง: Rev Growth ปี1-3/ปี4-5</div>
     </div>
@@ -10830,7 +11077,7 @@ function _tsDcfModelHtml(fc, dcf) {
       <label style="font-size:11px;color:var(--text2)">CapEx % Revenue
         <input id="ts-dm-capex" type="number" step="0.1" value="${n(fc.capex_pct_revenue, 3).toFixed(1)}"
           class="scr-input" style="display:block;width:88px;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
-      <label style="font-size:11px;color:var(--text2)">ΔNWC % Revenue
+      <label style="font-size:11px;color:var(--text2)">NWC % Revenue (ระดับ)
         <input id="ts-dm-nwc" type="number" step="0.1" value="${n(fc.nwc_pct_revenue, 0).toFixed(1)}"
           class="scr-input" style="display:block;width:88px;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
       <label style="font-size:11px;color:var(--text2)">Terminal Growth %
@@ -10895,7 +11142,7 @@ function _tsDcfModelHtml(fc, dcf) {
 
     <div id="ts-dm-table"></div>
     <div id="ts-dm-summary" style="margin-top:10px"></div>
-    <div style="font-size:10px;color:var(--text2);margin-top:8px">⚠ D&amp;A / CapEx / ΔNWC / Cost of Debt ตั้งต้นจาก % ต่อ Revenue หรือ % ต่อหนี้ของปีล่าสุดปีเดียว (ไม่ใช่ค่าเฉลี่ยหลายปี) — หุ้นที่เพิ่งลงทุนหนัก/มี one-off ควรปรับเองก่อนเชื่อผลลัพธ์ · Rf/Beta/ERP เป็นค่ากรอกเองล้วนๆ ไม่มีในงบการเงิน</div>
+    <div style="font-size:10px;color:var(--text2);margin-top:8px">⚠ D&amp;A / CapEx / Cost of Debt ตั้งต้นจาก % ต่อ Revenue หรือ % ต่อหนี้ของปีล่าสุดปีเดียว (ไม่ใช่ค่าเฉลี่ยหลายปี) — หุ้นที่เพิ่งลงทุนหนัก/มี one-off ควรปรับเองก่อนเชื่อผลลัพธ์ · NWC % Revenue คือระดับ Working Capital ปีล่าสุด ไม่ใช่การเปลี่ยนแปลง (ผลกระทบต่อ FCFF คำนวณจาก % นี้ × ส่วนต่างรายได้ปีนั้นเทียบปีก่อน) · Rf/Beta/ERP เป็นค่ากรอกเองล้วนๆ ไม่มีในงบการเงิน</div>
   </div>`;
 }
 
@@ -10951,24 +11198,27 @@ function _tsDcfModelRecalc() {
   const fmt = v => Number.isFinite(v) ? (v / 1e6).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
 
   // แถว TTM (ฐาน) — ข้อมูลจริงจากงบปีล่าสุด (ไม่ใช่พยากรณ์ ไม่รวมใน PV) แสดงไว้เทียบกับปีพยากรณ์
+  // NWC ในแถวนี้โชว์ 'ระดับ' Working Capital ปัจจุบัน (บาท) เฉยๆ ไม่บวกเข้า ttmFcff เพราะไม่ใช่
+  // กระแสเงินสด (ต่างจากปีพยากรณ์ที่คำนวณ 'ผลกระทบจาก ΔRevenue' — แถว TTM ไม่มีปีก่อนหน้าให้เทียบ)
   const ttmDa = fc.revenue * (fc.da_pct_revenue || 0) / 100;
   const ttmCapex = fc.revenue * (fc.capex_pct_revenue || 0) / 100;
-  const ttmNwc = fc.revenue * (fc.nwc_pct_revenue || 0) / 100;
+  const ttmNwcLevel = fc.revenue * (fc.nwc_pct_revenue || 0) / 100;
   const ttmNoplat = fc.ebit * (1 - tax);
-  const ttmFcff = ttmNoplat + ttmDa - ttmCapex + ttmNwc;
+  const ttmFcff = ttmNoplat + ttmDa - ttmCapex;
   const ttmRowHtml = `<tr style="color:var(--blue)">
     <td style="font-weight:700">TTM (ฐาน)</td><td style="text-align:right">—</td>
     <td style="text-align:right">${fmt(fc.revenue)}</td><td style="text-align:right">${fmt(fc.ebit)}</td>
     <td style="text-align:right">${(fc.ebit_margin || 0).toFixed(1)}%</td><td style="text-align:right">${fmt(ttmNoplat)}</td>
     <td style="text-align:right">${fmt(ttmDa)}</td><td style="text-align:right">${fmt(ttmCapex)}</td>
-    <td style="text-align:right;color:${ttmNwc < 0 ? 'var(--red)' : 'var(--text)'}">${fmt(ttmNwc)}</td>
+    <td style="text-align:right;color:${ttmNwcLevel < 0 ? 'var(--red)' : 'var(--text)'}" title="ระดับ Working Capital ปัจจุบัน — ไม่ได้รวมในผลรวม FCFF แถวนี้ (ไม่ใช่กระแสเงินสด)">${fmt(ttmNwcLevel)}</td>
     <td style="text-align:right;font-weight:700">${fmt(ttmFcff)}</td></tr>`;
 
-  // ทุกช่อง (Revenue/EBIT/NOPLAT/D&A/CapEx/ΔNWC) ต่อปี: ตั้งต้นจากสูตร (โต% × Revenue ปีก่อน,
+  // ทุกช่อง (Revenue/EBIT/NOPLAT/D&A/CapEx/NWC) ต่อปี: ตั้งต้นจากสูตร (โต% × Revenue ปีก่อน,
   // EBIT Margin, Tax Rate, % ต่อ Revenue ด้านบน) แต่กดแก้ตัวเลขตรงในตารางรายปีเองได้ทุกช่อง —
   // แก้ Revenue ปีไหน ปีถัดไปคำนวณสูตรต่อจากค่าที่แก้แล้ว (ไม่ใช่ค่าตามสูตรเดิม) เก็บ override ไว้
   // ใน _tsDcfModelOverrides คงอยู่ข้าม recalc จนกว่าจะโหลดหุ้นตัวใหม่ · EBIT% เป็นอัตราส่วน
-  // (EBIT/Revenue) คำนวณจากค่าจริงเสมอ ไม่ใช่ช่องแก้ตรงๆ
+  // (EBIT/Revenue) คำนวณจากค่าจริงเสมอ ไม่ใช่ช่องแก้ตรงๆ · NWC default ใช้ 'ผลต่างรายได้ปีนี้เทียบ
+  // ปีก่อน' คูณ nwcPct (ระดับ) ไม่ใช่รายได้เต็มปี ดูคอมเมนต์ก่อนฟังก์ชันนี้
   let revenue = fc.revenue;
   const rows = [];
   let pvSum = 0, lastFcff = 0;
@@ -10984,7 +11234,10 @@ function _tsDcfModelRecalc() {
     const noplatDefault = ebit * (1 - tax);
     const noplat = _tsDcfModelOverrides.noplat[t] ?? noplatDefault;
 
-    const daDefault = rev * daPct, capexDefault = rev * capexPct, nwcDefault = rev * nwcPct;
+    const daDefault = rev * daPct, capexDefault = rev * capexPct;
+    // nwcPct = ระดับ NWC ÷ Revenue (ไม่ใช่การเปลี่ยนแปลง) — รายได้โตขึ้นเท่าไหร่ต้องใช้เงินทุน
+    // หมุนเวียนเพิ่มตามอัตราส่วนนี้ ผลกระทบต่อกระแสเงินสด = −(nwcPct × ΔRevenue ปีนี้เทียบปีก่อน)
+    const nwcDefault = -(nwcPct * (rev - revenue));
     const da = _tsDcfModelOverrides.da[t] ?? daDefault;
     const capex = _tsDcfModelOverrides.capex[t] ?? capexDefault;
     const nwc = _tsDcfModelOverrides.nwc[t] ?? nwcDefault;
@@ -11015,7 +11268,7 @@ function _tsDcfModelRecalc() {
   tblBox.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%;font-size:11px">
     <thead><tr><th></th><th style="text-align:right">โต%</th><th style="text-align:right">Revenue ✏️</th>
     <th style="text-align:right">EBIT ✏️</th><th style="text-align:right">EBIT%</th><th style="text-align:right">NOPLAT ✏️</th>
-    <th style="text-align:right">D&amp;A ✏️</th><th style="text-align:right">CapEx ✏️</th><th style="text-align:right">ΔNWC ✏️</th>
+    <th style="text-align:right">D&amp;A ✏️</th><th style="text-align:right">CapEx ✏️</th><th style="text-align:right">NWC ✏️</th>
     <th style="text-align:right">FCFF</th></tr></thead><tbody>${ttmRowHtml}${rowsHtml}</tbody></table></div>
     <div style="font-size:10px;color:var(--text2);margin-top:4px">หน่วย: ล้านบาท/หน่วยเดียวกับ Market Cap · ✏️ = กดตัวเลขในช่องนั้นๆ เพื่อแก้เป็นค่าที่ตั้งเองรายปีได้ (เว้นว่างเพื่อกลับไปใช้สูตรจากช่อง % ด้านบน) — แก้ Revenue ปีไหน ปีถัดไปจะคำนวณต่อจากค่าที่แก้แล้ว, EBIT% เป็นอัตราส่วนคำนวณจาก EBIT/Revenue เสมอไม่มีช่องแก้ตรงๆ, TTM (ฐาน) เป็นข้อมูลจริงแก้ไม่ได้</div>`;
 

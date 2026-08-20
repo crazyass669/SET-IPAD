@@ -220,6 +220,7 @@ from sources.etf_universe import fetch_etf_list_live
 from sources import sec_store
 from sources import financials_store
 from sources import factor_snapshot
+from sources import dcf_screener
 from sources import dr_descriptions
 from sources import us_index_membership
 from sources import hk_index_membership
@@ -5294,6 +5295,26 @@ def tearsheet(market, symbol):
         "meta": {"computed_at": meta_computed_at,
                  "has_factors": bool(f) if lite else (_mirror_sym(mkt, sym) in snap_rows)},
     })
+
+
+@app.route("/api/dcf-screener")
+def dcf_screener_endpoint():
+    """🎯 DCF Screener — ผลลัพธ์ DCF Model (พยากรณ์เต็มรูปแบบ) ที่คำนวณไว้แล้วทั้งตลาดหุ้นไทย
+    (ดู sources/dcf_screener.py) อ่านจาก cache ในตาราง dcf_screener ตรงๆ ไม่คำนวณสด —
+    กดปุ่ม "⟳ คำนวณ DCF ใหม่ทั้งตลาด" (POST /api/dcf-screener/rebuild) ก่อนถึงจะมีข้อมูล"""
+    return jsonify({"rows": dcf_screener.get_snapshot(BASE_DIR), "meta": dcf_screener.snapshot_meta(BASE_DIR)})
+
+
+@app.route("/api/dcf-screener/rebuild", methods=["POST"])
+def dcf_screener_rebuild():
+    """คำนวณ DCF ใหม่ทั้งตลาด — ไม่ยิง network เพิ่ม (อ่านจากงบที่ sync ไว้แล้ว) จึงรันแบบ sync
+    ในคำขอเดียวได้เลย ไม่ต้อง background thread/progress bar เหมือน sync งบชุดใหญ่
+
+    body (ไม่ใส่ = ใช้ค่าเริ่มต้นทั้งหมด): {rf_pct, beta, erp_pct, terminal_growth_pct, years}
+    — resolve_assumptions() clamp/กันค่าพังให้แล้วฝั่ง dcf_screener"""
+    body = request.get_json(silent=True) or {}
+    result = dcf_screener.build_snapshot(BASE_DIR, assumptions=body)
+    return jsonify(result)
 
 
 @app.route("/api/track-search", methods=["POST"])

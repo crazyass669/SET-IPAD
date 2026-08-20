@@ -3515,13 +3515,22 @@ def compute_balance_quality(payload_yahoo):
 
 
 def compute_dcf_forecast_inputs(payload_yahoo):
-    """วัตถุดิบสำหรับ DCF Model แบบเต็ม (Revenue→EBIT→NOPLAT→D&A→CapEx→ΔNWC→FCFF) จากงบ Yahoo
+    """วัตถุดิบสำหรับ DCF Model แบบเต็ม (Revenue→EBIT→NOPLAT→D&A→CapEx→NWC→FCFF) จากงบ Yahoo
     annual ปีล่าสุดที่มี Revenue+EBIT ครบ — เป็นแค่ 'ค่าเริ่มต้น' ให้ผู้ใช้ปรับเอง ไม่ใช่การพยากรณ์
     (ทุก % คำนวณจากปีล่าสุดปีเดียว ไม่ได้เฉลี่ยหลายปี) รวม total_debt/cost_of_debt_pretax
     (ดอกเบี้ยจ่าย÷หนี้รวม) สำหรับ Capital Structure/Cost of Debt ของ WACC เพราะมีในงบจริง —
     ส่วน Rf/Beta/Equity Risk Premium ไม่คำนวณที่นี่ (ไม่มีในงบเลย ไม่มี beta/risk-free rate
     เก็บไว้ในระบบ) ฝั่ง UI ให้ผู้ใช้กรอกเองทั้งหมด (ลิงก์ไปหน้า factsheet ของ SET.or.th ที่มีค่า
     Beta หุ้นรายตัวให้ดูประกอบ)
+
+    nwc_pct_revenue = **ระดับ** Working Capital (Current Assets − Current Liabilities) หารรายได้
+    ปีล่าสุด — ไม่ใช่ 'การเปลี่ยนแปลง' ของ NWC เหมือนเดิม (เทียบกับหน้า reference ภายนอกที่ผู้ใช้
+    เอามาเทียบ 2026-08-21: PTT ตรงเป๊ะ 12.75% vs 12.7% ด้วยนิยามนี้ ตรงข้ามกับของเดิมที่ใช้
+    'Change In Working Capital' จากงบกระแสเงินสดซึ่งห่างจากอ้างอิงมาก ~10-12pp ทุกตัวที่ทดสอบ)
+    ฝั่งคำนวณ FCFF (compute_dcf_for_symbol/_tsDcfModelRecalc) ต้องคูณกับ 'ส่วนต่างรายได้ปีต่อปี'
+    ไม่ใช่รายได้เต็มปี ถึงจะได้ผลกระทบต่อกระแสเงินสดที่ถูกต้อง (มาตรฐาน DCF: ΔNWC ดอลลาร์ = NWC ratio
+    × ΔRevenue, รายได้โตยิ่งใช้เงินทุนหมุนเวียนเพิ่มยิ่งกินกระแสเงินสด — ต่างจากเดิมที่คูณรายได้เต็มปี
+    ซึ่งถูกต้องเฉพาะตอนใช้นิยาม 'การเปลี่ยนแปลง' แบบเดิมเท่านั้น)
     คืน None ถ้าไม่มี Revenue/EBIT ปีล่าสุดให้คำนวณ"""
     inc = payload_yahoo.get("income", {})
     bal = payload_yahoo.get("balance", {})
@@ -3533,7 +3542,10 @@ def compute_dcf_forecast_inputs(payload_yahoo):
     pretax_row = inc.get("Pretax Income", {})
     da_row = inc.get("Reconciled Depreciation", {})
     capex_row = cf.get("Capital Expenditure", {})
-    nwc_row = cf.get("Change In Working Capital", {})
+    wc_row = bal.get("Working Capital", {})
+    ca_row = bal.get("Current Assets", {})
+    cl_row = bal.get("Current Liabilities", {})
+    nwc_change_row = cf.get("Change In Working Capital", {})   # fallback เก่า ถ้าไม่มี balance sheet
     debt_row = bal.get("Total Debt", {})
     int_row = inc.get("Interest Expense", {})
 
@@ -3547,21 +3559,40 @@ def compute_dcf_forecast_inputs(payload_yahoo):
     if not revenue or revenue <= 0:
         return None
 
+    # เดิมใช้ next((d for d in tax_row if d in pretax_row)) ซึ่งหยิบ 'คีย์แรกตามลำดับ dict'
+    # ไม่ใช่ปีล่าสุด (dict ที่ merge จากหลายรอบ sync ไม่รับประกันเรียงตามวันที่) — ทำให้บางหุ้น
+    # (เช่น PTT) ได้ tax rate ปีเก่าสุดที่ชนเพดาน 40% แทนปีล่าสุดจริง พบจากเทียบ reference
+    # ภายนอก 2026-08-21 (PTT ห่าง 9pp ทั้งที่ปีล่าสุดจริงห่างแค่ 1.85pp) แก้เป็นไล่ย้อนหาปีล่าสุด
+    # ที่ยังมีกำไร (pretax > 0) แทน — ปีขาดทุนหารอัตราภาษีไม่ได้ (นับจริง 2026-08-21: หุ้นไทยที่ไม่ใช่
+    # กลุ่มการเงิน 26.1% ขาดทุนในปีล่าสุด เดิม fallback ไป 20% เหมาทันทีทั้งที่ 72.8% ของกลุ่มนี้มีปี
+    # กำไรอยู่ในประวัติให้ดึงมาใช้ได้จริง) — ทดลองเทียบ 'ปีล่าสุดที่กำไร' กับ 'ค่าเฉลี่ยหลายปีที่กำไร'
+    # แล้ว ส่วนใหญ่ต่างกันแค่ median 2.6pp แต่เคสที่ต่างเยอะ (เช่น หมดสิทธิ BOI อัตราภาษีกระโดดถาวร)
+    # ปีล่าสุดสะท้อนสถานะปัจจุบันแม่นกว่าค่าเฉลี่ยที่เอายุคเก่ามาผสม จึงเลือกปีล่าสุดที่กำไร ไม่ใช่ค่าเฉลี่ย
     tax_rate = None
     if tax_row and pretax_row:
-        td = next((d for d in tax_row if d in pretax_row), None)
-        if td:
+        for td in sorted(set(tax_row) & set(pretax_row), reverse=True):
             pretax, tax = pretax_row.get(td), tax_row.get(td)
             if pretax and pretax > 0 and tax is not None:
                 tax_rate = round(max(0.0, min(tax / pretax, 0.4)) * 100, 2)
+                break
     if tax_rate is None:
-        tax_rate = 20.0   # อัตราภาษีนิติบุคคลไทยมาตรฐาน — fallback เมื่อคำนวณจากงบไม่ได้
+        tax_rate = 20.0   # อัตราภาษีนิติบุคคลไทยมาตรฐาน — fallback เมื่อไม่เคยมีปีกำไรในข้อมูลที่มี
 
     def _pct_of_revenue(row, use_abs=False):
         if latest_date not in row or row[latest_date] is None:
             return None
         v = row[latest_date]
         return round((abs(v) if use_abs else v) / revenue * 100, 2)
+
+    # NWC % Revenue: ระดับ Working Capital ปีล่าสุด ÷ Revenue — ลำดับ fallback: field
+    # 'Working Capital' ตรงๆ จาก Yahoo -> คำนวณเอง (Current Assets − Current Liabilities)
+    # -> ถ้าไม่มีข้อมูล balance sheet เลย ค่อย fallback ไปใช้ ΔNWC จากงบกระแสเงินสด (นิยามเก่า)
+    if latest_date in wc_row and wc_row[latest_date] is not None:
+        nwc_pct_revenue = round(wc_row[latest_date] / revenue * 100, 2)
+    elif latest_date in ca_row and latest_date in cl_row and ca_row[latest_date] is not None and cl_row[latest_date] is not None:
+        nwc_pct_revenue = round((ca_row[latest_date] - cl_row[latest_date]) / revenue * 100, 2)
+    else:
+        nwc_pct_revenue = _pct_of_revenue(nwc_change_row, use_abs=False)
 
     rev_history = [{"year": int(d[:4]), "revenue": v} for d, v in sorted(rev_row.items()) if v is not None]
 
@@ -3580,9 +3611,7 @@ def compute_dcf_forecast_inputs(payload_yahoo):
         "tax_rate": tax_rate,
         "da_pct_revenue": _pct_of_revenue(da_row, use_abs=True),
         "capex_pct_revenue": _pct_of_revenue(capex_row, use_abs=True),
-        # ΔNWC เก็บเครื่องหมายเดิมตามงบกระแสเงินสด (บวก = ปลดปล่อยเงินสด, ลบ = ใช้เงินสด) —
-        # ฝั่ง UI บวกเข้า FCFF ตรงๆ ไม่ต้องกลับเครื่องหมาย
-        "nwc_pct_revenue": _pct_of_revenue(nwc_row, use_abs=False),
+        "nwc_pct_revenue": nwc_pct_revenue,
         "total_debt": total_debt,
         "cost_of_debt_pretax": cost_of_debt_pretax,
         "rev_history": rev_history,
