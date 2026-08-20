@@ -967,11 +967,6 @@
   .filter-btn { padding: 8px 13px; }
   .filter-row { gap: 10px; }
 
-  /* ซ่อนปุ่ม admin/dev (Kill Server ซ้ำ, ปลดล็อก Job) บนจอมือถือ/แท็บเล็ต
-     ผู้ใช้ทั่วไปไม่ต้องใช้ ยังกดได้ปกติบนเดสก์ท็อป — ซ่อนทั้ง .btn-wrap
-     (ปุ่ม+tooltip note) ไม่ใช่แค่ปุ่ม กันเหลือช่องว่าง/tooltip ค้าง */
-  .btn-wrap:has(#kill-dup-btn), .btn-wrap:has(#job-reset-btn) { display: none; }
-
 }
 
 /* ตารางข้อมูล (Screener, หุ้นทั้งหมด, Fundamentals ฯลฯ) กว้างเกินจอแคบ
@@ -1082,6 +1077,15 @@ body.static-mode #tbl-momentum   th:nth-child(4),  body.static-mode #tbl-momentu
      (แตะเมนูบนจอสัมผัสมักเปิดแท็บใหม่อยู่แล้วตามพฤติกรรม browser เอง) แถม
      กินที่แถบ nav ที่แคบอยู่แล้ว — ซ่อนเฉพาะจอสัมผัส ส่วนเดสก์ท็อปยังโชว์ปกติ */
   #nav-openmode-btn { display: none; }
+
+  /* ปุ่ม admin/dev (Kill Server ซ้ำ, ปลดล็อก Job) บนจอสัมผัสทุกทิศทาง —
+     เดิมซ่อนด้วย @media (max-width:1024px) ซึ่งเป็นแนวตั้งเท่านั้น พอหมุน
+     แนวนอน iPad ส่วนใหญ่กว้างเกิน 1024px (810/820/834/1024px portrait ->
+     1080/1180/1194/1366px landscape) เลยหลุดเงื่อนไข ปุ่มโผล่ค้าง ใช้
+     pointer:coarse แทนความกว้างจอ ครอบคลุมทุก orientation ผู้ใช้ทั่วไป
+     ไม่ต้องใช้ ยังกดได้ปกติบนเดสก์ท็อป — ซ่อนทั้ง .btn-wrap (ปุ่ม+tooltip
+     note) ไม่ใช่แค่ปุ่ม กันเหลือช่องว่าง/tooltip ค้าง */
+  .btn-wrap:has(#kill-dup-btn), .btn-wrap:has(#job-reset-btn) { display: none; }
 }
 
 /* ── การ์ดคู่มือลำดับการกดอัพเดท (หน้า Data Health) ────────────────────
