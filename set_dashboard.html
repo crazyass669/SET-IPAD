@@ -3283,6 +3283,7 @@
     <span id="fin-meta-note" style="font-size:11px;color:var(--text2)"></span>
     <button class="filter-btn" style="margin-left:auto;font-size:12px" id="fin-compare-btn" onclick="toggleFinCompare()">⚖️ เทียบหุ้น 2 ตัว</button>
     <button class="filter-btn" style="font-size:12px" id="fin-coverage-btn" onclick="checkFinCoverage()">🔍 ตรวจสอบความครบถ้วน</button>
+    <button class="filter-btn" style="font-size:12px" id="fin-quarter-coverage-btn" onclick="checkFinQuarterCoverage()" title="เช็คว่าหุ้นตัวไหนยังไม่มีข้อมูลไตรมาสปฏิทินล่าสุด (ต่างจากปุ่มซ้ายที่เช็คแค่ 'มีข้อมูลหรือยัง')">🗓️ เช็คงวดล่าสุด</button>
     <button class="filter-btn" style="font-size:12px" id="fin-sync-btn" onclick="startFinancialsSync()">🔄 อัพเดทงบการเงินทั้งหมด (local)</button>
   </div>
 
@@ -3318,6 +3319,7 @@
 
   <!-- Coverage result -->
   <div id="fin-coverage-result" style="display:none;margin-bottom:12px"></div>
+  <div id="fin-quarter-coverage-result" style="display:none;margin-bottom:12px"></div>
 
   <!-- เทียบหุ้น 2 ตัว — ใช้งบไตรมาส Finnomena 16 ปี เทียบรายได้/margin/ROE แบบ overlay -->
   <div id="fin-compare-panel" class="card" style="padding:14px 16px;margin-bottom:12px;display:none">
@@ -3424,9 +3426,10 @@
         <button class="filter-btn" id="us-idx-sync-btn" onclick="startUSIndexSync()">🔄 ดึงเฉพาะที่ขาด/เก่า (local)
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
             <strong>Sync ดัชนี US</strong><br>
-            ดึงรายชื่อ constituents ล่าสุดจาก Wikipedia มาแทนไฟล์ local ก่อน แล้วดึงงบการเงิน
-            (ผ่าน Yahoo Finance) เฉพาะ ticker ในดัชนีที่ยังไม่มีข้อมูลในระบบ หรือข้อมูลเก่าเกิน 7 วัน<br><br>
-            <span style="color:var(--text2)">ใช้เป็นระยะเพื่อให้ปุ่มกรอง S&P 500 / Dow Jones / Nasdaq 100 ครบตามจำนวนจริงเสมอ (ตัวเลขดัชนีเปลี่ยนได้เรื่อยๆ)</span>
+            ดึงรายชื่อ constituents ล่าสุดจาก Wikipedia มาแทนไฟล์ local ก่อน แล้วดึงงบการเงินรายปี+รายไตรมาส
+            (ผ่าน Yahoo Finance) ให้ <b>สมาชิกทั้งหมด</b> ของ S&amp;P 500/Dow Jones/Nasdaq 100 — ข้ามเฉพาะตัวที่มีงวดล่าสุดอยู่แล้วจริง
+            (เช็คเนื้อหา ไม่ใช่เดาจากวันที่) กดซ้ำได้เรื่อยๆ ไม่เสียของ<br><br>
+            <span style="color:var(--text2)">ใช้เป็นระยะเพื่อให้ปุ่มกรอง S&P 500 / Dow Jones / Nasdaq 100 ครบตามจำนวนจริงเสมอ (ตัวเลขดัชนีเปลี่ยนได้เรื่อยๆ) และให้งบรายไตรมาสสดขึ้นทุกครั้งที่กด</span>
           </div></span>
         </button>
         <span id="us-idx-diff-note" style="font-size:11px;color:var(--text2)"></span>
@@ -3447,8 +3450,9 @@
         <button class="filter-btn" id="hk-idx-sync-btn" onclick="startHKIndexSync()">🔄 ดึงเฉพาะที่ขาด/เก่า (local)
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
             <strong>Sync ดัชนี HK</strong><br>
-            ดึงรายชื่อ constituents ล่าสุดจาก Wikipedia มาแทนไฟล์ local ก่อน แล้วดึงงบการเงิน
-            (ผ่าน Yahoo Finance) เฉพาะ ticker ในดัชนีที่ยังไม่มีข้อมูลในระบบ หรือข้อมูลเก่าเกิน 7 วัน<br><br>
+            ดึงรายชื่อ constituents ล่าสุดจาก Wikipedia มาแทนไฟล์ local ก่อน แล้วดึงงบการเงินรายปี+รายไตรมาส
+            (ผ่าน Yahoo Finance) ให้ <b>สมาชิกทั้งหมด</b> ของ HSI/HSCEI/HSTECH — ข้ามเฉพาะตัวที่มีงวดล่าสุดอยู่แล้วจริง
+            กดซ้ำได้เรื่อยๆ ไม่เสียของ<br><br>
             <span style="color:var(--text2)">ไฟล์เดียวกับที่หน้า "🇭🇰 หุ้น HK" และ Heatmap HK ใช้กรองดัชนี</span>
           </div></span>
         </button>
@@ -3469,8 +3473,9 @@
         <button class="filter-btn" id="jp-idx-sync-btn" onclick="startJPIndexSync()">🔄 ดึงเฉพาะที่ขาด/เก่า (local)
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
             <strong>Sync ดัชนี JP</strong><br>
-            ดึงรายชื่อ constituents ล่าสุดจาก ja.wikipedia มาแทนไฟล์ local ก่อน แล้วดึงงบการเงิน
-            (ผ่าน Yahoo Finance) เฉพาะ ticker ในดัชนีที่ยังไม่มีข้อมูลในระบบ หรือข้อมูลเก่าเกิน 7 วัน<br><br>
+            ดึงรายชื่อ constituents ล่าสุดจาก ja.wikipedia มาแทนไฟล์ local ก่อน แล้วดึงงบการเงินรายปี (ทุกตัว) +
+            รายไตรมาส (ผ่าน Yahoo Finance) ให้ <b>สมาชิกทั้งหมด</b> ของ Nikkei 225 — ข้ามเฉพาะตัวที่มีงวดล่าสุดอยู่แล้วจริง
+            กดซ้ำได้เรื่อยๆ ไม่เสียของ<br><br>
             <span style="color:var(--text2)">ไฟล์เดียวกับที่หน้า "🇯🇵 หุ้น JP" ใช้กรองดัชนี</span>
           </div></span>
         </button>
@@ -4146,6 +4151,26 @@
   <div class="card" style="padding:14px 16px;margin-bottom:12px">
     <div style="font-size:13px;font-weight:600;margin-bottom:8px">📊 อัพเดทงบไตรมาส (ก.พ. / พ.ค. / ส.ค. / พ.ย.) — เดิมต้องรัน command line ตอนนี้กดปุ่มได้เลย
       <span class="badge badge-yellow" style="margin-left:6px">พึ่ง Finnomena เป็นหลัก — คนละแหล่งกับปุ่มด้านบน</span></div>
+
+    <!-- สรุปลำดับกดกันงง — เพิ่ม 2026-08-20 ตามคำขอ user ที่บอกว่าปุ่มในการ์ดนี้เยอะขึ้นเรื่อยๆ
+         (มี Sync ดัชนี US/HK/JP เพิ่มเข้ามาใหม่) จนสับสนว่าต้องกดอันไหนบ้าง -->
+    <div style="margin:0 0 12px;padding:10px 12px;border-left:3px solid var(--blue);background:rgba(88,166,255,0.08);border-radius:0 6px 6px 0;font-size:12px;line-height:1.7">
+      <div style="color:var(--blue);font-weight:600;margin-bottom:4px">✅ งบไตรมาสใหม่ออก — กดตามลำดับนี้ (ไม่ต้องจำ ไล่จากบนลงล่างได้เลย)</div>
+      <ol style="margin:0;padding-left:18px">
+        <li><b>🔄 อัพเดทงบการเงินทั้งหมด</b> — กดก่อนเสมอ ใช้บ่อยสุด ครอบคลุมหุ้นไทย+DR รายไตรมาสครบ
+          + งบรายปีสมาชิกดัชนีหลัก US/HK/JP (ไม่กี่นาที-ครึ่งชม.)</li>
+        <li><b>🔄 Sync ดัชนี US / HK / JP</b> — กดทั้ง 3 ปุ่มต่อ (ให้สมาชิกดัชนีทั้งหมดได้งบรายไตรมาสด้วย
+          ไม่ใช่แค่พอร์ต DR — รอบแรกอาจนาน รอบหลังเร็วเพราะข้ามของสดแล้ว)</li>
+        <li><b>📥 Mirror ทั้งตลาด (ปกติ — เฉพาะที่ขาด)</b> — กดต่อ (Finnomena ครอบคลุมกว้างกว่า TH/HK/US ไม่กี่นาที)</li>
+        <li><b>📥 Mirror ทั้งตลาด (force)</b> — <span style="color:var(--text2)">ไตรมาสละครั้งพอ</span> (รีเฟรชงวดใหม่ให้ทุกตัวที่มี Finnomena อยู่แล้ว ใช้เวลานาน เป็นชั่วโมง)</li>
+        <li><b>🐋 อัพเดท Hedge Holdings</b> — <span style="color:var(--text2)">เดือนละครั้งพอ</span> (13F ดีเลย์ ~45 วันเหมือนงบการเงิน — กดพร้อมกันได้เลย)</li>
+        <li><b>🗓️ เช็คงวดล่าสุด</b> — เช็คผลว่าเหลือกี่ตัว/แหล่งไหนยังไม่สด ทำซ้ำได้เรื่อยๆ จนพอใจ</li>
+      </ol>
+      <div style="margin-top:6px;color:var(--text2)">ไม่ต้องกดครบทุกปุ่มทุกครั้งก็ได้ — ปุ่ม 1 อย่างเดียวพอสำหรับใช้งานปกติ ที่เหลือกดเป็นระยะเมื่อนึกได้
+        ทุกปุ่มข้ามของที่สดอยู่แล้วอัตโนมัติ กดซ้ำได้ไม่มีต้นทุนเสียของ (ปุ่ม "📖 คำอธิบาย DR/ดัชนีหลัก" ไม่ผูก cadence รายไตรมาส
+        ข้อมูลเปลี่ยนไม่บ่อย กดทุก 2-3 เดือนพอ)</div>
+    </div>
+
     <div style="font-size:11px;color:var(--text2);margin-bottom:10px">
       กรอบเวลาที่บริษัทต้องส่งงบต่อ SET (deadline) — รอให้พ้นช่วงนี้ไปแล้วค่อยกดอัพเดทจะได้งบครบสุด:
       <table style="border-collapse:collapse;font-size:11px;margin-top:4px">
@@ -4154,6 +4179,10 @@
         <tr><td style="padding:1px 10px 1px 0">8 – 14 ส.ค.</td><td>สิ้นงวด 30 มิ.ย. (Q2)</td></tr>
         <tr><td style="padding:1px 10px 1px 0">8 – 14 พ.ย.</td><td>สิ้นงวด 30 ก.ย. (Q3)</td></tr>
       </table>
+      <div style="margin-top:6px">⚠️ <b>Yahoo Finance</b> (<code>yahoo_q</code>) มาช้ากว่าตารางนี้อีก — สุ่มเช็คสด 2026-08-20 เทียบวันประกาศงบจริงกับตอนที่ Yahoo
+        มีข้อมูลแล้ว (ADVANC/TRUE/PTTGC/MRDIYT/AUCT) พบว่า Yahoo ตามทัน<b>ภายใน ~2 สัปดาห์หลังบริษัทประกาศงบจริง</b> (ไม่ใช่หลัง deadline
+        — บริษัทใหญ่มักประกาศเร็วกว่า deadline มาก) กดปุ่มอัพเดทได้เรื่อยๆ ไม่เสียของ (ข้ามของที่สดแล้วอัตโนมัติ) แต่ถ้า Yahoo ยังไม่ขึ้นงวดล่าสุด
+        ทั้งที่ SET/Finnomena มีแล้ว ให้รอราว 2 สัปดาห์นับจากวันประกาศงบของหุ้นนั้นก่อนค่อยเช็คซ้ำ (กดปุ่ม "🗓️ เช็คงวดล่าสุด" ด้านล่างดูได้เลย)</div>
     </div>
     <div style="display:flex;gap:14px;flex-wrap:wrap">
       <div class="btn-wrap">
@@ -4208,7 +4237,95 @@
           ⏱ ไม่กี่วินาที — กดหลัง "Mirror ทั้งตลาด (force)" เจอหุ้นใหม่
         </div>
       </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="dh-us-idx-sync-btn" onclick="startUSIndexSync('dh-us-idx-sync-btn')"
+          title="เช็ค S&P500/Dow/Nasdaq100 จาก Wikipedia แล้วดึงงบรายปี+รายไตรมาส (Yahoo) ให้สมาชิกทั้งหมด ข้ามตัวที่มีงวดล่าสุดแล้ว">🔄 Sync ดัชนี US</button>
+        <div class="btn-note">
+          <b>🔄 Sync ดัชนี US (S&amp;P500/Dow/Nasdaq100)</b>
+          <span class="badge badge-blue" style="margin-left:4px">Yahoo</span><br>
+          เช็ค constituents ล่าสุดจาก Wikipedia แทนไฟล์ local ก่อน แล้วดึงงบรายปี+รายไตรมาสให้ <b>สมาชิกทั้งหมด</b>
+          (ไม่ใช่แค่พอร์ต DR) — ข้ามเฉพาะตัวที่มีงวดล่าสุดอยู่แล้วจริง กดซ้ำได้เรื่อยๆ ไม่เสียของ<br>
+          📦 เหมือนปุ่ม "🔄 ดึงเฉพาะที่ขาด/เก่า" หน้า "งบการเงิน" → แท็บต่างประเทศ (DR) → US ทุกประการ<br>
+          ⏱ รอบแรกอาจนานหน่อย (~500 ตัว) รอบถัดไปเร็วเพราะข้ามของสดแล้ว
+        </div>
+      </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="dh-hk-idx-sync-btn" onclick="startHKIndexSync('dh-hk-idx-sync-btn')"
+          title="เช็ค HSI/HSCEI/HSTECH จาก Wikipedia แล้วดึงงบรายปี+รายไตรมาส (Yahoo) ให้สมาชิกทั้งหมด ข้ามตัวที่มีงวดล่าสุดแล้ว">🔄 Sync ดัชนี HK</button>
+        <div class="btn-note">
+          <b>🔄 Sync ดัชนี HK (HSI/HSCEI/HSTECH)</b>
+          <span class="badge badge-blue" style="margin-left:4px">Yahoo</span><br>
+          เหมือนปุ่ม Sync ดัชนี US แต่เป็นฝั่ง HK — Yahoo มีงบรายไตรมาสหุ้น HK ให้จำกัดกว่าหุ้น US/JP
+          ตามธรรมชาติ (ไม่ใช่บั๊ก) กดซ้ำได้เรื่อยๆ<br>
+          📦 เหมือนปุ่ม "🔄 ดึงเฉพาะที่ขาด/เก่า" หน้า "งบการเงิน" → แท็บต่างประเทศ (DR) → HK ทุกประการ<br>
+          ⏱ รอบแรกอาจนานหน่อย (~150 ตัว) รอบถัดไปเร็วเพราะข้ามของสดแล้ว
+        </div>
+      </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="dh-jp-idx-sync-btn" onclick="startJPIndexSync('dh-jp-idx-sync-btn')"
+          title="เช็ค Nikkei 225 จาก ja.wikipedia แล้วดึงงบรายปี+รายไตรมาส (Yahoo) ให้สมาชิกทั้งหมด ข้ามตัวที่มีงวดล่าสุดแล้ว">🔄 Sync ดัชนี JP</button>
+        <div class="btn-note">
+          <b>🔄 Sync ดัชนี JP (Nikkei 225)</b>
+          <span class="badge badge-blue" style="margin-left:4px">Yahoo</span><br>
+          เช็ค constituents ล่าสุดจาก ja.wikipedia แทนไฟล์ local ก่อน แล้วดึงงบรายปี (ทุกตัว) + รายไตรมาส
+          (สมาชิกทั้งหมด ข้ามตัวที่มีงวดล่าสุดแล้ว) — <b>ไม่มี Finnomena</b> เพราะไม่รองรับตลาดญี่ปุ่น<br>
+          📦 เหมือนปุ่ม "🔄 ดึงเฉพาะที่ขาด/เก่า" หน้า "งบการเงิน" → แท็บต่างประเทศ (DR) → JP ทุกประการ<br>
+          ⏱ รอบแรกอาจนานหน่อย (~225 ตัว) รอบถัดไปเร็วเพราะข้ามของสดแล้ว
+        </div>
+      </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="dh-hedge-refresh-btn" onclick="startHedgeRefresh('dh-hedge-refresh-btn')"
+          title="ขูดการถือครองทุกกอง (~84 กอง) จาก Dataroma ใหม่ — 13F เปลี่ยนแค่รายไตรมาส ดีเลย์ ~45 วันเหมือนงบการเงิน">🐋 อัพเดท Hedge Holdings</button>
+        <div class="btn-note">
+          <b>🐋 อัพเดท Hedge Holdings (13F)</b>
+          <span class="badge badge-blue" style="margin-left:4px">Dataroma</span><br>
+          ขูดการถือครองทุกกอง (~84 กอง) จาก Dataroma ใหม่ — cadence เดียวกับงบการเงิน (ยื่นแบบ 13F ต่อ SEC
+          รายไตรมาส ดีเลย์ ~45 วัน) จึงย้ายมาไว้คู่กันในการ์ดนี้<br>
+          📦 เหมือนปุ่ม "⟳ อัพเดท Hedge Holdings" หน้า 🐋 Hedge Holdings ทุกประการ<br>
+          ⏱ ~2-4 นาที — กดเดือนละครั้งพอ
+        </div>
+      </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="dh-dr-desc-sync-btn" onclick="startDRDescriptionSync('dh-dr-desc-sync-btn')"
+          title="ดึง Description จาก Yahoo Finance ต่อหุ้น DR ทุกตัวแล้วแปลไทย ข้อมูลเปลี่ยนไม่บ่อย กดซ้ำได้ทุก 2-3 เดือน">📖 คำอธิบาย DR</button>
+        <div class="btn-note">
+          <b>📖 ดึงคำอธิบายบริษัท DR</b><br>
+          ดึง Description จากหน้า Profile ของ Yahoo Finance ต่อหุ้น DR ทุกตัว (ไม่รวม ETF) แล้วแปลเป็นไทยอัตโนมัติ
+          เก็บไว้ดูตอนเปิดกราฟหุ้น — ข้ามตัวที่เพิ่งดึงไปไม่เกิน 180 วันอัตโนมัติ<br>
+          📦 เหมือนปุ่ม "📖 ดึงคำอธิบายบริษัท DR (local)" หน้า DR/DRx ทุกประการ<br>
+          ⏱ ข้อมูลเปลี่ยนไม่บ่อย — กดซ้ำได้เรื่อยๆ ทุกๆ 2-3 เดือน
+        </div>
+      </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="dh-dr-desc-sync-index-btn" onclick="startDRDescriptionSyncIndex('dh-dr-desc-sync-index-btn')"
+          title="เหมือนปุ่มซ้าย แต่ครอบคลุมสมาชิกดัชนีหลัก S&P500/Dow/Nasdaq100/HSI/HSCEI/HSTECH/Nikkei225 ทั้งชุด ใช้เวลานาน (~30-40 นาที)">📖 คำอธิบายดัชนีหลัก</button>
+        <div class="btn-note">
+          <b>📖 ดึงคำอธิบายบริษัท Nikkei/HSI/S&amp;P500 ฯลฯ</b><br>
+          ดึง+แปลเหมือนปุ่มซ้าย แต่ครอบคลุมสมาชิกดัชนีหลักทั้งชุด (S&amp;P500/Dow Jones/Nasdaq100/HSI/HSCEI/HSTECH/Nikkei 225)
+          ไม่ใช่แค่ DR universe — ใช้กับหุ้น mirror ที่เปิดดูบ่อยในหน้า "🇺🇸 หุ้น US"/"🇭🇰 หุ้น HK"/"🇯🇵 หุ้น JP"<br>
+          📦 เหมือนปุ่ม "📖 ดึงคำอธิบายบริษัท Nikkei/HSI/S&amp;P500 ฯลฯ" หน้า DR/DRx ทุกประการ<br>
+          ⏱ หุ้นหลักร้อยตัว ใช้เวลานาน (~30-40 นาที) — กดซ้ำได้เรื่อยๆ ทุกๆ 2-3 เดือน
+        </div>
+      </div>
+      <div class="btn-wrap">
+        <button class="refresh-btn" id="dh-quarter-coverage-btn" onclick="checkFinQuarterCoverage('dh-quarter-coverage-result')"
+          title="เช็คว่าไตรมาสปฏิทินล่าสุดที่ควรมีข้อมูลแล้ว ยังขาดกี่ตัวต่อแหล่ง (ต่างจาก 'มีข้อมูลหรือยัง' — ตัวนี้เช็คว่าข้อมูลที่มีเป็นงวดล่าสุดจริงหรือเก่า) แค่ดูผลเฉยๆ ไม่เสียเวลา sync">🗓️ เช็คงวดล่าสุด</button>
+        <div class="btn-note">
+          <b>🗓️ เช็คว่าไตรมาสล่าสุดยังขาดกี่ตัว</b>
+          <span class="badge badge-blue" style="margin-left:4px">Yahoo</span>
+          <span class="badge badge-green" style="margin-left:2px">SET</span>
+          <span class="badge badge-green" style="margin-left:2px">SET P&amp;L รายไตรมาส</span>
+          <span class="badge badge-yellow" style="margin-left:2px">Finnomena</span><br>
+          ต่างจากปุ่ม "🔍 ตรวจสอบความครบถ้วน" (หน้างบการเงิน) ที่เช็คแค่ <b>"มีข้อมูลหรือยัง"</b> (เก่าแค่ไหนก็นับว่ามี) —
+          ปุ่มนี้เช็คว่า <b>ข้อมูลที่มีเป็นงวดปฏิทินล่าสุดจริงหรือยัง</b> เทียบกับไตรมาสที่เพิ่งปิดไป ต่อแหล่งแยกกัน<br>
+          ⚠️ % ต่ำตอนไตรมาสเพิ่งปิดใหม่ๆ เป็นเรื่องปกติ — บริษัทมีสิทธิ์ยื่นงบช้าได้ถึง 45-60 วันหลังปิดไตรมาส และ Yahoo
+          เองก็ตามหลังวันที่บริษัทประกาศงบจริงอีก <b>~2 สัปดาห์</b> (วัดจริงจาก ADVANC/TRUE/PTTGC/MRDIYT/AUCT) ไม่ใช่ sync ล้มเหลว<br>
+          📦 อ่านผลอย่างเดียว ไม่ sync ข้อมูล — เจอตัวขาดแล้วกดปุ่ม "ลองดึงเฉพาะที่ขาด" ต่อได้เลยในผลลัพธ์<br>
+          ⏱ ไม่กี่วินาที — กดดูได้บ่อยตามใจ ไม่มีต้นทุน
+        </div>
+      </div>
     </div>
+    <div id="dh-quarter-coverage-result" style="display:none;margin-top:12px"></div>
   </div>
 
   <!-- แจกแจง 4 แหล่งข้อมูลงบการเงิน (Yahoo/Finnomena/SET company-highlight/SET P&L รายไตรมาส) —
@@ -4352,12 +4469,15 @@
           <b>📥 Mirror ทั้งตลาด (force)</b> <span style="color:var(--text2)">ปุ่มเดียวกัน — ไตรมาสละครั้ง ใช้เวลานาน (เป็นชั่วโมง)</span><br>
           <b>🏷️ ดึงชื่อหุ้น mirror ใหม่</b> <span style="color:var(--text2)">ปุ่มเดียวกัน — กดหลัง Mirror force เจอหุ้นใหม่</span><br>
           <b>🔍 ตรวจสอบความครบถ้วน</b> <span style="color:var(--text2)">หน้า "งบการเงิน" — ดูว่าตัวไหนงบขาด ก่อน/หลัง sync</span><br>
+          <b>🗓️ เช็คงวดล่าสุด</b> <span style="color:var(--text2)">มีทั้งหน้านี้ (การ์ด "📊 อัพเดทงบไตรมาส" ด้านบน) และหน้า "งบการเงิน" — คู่กับปุ่มบน ต่างกันตรงเช็คว่า
+          <b>"มีข้อมูลแล้ว" แต่เป็นงวดเก่าหรือเปล่า</b> (ปุ่มบนนับว่า "มี" แม้เก่าแค่ไหนก็ตาม) — แค่ดูผลเฉยๆ ไม่เสียเวลา sync
+          กดดูได้บ่อยตามใจช่วงหลังงบออก (เช่นทุกครั้งที่กด "🔄 อัพเดทงบการเงินทั้งหมด" ด้านบน) เพื่อดูว่าเหลือกี่ตัว/แหล่งไหนยังไม่สด —
+          <code>yahoo_q</code> จะสดช้าสุด ปกติ ~2 สัปดาห์หลังบริษัทประกาศงบจริง (ไม่ใช่ปุ่มพัง)</span><br>
           <b>🔄 ดึงเฉพาะที่ขาด/เก่า</b> <span style="color:var(--text2)">หน้า "DR / DRx" — งบหุ้นแม่ของ DR
           (เร็วกว่า 📥 ดึงทั้งหมด เพราะข้ามตัวที่เพิ่งดึงไป)</span><br>
-          <b>🔄 ดึงเฉพาะที่ขาด/เก่า</b> <span style="color:var(--text2)">หน้า "งบการเงิน" → แท็บต่างประเทศ (DR) →
-          ปุ่ม <b>US</b> — งบหุ้น S&amp;P500/Dow/Nasdaq 100</span><br>
-          <b>🔄 ดึงเฉพาะที่ขาด/เก่า</b> <span style="color:var(--text2)">หน้าเดียวกัน → ปุ่ม <b>HK</b>
-          — งบหุ้น HSI/HSCEI/HSTECH</span>
+          <b>🔄 Sync ดัชนี US/HK/JP</b> <span style="color:var(--text2)">3 ปุ่มด้านบนในหน้านี้ (การ์ด "📊 อัพเดทงบไตรมาส")
+          — เหมือนปุ่ม "🔄 ดึงเฉพาะที่ขาด/เก่า" หน้า "งบการเงิน" → แท็บต่างประเทศ (DR) → US/HK/JP ทุกประการ
+          (สมาชิก S&amp;P500/Dow/Nasdaq100/HSI/HSCEI/HSTECH/Nikkei225 — ไม่ใช่แค่พอร์ต DR) กดถี่ได้ ไม่เสียของ</span>
           <div style="color:var(--yellow);margin-top:8px">
             📋 มีเครื่องอื่นรันแอปนี้ด้วย? กดครบ <b>🔄 อัพเดทงบการเงินทั้งหมด</b> + <b>📥 Mirror ทั้งตลาด (force)</b>
             ที่เครื่องหลักแล้ว <b>copy financials.db ไปทับเครื่องที่สอง</b> แทนกดอัพเดทซ้ำสองที่ (สองปุ่มนี้
@@ -4958,6 +5078,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260820h"></script>
+<script src="static/dashboard.js?v=20260820n"></script>
 </body>
 </html>

@@ -111,7 +111,11 @@ def fetch_live_membership():
     out["SP500"] = re.findall(r'\{\{(?:NyseSymbol|NasdaqSymbol|BZX link)\|([A-Z.]+)\}\}', sp_txt)
     out["SP500_sector"] = _parse_sp500_sectors(sp_txt)
 
-    dow_txt = _fetch_wikitext("Dow_Jones_Industrial_Average")
+    # 2026-08-20: Wikipedia ย้ายตาราง constituents ออกจากหน้า "Dow_Jones_Industrial_Average"
+    # ไปอยู่หน้าแยก "List_of_Dow_Jones_Industrial_Average_companies" แล้ว (หน้าเดิมเหลือแค่
+    # infobox "constituents = 30" ไม่มีตารางจริงให้ parse — ทำให้ได้ 0 ตัวเงียบๆ จน guard ด้านล่าง
+    # จับได้ว่า < 10 ตัว) เช็คสด 2026-08-20 หน้าใหม่มีตาราง {{NYSE/NASDAQ link|X}} ครบ 30 ตัวถูกต้อง
+    dow_txt = _fetch_wikitext("List_of_Dow_Jones_Industrial_Average_companies")
     out["DOW"] = re.findall(r'\{\{(?:NYSE|NASDAQ) link\|([A-Z.]+)\}\}', dow_txt)
     out["DOW_sector"] = _parse_dow_sectors(dow_txt)
 

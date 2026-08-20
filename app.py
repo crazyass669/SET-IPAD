@@ -535,15 +535,29 @@ def start_refresh():
 
 @app.route("/api/progress")
 def progress_stream():
-    """SSE endpoint — ส่ง progress ทุก 0.5 วิ"""
+    """SSE endpoint — ส่ง progress ทุก 0.5 วิ
+
+    Stall detection (ไม่ใช่ deadline ตายตัว): จับเวลาตั้งแต่ (current, total, message)
+    'ไม่เปลี่ยนเลย' ไม่ใช่ตั้งแต่เปิด stream — เดิมนับจากเปิด stream ตรงๆ ทำให้งานที่รู้อยู่แล้วว่า
+    ใช้เวลานานเกิน 20 นาทีโดยชอบธรรม (เช่น Mirror ทั้งตลาด force เป็นชั่วโมง, financials-update-all
+    เฟส sync mirror US/HK หลายร้อยตัว) โดน error timeout ทั้งที่ backend ยังขยับ/รันต่อเนื่องอยู่จริง
+    (เจอสด 2026-08-20: mirror index sync ยัง log ความคืบหน้าต่อเนื่อง แต่ SSE ยิง error ที่ 20 นาทีพอดี
+    ทั้งที่ progress ไม่ได้ค้าง) — งานจริงไม่ได้หยุด แค่ SSE ตัดการรายงานผลให้ผู้ใช้เห็นก่อนเวลา"""
     def generate():
-        deadline = time.monotonic() + 20 * 60  # safety net กันค้างถ้า job ไม่ set done/error
+        STALL_TIMEOUT = 20 * 60   # ค้างจริง (current/total/message เดิมทุกตัว) เกินนี้ถือว่าผิดปกติ
+        last_sig = None
+        last_change = time.monotonic()
         while True:
             snap = _snapshot()
             yield f"data: {json.dumps(snap, ensure_ascii=False)}\n\n"
             if snap["done"] or snap["error"]:
                 break
-            if time.monotonic() > deadline:
+            sig = (snap.get("current"), snap.get("total"), snap.get("message"))
+            now = time.monotonic()
+            if sig != last_sig:
+                last_sig = sig
+                last_change = now
+            elif now - last_change > STALL_TIMEOUT:
                 yield f"data: {json.dumps({'done': True, 'error': 'timeout: ไม่มีความคืบหน้าเกิน 20 นาที'}, ensure_ascii=False)}\n\n"
                 break
             time.sleep(0.5)
@@ -3608,6 +3622,100 @@ def _dr_financials_universe():
     return sorted(s["sym"] for s in load_dr_universe(BASE_DIR) if not s.get("etf"))
 
 
+def _index_group_quarter_coverage():
+    """เทียบสมาชิก 'ทั้งหมด' ของแต่ละดัชนีหลัก (SP500/DOW/NDX/HSI/HSCEI/HSTECH/NIKKEI225)
+    กับงบรายไตรมาสที่มีจริงใน DB — ต้องเช็ค 3 namespace แยกกันเพราะหุ้นตัวเดียวอาจถูกเก็บคนละที่:
+    1. 'DR:{sym}' (sym = mnemonic ในพอร์ต DR ของ SET เช่น 'AIA'/'TEL') — sync yahoo_q+
+       finnomena_q เต็มอยู่แล้วเป็นประจำ
+    2. 'DR:{code}' (code = ticker ดิบ ไม่ใช่ mnemonic) — ปุ่ม "ดึงเฉพาะที่ขาด/เก่า" ของหน้า
+       งบการเงิน → แท็บ US/HK/JP ยิง sync_all(sources=..., is_dr=True, market=ex,
+       skip_up_to_date=True) ให้สมาชิกดัชนีทั้งหมดที่ยังไม่อยู่ในพอร์ต DR (2026-08-20 แก้เป็น
+       ongoing refresh แล้ว ไม่ใช่ one-shot backfill แบบเดิม — ดู _run_us_index_sync/
+       _run_hk_index_sync/_run_jp_index_sync) US/HK sync ทั้ง yahoo_q+yahoo คู่กัน ส่วน JP
+       sync yahoo_q อย่างเดียว (yahoo รายปีของ JP ยังคงอยู่ใต้ namespace (3) แยกจากนี้ตามเดิม
+       เพราะ sync_mirror_yahoo_index เดิมเขียนไว้อยู่แล้ว ไม่ได้ย้ายมารวม)
+    3. 'FINN:{ex}:{code}' — เฉพาะ finnomena_q จากปุ่ม "📥 Mirror ทั้งตลาด" (ครอบ TH+HK+US
+       ทั้งตลาดของ Finnomena ไม่ใช่แค่ดัชนีหลัก) ไม่มี yahoo_q ที่นี่เลย (sync_mirror_yahoo_index
+       ดึงให้แค่งบรายปี 'yahoo') — namespace นี้ไม่มีของ JP เลย เพราะ Finnomena ไม่รองรับตลาด
+       ญี่ปุ่น (_finn_resolve รองรับแค่ TH/US/HK) ดังนั้น finnomena_q ของ NIKKEI225 นอกพอร์ต DR
+       จะเป็น 'not_tracked' เสมอ (ช่องว่างถาวรจากข้อจำกัดของ Finnomena เอง ไม่ใช่บั๊ก) — yahoo_q
+       ของ NIKKEI225 ไม่มีข้อจำกัดแบบนี้แล้วหลังแก้ (2) ด้านบน เช็ค (2) ได้ปกติเหมือน US/HK"""
+    from sources import us_index_membership as _uim, hk_index_membership as _him, jp_index_membership as _jim
+
+    def _norm_hk(code):
+        code = (code or "").upper().strip()
+        if code.endswith(".HK"):
+            code = code[:-3]
+        return code.zfill(4) if code.isdigit() else code
+
+    def _norm_jp(code):
+        code = (code or "").upper().strip()
+        return code[:-2] if code.endswith(".T") else code
+
+    us = _uim.load_local(BASE_DIR)
+    hk = _him.load_local(BASE_DIR)
+    jp = _jim.load_local(BASE_DIR)
+    groups_raw = {
+        "SP500": ("US", [t.upper().strip() for t in (us.get("SP500") or [])]),
+        "DOW": ("US", [t.upper().strip() for t in (us.get("DOW") or [])]),
+        "NDX": ("US", [t.upper().strip() for t in (us.get("NDX") or [])]),
+        "HSI": ("HK", [_norm_hk(t) for t in (hk.get("HSI") or [])]),
+        "HSCEI": ("HK", [_norm_hk(t) for t in (hk.get("HSCEI") or [])]),
+        "HSTECH": ("HK", [_norm_hk(t) for t in (hk.get("HSTECH") or [])]),
+        "NIKKEI225": ("JP", [_norm_jp(t) for t in (jp.get("NIKKEI225") or [])]),
+    }
+
+    yf_to_dr = {}
+    for e in load_dr_universe(BASE_DIR):
+        if e.get("etf"):
+            continue
+        yf = (e.get("yf") or "").upper().strip()
+        if yf.endswith(".HK"):
+            code = _norm_hk(yf)
+        elif yf.endswith(".T"):
+            code = _norm_jp(yf)
+        else:
+            code = yf
+        yf_to_dr[code] = e["sym"]
+
+    latest_map = financials_store.get_latest_period_map_raw(BASE_DIR, sources=("yahoo_q", "finnomena_q"))
+    target_yq = financials_store._target_period("yahoo_q")
+    target_fq = financials_store._target_period("finnomena_q")
+
+    def _bucket(latest, target):
+        if latest is None:
+            return "not_tracked"
+        return "fresh" if latest >= target else "stale"
+
+    out = {}
+    for gk, (ex, codes) in groups_raw.items():
+        res = {"index_total": len(codes),
+               "yahoo_q": {"target": target_yq.isoformat(), "total": len(codes),
+                           "fresh": 0, "stale": 0, "not_tracked": 0},
+               "finnomena_q": {"target": target_fq.isoformat(), "total": len(codes),
+                                "fresh": 0, "stale": 0, "not_tracked": 0}}
+        for code in codes:
+            dr_sym = yf_to_dr.get(code)
+            yq_latest = latest_map.get((f"DR:{dr_sym}", "yahoo_q")) if dr_sym else None
+            if yq_latest is None:
+                # JP รวมด้วย — ต่างจาก finnomena_q ด้านล่าง เพราะ _run_jp_index_sync (2026-08-20)
+                # เพิ่ม sync_all(sources=('yahoo_q',), is_dr=True, market='JP') ให้ตัวนอกพอร์ต DR
+                # แล้ว เขียนลง 'DR:{code}' เหมือน US/HK ทุกประการ (ก่อนหน้านี้ JP ไม่มี yahoo_q
+                # นอกพอร์ต DR เลยจริงๆ เลยเคยกันไว้ไม่เช็ค — ถ้าลบส่วนนี้ทิ้งจะมองไม่เห็นข้อมูลที่
+                # เพิ่ง sync มาใหม่)
+                yq_latest = latest_map.get((f"DR:{code}", "yahoo_q"))
+            res["yahoo_q"][_bucket(yq_latest, target_yq)] += 1
+
+            fq_latest = latest_map.get((f"DR:{dr_sym}", "finnomena_q")) if dr_sym else None
+            if fq_latest is None and ex != "JP":
+                fq_latest = latest_map.get((f"DR:{code}", "finnomena_q"))
+            if fq_latest is None and ex != "JP":
+                fq_latest = latest_map.get((f"FINN:{ex}:{code}", "finnomena_q"))
+            res["finnomena_q"][_bucket(fq_latest, target_fq)] += 1
+        out[gk] = res
+    return out
+
+
 @app.route("/api/financials-coverage")
 def financials_coverage():
     """เทียบ universe หุ้นทั้งหมดกับที่มีข้อมูลจริงใน DB แล้วต่อแหล่ง (yahoo/set)
@@ -3626,6 +3734,34 @@ def financials_coverage():
         symbols = _financials_universe()
         coverage = financials_store.get_coverage(BASE_DIR, symbols)
     return jsonify(coverage)
+
+
+@app.route("/api/financials-quarter-coverage")
+def financials_quarter_coverage():
+    """เทียบ universe กับ 'ไตรมาสล่าสุดที่ควรจะมีข้อมูลแล้ว ณ วันนี้' (_target_period) ต่างจาก
+    /api/financials-coverage ที่เช็คแค่ 'มีข้อมูลหรือยัง' (เก่าแค่ไหนก็นับว่ามี) ตัวนี้เช็ค
+    'ข้อมูลที่มีเป็นงวดล่าสุดจริงหรือยัง' — ใช้ตอบคำถาม 'ไตรมาสล่าสุดยังขาดกี่ตัว'
+    ?universe=dr เช็คเฉพาะหุ้นต่างประเทศ (DR/DRx, ไม่มี set/set_qpl เพราะ SET.or.th ไม่มีข้อมูลหุ้นต่างประเทศ)"""
+    if request.args.get("universe") == "dr":
+        symbols = _dr_financials_universe()
+        coverage = financials_store.get_quarter_coverage(
+            BASE_DIR, symbols, sources=("yahoo_q", "finnomena_q"), is_dr=True)
+    else:
+        symbols = _financials_universe()
+        coverage = financials_store.get_quarter_coverage(
+            BASE_DIR, symbols, sources=("set", "set_qpl", "yahoo_q", "finnomena_q"), is_dr=False)
+    return jsonify(coverage)
+
+
+@app.route("/api/financials-quarter-coverage-by-index")
+def financials_quarter_coverage_by_index():
+    """เหมือน /api/financials-quarter-coverage?universe=dr แต่แจกแจงแยกตามดัชนีหลัก
+    (SP500/DOW/NDX/HSI/HSCEI/HSTECH/NIKKEI225) เทียบกับ 'สมาชิกทั้งหมด' ของแต่ละดัชนีจริง
+    (ไม่ใช่แค่ subset ในพอร์ต DR) — แต่ละ source (yahoo_q/finnomena_q) แบ่ง fresh/stale/
+    not_tracked แยกกัน เพราะ yahoo_q มีแค่ตัวในพอร์ต DR เท่านั้น ส่วน finnomena_q ครอบคลุม
+    กว้างกว่านั้น (เช็ค 'FINN:{ex}:' namespace จากปุ่ม 'Mirror ทั้งตลาด' เพิ่มด้วย)
+    ดู docstring _index_group_quarter_coverage"""
+    return jsonify(_index_group_quarter_coverage())
 
 
 def _warmup_fin_dependent_caches():
@@ -5248,23 +5384,35 @@ def _load_mirror_names_us():
 
 
 def _run_us_index_sync(min_age_days=None):
+    """min_age_days: ไม่ใช้แล้ว (เก็บไว้แค่ backward-compat ของ /api/us-index-sync ที่ยังส่ง
+    field นี้มา) — เดิมส่งต่อเป็น sync_all(min_age_days=...) ตรงๆ แต่ sync_all() ไม่มีพารามิเตอร์
+    นี้จริง (บั๊กแฝง ไม่เคยเจอเพราะ 'extra' ว่างแทบทุกรอบหลัง sync ครั้งแรก — TypeError จะเกิดขึ้น
+    เฉพาะตอนดัชนี reconstitute มีตัวใหม่เท่านั้น) แก้เป็น skip_up_to_date=True (เช็คเนื้อหาจริง
+    เทียบ target quarter แทน) ซึ่งพลิกพฤติกรรมจากเดิมด้วย: เดิม sync แค่ตัวที่ 'ยังไม่เคยอยู่ใน
+    mirror pool เลย' (one-shot backfill — ตัวที่เคย sync ไปแล้วครั้งเดียวจะไม่ถูกแตะอีกแม้ข้อมูล
+    เก่าไปแล้ว) ตอนนี้ sync 'สมาชิกทั้งหมดของดัชนี' ทุกครั้งที่กด แต่ skip_up_to_date จะข้ามตัวที่
+    สดอยู่แล้วให้เอง ทำให้กลายเป็น ongoing refresh จริง ไม่ใช่ backfill ครั้งเดียวทิ้ง"""
     try:
         diff, live = us_index_membership.sync_membership(BASE_DIR)
         _us_index_diff_cache.clear()   # ลิสต์เปลี่ยน — ผลเช็คหุ้นใหม่เดิมไม่ตรงแล้ว
         added_n = sum(len(v["new"]) for v in diff.values())
         removed_n = sum(len(v["removed"]) for v in diff.values())
 
-        mirror_us = set(factor_snapshot.get_mirror_symbols(BASE_DIR).get("US", []))
-        extra = sorted({s for lst in live.values() for s in lst} - mirror_us)
+        # ตัดตัวที่อยู่ในพอร์ต DR ที่ curate ไว้แล้วออก — ตัวนั้น sync yahoo_q/yahoo เป็นประจำ
+        # อยู่แล้วผ่าน flow DR ปกติ (ดู _dr_financials_universe) กันสร้างแถวซ้ำซ้อนคนละ symbol
+        # key สำหรับหุ้นตัวเดียวกัน (US: dr_sym เท่ากับ ticker ตรงๆ เทียบง่ายไม่ต้อง normalize)
+        curated_us = {e["sym"] for e in load_dr_universe(BASE_DIR)
+                      if not e.get("etf") and "." not in (e.get("yf") or "")}
+        targets = sorted({s for lst in live.values() for s in lst} - curated_us)
 
         def cb(current, total, msg):
             _update(current=current, total=total,
                     message=f"ดัชนีอัพเดทแล้ว (+{added_n}/-{removed_n}) · {msg}")
 
-        if extra:
-            result = financials_store.sync_all(BASE_DIR, extra, sources=("yahoo_q", "yahoo"),
+        if targets:
+            result = financials_store.sync_all(BASE_DIR, targets, sources=("yahoo_q", "yahoo"),
                                                callback=cb, is_dr=True, market="US",
-                                               min_age_days=min_age_days)
+                                               skip_up_to_date=True)
             _clear_fin_analytics_and_warm()
         else:
             result = {"ok": 0, "fail": 0, "total": 0, "skipped": 0}
@@ -5274,7 +5422,7 @@ def _run_us_index_sync(min_age_days=None):
         local = us_index_membership.load_local(BASE_DIR)
         mirror_names_us = _load_mirror_names_us()
         extra_names = dict(local.get("extra_names") or {})
-        for sym in extra:
+        for sym in targets:
             if sym in mirror_names_us or sym in extra_names:
                 continue
             payload = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=True) \
@@ -5287,7 +5435,7 @@ def _run_us_index_sync(min_age_days=None):
         skipped = result.get("skipped", 0)
         _update(done=True,
                 message=f"เสร็จแล้ว! ดัชนีอัพเดท +{added_n}/-{removed_n} · งบการเงิน {result['ok']}/{result['total']} สำเร็จ"
-                        + (f" · ข้าม {skipped} คู่ (ดึงไปแล้วไม่เกิน {min_age_days} วัน)" if skipped else "")
+                        + (f" · ข้าม {skipped} คู่ (มีงวดล่าสุดอยู่แล้ว)" if skipped else "")
                         + (f" (ล้มเหลว {result['fail']})" if result["fail"] else ""))
     except Exception as e:
         _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
@@ -5364,6 +5512,10 @@ def _load_mirror_names_hk():
 
 
 def _run_hk_index_sync(min_age_days=None):
+    """min_age_days: ไม่ใช้แล้ว ดูเหตุผลใน docstring _run_us_index_sync (bug เดียวกันเป๊ะ —
+    sync_all() ไม่มีพารามิเตอร์นี้จริง) แก้เป็น skip_up_to_date=True แทน + เปลี่ยน scope จาก
+    'เฉพาะตัวใหม่ที่ยังไม่เคยอยู่ใน mirror pool' เป็น 'สมาชิกทั้งหมดของดัชนี' ทุกครั้งที่กด
+    (skip_up_to_date ข้ามตัวที่สดอยู่แล้วให้เอง กลายเป็น ongoing refresh ไม่ใช่ backfill ครั้งเดียว)"""
     try:
         def _sync_cb(current, total, msg):
             _update(current=current, total=total, message=msg)
@@ -5372,27 +5524,27 @@ def _run_hk_index_sync(min_age_days=None):
         added_n = sum(len(v["new"]) for v in diff.values())
         removed_n = sum(len(v["removed"]) for v in diff.values())
 
-        # mirror เก็บชื่อตาม Finnomena (เลขล้วน มีทั้งเติม 0 นำหน้าและไม่เติม เช่น "0700"/"799")
-        # ส่วน membership เป็น "0700.HK" — ต้อง normalize ก่อนเทียบ ไม่งั้น extra = ทั้งดัชนี
-        # ทุกครั้ง (ยิง Yahoo ซ้ำหมด) และ key ที่เก็บ ("0700.HK") จะไม่ตรงกับที่หน้างบ/
-        # โมดัลกราฟ query ("0700" — ดู _loadCmFin ฝั่ง JS ที่ตัด .HK ก่อน fetch)
-        def _hk_code(s):
-            s = s.upper()
-            if s.endswith(".HK"):
-                s = s[:-3]
-            return s.lstrip("0") or "0"
-        mirror_hk = {_hk_code(s) for s in factor_snapshot.get_mirror_symbols(BASE_DIR).get("HK", [])}
+        # ตัวในพอร์ต DR ใช้ mnemonic เป็น sym ('AIA'/'TEL') ไม่ใช่ ticker ตัวเลข — ต้อง normalize
+        # ticker ดิบจาก field 'yf' (เลข 4 หลักเติม 0 นำหน้า) มาเทียบกับ membership ที่ format
+        # เดียวกันอยู่แล้ว ('0700.HK') กันสร้างแถวซ้ำซ้อนคนละ namespace key สำหรับหุ้นตัวเดียวกัน
+        def _hk_norm4(code):
+            code = (code or "").upper().strip()
+            if code.endswith(".HK"):
+                code = code[:-3]
+            return code.zfill(4) if code.isdigit() else code
+        curated_hk = {_hk_norm4(e.get("yf")) for e in load_dr_universe(BASE_DIR)
+                      if not e.get("etf") and (e.get("yf") or "").upper().endswith(".HK")}
         members = {s for k in ("HSI", "HSCEI", "HSTECH") for s in live.get(k, [])}
-        extra = sorted(s[:-3] for s in members if _hk_code(s) not in mirror_hk)
+        targets = sorted({s[:-3] for s in members} - curated_hk)
 
         def cb(current, total, msg):
             _update(current=current, total=total,
                     message=f"ดัชนีอัพเดทแล้ว (+{added_n}/-{removed_n}) · {msg}")
 
-        if extra:
-            result = financials_store.sync_all(BASE_DIR, extra, sources=("yahoo_q", "yahoo"),
+        if targets:
+            result = financials_store.sync_all(BASE_DIR, targets, sources=("yahoo_q", "yahoo"),
                                                callback=cb, is_dr=True, market="HK",
-                                               min_age_days=min_age_days)
+                                               skip_up_to_date=True)
             _clear_fin_analytics_and_warm()
         else:
             result = {"ok": 0, "fail": 0, "total": 0, "skipped": 0}
@@ -5402,7 +5554,7 @@ def _run_hk_index_sync(min_age_days=None):
         local = hk_index_membership.load_local(BASE_DIR)
         mirror_names_hk = _load_mirror_names_hk()
         extra_names = dict(local.get("extra_names") or {})
-        for sym in extra:
+        for sym in targets:
             if sym in mirror_names_hk or sym in extra_names:
                 continue
             payload = financials_store.get(BASE_DIR, sym, "yahoo_q", is_dr=True) \
@@ -5415,7 +5567,7 @@ def _run_hk_index_sync(min_age_days=None):
         skipped = result.get("skipped", 0)
         _update(done=True,
                 message=f"เสร็จแล้ว! ดัชนีอัพเดท +{added_n}/-{removed_n} · งบการเงิน {result['ok']}/{result['total']} สำเร็จ"
-                        + (f" · ข้าม {skipped} คู่ (ดึงไปแล้วไม่เกิน {min_age_days} วัน)" if skipped else "")
+                        + (f" · ข้าม {skipped} คู่ (มีงวดล่าสุดอยู่แล้ว)" if skipped else "")
                         + (f" (ล้มเหลว {result['fail']})" if result["fail"] else ""))
     except Exception as e:
         _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
@@ -5458,11 +5610,14 @@ def jp_index_check_updates():
 def start_jp_index_sync():
     """ปุ่ม "ดึงเฉพาะที่ขาด/เก่า (local)" ของดัชนี JP — เช็ค ja.wikipedia แล้วอัพเดทไฟล์ local
     ให้ตรง จากนั้นดึงงบการเงิน (ผ่าน Yahoo Finance) ให้สมาชิก Nikkei 225 ทุกตัวที่ยังไม่มีข้อมูล
-    (ใช้ `sync_mirror_yahoo_index` — skip-if-exists, ไม่มี min_age_days re-fetch แบบ
-    `_run_hk_index_sync`/`sync_all` เพราะ scope เล็กแค่ 225 ตัว ไม่ต้องการ incremental refresh
-    ซับซ้อน) แล้ว rebuild factor_snapshot_mirror ให้ Tearsheet/Peer Compare/F-Score-Z-Score
-    เห็นข้อมูล — **ไม่ใช้ build_mirror_snapshot() ปกติ** (ผูกกับ finnomena_q ที่ไม่มีข้อมูล JP
-    เลย) ใช้ build_mirror_snapshot_yahoo_only() แทน"""
+    (ใช้ `sync_mirror_yahoo_index` — skip-if-exists) แล้ว rebuild factor_snapshot_mirror ให้
+    Tearsheet/Peer Compare/F-Score-Z-Score เห็นข้อมูล — **ไม่ใช้ build_mirror_snapshot() ปกติ**
+    (ผูกกับ finnomena_q ที่ไม่มีข้อมูล JP เลย) ใช้ build_mirror_snapshot_yahoo_only() แทน
+
+    2026-08-20: เพิ่มขั้น sync yahoo_q (รายไตรมาส) ต่อท้าย — เดิมฟังก์ชันนี้ดึงให้แค่งบรายปี
+    ('yahoo') เท่านั้น ทำให้สมาชิก Nikkei 225 นอกพอร์ต DR ไม่มีงบรายไตรมาสเลยสักตัว (ต่างจาก
+    US/HK ที่มี sync_all(sources=('yahoo_q','yahoo')) ให้ตัวนอกพอร์ตอยู่แล้วบางส่วน) ใช้
+    skip_up_to_date=True เหมือน US/HK ที่เพิ่งแก้ (ongoing refresh ไม่ใช่ backfill ครั้งเดียว)"""
     with _lock:
         if _state["running"]:
             return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
@@ -5494,6 +5649,24 @@ def _run_jp_index_sync():
                     message=f"ดัชนีอัพเดทแล้ว (+{added_n}/-{removed_n}) · {msg}")
 
         result = financials_store.sync_mirror_yahoo_index(BASE_DIR, {"JP": tickers}, callback=cb)
+
+        # ตัวในพอร์ต DR ใช้ mnemonic เป็น sym ('TEL'/'FANUC') ไม่ใช่ ticker ตัวเลข — กันสร้างแถว
+        # ซ้ำซ้อนคนละ namespace key สำหรับหุ้นตัวเดียวกัน (เหมือน US/HK ด้านบน)
+        curated_jp = {(e.get("yf") or "")[:-2].upper() for e in load_dr_universe(BASE_DIR)
+                      if not e.get("etf") and (e.get("yf") or "").upper().endswith(".T")}
+        q_targets = sorted(set(tickers) - curated_jp)
+
+        def cb_q(current, total, msg):
+            _update(current=current, total=total,
+                    message=f"ดัชนีอัพเดทแล้ว (+{added_n}/-{removed_n}) · งบรายไตรมาส {msg}")
+
+        if q_targets:
+            result_q = financials_store.sync_all(BASE_DIR, q_targets, sources=("yahoo_q",),
+                                                  callback=cb_q, is_dr=True, market="JP",
+                                                  skip_up_to_date=True)
+        else:
+            result_q = {"ok": 0, "fail": 0, "total": 0, "skipped": 0}
+
         _update(message="กำลัง rebuild factor snapshot JP...")
         n_mirror = factor_snapshot.build_mirror_snapshot_yahoo_only(
             BASE_DIR, "JP", tickers, price_by_ticker=price_by_ticker)
@@ -5501,8 +5674,10 @@ def _run_jp_index_sync():
 
         _update(done=True,
                 message=f"เสร็จแล้ว! ดัชนี Nikkei 225 อัพเดท +{added_n}/-{removed_n} · "
-                        f"งบการเงิน {result['ok']} ตัว (ข้าม {result['skipped']} ที่มีอยู่แล้ว"
+                        f"งบรายปี {result['ok']} ตัว (ข้าม {result['skipped']} ที่มีอยู่แล้ว"
                         + (f", ล้มเหลว {result['fail']}" if result["fail"] else "") + f") · "
+                        f"งบรายไตรมาส {result_q['ok']}/{result_q['total']} สำเร็จ"
+                        + (f" (ล้มเหลว {result_q['fail']})" if result_q["fail"] else "") + f" · "
                         f"factor snapshot: {n_mirror} ตัว")
     except Exception as e:
         _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
@@ -7047,6 +7222,54 @@ def _compute_data_health():
     except Exception as e:
         items.append(_dh_error_item("financials_coverage_by_source",
                                      "งบการเงิน — แจกแจงตามแหล่ง (financials.db)", "งบการเงิน", str(e)[:160]))
+
+    # เช็คว่าไตรมาสล่าสุดที่ 'ควรจะมีข้อมูลแล้ว' (_target_period) ยังขาดกี่ตัวต่อแหล่ง — ต่างจาก
+    # item ด้านบนที่นับว่า 'มีข้อมูล' แม้จะเก่าแค่ไหนก็ตาม (เช่น sync ไปตั้งแต่ Q4 ปีก่อนก็นับ
+    # covered) รายการนี้ตอบคำถาม 'ตัวไหนยังไม่ได้ Q ล่าสุดจริง' ตามคำขอ user 2026-08-20
+    try:
+        _finq_cov = financials_store.get_quarter_coverage(
+            BASE_DIR, _financials_universe(),
+            sources=("set", "set_qpl", "yahoo_q", "finnomena_q"))
+        _finq_labels = {"set": "SET company-highlight", "set_qpl": "SET P&L รายไตรมาส",
+                         "yahoo_q": "Yahoo Finance", "finnomena_q": "Finnomena"}
+        _finq_rows = []
+        _finq_worst_pct = 100.0
+        _finq_missing_total = 0
+        for _k in ("set", "set_qpl", "yahoo_q", "finnomena_q"):
+            _c = _finq_cov.get(_k, {"fresh": 0, "total": 0, "stale": 0})
+            _total = _c["total"]
+            _pct = (_c["fresh"] / _total * 100) if _total else 0.0
+            _finq_worst_pct = min(_finq_worst_pct, _pct)
+            _finq_missing_total += _c["stale"]
+            _color = "var(--green)" if _pct >= 99.5 else ("var(--yellow)" if _pct >= 90 else "var(--red)")
+            _finq_rows.append(
+                f'<tr><td style="padding:2px 10px 2px 0">{_finq_labels[_k]}</td>'
+                f'<td style="text-align:right;color:{_color};font-weight:600">'
+                f'{_c["fresh"]}/{_total} ({_pct:.1f}%)</td>'
+                f'<td style="padding-left:10px;color:var(--text2)">เป้าหมาย {_c["target"]}</td></tr>')
+        # threshold หลวมกว่า item 'มีข้อมูล' ด้านบนมาก (99.5/90) เพราะบริษัทมีสิทธิ์ยื่นงบช้าได้
+        # ถึง 45-60 วันหลังปิดไตรมาส (_target_period ไม่รอ deadline ถือว่า 'ควรมีแล้ว' ทันทีที่
+        # ไตรมาสปฏิทินปิด) — % ต่ำตอนไตรมาสเพิ่งปิดใหม่ๆ เป็นเรื่องปกติ ไม่ใช่ sync ล้มเหลว
+        _finq_status = ("ok" if _finq_worst_pct >= 95
+                         else "warn" if _finq_worst_pct >= 50 else "red")
+        items.append({
+            "key": "financials_quarter_freshness",
+            "label": "งบการเงิน — เช็คงวดล่าสุด (financials.db)",
+            "category": "งบการเงิน",
+            "last_at": None, "age_hours": None,
+            "status": _finq_status,
+            "note": (f'<table style="border-collapse:collapse">{"".join(_finq_rows)}</table>'
+                     f'<div style="margin-top:6px;color:var(--text2);font-size:11px">'
+                     f'เป้าหมาย = ไตรมาสปฏิทินล่าสุดที่ปิดไปแล้ว (ไม่รอ deadline ยื่นงบ 45-60 วัน — '
+                     f'% ต่ำตอนไตรมาสเพิ่งปิดใหม่ๆ เป็นเรื่องปกติ ไม่ใช่ sync ล้มเหลว)</div>'
+                     + (f'<div style="margin-top:4px">ยังไม่ได้งวดล่าสุด {_finq_missing_total} คู่ (หุ้น×แหล่ง) — '
+                        'กดปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่าง (ใช้ skip_up_to_date '
+                        'ยิงเฉพาะที่ขาดอัตโนมัติอยู่แล้ว) หรือดูรายละเอียดที่ปุ่ม '
+                        '"🗓️ เช็คงวดล่าสุด" หน้า "งบการเงิน"</div>' if _finq_missing_total else '')),
+        })
+    except Exception as e:
+        items.append(_dh_error_item("financials_quarter_freshness",
+                                     "งบการเงิน — เช็คงวดล่าสุด (financials.db)", "งบการเงิน", str(e)[:160]))
 
     # coverage ของ mirror งบดัชนีหลัก US/HK/JP (source 'yahoo' namespace FINN:/DR:) — แยก
     # "ไม่เคย sync จริง" ออกจาก "เก่าเกิน 1 ปี" ให้เห็นในแอปเลย ไม่ต้องไล่เช็คมือแบบ 2026-08-15

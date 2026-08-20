@@ -425,6 +425,31 @@ def get_latest_period_map(base_dir, is_dr=False, sources=None):
     return out
 
 
+def get_latest_period_map_raw(base_dir, sources):
+    """เหมือน get_latest_period_map แต่คืนคีย์เป็น symbol เต็มตามที่เก็บจริงใน DB (ไม่ตัด
+    prefix 'DR:'/'FINN:{ex}:' ออก ไม่กรอง namespace ไหนทิ้งเลย) — ใช้เมื่อ caller ต้องเทียบ
+    ข้าม namespace เอง เช่นเช็คสมาชิกดัชนีหลัก US/HK/JP ที่บางตัวอยู่ในพอร์ต DR ('DR:{sym}')
+    บางตัวมีแค่ใน mirror ทั้งตลาด ('FINN:{ex}:{code}' จากปุ่ม 'Mirror ทั้งตลาด') แยกกันคนละที่"""
+    if not db_exists(base_dir):
+        return {}
+    con = _connect(base_dir)
+    try:
+        qmarks = ",".join("?" * len(sources))
+        rows = con.execute(
+            f"SELECT symbol, source, payload FROM financials WHERE source IN ({qmarks})",
+            list(sources)).fetchall()
+    finally:
+        con.close()
+    out = {}
+    for sym, src, payload_raw in rows:
+        try:
+            payload = json.loads(payload_raw)
+        except Exception:
+            payload = None
+        out[(sym, src)] = _payload_latest_period(src, payload)
+    return out
+
+
 def get_coverage(base_dir, symbols, sources=("yahoo", "set"), is_dr=False):
     """เทียบ universe ที่ควรมี (symbols) กับที่มีจริงใน DB ต่อ source
     คืน {source: {"covered": n, "total": n, "missing": [...]}}"""
@@ -436,6 +461,41 @@ def get_coverage(base_dir, symbols, sources=("yahoo", "set"), is_dr=False):
         out[src] = {
             "covered": len(symbols) - len(missing),
             "total": len(symbols),
+            "missing": missing,
+        }
+    return out
+
+
+def get_quarter_coverage(base_dir, symbols, sources=("set", "set_qpl", "yahoo_q", "finnomena_q"),
+                         is_dr=False, today=None):
+    """เทียบ universe กับ 'ไตรมาสล่าสุดที่ควรจะมีข้อมูลแล้ว' (_target_period) ต่อ source —
+    ต่างจาก get_coverage() ที่เช็คแค่ 'มีข้อมูลหรือยัง' (แม้จะเก่าแค่ไหนก็นับว่า covered)
+    ตัวนี้เช็ค 'ข้อมูลที่มีเป็นงวดล่าสุดจริงหรือยัง' ใช้คู่กับปุ่ม 'ดึงเฉพาะที่ขาด/เก่า'
+    (skip_up_to_date ใน sync_all ใช้ logic เดียวกันเป๊ะ — ดูคอมเมนต์ _target_period/
+    _payload_latest_period ด้านบน)
+
+    คืน {source: {"target": "YYYY-MM-DD", "fresh": n, "stale": n, "total": n,
+                  "missing": [{"sym":..., "have": "YYYY-MM-DD"|None}, ...]}}
+    symbol ที่ finnomena_q ไม่รองรับ (ETF/ตลาดนอก TH-US-HK) ถูกตัดออกจาก total ของ
+    source นั้นไปเลย ไม่นับเป็น stale (เหมือน sync_all ตัดออกจาก task ตั้งแต่ต้น)"""
+    symbols = sorted({s.upper().strip().replace(".BK", "") for s in symbols})
+    latest_map = get_latest_period_map(base_dir, is_dr=is_dr, sources=sources)
+    out = {}
+    for src in sources:
+        target = _target_period(src, today)
+        syms = symbols
+        if src == "finnomena_q":
+            syms = [s for s in symbols if finnomena_supported(s, is_dr=is_dr)]
+        missing = []
+        for s in syms:
+            have = latest_map.get((s, src))
+            if have is None or have < target:
+                missing.append({"sym": s, "have": have.isoformat() if have else None})
+        out[src] = {
+            "target": target.isoformat(),
+            "total": len(syms),
+            "fresh": len(syms) - len(missing),
+            "stale": len(missing),
             "missing": missing,
         }
     return out

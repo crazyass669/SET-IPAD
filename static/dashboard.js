@@ -5056,12 +5056,12 @@ function _hedgeRenderDetail(html) {
   d.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function startHedgeRefresh() {
+function startHedgeRefresh(btnId = 'hedge-refresh-btn') {
   if (!confirm('ขูดการถือครองทุกกอง (~84 กอง) จาก Dataroma ใหม่?\n\nใช้เวลา ~2–4 นาที · ข้อมูล 13F เปลี่ยนแค่รายไตรมาส')) return;
   _hedgeLoaded = false;
   _hedgeData = null;                 // บังคับให้ loadHedgePage ยิงโหลดใหม่ (ไม่งั้นเข้า early-return)
   _hedgeGlobalStatsCache = null;
-  _startJob('/api/hedge-refresh', 'hedge-refresh-btn', '⟳ อัพเดท Hedge Holdings', null, () => {
+  _startJob('/api/hedge-refresh', btnId, '⟳ อัพเดท Hedge Holdings', null, () => {
     loadHedgePage();
   });
 }
@@ -6404,6 +6404,129 @@ function retryFinMissing(symbols) {
       banner.innerHTML = `<b>ผลรอบล่าสุด</b> (พยายามดึง ${beforeCount} หุ้น): ${s.message}<br>
         <span style="color:var(--text2)">ถ้าจำนวน "ขาด" ด้านล่างไม่ลดลงเลย มักแปลว่าหุ้นกลุ่มนี้ไม่มีข้อมูลจริงจาก Yahoo/SET.or.th
         (เช่น หยุดเทรดนาน/อยู่ระหว่างฟื้นฟูกิจการ) ไม่ใช่ระบบไม่บันทึกผล — ลองซ้ำได้แต่ไม่น่าจะเปลี่ยนถ้าลองไปแล้วหลายรอบ</span>`;
+      box.insertBefore(banner, box.firstElementChild);
+    }
+  });
+}
+
+async function checkFinQuarterCoverage(resultId = 'fin-quarter-coverage-result') {
+  const box = document.getElementById(resultId);
+  box.style.display = 'block';
+  box.innerHTML = '<div class="empty" style="padding:16px">กำลังตรวจสอบ...</div>';
+  try {
+    const r = await fetch('/api/financials-quarter-coverage');
+    const d = await r.json();
+    _renderFinQuarterCoverage(d, resultId);
+  } catch (e) {
+    box.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ ตรวจสอบไม่สำเร็จ: ${e.message}</div>`;
+  }
+}
+
+function _renderFinQuarterCoverage(d, resultId = 'fin-quarter-coverage-result') {
+  const box = document.getElementById(resultId);
+  const srcLabels = { set: 'SET company-highlight', set_qpl: 'SET P&L รายไตรมาส',
+                       yahoo_q: 'Yahoo Finance', finnomena_q: 'Finnomena' };
+  const keys = Object.keys(srcLabels).filter(k => d[k]);
+  const allMissing = [...new Set(keys.flatMap(k => (d[k].missing || []).map(m => m.sym)))];
+
+  function _sourceRow(key) {
+    const s = d[key] || { fresh: 0, total: 0, stale: 0, missing: [], target: '' };
+    const pct = s.total ? Math.round(s.fresh / s.total * 100) : 0;
+    const color = pct >= 95 ? 'var(--green)' : pct >= 50 ? 'var(--yellow)' : 'var(--red)';
+    const names = s.missing.slice(0, 30).map(m => m.sym);
+    const preview = names.join(', ') + (s.missing.length > 30 ? ` ... (+${s.missing.length - 30} ตัว)` : '');
+    return `
+      <div style="margin-bottom:10px">
+        <div style="font-size:13px;font-weight:600">${srcLabels[key]}: <span style="color:${color}">${s.fresh}/${s.total}</span> (${pct}%)
+          <span style="font-size:11px;color:var(--text2);font-weight:400"> — เป้าหมายงวด ${s.target}</span></div>
+        ${s.missing.length ? `<div style="font-size:11px;color:var(--text2);margin-top:3px;word-break:break-all">ยังไม่ได้งวดล่าสุด: ${preview}</div>` : ''}
+      </div>`;
+  }
+
+  box.innerHTML = `
+  <div class="card" style="padding:14px 16px">
+    <div style="font-size:13px;font-weight:700;margin-bottom:4px">🗓️ ผลเช็คงวดล่าสุด</div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:10px">
+      เทียบกับไตรมาสปฏิทินล่าสุดที่ปิดไปแล้ว (ไม่รอ deadline ยื่นงบ 45-60 วัน) — % ต่ำตอนไตรมาสเพิ่งปิดใหม่ๆ เป็นเรื่องปกติ ไม่ใช่ sync ล้มเหลว
+    </div>
+    ${keys.map(_sourceRow).join('')}
+    ${allMissing.length ? `
+      <div style="font-size:11px;color:var(--text2);margin:10px 0">
+        รวม ${allMissing.length} หุ้นที่ยังขาดอย่างน้อย 1 แหล่ง — บางตัวอาจเป็นเพราะบริษัทยังไม่ยื่นงบจริง (ลองซ้ำหลังผ่าน deadline แล้วจะได้เอง)
+      </div>
+      <button class="filter-btn active" style="font-size:12px" onclick='retryFinQuarterMissing(${JSON.stringify(allMissing)}, "${resultId}")'>🔄 ลองดึงเฉพาะที่ขาด (${allMissing.length} หุ้น)</button>
+    ` : `<div style="font-size:12px;color:var(--green);margin-top:6px">✓ ได้งวดล่าสุดครบทุกตัวแล้ว</div>`}
+    <details style="margin-top:12px" ontoggle="if(this.open) _loadFinQuarterCoverageByIndex('${resultId}')">
+      <summary style="cursor:pointer;font-size:12px;color:var(--text2)">📇 แจกแจงตามดัชนีหลัก US/HK/JP (S&amp;P500/Dow/Nasdaq100/HSI/HSCEI/HSTECH/Nikkei225) — คลิกเพื่อดู</summary>
+      <div id="${resultId}-byindex" style="margin-top:8px;font-size:11px;color:var(--text2)">กำลังโหลด...</div>
+    </details>
+  </div>`;
+}
+
+// เฉพาะส่วนที่ underlying อยู่ในพอร์ต DR (SET มี DR ให้ซื้อขายจริง) เท่านั้นที่ระบบดึงงบ
+// รายไตรมาส (yahoo_q/finnomena_q) ให้ — สมาชิกดัชนีที่เหลือ (ส่วนใหญ่) ปุ่ม US/HK/JP Index
+// Sync ดึงให้แค่งบรายปี ไม่เคยตั้งใจ sync รายไตรมาสให้เลย ดู _dr_index_group_symbols (app.py)
+async function _loadFinQuarterCoverageByIndex(resultId) {
+  const box = document.getElementById(`${resultId}-byindex`);
+  if (!box || box.dataset.loaded) return;
+  try {
+    const r = await fetch('/api/financials-quarter-coverage-by-index');
+    const d = await r.json();
+    box.dataset.loaded = '1';
+    const groupLabels = { SP500: 'S&P 500', DOW: 'Dow Jones', NDX: 'Nasdaq 100',
+                           HSI: 'HSI', HSCEI: 'HSCEI', HSTECH: 'HSTECH', NIKKEI225: 'Nikkei 225' };
+    const emptySrc = { fresh: 0, stale: 0, not_tracked: 0, total: 0 };
+    const cell = s => {
+      s = s || emptySrc;
+      const tracked = s.fresh + s.stale;
+      if (!tracked) return '<span style="color:var(--text2)">ไม่มีการติดตาม</span>';
+      const pct = Math.round(s.fresh / tracked * 100);
+      const color = pct >= 95 ? 'var(--green)' : pct >= 50 ? 'var(--yellow)' : 'var(--red)';
+      const nt = s.not_tracked ? `<span style="color:var(--text2)"> (+${s.not_tracked} ไม่ติดตาม)</span>` : '';
+      return `<span style="color:${color}">${s.fresh}/${tracked}</span> (${pct}%)${nt}`;
+    };
+    const rows = Object.keys(groupLabels).map(gk => {
+      const g = d[gk] || { index_total: 0, yahoo_q: emptySrc, finnomena_q: emptySrc };
+      return `<tr>
+        <td style="padding:2px 12px 2px 0">${groupLabels[gk]}</td>
+        <td style="padding:2px 12px 2px 0;color:var(--text2)">${g.index_total} ตัว</td>
+        <td style="padding:2px 12px 2px 0">${cell(g.yahoo_q)}</td>
+        <td style="padding:2px 0">${cell(g.finnomena_q)}</td>
+      </tr>`;
+    }).join('');
+    box.innerHTML = `
+      <div style="margin-bottom:6px">% คิดจากเฉพาะตัวที่ "มีการติดตาม" จริง (ไม่นับ "ไม่ติดตาม" เป็นตัวหาร) —
+        Yahoo รายไตรมาสมีแค่ตัวที่อยู่ในพอร์ต DR ของ SET เท่านั้น (ที่เหลือปุ่ม US/HK/JP Index Sync
+        ดึงให้แค่งบรายปี) ส่วน Finnomena ครอบคลุมกว้างกว่านั้นถ้าเคยกด "📥 Mirror ทั้งตลาด" ไปแล้ว
+        (ไม่มีข้อมูลหุ้นญี่ปุ่นเลยนอกพอร์ต DR)</div>
+      <table style="border-collapse:collapse">
+        <tr style="color:var(--text)"><td style="padding:2px 12px 2px 0"><b>ดัชนี</b></td>
+          <td style="padding:2px 12px 2px 0"><b>สมาชิกทั้งหมด</b></td>
+          <td style="padding:2px 12px 2px 0"><b>Yahoo</b></td><td><b>Finnomena</b></td></tr>
+        ${rows}
+      </table>`;
+  } catch (e) {
+    box.innerHTML = `<span style="color:var(--red)">โหลดไม่สำเร็จ: ${e.message}</span>`;
+  }
+}
+
+function retryFinQuarterMissing(symbols, resultId = 'fin-quarter-coverage-result') {
+  const beforeCount = symbols.length;
+  // 'fin-sync-btn' (หน้างบการเงิน) มีอยู่ใน DOM เสมอไม่ว่ากำลังดูหน้าไหนอยู่ (ทุกหน้าเป็น
+  // <div class="page"> พี่น้องกันในเอกสารเดียว ไม่ถูก unmount) ใช้ปุ่มเดียวกันได้แม้เรียกจาก
+  // หน้า Data Health — overlay progress ก็เป็น global element ไม่ผูกกับหน้าที่ active อยู่แล้ว
+  _startJob('/api/financials/sync-all', 'fin-sync-btn', '🔄 อัพเดทงบการเงินทั้งหมด (local)', { symbols, skip_up_to_date: true }, async (s) => {
+    fetch('/api/financials-meta').then(r => r.json()).then(d => {
+      const note = document.getElementById('fin-meta-note');
+      if (note && d.last_synced_at) note.textContent = `sync ล่าสุด: ${d.last_synced_at} · ${d.symbol_count} หุ้น`;
+    }).catch(() => {});
+    await checkFinQuarterCoverage(resultId);
+    const box = document.getElementById(resultId);
+    if (box && box.firstElementChild && s?.message) {
+      const banner = document.createElement('div');
+      banner.style.cssText = 'margin-bottom:10px;padding:10px 12px;border-radius:8px;background:#1f6feb14;border:1px solid #1f6feb55;font-size:12px;line-height:1.6';
+      banner.innerHTML = `<b>ผลรอบล่าสุด</b> (พยายามดึง ${beforeCount} หุ้น): ${s.message}<br>
+        <span style="color:var(--text2)">ถ้าจำนวนที่ขาดยังไม่ลดลงเลย มักแปลว่าบริษัทกลุ่มนี้ยังไม่ยื่นงบไตรมาสล่าสุดจริง (ยังไม่ถึง/เพิ่งพ้น deadline) ไม่ใช่ระบบดึงไม่สำเร็จ</span>`;
       box.insertBefore(banner, box.firstElementChild);
     }
   });
@@ -13612,16 +13735,16 @@ function _patchLineChart(canvasId, series, liveVal, isPE) {
   setupValHover(canvasId, stats.thresholds, stats.avg, isPE, stats.std);
 }
 
-function startDRDescriptionSync() {
-  _startJob('/api/dr-description-sync', 'dr-desc-sync-btn', '📖 ดึงคำอธิบายบริษัท DR (local)', null, () => {
+function startDRDescriptionSync(btnId = 'dr-desc-sync-btn') {
+  _startJob('/api/dr-description-sync', btnId, '📖 ดึงคำอธิบายบริษัท DR (local)', null, () => {
     _drDescData = null;   // บังคับโหลดใหม่รอบถัดไปที่เปิด modal
   });
 }
 
 // ครอบคลุมหุ้นสมาชิกดัชนีหลัก US (S&P500/Dow/Nasdaq100) + HK (HSI/HSCEI/HSTECH) +
 // JP (Nikkei225) ทั้งชุด — ต่างจาก startDRDescriptionSync ที่ครอบคลุมแค่ DR universe 318 ตัว
-function startDRDescriptionSyncIndex() {
-  _startJob('/api/dr-description-sync-index', 'dr-desc-sync-index-btn', '📖 ดึงคำอธิบายบริษัท Nikkei/HSI/S&P500 ฯลฯ (local)', null, () => {
+function startDRDescriptionSyncIndex(btnId = 'dr-desc-sync-index-btn') {
+  _startJob('/api/dr-description-sync-index', btnId, '📖 ดึงคำอธิบายบริษัท Nikkei/HSI/S&P500 ฯลฯ (local)', null, () => {
     _drDescData = null;   // บังคับโหลดใหม่รอบถัดไปที่เปิด modal
   });
 }
@@ -14995,8 +15118,8 @@ async function checkHKIndexUpdates() {
   }
 }
 
-function startHKIndexSync() {
-  _startJob('/api/hk-index-sync', 'hk-idx-sync-btn', '🔄 ดึงเฉพาะที่ขาด/เก่า (local)',
+function startHKIndexSync(btnId = 'hk-idx-sync-btn') {
+  _startJob('/api/hk-index-sync', btnId, '🔄 ดึงเฉพาะที่ขาด/เก่า (local)',
     { min_age_days: 7 }, () => {
       document.getElementById('hk-idx-diff-note').textContent = '';
       document.getElementById('hk-idx-diff-result').style.display = 'none';
@@ -15037,8 +15160,8 @@ async function checkJPIndexUpdates() {
   }
 }
 
-function startJPIndexSync() {
-  _startJob('/api/jp-index-sync', 'jp-idx-sync-btn', '🔄 ดึงเฉพาะที่ขาด/เก่า (local)',
+function startJPIndexSync(btnId = 'jp-idx-sync-btn') {
+  _startJob('/api/jp-index-sync', btnId, '🔄 ดึงเฉพาะที่ขาด/เก่า (local)',
     null, () => {
       document.getElementById('jp-idx-diff-note').textContent = '';
       document.getElementById('jp-idx-diff-result').style.display = 'none';
@@ -15049,8 +15172,8 @@ function startJPIndexSync() {
     });
 }
 
-function startUSIndexSync() {
-  _startJob('/api/us-index-sync', 'us-idx-sync-btn', '🔄 ดึงเฉพาะที่ขาด/เก่า (local)',
+function startUSIndexSync(btnId = 'us-idx-sync-btn') {
+  _startJob('/api/us-index-sync', btnId, '🔄 ดึงเฉพาะที่ขาด/เก่า (local)',
     { min_age_days: 7 }, () => {
       document.getElementById('us-idx-diff-note').textContent = '';
       document.getElementById('us-idx-diff-result').style.display = 'none';
@@ -21629,6 +21752,7 @@ const DH_SOURCE_MAP = {
                           fn: 'startFinancialsSync', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด', gotoPage: 'financials',
                           fn2: 'startDRFinancialsSyncIncremental', fnLabel2: '🔄 ดึงงบ DR ที่ขาด/เก่า', gotoPage2: 'dr', gotoLabel2: 'ไปหน้า DR/DRx' },
   financials_coverage_by_source: { text: 'ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างในหน้านี้ (sync ครบ 4 แหล่งรวม set_qpl)', fn: 'startFinancialsUpdateAll', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด' },
+  financials_quarter_freshness: { text: 'ปุ่ม "🗓️ เช็คงวดล่าสุด" หน้า งบการเงิน (ดูรายชื่อ+ลองดึงเฉพาะที่ขาด) หรือปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างในหน้านี้', fn: 'startFinancialsUpdateAll', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด', gotoPage: 'financials' },
   mirror_index_coverage: { text: 'ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างในหน้านี้ (sync งบดัชนีหลัก US/HK/JP ผ่าน Yahoo ให้ตัวที่ยังไม่เคยมี — ตัวที่เก่าเกิน 1 ปีไม่ retry อัตโนมัติ ต้องเปิด Tearsheet ของตัวนั้นแล้วกด refresh เอง)', fn: 'startFinancialsUpdateAll', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด' },
   mirror:               { text: 'ปุ่ม "🌐 Sync Mirror US/HK เต็ม" ด้านบนในหน้านี้ (หรือ python mirror_finnomena.py force)', fn: 'startMirrorYahooIndexSync', fnLabel: '🌐 Sync Mirror US/HK เต็ม' },
   market_stats:         { text: 'หน้า Valuation — ปุ่ม "⟳ อัพเดทข้อมูล P/E & P/BV" (ต้องโหลด Table_PE.xls/Table_PBV.xls มาวางทับก่อน)', fn: 'refreshMarketStats', fnLabel: '⟳ อัพเดท P/E & P/BV', gotoPage: 'valuation' },
