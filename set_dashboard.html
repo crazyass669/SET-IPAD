@@ -4205,6 +4205,26 @@
         </div>
       </div>
       <div class="btn-wrap">
+        <button class="refresh-btn" id="fin-sync-dh-btn" onclick="startFinancialsSync('fin-sync-dh-btn')">🔄 อัพเดทงบการเงินทั้งหมด (local)</button>
+        <div id="fin-sync-dh-status" style="font-size:11px;color:var(--text2);margin:4px 0"></div>
+        <div class="btn-note">
+          <b>🔄 sync เฉพาะหุ้นไทย — เร็วกว่าปุ่มบนสุด แต่แคบกว่า</b>
+          <span class="badge badge-blue" style="margin-left:4px">Yahoo</span>
+          <span class="badge badge-green" style="margin-left:2px">SET</span>
+          <span class="badge badge-green" style="margin-left:2px">SET P&amp;L รายไตรมาส</span>
+          <span class="badge badge-yellow" style="margin-left:2px">Finnomena</span><br>
+          ปุ่มเดียวกับที่อยู่หน้า "งบการเงิน" (ด้านบนตาราง) — เอามาไว้ตรงนี้ด้วย กันต้องสลับหน้าไปมาตอน sync
+          <b>เฉพาะหุ้นไทย</b> 5 แหล่งเดียวกับปุ่มบนสุด — <b>ไม่รวม</b> DR / ดัชนีหลัก US-HK-JP / หุ้น mirror
+          ที่ค้นบ่อย (ปุ่มบนสุดครอบคลุมกว้างกว่า)<br>
+          ⚠️ <b>ซ้ำซ้อนกับส่วนหุ้นไทยของปุ่มบนสุด</b> — ถ้าจะกดครบทุกอย่างอยู่แล้วกดปุ่มบนสุดพอ ไม่ต้องกดปุ่มนี้ซ้ำ
+          ปุ่มนี้มีไว้เผื่ออยากรีเฟรชแค่หุ้นไทยไวๆ โดยไม่รอ DR/ดัชนีหลัก — กดซ้ำได้เรื่อยๆ ไม่เสียของ
+          (<code>skip_up_to_date</code> ข้ามคู่หุ้น×แหล่งที่สดอยู่แล้วให้เองอัตโนมัติ)<br>
+          📦 endpoint เดียวกับที่ปุ่ม "🔍 ตรวจสอบความครบถ้วน" / "🗓️ เช็คงวดล่าสุด" (หน้างบการเงิน) ใช้ตอนสั่ง
+          sync เจาะจงเฉพาะหุ้นที่ขาด — กดจากที่นี่คือ sync "ทุกตัว" แทน ไม่ได้เจาะจง<br>
+          ⏱ ไม่กี่นาที — <b>ไม่บังคับกด</b> ถ้ากดปุ่มบนสุดอยู่แล้ว
+        </div>
+      </div>
+      <div class="btn-wrap">
         <button class="refresh-btn" id="mirror-force-btn" onclick="startMirrorFinnomenaForceFull()">📥 Mirror ทั้งตลาด (force)</button>
         <div class="btn-note">
           <b>📥 Mirror งบ Finnomena ทั้งตลาด (force) + rebuild snapshot</b>
@@ -5078,6 +5098,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260820n"></script>
+<script src="static/dashboard.js?v=20260820o"></script>
 </body>
 </html>

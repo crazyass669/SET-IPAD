@@ -31,6 +31,11 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 DB_FILE = "financials.db"
 
+# sync_all() ที่แตะหุ้นตั้งแต่จำนวนนี้ขึ้นไปถือว่าเป็น batch sync จริง (ไม่ใช่ fallback
+# sync หุ้นเดี่ยวๆ ตอนเปิดหน้า Tearsheet เจอข้อมูลขาด) — ถึงจะ trigger auto-rebuild
+# factor_snapshot ต่อท้าย (ดู factor_snapshot.schedule_rebuild)
+_AUTO_REBUILD_MIN_SYMBOLS = 5
+
 
 def _db_path(base_dir):
     return os.path.join(base_dir, DB_FILE)
@@ -3214,6 +3219,12 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
                 callback(done, total, f"งบการเงิน {done}/{total} ({sym} · {src})...")
 
     _set_meta(base_dir, "last_full_sync_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    if ok > 0 and len(symbols) >= _AUTO_REBUILD_MIN_SYMBOLS:
+        try:
+            from sources import factor_snapshot   # lazy import กัน circular import (factor_snapshot import โมดูลนี้อยู่แล้ว)
+            factor_snapshot.schedule_rebuild(base_dir)
+        except Exception as e:
+            print(f"[FinancialsSync] เรียก auto-rebuild factor_snapshot ไม่สำเร็จ (ไม่กระทบ sync): {e}")
     return {"ok": ok, "fail": fail, "total": total, "skipped": skipped}
 
 

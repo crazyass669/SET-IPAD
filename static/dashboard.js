@@ -6088,15 +6088,23 @@ function goToFinUpdate() {
   const btn = [...document.querySelectorAll('.nav-btn')].find(b => b.getAttribute('onclick')?.includes("'financials'"));
   showPage('financials', btn);
 }
-function startFinancialsSync() {
+function startFinancialsSync(btnId = 'fin-sync-btn') {
   // skip_up_to_date: true — ข้ามคู่ (หุ้น, แหล่ง) ที่มีข้อมูลงวดล่าสุดที่ควรจะมีอยู่แล้วจริง (เช็ค
   // เนื้อหาจริงฝั่ง backend ไม่ใช่เดาจากวันที่ sync) กันกดซ้ำแล้วต้องรอ sync ทั้งตลาดใหม่ทั้งหมด
   // (เดิมส่ง {} เปล่าๆ = ยิงสดทุกคู่ทุกครั้งไม่ว่าจะเพิ่ง sync มาหรือไม่, เดิมใช้ min_age_days แบบ
   // เดาจากเวลา 7→2 วัน ก่อนเปลี่ยนมาเช็คเนื้อหาจริงแทนตั้งแต่ 2026-08-15)
-  _startJob('/api/financials/sync-all', 'fin-sync-btn', '🔄 อัพเดทงบการเงินทั้งหมด (local)', { skip_up_to_date: true }, () => {
+  // btnId: รับพารามิเตอร์ได้ตั้งแต่มีปุ่มนี้ซ้ำ 2 ที่ (หน้างบการเงิน 'fin-sync-btn' เดิม + หน้า
+  // Data Health 'fin-sync-dh-btn' ใหม่) — ปุ่มไหนกดต้องโชว์สถานะ disabled/loading ที่ปุ่มนั้นเอง
+  // ไม่ใช่ปุ่มอีกหน้าที่มองไม่เห็น (progress overlay ยังเป็น global element เหมือนเดิม ไม่กระทบ)
+  _startJob('/api/financials/sync-all', btnId, '🔄 อัพเดทงบการเงินทั้งหมด (local)', { skip_up_to_date: true }, () => {
     fetch('/api/financials-meta').then(r => r.json()).then(d => {
-      const note = document.getElementById('fin-meta-note');
-      if (note && d.last_synced_at) note.textContent = `sync ล่าสุด: ${d.last_synced_at} · ${d.symbol_count} หุ้น`;
+      if (!d.last_synced_at) return;
+      const txt = `sync ล่าสุด: ${d.last_synced_at} · ${d.symbol_count} หุ้น`;
+      // อัพเดททั้ง 2 จุด (หน้างบการเงิน + หน้า Data Health) เผื่อ element ไหนไม่มีอยู่ในหน้าที่เปิดตอนนี้
+      ['fin-meta-note', 'fin-sync-dh-status'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = txt;
+      });
     }).catch(() => {});
     loadFinAnalytics();   // ข้อมูลใหม่ — คำนวณ growth/PEG/FCF ใหม่
   });

@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import time
 from datetime import datetime
 
@@ -25,6 +26,53 @@ from sources import dividend_stats
 from core import delisted_log
 
 TABLE = "factor_snapshot"
+
+# --- auto-rebuild หลัง sync งบชุดใหญ่ (เรียกจาก financials_store.sync_all) ---
+# debounce ด้วย threading.Timer: sync ยาวที่เรียก sync_all() หลายรอบติดกัน (bulk sync/
+# index sync) จะเลื่อน timer ออกไปเรื่อยๆ รีบิลด์จริงแค่ครั้งเดียวหลังนิ่งแล้ว ไม่ใช่ทุกครั้ง
+# ที่ sync เสร็จ — กัน build_snapshot() (DELETE+INSERT ทั้งตาราง หนักหลักพันตัว) รันถี่เกินจำเป็น
+_REBUILD_DEBOUNCE_SEC = 300
+_rebuild_lock = threading.Lock()
+_rebuild_timer = None
+_rebuild_building = False
+_rebuild_pending = False
+
+
+def schedule_rebuild(base_dir, delay=_REBUILD_DEBOUNCE_SEC):
+    """เลื่อนตัวจับเวลารีบิลด์ factor_snapshot ออกไป delay วิ — เรียกซ้ำได้ปลอดภัย
+    (sync หลายรอบติดกันจะยุบเหลือรีบิลด์ครั้งเดียว) รันใน daemon thread ไม่ block caller"""
+    global _rebuild_timer
+    with _rebuild_lock:
+        if _rebuild_timer is not None:
+            _rebuild_timer.cancel()
+        _rebuild_timer = threading.Timer(delay, _fire_rebuild, args=(base_dir,))
+        _rebuild_timer.daemon = True
+        _rebuild_timer.start()
+
+
+def _fire_rebuild(base_dir):
+    """เรียกจาก timer เท่านั้น — กันรัน build_snapshot() ซ้อนกัน (ถ้ากำลังรันอยู่แล้ว
+    ให้จดไว้ว่ามีของใหม่เข้ามาระหว่างนั้น แล้วคิวรอบสั้นต่อท้ายแทนที่จะรันซ้อน)"""
+    global _rebuild_timer, _rebuild_building, _rebuild_pending
+    with _rebuild_lock:
+        _rebuild_timer = None
+        if _rebuild_building:
+            _rebuild_pending = True
+            return
+        _rebuild_building = True
+    try:
+        result = build_snapshot(base_dir)
+        print(f"[factor_snapshot] auto-rebuild เสร็จ: {result}")
+    except Exception as e:
+        print(f"[factor_snapshot] auto-rebuild ล้มเหลว (ไม่กระทบ sync ที่ trigger): {e}")
+    finally:
+        with _rebuild_lock:
+            _rebuild_building = False
+            again = _rebuild_pending
+            _rebuild_pending = False
+        if again:
+            schedule_rebuild(base_dir, delay=5)
+
 
 # ชื่อ GICS sector ที่ถือเป็น "สถาบันการเงิน" สำหรับ US/HK (us/hk_index_metrics.json ใช้ชื่อ
 # sector ไม่ตรงกันเป๊ะระหว่างไฟล์ — HK มีทั้ง "Financials" (แบงก์จีน) และ "Finance" (HSBC/HKEX/
