@@ -658,7 +658,12 @@ def sync_dr_universe(base_dir, validate=True):
         if yf_t and validate:
             try:
                 import yfinance as yf
-                if yf.Ticker(yf_t).history(period="5d").empty:
+                from sources.yahoo import _TimeoutSession
+                # ต้องมี session timeout เหมือนจุดอื่นในไปป์ไลน์ DR (ดู _dr_do_rebuild ใน
+                # app.py) — จุดนี้เรียกเวลาเจอ underlying auto-derive ใหม่ (ticker เดา
+                # อัตโนมัติ ยังไม่ยืนยัน) ยิ่งเสี่ยงเจอ ticker ที่ Yahoo ตอบสนองแปลกๆ กว่าปกติ
+                # ถ้าค้าง จะยึด _dr_rebuild_lock ไปตลอด (เรียกจาก _dr_do_rebuild ใต้ lock นั้น)
+                if yf.Ticker(yf_t, session=_TimeoutSession()).history(period="5d").empty:
                     reason, yf_t = f"Yahoo ไม่มีข้อมูล ticker ที่ derive ได้ ({yf_t})", None
             except Exception as ex:
                 reason, yf_t = f"ตรวจ ticker กับ Yahoo ไม่สำเร็จ: {ex}", None

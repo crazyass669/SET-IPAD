@@ -318,6 +318,14 @@
     min-width: 14px; text-align: center; vertical-align: middle;
   }
 
+  /* ETF — badge สีฟ้าบนปุ่ม nav เมื่อมี ETF จดทะเบียนใหม่ที่ยังไม่เคยเห็น (แค่แจ้งเตือน
+     เงียบๆ ไม่ใช่ปัญหาแบบ Data Health เลยใช้สีต่างกัน) */
+  .etf-new-badge {
+    display: inline-block; margin-left: 4px; background: var(--blue, #58a6ff); color: #fff;
+    font-size: 9px; font-weight: 700; border-radius: 8px; padding: 1px 5px;
+    min-width: 14px; text-align: center; vertical-align: middle;
+  }
+
   /* SORT HEADER */
   .tbl th.sortable { cursor: pointer; user-select: none; }
   .tbl th.sortable:hover { color: var(--text); }

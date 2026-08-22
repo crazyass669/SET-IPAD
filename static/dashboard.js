@@ -318,6 +318,7 @@ async function loadData() {
     checkFlowFreshness();    // ซ่อนเมนู Capital Flow บนเวอร์ชันเว็บถ้าข้อมูลค้าง
     loadFinAnalytics();      // ผสาน growth_score/peg/fcf_yield เข้า DATA.stocks (local-only)
     checkDataHealthBadge();  // badge แดงบนปุ่ม nav ถ้ามีแหล่งข้อมูลไหนค้าง (local-only)
+    checkEtfNewListingsBadge();  // badge ฟ้าบนปุ่ม nav ถ้ามี ETF จดทะเบียนใหม่ (local-only)
     checkRunFailures();      // banner แดงถ้า Quick Update/Full Refresh/สคริปต์งบ ล่าสุดล้มเหลว
   } catch(e) {
     console.error("loadData error:", e);
@@ -1283,8 +1284,8 @@ function renderOverview() {
   document.getElementById("tbl-losers").innerHTML  = miniTbl(losers, false);
 
   // --- industry bars --- (ret_1m ใช้ดัชนีถ่วงน้ำหนักจริงถ้ามี ไม่ใช่ค่าเฉลี่ยหุ้นดิบ)
-  const industries = DATA.industries.map(_sectorWithIdxOverride).sort((a,b) => (b.ret_1m||0)-(a.ret_1m||0));
-  const maxAbs = Math.max(...industries.map(ig => Math.abs(ig.ret_1m||0)));
+  const industries = (DATA.industries || []).map(_sectorWithIdxOverride).sort((a,b) => (b.ret_1m||0)-(a.ret_1m||0));
+  const maxAbs = Math.max(...industries.map(ig => Math.abs(ig.ret_1m||0)), 1);
   document.getElementById("industry-bars").innerHTML = industries.map(ig => {
     const r = ig.ret_1m || 0;
     const w = Math.round(Math.abs(r)/maxAbs*100);
@@ -2545,7 +2546,8 @@ function resetNhCache() { _nhLoaded = false; }  // call after Quick Update
 async function loadNewHighChart() {
   if (_nhLoaded) return;
   try {
-    const r = await fetch("/api/market-internals");
+    const r = await _fetchTimeout("/api/market-internals", 30000,
+      "หมดเวลารอ New High/New Low (เกิน 30 วิ) — ลองใหม่อีกครั้ง");
     if (!r.ok) { document.getElementById("new-high-loading").textContent = "ไม่สามารถโหลดได้"; return; }
     const d = await r.json();
     if (d.error) { document.getElementById("new-high-loading").textContent = d.error; return; }
@@ -2789,12 +2791,13 @@ function _ensureIdxDataLoaded(onLoaded) {
   _idxDataLoading = true;
   _fetchTimeout('/api/indices').then(r => r.json()).then(d => {
     _idxDataLoading = false;
+    const waiters = _idxDataWaiters;
+    _idxDataWaiters = [];
     if (!d.error) {
       _idxData = d;
-      _idxDataWaiters.forEach(fn => fn());
       renderDqBanner();   // เพิ่งมี _idxData ครั้งแรก — เช็คว่าเก่ากว่าราคาหุ้นไปหรือยัง
     }
-    _idxDataWaiters = [];
+    waiters.forEach(fn => fn());   // เรียก re-render ต่อแม้ error (fallback เป็นค่าเฉลี่ยไม่ถ่วงน้ำหนัก) แทนที่จะค้างเงียบๆ
   }).catch((e) => {
     console.warn('[_ensureIdxDataLoaded] /api/indices ล้มเหลว:', e);
     _idxDataLoading = false;
@@ -4991,7 +4994,7 @@ function _hedgeComputeOverlap() {
   Object.values(map).forEach(e => {
     e.avgHold = e.totalShares > 0 ? e.totalValue / e.totalShares : null;
     e.current = q[e.sym] != null ? q[e.sym] : null;
-    e.vsCost = (e.avgHold && e.current) ? (e.current - e.avgHold) / e.avgHold * 100 : null;
+    e.vsCost = (e.avgHold != null && e.current != null && e.avgHold !== 0) ? (e.current - e.avgHold) / e.avgHold * 100 : null;
     e.poolPct = grandTotal > 0 ? e.totalValue / grandTotal * 100 : null;
   });
   return Object.values(map);
@@ -13434,11 +13437,23 @@ async function _fetchDRFullHistory(sym) {
   try {
     const r = await _fetchTimeout(`/api/dr-history/${encodeURIComponent(sym)}`, 25000);
     const d = await r.json();
-    if (d.error || !d.dates) return;
+    if (d.error || !d.dates) { _drHistoryFailNote(); return; }
     const hist = d.dates.map((date, i) => [date, d.closes[i]]);
     _cmHistoryData = hist;
     if (_cmStock?.symbol === sym) _drawChart(_cmStock, hist);
-  } catch(e) { console.error('DR history fetch error:', e); }
+  } catch(e) { console.error('DR history fetch error:', e); _drHistoryFailNote(); }
+}
+
+// preview เดิมที่วาดจาก close100 ใน openDRChartModal ใช้วันที่ประดิษฐ์ขึ้น (นับถอยหลัง
+// ทีละ 1 วันปฏิทินจากวันนี้ รวมวันหยุดสุดสัปดาห์ด้วย ไม่ใช่วันเทรดจริง) ตั้งใจให้เป็นแค่
+// placeholder ชั่วคราวจนกว่า _fetchDRFullHistory จะโหลดวันที่จริงมาทับ — ถ้า fetch พลาด
+// (error/timeout/response ไม่มี dates) preview ปลอมนี้จะค้างอยู่ถาวรโดยผู้ใช้ไม่รู้ตัวว่า
+// วันที่ในกราฟ/tooltip คลาดเคลื่อน จึงต้องแจ้งเตือนให้เห็นชัดแทนการเงียบ
+function _drHistoryFailNote() {
+  const sub = document.getElementById('cm-sub');
+  if (sub && !sub.textContent.includes('⚠')) {
+    sub.textContent += ' · ⚠ โหลดวันที่จริงไม่สำเร็จ วันที่ในกราฟเป็นค่าประมาณ';
+  }
 }
 
 // ============================================================
@@ -17930,6 +17945,7 @@ function initFinPage() {
     } else {
       _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000).then(r => r.json()).then(d => {
         if (d.stocks) { _drData = _drData || d.stocks; _buildDrDatalist(); }
+        if (typeof _newsBuildDatalist === 'function') _newsBuildDatalist();
       }).catch(() => {});
     }
     // โหลดรายชื่อหุ้น US/HK ทั้งตลาด (mirror) ครั้งเดียว แล้วเติมเข้า datalist ค้นหา
@@ -17939,6 +17955,7 @@ function initFinPage() {
         _finDrMirrorSyms = d || {};
         _buildDrDatalist();
         _finMirRender();   // เติมรายการ browse US/HK เมื่อโหลดรายชื่อเสร็จ
+        if (typeof _newsBuildDatalist === 'function') _newsBuildDatalist();
       }).catch(() => {});
       // ชื่อบริษัทของหุ้น mirror (แยก request — ใหญ่กว่า) โหลดเสร็จค่อยเติมชื่อในรายการ
       fetch('/api/mirror-names').then(r => r.json()).then(d => {
@@ -17947,6 +17964,7 @@ function initFinPage() {
         if (dl) dl.innerHTML = '';   // บังคับ rebuild ด้วยชื่อ (ข้าม guard นับจำนวน)
         _buildDrDatalist();
         _finMirRender();
+        if (typeof _newsBuildDatalist === 'function') _newsBuildDatalist();
       }).catch(() => {});
     }
   }
@@ -22325,6 +22343,35 @@ async function checkDataHealthBadge() {
   } catch (e) { /* เงียบ — ไม่ใช่ฟีเจอร์หลัก */ }
 }
 
+// เรียกตอนเปิดหน้า ETF — ผู้ใช้เห็น badge แล้ว เคลียร์ pending_new ฝั่ง backend (ไม่งั้น
+// badge จะค้างเตือนตัวเดิมซ้ำไปเรื่อยๆ) + ซ่อน badge ทันทีฝั่ง UI ไม่ต้องรอ response
+function _ackEtfNewListings() {
+  const badge = document.getElementById('etf-new-badge');
+  if (badge) badge.style.display = 'none';
+  if (IS_STATIC) return;
+  fetch('/api/etf-new-listings/ack', { method: 'POST' }).catch(() => {});
+}
+
+// เรียกตอนเปิดแอป — เติม badge สีฟ้าบนปุ่ม nav "ETF ไทย" ถ้ามี ETF จดทะเบียนใหม่ที่
+// ยังไม่เคยเห็น (backend เทียบ symbol สดจาก SET กับ known set ทุกรอบ rebuild เอง —
+// ดู _check_etf_new_listings ใน app.py) — ไม่ใช่ปัญหาเหมือน Data Health เลยไม่ใช้สีแดง
+async function checkEtfNewListingsBadge() {
+  if (IS_STATIC) return;
+  try {
+    const r = await fetch('/api/etf-new-listings');
+    const d = await r.json();
+    const badge = document.getElementById('etf-new-badge');
+    if (!badge) return;
+    if (d.count > 0) {
+      badge.textContent = d.count;
+      badge.title = 'ETF จดทะเบียนใหม่: ' + (d.symbols || []).join(', ');
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch (e) { /* เงียบ — ไม่ใช่ฟีเจอร์หลัก */ }
+}
+
 async function pingDataSources() {
   const btn = document.getElementById('dh-ping-btn');
   const box = document.getElementById('dh-ping-result');
@@ -23118,6 +23165,7 @@ function _etfWarningsHtml(d) {
 }
 
 function loadETFPage() {
+  _ackEtfNewListings();
   if (_etfLoaded && _etfData) { renderETFTable(); return; }
   document.getElementById('etf-status').textContent = 'กำลังดึงข้อมูล...';
   document.getElementById('etf-table-wrap').innerHTML =

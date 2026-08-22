@@ -191,6 +191,11 @@ def refresh_all(base_dir, callback=None, pause=0.4):
     """ขูดทุกกอง → เขียน data/hedge_holdings.json — callback(current,total,msg) ราย gอง"""
     managers = fetch_managers()
     total = len(managers)
+    if total == 0:
+        # Dataroma อาจเปลี่ยนโครงสร้าง HTML แล้ว regex ไม่ match อะไรเลย (fetch_managers()
+        # คืน [] แบบเงียบๆ ไม่ raise) — ห้ามปล่อยให้เขียนทับ cache เดิมด้วยผลว่างเปล่า
+        raise RuntimeError("fetch_managers() คืนค่าว่างเปล่า — Dataroma อาจเปลี่ยนโครงสร้าง HTML, "
+                            "ไม่เขียนทับ cache เดิมเพื่อกันข้อมูลหาย")
     result = {}
     quotes = {}   # sym -> current price ล่าสุด (รวมจากทุกกอง ครอบทุกตัว ไม่จำกัดแค่ top 100)
     for idx, mgr in enumerate(managers, 1):
@@ -248,8 +253,11 @@ def load_cache(base_dir):
     path = os.path.join(base_dir, CACHE_REL)
     if not os.path.exists(path):
         return None
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 if __name__ == "__main__":  # ทดสอบเร็ว: python -m sources.dataroma

@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260820a">
+<link rel="stylesheet" href="static/dashboard.css?v=20260822a">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -52,7 +52,7 @@
   <button class="nav-btn" onclick="showPage('dcf-screener',this)" title="DCF Screener — รัน DCF Model (พยากรณ์เต็มรูปแบบ) กับหุ้นไทยทุกตัวที่คำนวณได้ ด้วยสมมติฐาน WACC/Growth ค่าเริ่มต้นเดียวกันทั้งตลาด (Beta=1.00 คงที่) เรียงตาม upside% มาก→น้อย เป็นการคัดกรองเบื้องต้น ไม่ใช่คำแนะนำซื้อ/ขาย · local-only">🎯 DCF Screener</button>
   <button class="nav-btn nav-btn-highlight" onclick="showPage('watchlist',this)">⭐ Watchlist</button>
   <button class="nav-btn" onclick="showPage('dr',this)">DR/DRx</button>
-  <button class="nav-btn" onclick="showPage('etf',this)" title="ETF ไทย — ราคา/NAV/Premium-Discount/RS ของ ETF ที่จดทะเบียนบน SET โดยตรง (ดัชนีในประเทศ/ต่างประเทศ/ตราสารหนี้/สินค้าโภคภัณฑ์/Leveraged-Inverse)">🏦 ETF ไทย</button>
+  <button class="nav-btn" onclick="showPage('etf',this)" title="ETF ไทย — ราคา/NAV/Premium-Discount/RS ของ ETF ที่จดทะเบียนบน SET โดยตรง (ดัชนีในประเทศ/ต่างประเทศ/ตราสารหนี้/สินค้าโภคภัณฑ์/Leveraged-Inverse)">🏦 ETF ไทย<span id="etf-new-badge" class="etf-new-badge" style="display:none"></span></button>
   <button class="nav-btn" onclick="showPage('valuation',this)">Valuation</button>
   <button class="nav-btn" onclick="showPage('insider',this)">Insider</button>
   <button class="nav-btn" onclick="showPage('flow',this)" title="Capital Flow — net buy/sell สถาบัน/ต่างชาติ/รายย่อย">Capital Flow</button>
@@ -5179,6 +5179,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260820u"></script>
+<script src="static/dashboard.js?v=20260823a"></script>
 </body>
 </html>

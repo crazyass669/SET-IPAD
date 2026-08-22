@@ -238,6 +238,7 @@ HTML_FILE    = os.path.join(BASE_DIR, "set_dashboard.html")
 HISTORY_FILE = os.path.join(BASE_DIR, "set_history.json")
 DR_CACHE_FILE = os.path.join(BASE_DIR, "dr_cache.json")
 ETF_CACHE_FILE = os.path.join(BASE_DIR, "etf_cache.json")
+ETF_NEW_LISTINGS_FILE = os.path.join(BASE_DIR, "etf_known_symbols.json")
 WATCHLIST_FILE = os.path.join(BASE_DIR, "data", "watchlist.json")
 PRICE_ALERTS_FILE = os.path.join(BASE_DIR, "data", "price_alerts.json")
 TOKEN_FILE = os.path.join(BASE_DIR, ".dashboard_token")
@@ -327,6 +328,40 @@ def _save_etf_cache_to_file(result):
         print(f"[ETF] Saved cache: {len(result.get('stocks', []))} ETFs -> etf_cache.json")
     except Exception as e:
         print(f"[ETF] Failed to save cache: {e}")
+
+def _check_etf_new_listings(stocks):
+    """เทียบ symbol ที่เพิ่งดึงมา (ETF ไม่มี static list ให้ curate แบบ DR — ดึงสดจาก
+    SET ทุกรอบ rebuild อยู่แล้ว) กับ known set ที่บันทึกไว้ในไฟล์ — ตัวใหม่ที่ไม่เคยเห็น
+    มาก่อนจะถูกเติมเข้า pending_new (ไว้เติม badge เตือนบนปุ่ม nav ของหน้า ETF) ค้างจน
+    กว่าผู้ใช้จะเปิดหน้า ETF (เรียก /api/etf-new-listings/ack เคลียร์) — persist ลงไฟล์
+    กันหายตอน restart server ครั้งแรกที่ไม่มีไฟล์เลย (เพิ่ง deploy ฟีเจอร์นี้) ไม่ถือว่า
+    ทุกตัวเป็น "ใหม่" ทั้งหมด (กัน badge ระเบิดเทียบกับ known set ว่าง)"""
+    current = {s["symbol"] for s in stocks if s.get("symbol")}
+    state = None
+    if os.path.exists(ETF_NEW_LISTINGS_FILE):
+        try:
+            with open(ETF_NEW_LISTINGS_FILE, encoding="utf-8") as f:
+                state = json.load(f)
+        except Exception as e:
+            print(f"[ETF] Failed to load known-symbols state: {e}")
+
+    from datetime import datetime as _dt
+    if state is None:
+        _atomic_write_json(ETF_NEW_LISTINGS_FILE, {
+            "known": sorted(current), "pending_new": [], "updated_at": _dt.now().isoformat(),
+        })
+        return
+
+    known = set(state.get("known") or [])
+    pending = set(state.get("pending_new") or [])
+    new_syms = current - known
+    if new_syms:
+        pending |= new_syms
+        print(f"[ETF] พบ ETF ใหม่ {len(new_syms)} ตัว: {', '.join(sorted(new_syms))}")
+    known |= current
+    _atomic_write_json(ETF_NEW_LISTINGS_FILE, {
+        "known": sorted(known), "pending_new": sorted(pending), "updated_at": _dt.now().isoformat(),
+    })
 
 # History: อ่านจาก SQLite ผ่าน core.store (point query ~6ms) — ไม่มี in-memory
 # cache 434MB อีกต่อไป และไม่ต้องมี mtime invalidation (query ตรงทุกครั้ง)
@@ -878,7 +913,7 @@ def get_dr_data():
     ?fresh=1 = บังคับทำสดแบบ blocking (ใช้ตอน bake static site — ห้ามได้ข้อมูลเก่า)"""
     fresh = request.args.get("fresh") == "1"
     cached = _dr_cache.get("result")
-    if not fresh and cached and cached.get("stocks") and _dr_cache.get("ts"):
+    if not fresh and cached and cached.get("stocks") and _dr_cache.get("ts") is not None:
         age = time.time() - _dr_cache["ts"]
         if age < _DR_CACHE_TTL:
             return jsonify(_dr_light(cached))
@@ -898,7 +933,7 @@ def _rebuild_dr_cache():
     lock กันรันซ้อน (เรียกได้ทั้งจาก request ตรงและ background thread)"""
     with _dr_rebuild_lock:
         # อีก thread เพิ่ง rebuild เสร็จระหว่างเรารอ lock — ใช้ผลนั้นเลย ไม่ยิงซ้ำ
-        if (_dr_cache.get("result") and _dr_cache.get("ts")
+        if (_dr_cache.get("result") and _dr_cache.get("ts") is not None
                 and time.time() - _dr_cache["ts"] < 120):
             return _dr_cache["result"]
         return _dr_do_rebuild()
@@ -1060,6 +1095,14 @@ def _dr_do_rebuild():
             vol_history = [int(v) for v in vol_s.tail(260).tolist()] if len(vol_s) else []
             vol_today   = int(vol_s.iloc[-1]) if len(vol_s) else None
             vol_avg20   = int(vol_s.tail(21).iloc[:-1].mean()) if len(vol_s) >= 21 else None
+            # เก็บคู่กับ dates/closes เต็มประวัติ (ไม่ใช่แค่ tail 260 แบบ vol_history) —
+            # dr_quick_update ใช้ต่อความยาวทุกครั้งที่อัพเดท (entry.get("_full_vols", ...))
+            # เดิมไม่เคยเซ็ตค่านี้เลยในนี้ ทำให้รอบ quick-update แรกหลัง full rebuild ทุกครั้ง
+            # เข้า default [0]*len(old_dates) (เป็นพันแท่ง) เจือจาง vol_avg20/vol_history
+            # จนกลายเป็น 0 ผิดๆ — align กับความยาว close เหมือน dr_quick_update ทำ (ดู
+            # new_vols_raw) ไม่ align (เช่น NaN ถูก dropna ไม่เท่ากัน) ก็ fallback เป็น 0 ทั้งเส้น
+            full_vols = ([int(v) for v in vol_s.tolist()] if len(vol_s) == len(close)
+                         else [0] * len(close))
 
             n = min(30, len(close))
             ohlc30 = []
@@ -1142,6 +1185,7 @@ def _dr_do_rebuild():
                 "ohlc30":   ohlc30,
                 "dates":    dates_all,
                 "closes":   closes_all,
+                "_full_vols":    full_vols,
                 "above_ema50":   above_ema50,
                 "above_ema200":  above_ema200,
                 "price_history": price_history,
@@ -1214,7 +1258,7 @@ def get_etf_data():
     stale-while-revalidate เหมือน /api/dr — ?fresh=1 บังคับทำสดแบบ blocking"""
     fresh = request.args.get("fresh") == "1"
     cached = _etf_cache.get("result")
-    if not fresh and cached and cached.get("stocks") and _etf_cache.get("ts"):
+    if not fresh and cached and cached.get("stocks") and _etf_cache.get("ts") is not None:
         age = time.time() - _etf_cache["ts"]
         if age < _ETF_CACHE_TTL:
             return jsonify(_etf_light(cached))
@@ -1230,7 +1274,7 @@ def get_etf_data():
 
 def _rebuild_etf_cache():
     with _etf_rebuild_lock:
-        if (_etf_cache.get("result") and _etf_cache.get("ts")
+        if (_etf_cache.get("result") and _etf_cache.get("ts") is not None
                 and time.time() - _etf_cache["ts"] < 120):
             return _etf_cache["result"]
         return _etf_do_rebuild()
@@ -1554,6 +1598,10 @@ def _etf_do_rebuild():
     result = {"stocks": results, "ts": _dt.now().isoformat(), "warnings": warnings}
     _etf_cache.update(result=result, ts=time.time())
     _save_etf_cache_to_file(result)
+    try:
+        _check_etf_new_listings(results)
+    except Exception as e:
+        print(f"[ETF] เช็ค ETF ใหม่ล้มเหลว (ไม่กระทบ rebuild หลัก): {e}")
     return result
 
 
@@ -1590,6 +1638,38 @@ def etf_full_refresh():
     SET API ล่ม ทำให้ raise 'ไม่มี cache เก่า' แทนที่จะ fallback ได้ตามที่ตั้งใจไว้)"""
     if _etf_cache.get("result"):
         _etf_cache["ts"] = 0
+    return jsonify({"ok": True})
+
+
+@app.route("/api/etf-new-listings")
+def etf_new_listings():
+    """คืนจำนวน/รายชื่อ ETF ใหม่ที่ยังไม่ ack — ใช้เติม badge บนปุ่ม nav ตอนเปิดแอป
+    (เบาๆ อ่านไฟล์ตรง ไม่ต้อง trigger rebuild) — ไม่มีไฟล์ = ยังไม่เคยรัน rebuild เลย
+    หลังติดตั้งฟีเจอร์นี้ ถือว่ายังไม่มีอะไรใหม่"""
+    if not os.path.exists(ETF_NEW_LISTINGS_FILE):
+        return jsonify({"count": 0, "symbols": []})
+    try:
+        with open(ETF_NEW_LISTINGS_FILE, encoding="utf-8") as f:
+            state = json.load(f)
+    except Exception:
+        return jsonify({"count": 0, "symbols": []})
+    pending = sorted(state.get("pending_new") or [])
+    return jsonify({"count": len(pending), "symbols": pending})
+
+
+@app.route("/api/etf-new-listings/ack", methods=["POST"])
+def etf_new_listings_ack():
+    """ผู้ใช้เปิดหน้า ETF แล้ว (เห็น badge/แจ้งเตือนแล้ว) — เคลียร์ pending_new ล้าง
+    badge โดยไม่แตะ known set (ไม่งั้นตัวเดิมจะโดนนับเป็น "ใหม่" ซ้ำรอบ rebuild ถัดไป)"""
+    if not os.path.exists(ETF_NEW_LISTINGS_FILE):
+        return jsonify({"ok": True})
+    try:
+        with open(ETF_NEW_LISTINGS_FILE, encoding="utf-8") as f:
+            state = json.load(f)
+        state["pending_new"] = []
+        _atomic_write_json(ETF_NEW_LISTINGS_FILE, state)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
     return jsonify({"ok": True})
 
 
@@ -1875,8 +1955,14 @@ def dr_quick_status():
 
 @app.route("/api/dr-full-refresh", methods=["POST"])
 def dr_full_refresh():
-    """ล้าง DR cache ให้ /api/dr ดึงข้อมูลใหม่ทั้งหมด (2Y)"""
-    _dr_cache.clear()
+    """บังคับให้ /api/dr ถือว่า cache หมดอายุแล้วดึงใหม่รอบถัดไป — ตั้ง ts=0 แทนการ
+    clear() ทั้งก้อน (เดิม clear() ทำให้ get_dr_data() แข่งกับ request ที่กำลังอ่าน
+    _dr_cache["ts"] อยู่พอดี (TOCTOU) กลายเป็น KeyError -> 500 ดิบๆ ไม่มี JSON error
+    body ให้ frontend อ่าน + ทำลาย _old_mc fallback ใน _dr_do_rebuild (อ่านจาก
+    _dr_cache["result"]) ทำให้ market cap หายไปทั้งตัวแทนที่จะ fallback ใช้ค่าเก่า —
+    เหมือนบั๊กที่แก้แล้วใน etf_full_refresh() ดู comment ที่นั่น"""
+    if _dr_cache.get("result"):
+        _dr_cache["ts"] = 0
     return jsonify({"status": "cleared"})
 
 
@@ -2499,8 +2585,9 @@ def hedge_fetch_missing():
     body: {"symbols": ["HHH","AER",...]} (รูปแบบ Dataroma มีจุดได้ จะ normalize เอง)"""
     syms = []
     if request.is_json:
-        syms = request.json.get("symbols") or []
-    syms = [_hedge_norm(s) for s in syms if s]
+        body = request.json
+        syms = body.get("symbols") or [] if isinstance(body, dict) else []
+    syms = [_hedge_norm(s) for s in syms if isinstance(s, str) and s]
     if not syms:
         return jsonify({"error": "ไม่มีรายชื่อหุ้นที่จะดึง"}), 400
     with _lock:
@@ -2563,10 +2650,14 @@ def get_dr_history(symbol):
                 return jsonify({"sym": sym, "yf": dr_entry["yf"],
                                 "dates": s["dates"], "closes": s["closes"]})
 
-    # fallback: fetch จาก yfinance โดยตรง
+    # fallback: fetch จาก yfinance โดยตรง — ต้องมี session timeout เหมือนทุกจุดอื่นใน DR
+    # pipeline (ดู _dr_do_rebuild) ไม่งั้น Yahoo ค้าง socket = thread ที่รับ request นี้
+    # ค้างไม่มีกำหนด (เกิดง่ายเพราะ path นี้ทำงานพอดีตอน _dr_cache ว่าง/ไม่มี symbol —
+    # เช่นหลัง dr_full_refresh() หรือก่อน rebuild ครั้งแรกของเครื่อง)
     yf_ticker = dr_entry["yf"]
     try:
-        t = yf.Ticker(yf_ticker)
+        from sources.yahoo import _TimeoutSession
+        t = yf.Ticker(yf_ticker, session=_TimeoutSession())
         hist = t.history(period="max")
         if hist.empty:
             return jsonify({"error": "ไม่พบข้อมูลราคา"}), 404
@@ -5955,8 +6046,9 @@ def _news_from_yahoo(yf_ticker):
     และรุ่นเก่า (field แบนราบ providerPublishTime เป็น epoch)"""
     import yfinance as yf
     from datetime import datetime, timezone
+    from sources.yahoo import _TimeoutSession
     rows = []
-    for n in (yf.Ticker(yf_ticker).news or []):
+    for n in (yf.Ticker(yf_ticker, session=_TimeoutSession()).news or []):
         c = n.get("content") or n   # รุ่นใหม่ห่อใน content, รุ่นเก่าอยู่ชั้นนอกเลย
         title = c.get("title")
         if not title:

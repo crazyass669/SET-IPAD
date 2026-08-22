@@ -12,6 +12,7 @@ set_dr_data.json
 set_history.json
 dr_cache.json
 etf_cache.json
+etf_known_symbols.json
 set_market_stats.json
 *.json.tmp
 
