@@ -2460,8 +2460,11 @@ def jp_sector_ranks():
     ไม่มี query param ?index= เหมือน US/HK เพราะ JP มีดัชนีเดียว (Nikkei 225)"""
     from sources import jp_index_metrics
     from core.metrics import summarize_groups
-    stocks = [s for s in jp_index_metrics.load_local(BASE_DIR).get("stocks", []) if s.get("in_nikkei225")]
-    return jsonify({"sectors": summarize_groups(stocks, "sector")})
+    try:
+        stocks = [s for s in jp_index_metrics.load_local(BASE_DIR).get("stocks", []) if s.get("in_nikkei225")]
+        return jsonify({"sectors": summarize_groups(stocks, "sector")})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/jp-history/<symbol>")
@@ -9521,8 +9524,12 @@ def _load_short_data():
     mtime = os.path.getmtime(_SHORT_DATA_FILE)
     if _short_data_cache and mtime == _short_data_ts:
         return _short_data_cache
-    with open(_SHORT_DATA_FILE, encoding="utf-8") as f:
-        _short_data_cache = json.load(f)
+    try:
+        with open(_SHORT_DATA_FILE, encoding="utf-8") as f:
+            _short_data_cache = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[Short Sales] failed to load {_SHORT_DATA_FILE}: {e}")
+        return _short_data_cache
     _short_data_ts = mtime
     return _short_data_cache
 
@@ -10222,7 +10229,7 @@ def short_sales():
     # ส่งเฉพาะ field ที่ frontend ต้องการ (ไม่ส่ง daily array ทั้งหมด — ใหญ่เกินไป)
     out = {}
     for sym, v in stocks.items():
-        daily = v.get("daily", [])
+        daily = v.get("daily") or []
         out[sym] = {
             "period_vol":       v.get("period_vol", 0),
             "period_pct_value": v.get("period_pct_value", 0),

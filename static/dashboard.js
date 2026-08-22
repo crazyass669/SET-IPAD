@@ -16363,6 +16363,7 @@ function _renderHkBreadth() {
 // จากข้อมูลที่โหลดมาแล้ว (ไม่ต้องยิง endpoint เพิ่ม)
 // ============================================================
 let _jpData = null;
+let _jpStocksLoading = false;
 let _jpView = 'all';         // all | rs80 | stage2 | nearhigh | momentum | ema200
 let _jpSector = 'ALL';
 let _jpSort = { key: 'rs_score', dir: 1 };
@@ -16394,24 +16395,27 @@ function jpSortBy(key) {
 
 function loadJpStocksPage() {
   if (_jpData) { renderJpTable(); loadJpBreadthChart(); return; }
+  if (_jpStocksLoading) return;
   const tbody = document.getElementById('jp-stocks-tbody');
   if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
+  _jpStocksLoading = true;
   _fetchTimeout('/api/jp-index-metrics', 30000, 'หมดเวลารอข้อมูลหุ้น JP (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
-      _jpData = d;
       if (!d.stocks || !d.stocks.length) {
         if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">ยังไม่มีข้อมูล — กดปุ่ม <b>📈 JP Index Max</b> หรือ <b>⚡ Quick Update</b> เพื่อดึงราคาและคำนวณ metrics</td></tr>`;
         return;
       }
+      _jpData = d;
       _rebuildJpSectorFilter();
       renderJpTable();
       loadJpBreadthChart();
     })
     .catch(e => {
       if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
-    });
+    })
+    .finally(() => { _jpStocksLoading = false; });
 }
 
 function _rebuildJpSectorFilter() {
@@ -16637,9 +16641,9 @@ function renderJpSectorTable() {
   const tbody = document.getElementById('jp-sectors-tbody');
   if (!tbody) return;
   tbody.innerHTML = rows.map((s, i) => `
-    <tr style="cursor:pointer" onclick="_openJpSector('${s.name.replace(/'/g,"\\'")}')">
+    <tr style="cursor:pointer" onclick="_openJpSector('${String(s.name || 'Unknown').replace(/'/g,"\\'")}')">
       <td class="text2">${i + 1}</td>
-      <td><strong>${s.name}</strong></td>
+      <td><strong>${s.name || 'Unknown'}</strong></td>
       <td class="r text2">${s.count}</td>
       <td class="r"><span class="${rsColor(s.avg_rs)}" style="font-weight:700">${s.avg_rs ?? '—'}</span></td>
       <td class="r">${pct(s.ret_1d)}</td>
@@ -27003,7 +27007,7 @@ async function showShortDetail(sym, rowEl) {
   // ใช้ daily_tail จาก summary ที่โหลดไว้แล้วแทน (เดิมไม่เช็ค d.error เลย
   // ทำให้ panel โชว์ undefined%/NaN บนเว็บ)
   try {
-    const r = await fetch(`/api/short-sales/${encodeURIComponent(sym)}`);
+    const r = await _fetchTimeout(`/api/short-sales/${encodeURIComponent(sym)}`, 15000, 'หมดเวลารอข้อมูล Short Sale รายตัว (เกิน 15 วิ) — ลองใหม่อีกครั้ง');
     let d = await r.json();
     if (d.error) {
       const v = _shortData?.stocks?.[sym];
@@ -28589,7 +28593,7 @@ function _filRecentRender() {
   // sym มาจาก localStorage — กรองเป็น [A-Z0-9.-] ก่อนยัดลง onclick (กันอักขระพิเศษแตก HTML)
   const safe = s => String(s || '').replace(/[^A-Z0-9.\-]/gi, '');
   box.innerHTML = '<span style="color:var(--text2)">🕓 เพิ่งดู:</span>' +
-    list.filter(r => safe(r.sym) && flag[r.tab])
+    list.filter(r => r && safe(r.sym) && flag[r.tab])
       .map(r => `<button class="filter-btn" style="font-size:11px;padding:3px 10px"
       onclick="_filRecentPick('${safe(r.sym)}','${r.tab}')">${flag[r.tab]} ${safe(r.sym)}</button>`).join('');
 }
@@ -28597,7 +28601,7 @@ function _filRecentRender() {
 function _filRecentAdd(sym, tab) {
   let list = [];
   try { list = JSON.parse(localStorage.getItem(FIL_RECENT_KEY)) || []; } catch {}
-  list = [{ sym, tab }, ...list.filter(r => !(r.sym === sym && r.tab === tab))].slice(0, 10);
+  list = [{ sym, tab }, ...list.filter(r => r && !(r.sym === sym && r.tab === tab))].slice(0, 10);
   try { localStorage.setItem(FIL_RECENT_KEY, JSON.stringify(list)); } catch {}
   _filRecentRender();
 }
