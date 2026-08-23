@@ -109,11 +109,15 @@ def _local_path(base_dir):
 
 def load_local(base_dir):
     p = _local_path(base_dir)
+    default = {"HSI": [], "HSCEI": [], "HSTECH": [], "extra_names": {},
+               "sector": {}, "industry": {}}
     if not os.path.exists(p):
-        return {"HSI": [], "HSCEI": [], "HSTECH": [], "extra_names": {},
-                "sector": {}, "industry": {}}
-    with open(p, encoding="utf-8") as f:
-        return json.load(f)
+        return default
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return default
 
 
 def save_local(base_dir, data):

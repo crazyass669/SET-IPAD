@@ -12478,12 +12478,24 @@ function _hmCmp(getV, dir) {
 // ของดัชนีนั้น แทนที่จะกด gap-update ทั้ง union ของ region (US ~518 ตัว, HK ~105 ตัว) —
 // ไม่งั้นดูอยู่แค่แท็บ Dow (30 ตัว) แต่ต้องรอ Yahoo ทั้ง 518 ตัวเหมือนเดิมทุกครั้ง (JP ไม่มี
 // ดัชนีย่อยให้เลือกอยู่แล้ว เลยไม่ส่ง)
-function _hmLiveUpdate(region, btn, idleLabel, onDone, indexKey, noteId) {
+// isActive (optional) — เช็คว่าแท็บดัชนีย่อยที่กดตอนเริ่ม (indexKey) ยังเป็นแท็บที่ผู้ใช้ดู
+// อยู่หรือเปล่าตอนงาน poll เสร็จ (เดิมอ่าน _hmIndex/_hkHmIndex "ล่าสุด" ตรงๆ ตอน onDone/appendNote
+// ทำงาน ไม่ใช่ค่าตอนกดปุ่ม — สลับแท็บระหว่างรอ (เช่น กด Dow แล้วสลับไป SP500 ก่อนงานเสร็จ)
+// ทำให้ผลของ Dow ไปโผล่ที่แท็บ SP500 แทน) ไม่ส่งมา = ไม่มีแท็บย่อยให้เช็ค (JP)
+function _hmLiveUpdate(region, btn, idleLabel, onDone, indexKey, noteId, isActive) {
   if (btn) { btn.disabled = true; btn.textContent = '⚡ กำลังดึงราคา Live...'; }
   const qs = indexKey ? `?index=${encodeURIComponent(indexKey)}` : '';
-  fetch(`/api/heatmap-live-update/${region}${qs}`, { method: 'POST' })
+  _fetchTimeout(`/api/heatmap-live-update/${region}${qs}`, 20000, 'เริ่มอัพเดทราคา Live ไม่สำเร็จ (หมดเวลารอ)', { method: 'POST' })
     .then(r => r.json())
     .then(res => {
+      // status "busy" = มีงานยาวอื่นที่ไม่เกี่ยวข้อง (Quick Update/Index Max ฯลฯ) ถือ _lock อยู่
+      // เลยยังไม่ได้เริ่มงานอะไรเลย (ต่างจาก "running" ด้านล่าง) ไป poll ต่อจะเจอ running:false
+      // ทันทีแล้วเข้าใจผิดว่าจบแล้ว ต้องแจ้งตรงๆ ว่าไม่ได้เริ่ม ไม่ใช่ไป poll
+      if (res.status === 'busy') {
+        if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
+        alert('ระบบกำลังทำงานอื่นอยู่ (เช่น Quick Update/Index Max) โปรดรอสักครู่แล้วลองใหม่');
+        return;
+      }
       // status "running" = มีงานของ region นี้ (แท็บย่อยอื่น/คลิกก่อนหน้า) ทำงานค้างอยู่แล้ว
       // ปุ่มนี้เลย "ไม่ได้" เริ่มงานใหม่ตามที่ผู้ใช้เพิ่งกด แค่ไปรอผลงานเก่าแทน — ต้องบอกผู้ใช้
       // ตรงๆ กันเข้าใจผิดว่าราคาที่ได้ท้ายสุดคือของรอบที่เพิ่งกด (อาจเป็นราคาจากรอบก่อนหน้า
@@ -12491,7 +12503,7 @@ function _hmLiveUpdate(region, btn, idleLabel, onDone, indexKey, noteId) {
       if (res.status === 'running' && btn) {
         btn.textContent = '⏳ มีงานอัพเดทค้างอยู่ กำลังรอผล...';
       }
-      _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId);
+      _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId, isActive);
     })
     .catch(e => {
       if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
@@ -12499,7 +12511,7 @@ function _hmLiveUpdate(region, btn, idleLabel, onDone, indexKey, noteId) {
     });
 }
 
-function _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId, tries) {
+function _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId, isActive, tries) {
   tries = tries || 0;
   // cap จำนวนรอบ poll (เหมือน _drPollRefresh) — กัน backend thread ค้าง (เช่น yf.download
   // ไม่ตอบระหว่างดึงราคาสด) ทำให้ปุ่มนี้ disabled ค้างถาวรไม่มีทางกู้คืนได้เอง
@@ -12508,10 +12520,13 @@ function _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId, tries) {
     alert('อัพเดทราคา Live นานผิดปกติ (>4 นาที) — ลองกดใหม่ หรือรีเฟรชหน้า');
     return;
   }
-  fetch(`/api/heatmap-live-status/${region}`)
+  // ต้องมี timeout ต่อ request เอง (ไม่ใช่แค่ cap จำนวนรอบ) — ถ้า fetch เส้นนี้ค้างเฉยๆ (connection
+  // ค้าง ไม่ resolve/reject เลย เช่น proxy สะดุด) ทั้ง .then ทั้ง .catch จะไม่ทำงานเลย รอบ poll ถัดไป
+  // เลยไม่ถูก schedule ปุ่มจะ disabled ค้างถาวรแม้จะมี tries cap ก็ตาม (cap เช็คแค่ตอนเริ่มรอบใหม่)
+  _fetchTimeout(`/api/heatmap-live-status/${region}`, 15000, 'เช็คสถานะอัพเดทราคา Live หมดเวลา')
     .then(r => r.json())
     .then(st => {
-      if (st.running) { setTimeout(() => _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId, tries + 1), 1500); return; }
+      if (st.running) { setTimeout(() => _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId, isActive, tries + 1), 1500); return; }
       if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
       // ต่อท้าย note เดิม (ที่ loadHeatmapPage/loadHkHeatmapPage/loadJpHeatmapPage เซ็ตตอน
       // โหลดข้อมูลใหม่เสร็จ) ด้วยสรุปผลรอบ live-update นี้ — แบบเดียวกับปุ่ม "⚡ ราคาล่าสุด"
@@ -12526,7 +12541,9 @@ function _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId, tries) {
         if (p && typeof p.then === 'function') p.then(showError); else showError();
         return;
       }
-      if (noteId && st.n_fetched != null) {
+      // isActive() = false แปลว่าผู้ใช้สลับแท็บดัชนีย่อยไปแล้วระหว่างรอ — ตัวเลข n_live/n_fetched
+      // นี้เป็นของแท็บที่กดตอนเริ่ม ไม่ใช่แท็บที่กำลังดูอยู่ตอนนี้ ต่อท้าย note ผิดแท็บจะสับสน
+      if (noteId && st.n_fetched != null && (!isActive || isActive())) {
         const appendNote = () => {
           const note = document.getElementById(noteId);
           if (note) {
@@ -12538,7 +12555,7 @@ function _hmLiveUpdatePoll(region, btn, idleLabel, onDone, noteId, tries) {
       }
     })
     .catch(e => {
-      // fetch ล้มเหลว (เซิร์ฟเวอร์รีสตาร์ท/เน็ตสะดุด) — เดิมไม่มี .catch ทำให้ปุ่มค้าง
+      // fetch ล้มเหลว/timeout (เซิร์ฟเวอร์รีสตาร์ท/เน็ตสะดุด) — เดิมไม่มี .catch ทำให้ปุ่มค้าง
       // disabled + textContent "กำลังดึงราคา Live..." ถาวรจนกว่าจะกด F5 เอง
       if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
       alert('เช็คสถานะอัพเดทราคา Live ไม่สำเร็จ: ' + e.message);
@@ -12583,7 +12600,7 @@ const HM_CFG = {
   ret_ytd:   { getV:s=>s.ret_ytd,  clr:v=>_heatColor(v,30),  fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>12?'#fff':'var(--text)',             hint:'เขียว = ขึ้น · แดง = ลง' },
   ret_1y:    { getV:s=>s.ret_1y,   clr:v=>_heatColor(v,50),  fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0,  txt:v=>Math.abs(v??0)>20?'#fff':'var(--text)',             hint:'เขียว = ขึ้น · แดง = ลง (12 เดือน)' },
   rs_score:  { getV:s=>s.rs_score, clr:v=>_heatColorRS(v),   fmt:v=>'RS '+Math.round(v),            aFmt:v=>'avg RS '+Math.round(v),       aPos:v=>v>=50, txt:v=>(v??50)>70||(v??50)<30?'#fff':'var(--text)',        hint:'เขียว = RS สูง (แข็งแกร่ง) · แดง = RS ต่ำ (อ่อนแอ)' },
-  vol_ratio: { getV:s=>(s.vol_today&&s.vol_avg20>0)?s.vol_today/s.vol_avg20*100:null, clr:v=>_heatColorVol(v), fmt:v=>(v/100).toFixed(1)+'x', aFmt:v=>'avg '+(v/100).toFixed(1)+'x', aPos:v=>v>=100, txt:v=>(v??0)>175?'#fff':'var(--text)', hint:'น้ำเงินเข้ม = Volume สูงกว่าเฉลี่ย · น้ำเงินจาง = Volume ต่ำกว่าเฉลี่ย' },
+  vol_ratio: { getV:s=>(s.vol_today!=null&&s.vol_avg20>0)?s.vol_today/s.vol_avg20*100:null, clr:v=>_heatColorVol(v), fmt:v=>(v/100).toFixed(1)+'x', aFmt:v=>'avg '+(v/100).toFixed(1)+'x', aPos:v=>v>=100, txt:v=>(v??0)>175?'#fff':'var(--text)', hint:'น้ำเงินเข้ม = Volume สูงกว่าเฉลี่ย · น้ำเงินจาง = Volume ต่ำกว่าเฉลี่ย' },
   from_52wh: { getV:s=>s.high_52w>0?(s.price-s.high_52w)/s.high_52w*100:null, clr:v=>_heatColor(v,40), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>16?'#fff':'var(--text)', hint:'เขียว = ใกล้/ทำ 52W High · แดง = ห่างจาก 52W High มาก' },
   ath_dist:  { getV:s=>s.ath_pct??null, clr:v=>_heatColor(v,50), fmt:v=>(v>0?'+':'')+v.toFixed(2)+'%', aFmt:v=>'avg '+(v>0?'+':'')+v.toFixed(2)+'%', aPos:v=>v>=0, txt:v=>Math.abs(v??0)>20?'#fff':'var(--text)', hint:'เขียว = ใกล้/ทำ ATH · แดง = ห่างจาก All-Time High มาก (คำนวณจากข้อมูลที่โหลด)' },
   // ราคาระหว่างวันที่ยังไม่ปิด (pre-market/กำลังเทรด) — มีเฉพาะ US/HK/JP heatmap หลังกด
@@ -12623,8 +12640,8 @@ function renderHeatmap() {
       const lbl = v != null ? cfg.fmt(v) : '—';
       const priceV = s.live_price ?? s.price;
       const priceLbl = priceV != null ? priceV.toFixed(2) : '—';
-      return `<div class="hm-cell" style="background:${bg};color:${txt}" title="${s.symbol} ${lbl}" onclick="openChartModal('${s.symbol}')">
-        <span style="font-size:11px;font-weight:700;line-height:1">${s.symbol.slice(0,5)}</span>
+      return `<div class="hm-cell" style="background:${bg};color:${txt}" title="${_escHtml(s.symbol)} ${_escHtml(lbl)}" onclick="openChartModal('${_escJsAttr(s.symbol)}')">
+        <span style="font-size:11px;font-weight:700;line-height:1">${_escHtml(s.symbol.slice(0,5))}</span>
         <span style="font-size:9px;line-height:1;opacity:0.85">${priceLbl}</span>
         <span style="font-size:10px;line-height:1;opacity:0.92">${lbl}</span>
       </div>`;
@@ -12634,7 +12651,7 @@ function renderHeatmap() {
     return `
       <div style="margin-bottom:14px">
         <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px;display:flex;align-items:center;gap:8px">
-          ${sec}
+          ${_escHtml(sec)}
           <span class="${avgClass}">${avgDisp}</span>
           <span class="text2" style="font-size:10px">${stocks.length} หุ้น</span>
         </div>
@@ -17023,7 +17040,9 @@ function _hmOpenTradingView() {
 }
 
 function usHmLiveUpdate() {
-  _hmLiveUpdate('US', document.getElementById('hm-refresh-btn'), '⚡ อัพเดทราคา', () => loadHeatmapPage(true), _hmIndex, 'hm-note');
+  const idx = _hmIndex;   // จับค่าแท็บตอนกดปุ่ม — ไม่ใช่ _hmIndex "ล่าสุด" ตอนงานเสร็จ (ดูคอมเมนต์ _hmLiveUpdate)
+  _hmLiveUpdate('US', document.getElementById('hm-refresh-btn'), '⚡ อัพเดทราคา',
+    () => loadHeatmapPage(true, idx), idx, 'hm-note', () => _hmIndex === idx);
 }
 
 function setHeatmapIndex(idx, btn) {
@@ -17044,20 +17063,31 @@ function setHeatmapPeriod(period, btn) {
   if (_hmData[_hmIndex]) _renderHeatmap(_hmData[_hmIndex]);
 }
 
-function loadHeatmapPage(forceRefresh = false) {
+// targetIndex (optional) — ดัชนีที่ต้องการโหลด แทนที่จะเป็น _hmIndex "ล่าสุด" ตอน response
+// กลับมา (เดิมอ่าน _hmIndex ซ้ำทั้งตอนสร้าง URL และตอนเขียน cache — ถ้าผู้ใช้สลับแท็บระหว่างรอ
+// (เช่น กด Dow แล้วรีบสลับไป Nasdaq-100 ก่อน response ของ Dow กลับมา) response ของ Dow ที่มาช้า
+// จะถูกเขียนทับ cache ของแท็บที่กำลังดูอยู่ (NDX) แทน ทำให้เห็นหุ้น Dow ติดป้ายว่าเป็น NDX)
+// ใช้ตอนเรียกจาก onDone ของ live-update ด้วย (ต้อง refresh cache ของแท็บที่กดตอนเริ่ม ไม่ใช่
+// แท็บที่กำลังดูอยู่ตอนงานเสร็จ)
+function loadHeatmapPage(forceRefresh = false, targetIndex) {
+  const idx = targetIndex || _hmIndex;
+  const isActive = () => idx === _hmIndex;
   const box = document.getElementById('hm-box');
   const note = document.getElementById('hm-note');
   if (!box) return;
-  if (!forceRefresh && _hmData[_hmIndex]) { _renderHeatmap(_hmData[_hmIndex]); return; }
+  if (!forceRefresh && _hmData[idx]) { if (isActive()) _renderHeatmap(_hmData[idx]); return; }
   const btn = document.getElementById('hm-refresh-btn');
-  if (forceRefresh && btn) { btn.disabled = true; btn.textContent = '⚡ กำลังอัพเดท...'; }
-  box.innerHTML = `<div id="hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
-  note.textContent = '';
-  return fetch(`/api/us-index-heatmap?index=${_hmIndex}`)
+  if (forceRefresh && btn && isActive()) { btn.disabled = true; btn.textContent = '⚡ กำลังอัพเดท...'; }
+  if (isActive()) {
+    box.innerHTML = `<div id="hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
+    note.textContent = '';
+  }
+  return fetch(`/api/us-index-heatmap?index=${idx}`)
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
-      _hmData[_hmIndex] = d;
+      _hmData[idx] = d;
+      if (!isActive()) return;
       _renderHeatmap(d);
       const age = Math.max(0, Math.round((Date.now() / 1000) - d.ts));
       const ageStr = age < 60 ? `${age} วิที่แล้ว` : `${Math.round(age / 60)} นาทีที่แล้ว`;
@@ -17065,10 +17095,11 @@ function loadHeatmapPage(forceRefresh = false) {
       note.textContent = `ข้อมูล ณ ${ageStr} · ${(d.rows || []).length}/${d.requested} ตัว${missNote}`;
     })
     .catch(e => {
+      if (!isActive()) return;
       box.innerHTML = `<div style="color:var(--red);font-size:13px;padding:20px;text-align:center">⚠ โหลดไม่สำเร็จ: ${e.message}</div>`;
     })
     .finally(() => {
-      if (btn) { btn.disabled = false; btn.textContent = '⚡ อัพเดทราคา'; }
+      if (btn && isActive()) { btn.disabled = false; btn.textContent = '⚡ อัพเดทราคา'; }
     });
 }
 
@@ -17164,10 +17195,10 @@ function _hmGridCellHtml(r, cfgKey, search, popupFn) {
   const dim = search && !r.symbol.toLowerCase().includes(search) && !(r.name || '').toLowerCase().includes(search);
   const priceV = r.live_price ?? r.price;
   const priceLbl = priceV != null ? priceV.toFixed(2) : '—';
-  return `<div class="hm-cell" onclick="${popupFn}(event,'${r.symbol}')"
-    title="${(r.name || '').replace(/"/g, '&quot;')} (${r.symbol}): ${lbl}"
+  return `<div class="hm-cell" onclick="${popupFn}(event,'${_escJsAttr(r.symbol)}')"
+    title="${_escHtml(r.name || '')} (${_escHtml(r.symbol)}): ${_escHtml(lbl)}"
     style="background:${cfg.clr(v)};color:${cfg.txt(v)};${dim ? 'opacity:.15;' : ''}">
-    <span style="font-size:11px;font-weight:700">${r.symbol.replace(/\.(HK|T)$/, '')}</span>
+    <span style="font-size:11px;font-weight:700">${_escHtml(r.symbol.replace(/\.(HK|T)$/, ''))}</span>
     <span style="font-size:9px;opacity:.85">${priceLbl}</span>
     <span style="font-size:10px;opacity:.92">${lbl}</span>
   </div>`;
@@ -17192,7 +17223,7 @@ function _hmGridHtml(rows, cfgKey, search, popupFn, dir = 1) {
     return `
       <div style="margin-bottom:14px">
         <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px;display:flex;align-items:center;gap:8px">
-          ${sec}
+          ${_escHtml(sec)}
           <span class="${avgClass}">${avgDisp}</span>
           <span class="text2" style="font-size:10px">${stocks.length} หุ้น</span>
         </div>
@@ -17248,7 +17279,9 @@ function _hkHmOpenTradingView() {
 }
 
 function hkHmLiveUpdate() {
-  _hmLiveUpdate('HK', document.getElementById('hk-hm-refresh-btn'), '⚡ รีเฟรช', () => loadHkHeatmapPage(true), _hkHmIndex, 'hk-hm-note');
+  const idx = _hkHmIndex;   // จับค่าแท็บตอนกดปุ่ม — ดูคอมเมนต์ usHmLiveUpdate
+  _hmLiveUpdate('HK', document.getElementById('hk-hm-refresh-btn'), '⚡ รีเฟรช',
+    () => loadHkHeatmapPage(true, idx), idx, 'hk-hm-note', () => _hkHmIndex === idx);
 }
 
 function setHkHeatmapIndex(idx, btn) {
@@ -17269,20 +17302,26 @@ function setHkHeatmapPeriod(period, btn) {
   if (_hkHmData[_hkHmIndex]) _renderHkHeatmap(_hkHmData[_hkHmIndex]);
 }
 
-function loadHkHeatmapPage(forceRefresh = false) {
+// targetIndex (optional) — ดูคอมเมนต์ loadHeatmapPage (US) ด้านบน เหตุผลเดียวกัน
+function loadHkHeatmapPage(forceRefresh = false, targetIndex) {
+  const idx = targetIndex || _hkHmIndex;
+  const isActive = () => idx === _hkHmIndex;
   const box = document.getElementById('hk-hm-box');
   const note = document.getElementById('hk-hm-note');
   if (!box) return;
-  if (!forceRefresh && _hkHmData[_hkHmIndex]) { _renderHkHeatmap(_hkHmData[_hkHmIndex]); return; }
+  if (!forceRefresh && _hkHmData[idx]) { if (isActive()) _renderHkHeatmap(_hkHmData[idx]); return; }
   const btn = document.getElementById('hk-hm-refresh-btn');
-  if (forceRefresh && btn) { btn.disabled = true; btn.textContent = '⚡ กำลังอัพเดท...'; }
-  box.innerHTML = `<div id="hk-hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
-  note.textContent = '';
-  return fetch(`/api/hk-index-heatmap?index=${_hkHmIndex}`)
+  if (forceRefresh && btn && isActive()) { btn.disabled = true; btn.textContent = '⚡ กำลังอัพเดท...'; }
+  if (isActive()) {
+    box.innerHTML = `<div id="hk-hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
+    note.textContent = '';
+  }
+  return fetch(`/api/hk-index-heatmap?index=${idx}`)
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
-      _hkHmData[_hkHmIndex] = d;
+      _hkHmData[idx] = d;
+      if (!isActive()) return;
       _renderHkHeatmap(d);
       const age = Math.max(0, Math.round((Date.now() / 1000) - d.ts));
       const ageStr = age < 60 ? `${age} วิที่แล้ว` : `${Math.round(age / 60)} นาทีที่แล้ว`;
@@ -17290,10 +17329,11 @@ function loadHkHeatmapPage(forceRefresh = false) {
       note.textContent = `ข้อมูล ณ ${ageStr} · ${(d.rows || []).length}/${d.requested} ตัว${missNote}`;
     })
     .catch(e => {
+      if (!isActive()) return;
       box.innerHTML = `<div style="color:var(--red);font-size:13px;padding:20px;text-align:center">⚠ โหลดไม่สำเร็จ: ${e.message}</div>`;
     })
     .finally(() => {
-      if (btn) { btn.disabled = false; btn.textContent = '⚡ รีเฟรช'; }
+      if (btn && isActive()) { btn.disabled = false; btn.textContent = '⚡ รีเฟรช'; }
     });
 }
 
@@ -17328,6 +17368,7 @@ let _jpHmSortDir = 1;    // 1 = มากไปน้อย, -1 = น้อย�
 let _jpHmData = null;      // {rows,ts,requested,missing}
 
 function jpHmLiveUpdate() {
+  // JP ไม่มีแท็บดัชนีย่อย (Nikkei 225 ตัวเดียว) ไม่ต้องเช็ค isActive
   _hmLiveUpdate('JP', document.getElementById('jp-hm-refresh-btn'), '⚡ รีเฟรช', () => loadJpHeatmapPage(true), null, 'jp-hm-note');
 }
 
@@ -22083,9 +22124,14 @@ function _bandZone(cur, b) {
   return               { label: 'สูงกว่า +2SD  (Overvalued มาก)',         color: '#ef4444' };
 }
 
+// request token กัน race — ถ้าผู้ใช้ค้นหุ้นใหม่ก่อนผลของหุ้นก่อนหน้าโหลดเสร็จ
+// ผลที่มาช้ากว่า (ของหุ้นเก่า) ต้องไม่ทับผลของหุ้นล่าสุดที่ผู้ใช้เพิ่งค้น
+let _bandReqSeq = 0;
+
 async function searchBand() {
   const sym = (document.getElementById('band-input').value || '').trim().toUpperCase();
   if (!sym) return;
+  const myReq = ++_bandReqSeq;
   document.getElementById('band-loading').style.display = 'block';
   document.getElementById('band-result').style.display  = 'none';
   document.getElementById('band-error').style.display   = 'none';
@@ -22102,6 +22148,7 @@ async function searchBand() {
       const res  = await _fetchTimeout(`/api/band/${encodeURIComponent(sym)}`, 30000,
         'หมดเวลารอข้อมูล Band (เกิน 30 วิ) — เว็บต้นทางอาจช้าหรือไม่ตอบสนอง ลองใหม่อีกครั้ง');
       const data = await res.json();
+      if (myReq !== _bandReqSeq) return; // มีคำค้นใหม่กว่าเข้ามาแล้ว ทิ้งผลนี้
       if (data.error) {
         document.getElementById('band-error').style.display   = 'block';
         document.getElementById('band-error').textContent     = '⚠ ' + data.error;
@@ -22109,6 +22156,7 @@ async function searchBand() {
       }
       _renderBandResult(data);
     } catch(e) {
+      if (myReq !== _bandReqSeq) return;
       document.getElementById('band-error').style.display   = 'block';
       document.getElementById('band-error').textContent     = '⚠ เกิดข้อผิดพลาด: ' + e.message;
     }
@@ -22119,6 +22167,7 @@ async function searchBand() {
       const res  = await _fetchTimeout(`/api/npdata/${encodeURIComponent(sym)}`, 30000,
         'หมดเวลารอข้อมูลกำไรสุทธิ (เกิน 30 วิ) — 9hoon.com อาจช้าหรือไม่ตอบสนอง ลองใหม่อีกครั้ง');
       const data = await res.json();
+      if (myReq !== _bandReqSeq) return;
       if (data.error) {
         document.getElementById('np-error').style.display = 'block';
         document.getElementById('np-error').textContent   = '⚠ ' + data.error;
@@ -22126,13 +22175,16 @@ async function searchBand() {
       }
       _renderNpResult(data);
     } catch(e) {
+      if (myReq !== _bandReqSeq) return;
       document.getElementById('np-error').style.display = 'block';
       document.getElementById('np-error').textContent   = '⚠ เกิดข้อผิดพลาด: ' + e.message;
     }
   })();
 
   await Promise.allSettled([bandTask, npTask]);
-  document.getElementById('band-loading').style.display = 'none';
+  if (myReq === _bandReqSeq) {
+    document.getElementById('band-loading').style.display = 'none';
+  }
 }
 
 function _renderBandResult(data) {
@@ -25133,7 +25185,8 @@ let _valSecSort = 'pe';
 
 async function _loadStockValStats() {
   if (_valStockData) return _valStockData;
-  const r = await fetch('/api/stock-valuation-stats?t=' + Date.now());
+  const r = await _fetchTimeout('/api/stock-valuation-stats?t=' + Date.now(), 25000,
+    'หมดเวลารอข้อมูล PE/PBV รายตัว (เกิน 25 วิ) ลองใหม่อีกครั้ง');
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   _valStockData = await r.json();
   if (_valStockData.error) throw new Error(_valStockData.error);
@@ -25397,7 +25450,17 @@ function _valSecModalSortArrow(key) {
 
 async function openValSectorModal(secName) {
   _valSecModalLastName = secName;
-  const data = await _loadStockValStats();
+  let data;
+  try { data = await _loadStockValStats(); }
+  catch(e) {
+    document.getElementById('modal-title').textContent = secName;
+    document.getElementById('modal-abbr').textContent  = '';
+    document.querySelector('#sector-modal .modal-body').innerHTML =
+      `<span style="color:var(--red)">โหลดข้อมูลไม่สำเร็จ: ${e.message}</span>`;
+    document.getElementById('sector-modal').classList.add('open');
+    document.body.style.overflow = 'hidden';
+    return;
+  }
   const secStats = data.sectors[secName] || {};
   let stocks = data.stocks.filter(s => s.sector === secName);
   // ต้อง join กับ DATA.stocks ก่อนเรียง เพราะ rs/price/1D%/1M% อยู่คนละ object (main)
@@ -26117,6 +26180,7 @@ function setValPeriod(p, btn) {
 }
 
 function filterByPeriod(dates, vals, period) {
+  if (!vals || !dates) return { dates: dates || [], vals: vals || [] };
   if (period === 'ALL') return { dates, vals };
   const years = { '1Y':1, '2Y':2, '3Y':3, '5Y':5, '10Y':10, '20Y':20, '30Y':30 }[period] || 999;
   const cutoff = new Date();
@@ -26131,6 +26195,7 @@ const VAL_PERIOD_LABEL = { ALL:'ตลอดกาล', '30Y':'30 ปี', '20Y'
 
 // ตัด leading/trailing null ออกก่อน filter period (ซีรีส์ mai เริ่มมีข้อมูลช้ากว่า SET)
 function _trimNulls(dates, vals) {
+  if (!vals || !dates) return { dates: dates || [], vals: vals || [] };
   let lo = 0, hi = vals.length - 1;
   while (lo <= hi && vals[lo] === null) lo++;
   while (hi >= lo && vals[hi] === null) hi--;
@@ -26542,9 +26607,14 @@ function renderValuation() {
   if (!_valData) return;
   const pe  = _valData.pe;
   const pbv = _valData.pbv;
+  if (!pe || !pbv) {
+    const el = document.getElementById('val-summary');
+    if (el) el.innerHTML = '<div style="color:var(--red);padding:16px">ไฟล์ set_market_stats.json ไม่มีข้อมูล pe/pbv — ลองกด Rebuild ใหม่</div>';
+    return;
+  }
 
-  const peF  = filterByPeriod(pe.dates,  pe.series['SET'],  _valPeriod);
-  const pbvF = filterByPeriod(pbv.dates, pbv.series['SET'], _valPeriod);
+  const peF  = filterByPeriod(pe.dates,  pe.series['SET']  || [], _valPeriod);
+  const pbvF = filterByPeriod(pbv.dates, pbv.series['SET'] || [], _valPeriod);
 
   const peStats  = _periodStats(pe.stats['SET']   || {}, peF.vals);
   const pbvStats = _periodStats(pbv.stats['SET']  || {}, pbvF.vals);
@@ -26683,8 +26753,8 @@ function renderValuation() {
     </div>`;
   }
 
-  const maiPeRaw  = _trimNulls(pe.dates,  pe.series['mai']);
-  const maiPbvRaw = _trimNulls(pbv.dates, pbv.series['mai']);
+  const maiPeRaw  = _trimNulls(pe.dates,  pe.series['mai']  || []);
+  const maiPbvRaw = _trimNulls(pbv.dates, pbv.series['mai'] || []);
   const maiPeF  = filterByPeriod(maiPeRaw.dates,  maiPeRaw.vals,  _valPeriod);
   const maiPbvF = filterByPeriod(maiPbvRaw.dates, maiPbvRaw.vals, _valPeriod);
   const maiPeStats  = _periodStats(pe.stats['mai']  || {}, maiPeF.vals);
@@ -26809,7 +26879,31 @@ async function loadNvdrData() {
     // ต้องมี timeout ไม่งั้นหน้าที่พึ่งข้อมูลนี้ (Short/Confluence) ค้าง "กำลังโหลด" ตลอดกาล
     const r = await _fetchTimeout('/api/nvdr?t=' + Date.now(), 25000);
     if (!r.ok) return null;
-    _nvdrData = await r.json();
+    const raw = await r.json();
+    // โหมด static (GitHub Pages/มือถือ): STATIC_MAP ชี้ /api/nvdr ไปที่ไฟล์สะสมดิบ
+    // nvdr_data.json ตรงๆ ซึ่งแต่ละหุ้นมีแค่ {nvdr_pct, nvdr_shares, paid_up_shares, daily}
+    // ต่างจาก route จริง (nvdr_summary) ที่แปลงเป็น {daily_count, last_snap, prev_snap,
+    // daily_tail} ก่อนส่ง — reshape ให้ตรงกันตรงนี้ กันข้อความ "ยังไม่เก็บ daily trend"
+    // หลอกผู้ใช้ทั้งที่ไฟล์ดิบมีประวัติจริงอยู่ (daily_count ที่หายไปจะเป็น undefined)
+    const rawStocks = raw.stocks || {};
+    const needsReshape = Object.values(rawStocks).some(v => v && v.daily_count === undefined && Array.isArray(v.daily));
+    if (needsReshape) {
+      const out = {};
+      for (const [sym, v] of Object.entries(rawStocks)) {
+        const daily = v.daily || [];
+        out[sym] = {
+          nvdr_pct:    v.nvdr_pct || 0,
+          nvdr_shares: v.nvdr_shares || 0,
+          daily_count: daily.length,
+          last_snap:   daily.length ? daily[daily.length - 1] : null,
+          prev_snap:   daily.length >= 2 ? daily[daily.length - 2] : null,
+          daily_tail:  daily.slice(-21).map(dd => [dd.date, dd.nvdr_pct, dd.nvdr_shares || 0]),
+        };
+      }
+      _nvdrData = { updated_at: raw.updated_at, stocks: out };
+    } else {
+      _nvdrData = raw;
+    }
     return _nvdrData;
   } catch { return null; }
 }
@@ -28918,13 +29012,19 @@ async function _fetchFlowMarket(market) {
   // timeout กันหน้าค้าง "กำลังโหลด..." ไม่มีกำหนดเมื่อแหล่งต้นทางช้า/ล่ม
   const res = await _fetchTimeout(cfg.endpoint + '?t=' + Date.now(), 90000,
     `หมดเวลารอข้อมูล Capital Flow (${cfg.label}) — แหล่งข้อมูลต้นทางอาจช้าหรือล่มอยู่ ลองใหม่อีกครั้ง`);
+  if (!res.ok) throw new Error(`โหลดข้อมูลไม่สำเร็จ (HTTP ${res.status})`);
   const d = await res.json();
   if (d.error) throw new Error(d.error);
+  if (!d.rows) throw new Error('ข้อมูลที่ได้ไม่มี rows');
   _flowDataByMarket[market] = d;
   return d;
 }
 
 async function loadFlowPage() {
+  // จำ market ที่ขอไว้ตอนเริ่มฟังก์ชัน — ถ้าผู้ใช้สลับตลาด (setFlowMarket) ก่อน fetch นี้จะ
+  // เสร็จ ผลลัพธ์เก่านี้ต้องถูกทิ้ง ไม่งั้นสถานะ/แหล่งข้อมูลของตลาดเก่าจะไปทับของตลาดใหม่
+  // ที่กำลังโชว์อยู่ (race condition: fetch ช้าของตลาดที่สลับออกไปแล้วเข้ามาทีหลัง)
+  const requestedMarket = _flowMarket;
   renderNvdrRanking();   // section NVDR โหลดคู่ขนาน ไม่ block ตาราง flow
   loadFlowSummaryCards();
   const marketTipEl = document.getElementById('flow-market-tip');
@@ -28932,7 +29032,8 @@ async function loadFlowPage() {
   document.getElementById('flow-tbody').innerHTML =
     '<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--muted)">กำลังโหลด...</td></tr>';
   try {
-    const d = await _fetchFlowMarket(_flowMarket);
+    const d = await _fetchFlowMarket(requestedMarket);
+    if (_flowMarket !== requestedMarket) return;   // สลับตลาดไปแล้วระหว่างรอ — ทิ้งผลลัพธ์เก่า
     // โชว์ว่ารอบนี้ดึงข้อมูลใหม่ได้จากแหล่งไหนบ้าง (siamchart/tfex/thaibma ล่มบ่อย มี fallback
     // เป็น SET API หรือไฟล์สะสม) — เดิมมีข้อมูลนี้จาก backend อยู่แล้วแต่ UI ไม่โชว์เลย
     // ผู้ใช้จึงไม่รู้ว่ากำลังดูข้อมูล fallback/ไฟล์เก่าอยู่หรือเปล่า
@@ -28942,9 +29043,15 @@ async function loadFlowPage() {
     const srcHtml = srcTxt
       ? ` · แหล่ง: ${srcTxt}`
       : '';
-    document.getElementById('flow-status').textContent = 'อัพเดท: ' + (d.fetched_at || '') + srcHtml;
+    const flowStatusEl = document.getElementById('flow-status');
+    flowStatusEl.textContent = 'อัพเดท: ' + (d.fetched_at || '') + srcHtml;
+    // fetched_at เป็นเวลา "ตอนนี้" เสมอแม้ทุกแหล่งดึงสดจะล้มหมดและใช้ไฟล์สะสมเก่า — เช็คความ
+    // ค้างจริงจาก latest_date (วันที่ของแถวข้อมูลล่าสุดจริง) แทน กันผู้ใช้เข้าใจผิดว่าข้อมูลสดใหม่
+    const flowStaleBadge = _staleTradeDateBadge(d.latest_date);
+    if (flowStaleBadge) flowStatusEl.appendChild(flowStaleBadge);
     renderFlowPage();
   } catch(e) {
+    if (_flowMarket !== requestedMarket) return;   // สลับตลาดไปแล้วระหว่างรอ — ทิ้ง error เก่า
     document.getElementById('flow-tbody').innerHTML =
       `<tr><td colspan="6" style="padding:20px;color:var(--red)">โหลดไม่ได้: ${e.message}</td></tr>`;
   }
@@ -28959,6 +29066,10 @@ function setFlowMarket(market, btn) {
   document.getElementById('flow-th-fund').innerHTML    = cfg.thFund    ? `${cfg.thFund}<br><span style="font-size:10px;font-weight:400">(${cfg.unit})</span>` : '';
   document.getElementById('flow-th-foreign').innerHTML = cfg.thForeign ? `${cfg.thForeign}<br><span style="font-size:10px;font-weight:400">(${cfg.unit})</span>` : '';
   document.getElementById('flow-th-retail').innerHTML  = cfg.thRetail  ? `${cfg.thRetail}<br><span style="font-size:10px;font-weight:400">(${cfg.unit})</span>` : '';
+  // Bond ไม่มีกองทุน+โบรก/รายย่อยแยก (มีแค่ต่างชาติ) — ซ่อนหัวคอลัมน์ทิ้งไปเลย เหมือนที่ทำกับ
+  // SET/Chg ด้านล่าง กันคอลัมน์ว่างไม่มีชื่อค้างอยู่กลางตาราง
+  document.getElementById('flow-th-fund').style.display   = cfg.thFund   ? '' : 'none';
+  document.getElementById('flow-th-retail').style.display = cfg.thRetail ? '' : 'none';
   // S50/Bond ไม่มีดัชนี SET/Chg คู่กัน — ซ่อนหัวคอลัมน์ทิ้งไปเลย กันหัวลอยไม่มีข้อมูลใต้
   document.getElementById('flow-th-set').style.display = cfg.hasIndex ? '' : 'none';
   document.getElementById('flow-th-chg').style.display = cfg.hasIndex ? '' : 'none';
@@ -28988,6 +29099,9 @@ function exportFlowCSV() {
   const d = _flowDataByMarket[_flowMarket];
   if (!d || !d.rows.length) { alert('ยังไม่ได้โหลดข้อมูล Capital Flow'); return; }
   const cutoff = new Date();
+  // ตั้งวันที่เป็น 1 ก่อน setMonth() เสมอ — กัน rollover เดือนเมื่อวันที่ปัจจุบัน (เช่น 31)
+  // เกินจำนวนวันของเดือนเป้าหมาย (เช่น ก.พ. 28 วัน) ซึ่ง JS จะปัดเลื่อนไปเดือนถัดไปเงียบๆ
+  cutoff.setDate(1);
   cutoff.setMonth(cutoff.getMonth() - _flowPeriod);
   const cutStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`;
   const rows = d.rows.filter(r => r.date >= cutStr).slice().sort((a, b) => a.date.localeCompare(b.date));
@@ -29015,6 +29129,9 @@ function renderFlowPage() {
   const d = _flowDataByMarket[_flowMarket];
   if (!d) return;
   const cutoff = new Date();
+  // ตั้งวันที่เป็น 1 ก่อน setMonth() เสมอ — กัน rollover เดือนเมื่อวันที่ปัจจุบัน (เช่น 31)
+  // เกินจำนวนวันของเดือนเป้าหมาย (เช่น ก.พ. 28 วัน) ซึ่ง JS จะปัดเลื่อนไปเดือนถัดไปเงียบๆ
+  cutoff.setDate(1);
   cutoff.setMonth(cutoff.getMonth() - _flowPeriod);
   // ใช้ local date components ไม่ใช่ toISOString() (แปลงเป็น UTC ก่อน) — ผู้ใช้ในโซนเวลา
   // ที่ UTC+ ล่วงหน้า (เช่น ไทย +7) จะได้ cutoff คลาดไป 1 วันตอนใกล้เที่ยงคืน

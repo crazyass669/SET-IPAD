@@ -39,18 +39,37 @@ from core.net import ssl_context
 class _LRUCache(OrderedDict):
     """dict จำกัดขนาด — ใช้กับ cache ที่ key มาจาก URL/symbol ตรงๆ (ผู้ใช้ยิงคำขอ
     symbol แปลกๆ ซ้ำได้ไม่จำกัด) กันโตไม่มีเพดานจนกิน memory ยาว ๆ เกิน TTL ไม่ช่วย
-    เพราะ entry ใหม่มาเรื่อย ๆ เร็วกว่าของเก่าหมดอายุ"""
+    เพราะ entry ใหม่มาเรื่อย ๆ เร็วกว่าของเก่าหมดอายุ
+
+    Flask รันแบบ multi-threaded — ล็อกด้วย threading.Lock กัน race บน
+    move_to_end()/popitem() เวลาหลาย thread เขียน cache พร้อมกันตอนใกล้เต็ม maxsize
+    (ไม่งั้น popitem ของ thread หนึ่งอาจไปชนคีย์ที่อีก thread กำลัง move_to_end อยู่
+    จน raise KeyError)"""
 
     def __init__(self, maxsize):
         super().__init__()
         self.maxsize = maxsize
+        self._lock = threading.Lock()
 
     def __setitem__(self, key, value):
-        if key in self:
-            self.move_to_end(key)
-        super().__setitem__(key, value)
-        if len(self) > self.maxsize:
-            self.popitem(last=False)
+        with self._lock:
+            if super().__contains__(key):
+                self.move_to_end(key)
+            super().__setitem__(key, value)
+            if len(self) > self.maxsize:
+                self.popitem(last=False)
+
+    def __getitem__(self, key):
+        with self._lock:
+            return super().__getitem__(key)
+
+    def __contains__(self, key):
+        with self._lock:
+            return super().__contains__(key)
+
+    def get(self, key, default=None):
+        with self._lock:
+            return super().get(key, default)
 
 
 # Band cache — เก็บผล mrlikestock.com ไว้ 6 ชั่วโมง เพื่อลด latency ค้นซ้ำ
@@ -2105,7 +2124,7 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
     else:
         tickers = membership.all_tickers(BASE_DIR)
     if not tickers:
-        return 0, {}, tickers
+        return 0, {}, tickers, False
 
     # last_dates อาจมี ticker ที่ถูกถอดจากดัชนีไปแล้วค้างอยู่ (ไม่อัพเดทต่อ) — ถ้าเอา
     # ไปหา min ทั้งก้อนจะยิ่งลากวันเริ่มดึง (start) ให้เก่าขึ้นเรื่อยๆ ทุกวันที่ผ่านไป
@@ -2116,7 +2135,7 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
         # แล้ว Quick Update ประจำวันแอบกลายเป็น full backfill period='max' หลายร้อยตัว
         # (งานหนักที่ตั้งใจให้กดปุ่ม Index Max เองเท่านั้น)
         print(f"[{label}] {store.DB_FILE} ยังว่าง — ข้าม gap-update (กดปุ่ม Index Max ก่อน)")
-        return 0, {}, tickers
+        return 0, {}, tickers, False
     last_dates = {t: d for t, d in last_dates_all.items() if t in set(tickers)}
     new_tickers = [t for t in tickers if t not in last_dates]
 
@@ -6056,8 +6075,11 @@ _HM_LIVE_STATE = {
     "JP": {"running": False, "error": None, "done": False},
 }
 # กัน race check-then-set ต่อ region (เดิมไม่มี lock — กดปุ่ม Live ซ้ำเร็วๆ/หลายแท็บ
-# พร้อมกันในภูมิภาคเดียวกันชนกันยิง Yahoo ซ้อนได้ ก่อน running ถูกตั้งจริง)
-_hm_live_lock = threading.Lock()
+# พร้อมกันในภูมิภาคเดียวกันชนกันยิง Yahoo ซ้อนได้ ก่อน running ถูกตั้งจริง) — ใช้ _lock ตัว
+# เดียวกับ us/hk/jp_index_full_refresh แทนที่จะแยกล็อกเอง (เดิมเคยมี _hm_live_lock ของตัวเอง
+# แต่สอง handler เช็ค flag ของกันและกันคนละ lock กัน ยังมี TOCTOU race เหลืออยู่ได้ — read/write
+# ของทั้ง _state["running"] และ _HM_LIVE_STATE[region]["running"] ต้องอยู่ใน critical section
+# เดียวกันถึงจะกันได้จริง)
 
 # ดัชนีย่อยที่ยอมให้กรอง (query param ?index=) ต่อ region — ใช้ตอนผู้ใช้กดปุ่ม Live ขณะ
 # ดูอยู่แค่แท็บเดียว (เช่น Dow 30 ตัว) จะได้ไม่ต้องไล่ยิง Yahoo ทั้ง union ของ region นั้น
@@ -6144,14 +6166,17 @@ def heatmap_live_update(region):
     if index_key not in _HM_REGION_INDEXES.get(region, ()):
         index_key = None   # ค่าที่ไม่รู้จัก/ไม่ส่งมา -> ดึงทั้ง union เหมือนเดิม
     state = _HM_LIVE_STATE[region]
-    with _hm_live_lock:
+    with _lock:
         if state["running"]:
             return jsonify({"status": "running"})
-        # เช็ค _state["running"] (ล็อกงานยาวหลัก เช่น Index Max/Quick Update) ด้วย — กัน
-        # race ที่ปุ่มนี้แยกล็อกเอง (_hm_live_lock) เลยเริ่มงานซ้อนกับ full-refresh ของตลาด
-        # เดียวกันได้ ทั้งสองเขียน {region}_prices.db/{region}_index_metrics.json ไฟล์เดียวกัน
+        # เช็ค _state["running"] (ล็อกงานยาวหลัก เช่น Index Max/Quick Update) ด้วย ภายใต้
+        # _lock เดียวกับที่ us/hk/jp_index_full_refresh ใช้ check-then-set ของตัวเอง — กัน
+        # งานซ้อนกับ full-refresh ของตลาดเดียวกันได้จริง (ทั้งสองเขียน {region}_prices.db/
+        # {region}_index_metrics.json ไฟล์เดียวกัน) ต่างจาก "running" (งาน live-update ของ
+        # region นี้เองกำลังทำอยู่แล้ว — poll ต่อได้ปกติ) ตรงที่ไม่เคยเริ่มงานอะไรเลย จึง return
+        # "busy" แยกเพื่อไม่ให้ frontend เข้าใจผิดว่ามีงานให้ poll แล้วโชว์ผลรอบเก่าซ้ำ
         if _state["running"]:
-            return jsonify({"status": "running"})
+            return jsonify({"status": "busy"})
         state.update(running=True, error=None, done=False, n_fetched=None, n_live=None)
     threading.Thread(target=_run_heatmap_live_update, args=(region, index_key), daemon=True).start()
     return jsonify({"status": "started"})
@@ -8973,8 +8998,11 @@ def refresh_market_stats_monthly():
         data = {}
         old_latest = None
         if os.path.exists(_MARKET_STATS_FILE):
-            with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
-                data = json.load(f)
+            try:
+                with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception as e:
+                return jsonify({"ok": False, "error": f"อ่าน set_market_stats.json เดิมไม่สำเร็จ: {e}"}), 500
             old_latest = (data.get("pe", {}).get("dates") or [None])[-1]
 
         data = merge_monthly(data, records)
@@ -9117,8 +9145,11 @@ def stock_valuation_stats():
 
     if not os.path.exists(DATA_FILE):
         return jsonify({"error": "ไม่มีข้อมูล"}), 404
-    with open(DATA_FILE, encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(DATA_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
     stocks = data.get("stocks", [])
 
@@ -9133,7 +9164,7 @@ def stock_valuation_stats():
         return [v for v in vals if lo <= v <= hi]
 
     def calc_dist(vals):
-        v = trim_outliers([x for x in vals if x and x > 0])
+        v = trim_outliers([x for x in vals if isinstance(x, (int, float)) and x > 0])
         if len(v) < 3:
             return None
         avg = st.mean(v)
@@ -10252,7 +10283,10 @@ def _fetch_flow_data():
         rows[i]["chg"] = round(curr - prev, 2) if prev and curr else None
     rows[0]["chg"] = None
 
+    # latest_date คือวันที่ของแถวข้อมูลจริงล่าสุด (ต่างจาก fetched_at ที่เป็นเวลา "ตอนนี้" เสมอ
+    # แม้ทุกแหล่งดึงสดจะล้มหมดและใช้ไฟล์สะสมเก่า — ใช้ latest_date เช็คว่าข้อมูลค้างจริงหรือไม่)
     result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
+              "latest_date": rows[-1]["date"] if rows else None,
               "sources": sources or ["ไฟล์สะสม (ดึงใหม่ไม่สำเร็จทั้งสองแหล่ง)"]}
     if sources and _IS_GITHUB_ACTIONS:   # ได้ของใหม่จริง + รันบน Actions ค่อยเขียนไฟล์ (เจ้าของไฟล์เดียว)
         _atomic_write_json(_MARKET_FLOW_FILE,
@@ -10374,6 +10408,7 @@ def _fetch_flow_s50_data():
 
     rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
     result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
+              "latest_date": rows[-1]["date"] if rows else None,
               "sources": sources or ["ไฟล์สะสม (ดึงใหม่ไม่สำเร็จ)"]}
     if sources and _IS_GITHUB_ACTIONS:
         _atomic_write_json(_S50_FLOW_FILE, {"rows": rows, "updated_at": result["fetched_at"]})
@@ -10461,6 +10496,7 @@ def _fetch_flow_bond_data():
 
     rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
     result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
+              "latest_date": rows[-1]["date"] if rows else None,
               "sources": sources or ["ไฟล์สะสม (ดึงใหม่ไม่สำเร็จ)"]}
     if sources and _IS_GITHUB_ACTIONS:
         _atomic_write_json(_BOND_FLOW_FILE, {"rows": rows, "updated_at": result["fetched_at"]})
@@ -10547,8 +10583,12 @@ def _load_nvdr_data():
     mtime = os.path.getmtime(_NVDR_DATA_FILE)
     if _nvdr_data_cache and mtime == _nvdr_data_ts:
         return _nvdr_data_cache
-    with open(_NVDR_DATA_FILE, encoding="utf-8") as f:
-        _nvdr_data_cache = json.load(f)
+    try:
+        with open(_NVDR_DATA_FILE, encoding="utf-8") as f:
+            _nvdr_data_cache = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[NVDR] failed to load {_NVDR_DATA_FILE}: {e}")
+        return _nvdr_data_cache
     _nvdr_data_ts = mtime
     return _nvdr_data_cache
 
@@ -10611,30 +10651,40 @@ def nvdr_daily_update():
             print(f"[nvdr] GitHub fallback ไม่ได้ ({e})")
 
         updated = 0
+        skipped = 0
         for item in items:
-            sym  = item.get("symbol")
-            if not sym:
-                continue
-            pct  = item.get("percentOfPaidUpCapital") or 0
-            shr  = int(item.get("nvdrInvestment") or 0)
-            paid = int(item.get("paidUpCapitalShares") or 0)
-            snap = {"date": trade_date, "nvdr_pct": round(pct, 4), "nvdr_shares": shr}
+            try:
+                sym  = item.get("symbol")
+                if not sym:
+                    continue
+                pct  = item.get("percentOfPaidUpCapital") or 0
+                shr  = int(item.get("nvdrInvestment") or 0)
+                paid = int(item.get("paidUpCapitalShares") or 0)
+                snap = {"date": trade_date, "nvdr_pct": round(pct, 4), "nvdr_shares": shr}
 
-            if sym not in stocks:
-                stocks[sym] = {"nvdr_pct": 0, "nvdr_shares": 0,
-                               "paid_up_shares": paid, "daily": []}
-            stocks[sym]["nvdr_pct"]      = round(pct, 4)
-            stocks[sym]["nvdr_shares"]   = shr
-            stocks[sym]["paid_up_shares"] = paid
+                if sym not in stocks:
+                    stocks[sym] = {"nvdr_pct": 0, "nvdr_shares": 0,
+                                   "paid_up_shares": paid, "daily": []}
+                stocks[sym]["nvdr_pct"]      = round(pct, 4)
+                stocks[sym]["nvdr_shares"]   = shr
+                stocks[sym]["paid_up_shares"] = paid
 
-            # เขียนทับถ้าเป็นวันเดียวกับที่มีอยู่แล้ว (SET อาจแก้ตัวเลขระหว่างวันถ้ารันซ้ำ
-            # หลายรอบ — เดิม append-only เลยค้างค่าแรกไว้ถาวร)
-            daily = stocks[sym].setdefault("daily", [])
-            if daily and daily[-1].get("date") == trade_date:
-                daily[-1] = snap
-            else:
-                daily.append(snap)  # สะสมไปเรื่อยๆ ไม่ตัดทิ้ง (เหมือนราคาหุ้น)
-            updated += 1
+                # เขียนทับถ้าเป็นวันเดียวกับที่มีอยู่แล้ว (SET อาจแก้ตัวเลขระหว่างวันถ้ารันซ้ำ
+                # หลายรอบ — เดิม append-only เลยค้างค่าแรกไว้ถาวร)
+                daily = stocks[sym].setdefault("daily", [])
+                if daily and daily[-1].get("date") == trade_date:
+                    daily[-1] = snap
+                else:
+                    daily.append(snap)  # สะสมไปเรื่อยๆ ไม่ตัดทิ้ง (เหมือนราคาหุ้น)
+                updated += 1
+            except Exception as e:
+                # กันหุ้นตัวเดียว field ผิดรูป (เช่น SET API ส่ง type แปลกมา) ทำให้ทั้งวันไม่ถูก
+                # บันทึกเลยสักตัว — เดิมไม่มี try/except รายตัว exception หลุดออกจาก loop ก่อนถึง
+                # _atomic_write_json ด้านล่าง ทำให้ข้อมูลทุกหุ้นของวันนั้นหายไปเงียบๆ ทั้งหมด
+                skipped += 1
+                print(f"[nvdr] skip {item.get('symbol')!r}: {type(e).__name__}: {e}")
+        if skipped:
+            print(f"[nvdr] skipped {skipped} malformed item(s) this run")
 
         data["stocks"]     = stocks
         data["updated_at"] = trade_date
@@ -10739,7 +10789,8 @@ def nvdr_summary():
                 pct = item.get("percentOfPaidUpCapital") or 0
                 out[sym] = {"nvdr_pct": round(pct, 4),
                             "nvdr_shares": int(item.get("nvdrInvestment") or 0),
-                            "daily_count": 0, "last_snap": None, "prev_snap": None}
+                            "daily_count": 0, "last_snap": None, "prev_snap": None,
+                            "daily_tail": []}
             return jsonify({"updated_at": trade_date, "stocks": out})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
