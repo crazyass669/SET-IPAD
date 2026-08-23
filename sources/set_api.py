@@ -378,6 +378,285 @@ def fetch_delisted_companies(lang="th", ctx=None, hdr=None):
     }
 
 
+def fetch_shareholders_batch(tickers, callback=None, workers=8, min_ratio=0.5):
+    """ดึงผู้ถือหุ้นใหญ่ + free float ทั้งกระดานจาก /api/set/stock/<sym>/shareholder
+    (พารัลเลลเหมือน fetch_fundamentals) — วัดจริง 2026-08-23: 931 ตัว 8 workers
+    ~8 วิ, coverage free float/major shareholders 100%
+
+    tickers: list ของ "PTT" (ไม่มี .BK ก็ได้ — ตัดให้เองถ้ามี เหมือน fetch_fundamentals)
+    คืน {ticker: {"free_float": float|None, "total_shareholder": int|None,
+    "book_close_date": "YYYY-MM-DD"|None, "nvdr_pct_holding": float|None,
+    "major_shareholders": [{"seq","name","shares","pct","is_nvdr"}, ...]}}
+    nvdr_pct_holding = % ของแถวที่ isThaiNVDR (ปกติมีแถวเดียว 'บริษัท ไทยเอ็นวีดีอาร์ จำกัด')
+    raise ValueError ถ้าดึงสำเร็จน้อยกว่า min_ratio (ให้ caller ข้ามรอบนี้ไปเลย — ไม่มี
+    fallback แหล่งอื่นสำหรับข้อมูลชุดนี้ในระบบ)"""
+    ctx, hdr = _bootstrap_headers()
+    results = {}
+
+    def _one(tick):
+        sym = tick[:-3] if tick.endswith(".BK") else tick
+        path = f"/api/set/stock/{urllib.parse.quote(sym)}/shareholder?lang=th"
+        for attempt in range(2):
+            try:
+                d = _get_json(ctx, hdr, path)
+                majors = []
+                nvdr_pct = None
+                for m in (d.get("majorShareholders") or []):
+                    pct = m.get("percentOfShare")
+                    is_nvdr = bool(m.get("isThaiNVDR"))
+                    if is_nvdr and pct is not None:
+                        nvdr_pct = float(pct)
+                    majors.append({
+                        "seq": m.get("sequence"), "name": m.get("name"),
+                        "shares": m.get("numberOfShare"),
+                        "pct": round(float(pct), 2) if pct is not None else None,
+                        "is_nvdr": is_nvdr,
+                    })
+                ff = d.get("freeFloat") or {}
+                return tick, {
+                    "free_float": round(float(ff["percentFreeFloat"]), 2) if ff.get("percentFreeFloat") is not None else None,
+                    "total_shareholder": d.get("totalShareholder"),
+                    "book_close_date": (d.get("bookCloseDate") or "")[:10] or None,
+                    "nvdr_pct_holding": nvdr_pct,
+                    "major_shareholders": majors,
+                }
+            except Exception:
+                if attempt == 0:
+                    time.sleep(0.5)
+        return tick, None
+
+    total = len(tickers)
+    done = ok = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(_one, t) for t in tickers]
+        for f in as_completed(futures):
+            tick, data = f.result()
+            done += 1
+            if data is not None:
+                results[tick] = data
+                ok += 1
+            if callback and done % 100 == 0:
+                callback(done, total, f"ผู้ถือหุ้นใหญ่ (SET API) {done}/{total}...")
+
+    if total > 0 and ok < total * min_ratio:
+        raise ValueError(f"SET API shareholder ได้แค่ {ok}/{total} "
+                         f"(<{int(min_ratio*100)}%) — ลองใหม่รอบหน้า")
+    return results
+
+
+def fetch_profiles_batch(tickers, callback=None, workers=8, min_ratio=0.5):
+    """ดึงโควตาต่างชาติ + ข้อมูลหลักทรัพย์ทั้งกระดานจาก /api/set/stock/<sym>/profile
+    (พารัลเลลเหมือน fetch_fundamentals) — วัดจริง 2026-08-23: 931 ตัว 8 workers
+    ~7 วิ, coverage percentForeignRoom ~95% (บางหลักทรัพย์ไม่มีเพดานต่างชาติกำหนด)
+
+    tickers: list ของ "PTT" คืน {ticker: {"foreign_room": float|None,
+    "foreign_limit": float|None, "foreign_available": int|None,
+    "foreign_as_of": "YYYY-MM-DD"|None, "listed_share": int|None, "par": float|None,
+    "first_trade_date": "YYYY-MM-DD"|None}}
+    raise ValueError ถ้าดึงสำเร็จน้อยกว่า min_ratio"""
+    ctx, hdr = _bootstrap_headers()
+    results = {}
+
+    def _one(tick):
+        sym = tick[:-3] if tick.endswith(".BK") else tick
+        path = f"/api/set/stock/{urllib.parse.quote(sym)}/profile?lang=th"
+        for attempt in range(2):
+            try:
+                d = _get_json(ctx, hdr, path)
+                room = d.get("percentForeignRoom")
+                limit = d.get("percentForeignLimit")
+                return tick, {
+                    "foreign_room": round(float(room), 4) if room is not None else None,
+                    "foreign_limit": round(float(limit), 2) if limit is not None else None,
+                    "foreign_available": d.get("foreignAvailable"),
+                    "foreign_as_of": (d.get("foreignLimitAsOf") or "")[:10] or None,
+                    "listed_share": d.get("listedShare"),
+                    "par": d.get("par"),
+                    "first_trade_date": (d.get("firstTradeDate") or "")[:10] or None,
+                }
+            except Exception:
+                if attempt == 0:
+                    time.sleep(0.5)
+        return tick, None
+
+    total = len(tickers)
+    done = ok = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(_one, t) for t in tickers]
+        for f in as_completed(futures):
+            tick, data = f.result()
+            done += 1
+            if data is not None:
+                results[tick] = data
+                ok += 1
+            if callback and done % 100 == 0:
+                callback(done, total, f"โควตาต่างชาติ (SET API) {done}/{total}...")
+
+    if total > 0 and ok < total * min_ratio:
+        raise ValueError(f"SET API profile ได้แค่ {ok}/{total} "
+                         f"(<{int(min_ratio*100)}%) — ลองใหม่รอบหน้า")
+    return results
+
+
+def fetch_stock_list(lang="th", ctx=None, hdr=None):
+    """รายชื่อหลักทรัพย์ทั้งหมดบน SET.or.th (~3,940 แถว รวม DW/DR/warrant/ดัชนี ไม่ใช่
+    แค่หุ้นสามัญ) จาก /api/set/stock/list — bulk endpoint เดียวได้ทั้งตลาด มี field
+    'oldSymbols' ที่ endpoint อื่นในไฟล์นี้ไม่มี (ประวัติชื่อย่อเดิมก่อนเปลี่ยน/ควบรวม
+    เช่น POWER เคยชื่อ PSTC) ใช้แยก "เปลี่ยนชื่อ" ออกจาก "เพิกถอนจริง" ตอนหุ้นหายจาก
+    universe แทนการเดามือ (ดู set_universe_check_updates ใน app.py) — เช็คแล้ว
+    2026-08-23: 333/3940 แถวมี oldSymbols อย่างน้อย 1 ตัว
+
+    คืน list ของ {"symbol","name_th","name_en","market","security_type",
+    "industry","sector","old_symbols":[...]}"""
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, f"/api/set/stock/list?lang={lang}", timeout=20)
+    rows = (d or {}).get("securitySymbols") or []
+    return [{
+        "symbol": r.get("symbol"),
+        "name_th": r.get("nameTH"),
+        "name_en": r.get("nameEN"),
+        "market": r.get("market"),
+        "security_type": r.get("securityType"),
+        "industry": r.get("industry"),
+        "sector": r.get("sector"),
+        "old_symbols": r.get("oldSymbols") or [],
+    } for r in rows]
+
+
+def fetch_ipo_upcoming(lang="th", ctx=None, hdr=None):
+    """หุ้น IPO ที่กำลังจะเข้าตลาด/อยู่ระหว่างเสนอขายจาก /api/set/ipo/upcoming —
+    เติมช่องว่างฝั่งตรงข้ามของ delisted_log (ตัวออก) ที่ระบบไม่เคยมีตัวติดตาม
+    "หุ้นเข้าใหม่" เลย (ดู PLAN_set_api_expansion.txt งาน #6)
+
+    คืน {"as_of_date": "YYYY-MM-DD", "items": [{"symbol","name_th","name_en",
+    "status","market","industry_name","sector_name","ipo_price","ipo_price_desc",
+    "no_of_ipo","business_description","underwriters":[...],
+    "financial_advisors":[...]}]}"""
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, f"/api/set/ipo/upcoming?lang={lang}", timeout=20)
+    items = (d or {}).get("data") or []
+    return {
+        "as_of_date": (d.get("asOfDate") or "")[:10],
+        "items": [{
+            "symbol": r.get("symbol"),
+            "name_th": r.get("nameTh"), "name_en": r.get("nameEn"),
+            "status": r.get("status"), "market": r.get("market"),
+            "industry_name": r.get("industryName"), "sector_name": r.get("sectorName"),
+            "ipo_price": r.get("ipoPrice"), "ipo_price_desc": r.get("ipoPriceDescription"),
+            "no_of_ipo": r.get("noOfIPO"),
+            "business_description": r.get("businessDescription"),
+            "underwriters": r.get("underwriters") or [],
+            "financial_advisors": r.get("financialAdvisors") or [],
+        } for r in items],
+    }
+
+
+def fetch_ipo_recently(lang="th", ctx=None, hdr=None):
+    """หุ้นที่เพิ่งเข้าตลาดจาก /api/set/ipo/recently — มีราคา IPO + ราคาล่าสุดมาให้
+    เทียบกันเลย (break ราคาจองหรือยัง)
+
+    คืน list ของ {"symbol","name","market","industry_name","sector_name",
+    "first_trade_date","ipo_price","last","change","percent_change","volume","value"}"""
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, f"/api/set/ipo/recently?lang={lang}", timeout=20)
+    items = d if isinstance(d, list) else []
+    return [{
+        "symbol": r.get("symbol"), "name": r.get("name"), "market": r.get("market"),
+        "industry_name": r.get("industryName"), "sector_name": r.get("sectorName"),
+        "first_trade_date": (r.get("firstTradeDate") or "")[:10],
+        "ipo_price": r.get("ipoPrice"), "last": r.get("last"),
+        "change": r.get("change"), "percent_change": r.get("percentChange"),
+        "volume": r.get("volume"), "value": r.get("value"),
+    } for r in items]
+
+
+def fetch_index_info_list(lang="th", ctx=None, hdr=None):
+    """ทุกดัชนีในตลาด SET (SET/SET50/SET50FF/SET100/sSET/mai + รายอุตสาหกรรม/หมวด)
+    real-time ในเรียกเดียวจาก /api/set/index/info/list — มีดัชนีตระกูล FF
+    (free-float adjusted เช่น SET50FF) ที่ TradingView ไม่มี (indices_cache.json
+    ใช้ TradingView เป็นหลักเพราะมีประวัติย้อนหลัง endpoint นี้มีแค่ snapshot วันนี้
+    เดียว — ใช้เป็นแหล่งเสริมเท่านั้น ไม่ใช่แทนที่ ดู PLAN_set_api_expansion.txt งาน #7)
+
+    คืน list ของ {"symbol","name_th","name_en","prior","open","high","low","last",
+    "change","percent_change","volume","value","market_status","market_datetime",
+    "level"}"""
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, f"/api/set/index/info/list?lang={lang}", timeout=15)
+    items = (d or {}).get("indexIndustrySectors") or []
+    return [{
+        "symbol": r.get("symbol"), "name_th": r.get("nameTH"), "name_en": r.get("nameEN"),
+        "prior": r.get("prior"), "open": r.get("open"), "high": r.get("high"),
+        "low": r.get("low"), "last": r.get("last"), "change": r.get("change"),
+        "percent_change": r.get("percentChange"), "volume": r.get("volume"),
+        "value": r.get("value"), "market_status": r.get("marketStatus"),
+        "market_datetime": r.get("marketDateTime"), "level": r.get("level"),
+    } for r in items]
+
+
+def fetch_financial_health(symbol, ctx=None, hdr=None):
+    """SET Financial Health Check ของหุ้น 1 ตัว จาก
+    /api/set/stock/<sym>/financial-health — จัดกลุ่มเป็น theme (คุณภาพรายได้/
+    สภาพคล่อง/หนี้สิน ฯลฯ) > category > account แต่ละบัญชีมีค่า 5 งวด (ปกติ 3 ปีเต็ม
+    + 2 งวดครึ่งปี) พร้อม %เปลี่ยนต่องวดที่ SET คำนวณมาให้แล้ว (ดู
+    PLAN_set_api_expansion.txt งาน #5)
+
+    คืน {"symbol","periods":[{"quarter","year","as_of_date"}],"themes":[{"name",
+    "categories":[{"name","description","accounts":[{"code","name","unit",
+    "change_unit","values":[{"quarter","year","as_of_date","amount","change"}]}]}]}]}"""
+    sym = symbol[:-3] if symbol.endswith(".BK") else symbol
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, f"/api/set/stock/{urllib.parse.quote(sym)}/financial-health?lang=th", timeout=15)
+    periods = [{"quarter": p.get("quarter"), "year": p.get("year"),
+                "as_of_date": (p.get("asOfDate") or "")[:10]} for p in (d.get("periods") or [])]
+    themes = []
+    for th in (d.get("themes") or []):
+        cats = []
+        for c in (th.get("categories") or []):
+            accs = []
+            for a in (c.get("accounts") or []):
+                accs.append({
+                    "code": a.get("code"), "name": a.get("name"), "unit": a.get("unit"),
+                    "change_unit": a.get("changeUnit"),
+                    "values": [{"quarter": v.get("quarter"), "year": v.get("year"),
+                                "as_of_date": (v.get("asOfDate") or "")[:10],
+                                "amount": v.get("amount"), "change": v.get("change")}
+                               for v in (a.get("values") or [])],
+                })
+            cats.append({"name": c.get("name"), "description": c.get("description"), "accounts": accs})
+        themes.append({"name": th.get("name"), "categories": cats})
+    return {"symbol": sym, "periods": periods, "themes": themes}
+
+
+def fetch_historical_trading(symbol, ctx=None, hdr=None):
+    """ราคา+PE/PBV/BVPS/DivYield รายวันของหุ้น 1 ตัวจาก
+    /api/set/stock/<sym>/historical-trading — endpoint ล็อคความลึกไว้ที่ ~118 แท่ง
+    ซื้อขาย (~6 เดือน) ไม่รับ query param วันที่ใดๆ (ลองแล้ว 2026-08-23: period/
+    fromDate+toDate/startDate+endDate ไม่มีผล คืนจำนวนแท่งเท่าเดิมเสมอ) ใช้เป็นเส้น
+    ตรวจสอบ Valuation Band ระยะสั้น ไม่ใช่แทนที่ pipeline หลัก (ดู
+    PLAN_set_api_expansion.txt งาน #4)
+
+    คืน list ของ {"date","close","pe","pbv","book_value_per_share",
+    "dividend_yield","market_cap"} เรียงเก่า->ใหม่"""
+    sym = symbol[:-3] if symbol.endswith(".BK") else symbol
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, f"/api/set/stock/{urllib.parse.quote(sym)}/historical-trading?lang=th", timeout=15)
+    rows = d if isinstance(d, list) else []
+    out = [{
+        "date": (r.get("date") or "")[:10], "close": r.get("close"),
+        "pe": r.get("pe"), "pbv": r.get("pbv"),
+        "book_value_per_share": r.get("bookValuePerShare"),
+        "dividend_yield": r.get("dividendYield"), "market_cap": r.get("marketCap"),
+    } for r in rows]
+    out.sort(key=lambda r: r["date"])
+    return out
+
+
 _TH_MONTHS = {
     "ม.ค.": 1, "ก.พ.": 2, "มี.ค.": 3, "เม.ย.": 4, "พ.ค.": 5, "มิ.ย.": 6,
     "ก.ค.": 7, "ส.ค.": 8, "ก.ย.": 9, "ต.ค.": 10, "พ.ย.": 11, "ธ.ค.": 12,

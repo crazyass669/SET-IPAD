@@ -1858,12 +1858,91 @@ function setDrRotBenchmark(mode, btn) {
   renderDRRotation();
 }
 
+// ===== Rotation loader helpers (ใช้ร่วมกัน DR/US-HK-JP/ETF) =====
+// toggle gate/body ระหว่างสถานะ loading/error/ready — เดิมแต่ละหน้าเขียนมือ 3 บรรทัดซ้ำกัน
+// หลายจุด เสี่ยง gate/body ไม่ sync กัน (ลืมซ่อน/โชว์อีกฝั่ง)
+function _rotGateState(gate, body, mode, msg) {
+  if (mode === 'ready') {
+    gate.style.display = 'none';
+    body.style.display = '';
+  } else {   // 'loading' หรือ 'error'
+    gate.style.display = '';
+    if (msg != null) gate.textContent = msg;
+    body.style.display = 'none';
+  }
+}
+
+// fetch + parse JSON + โยน error ถ้า backend ตอบ {error:...} มา (เช่น cache ยังไม่มี/rebuild
+// ล้มเหลว) — เดิม loadDRRotation/loadEtfRotation เช็คแค่ d.stocks ไม่เช็ค d.error เลย ทำให้
+// error จริงจาก backend ถูกกลบด้วยข้อความทั่วไป 'ไม่มีข้อมูล...' ต่างจาก _rotLoad (US/HK/JP)
+// ที่เช็คถูกอยู่แล้ว — รวมเป็น helper เดียวกันกันดริฟท์ห่างกันอีกในอนาคต
+async function _rotFetchJson(url, timeoutMs, timeoutMsg) {
+  const d = await (await _fetchTimeout(url, timeoutMs, timeoutMsg)).json();
+  if (d.error) throw new Error(d.error);
+  return d;
+}
+
+// ค่าเฉลี่ยของ field หนึ่งใน pool (ข้ามค่า null) — เดิมเขียนสูตรนี้ซ้ำเหมือนกันเป๊ะ 3 ที่
+// (DR/US-HK-JP/ETF rotation) เสี่ยงแก้ correctness bug ที่หนึ่งแล้วลืมอีกสองที่
+function _rotAvg(pool, field) {
+  const v = pool.filter(s => s[field] != null);
+  return v.length ? v.reduce((a, s) => a + s[field], 0) / v.length : 0;
+}
+
+// คำนวณ relative return ทุก timeframe (หุ้น − benchmark) จาก getter ของแต่ละ field — ใช้
+// ร่วมกันทั้ง DR/US-HK-JP/ETF rotation เดิมแต่ละหน้าคัดลอกสูตรเดียวกันแยกกัน 3 ที่ (เคยพลาด
+// มาแล้วรอบแก้ bug 6M/1Y average + null-vs-0 exclusion ที่ต้องไล่แก้ให้ครบทุกที่) คืน
+// {a3m,a1m,a1w,a6m,a1y, apply(s)} — apply() คืน object return ทั้ง 5 timeframe ที่ relative
+// แล้วของหุ้นตัวเดียว รับ getBm(field) เพื่อรองรับ ETF ที่ benchmark เป็น TDEX ต่อ field ได้
+// (ไม่ใช่แค่ค่าเฉลี่ยกลุ่มเหมือน DR/US-HK-JP)
+function _rotRelativeFromBm(getBm) {
+  const a3m = getBm('ret_3m'), a1m = getBm('ret_1m'), a1w = getBm('ret_1w');
+  const a6m = getBm('ret_6m'), a1y = getBm('ret_1y');
+  const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
+  return {
+    a3m, a1m, a1w, a6m, a1y,
+    apply: s => ({
+      ret_3m: rel(s.ret_3m, a3m), ret_1m: rel(s.ret_1m, a1m), ret_1w: rel(s.ret_1w, a1w),
+      ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
+    }),
+  };
+}
+
+// เหมือน _rotRelativeFromBm แต่ benchmark = ค่าเฉลี่ยเท่าน้ำหนักของ bmPool ตรงๆ (กรณีปกติของ
+// DR/US-HK-JP ที่ไม่มี benchmark พิเศษแบบ TDEX ของ ETF)
+function _rotRelative(bmPool) {
+  return _rotRelativeFromBm(f => _rotAvg(bmPool, f));
+}
+
+// ย่อหน้าอธิบาย 4 quadrant ของ RRG — เดิมก็อปวางคำต่อคำซ้ำ 5 บล็อกใน set_dashboard.html
+// (TH/US/HK/JP/ETF) ไม่มีกลไก include/macro ในไฟล์ HTML แก้คำอธิบายต้องไล่แก้ 5 ที่ (เคย
+// ดริฟท์จริง — บล็อก ETF มี caveat เพิ่มที่อีก 4 บล็อกไม่มี) ย้ายมา render จาก JS ที่เดียว
+// ตอนโหลดสคริปต์แทน — HTML เหลือแค่ container ว่าง id="<prefix>-rot-quadnote"
+function _rotQuadrantLegendHtml(extraHtml) {
+  return '🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น · ' +
+    '🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่' +
+    (extraHtml ? `<br><span style="color:var(--yellow)">${extraHtml}</span>` : '');
+}
+(() => {
+  const notes = {
+    'dr-rot-quadnote': '⚠ ราคาท้องถิ่น (ไม่แปลงค่าเงิน) — หุ้นคนละตลาดมีค่าเงินปนอยู่บ้าง เหมาะดู "ตัวไหนนำ/ตามในกลุ่ม DR" มากกว่าเทียบ absolute',
+    'us-rot-quadnote': null,
+    'hk-rot-quadnote': null,
+    'jp-rot-quadnote': null,
+    'etf-rot-quadnote': '⚠ ตัด ETF ประเภท Leveraged/Inverse ออกจาก cohort — beta ผิดธรรมชาติ เทียบกับตัวอื่นไม่ได้',
+  };
+  for (const [id, extra] of Object.entries(notes)) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = _rotQuadrantLegendHtml(extra);
+  }
+})();
+
 async function loadDRRotation() {
   const gate = document.getElementById('drrot-gate'), body = document.getElementById('drrot-body');
   if (!_drData || !_drData.length) {
-    gate.style.display = ''; gate.textContent = 'กำลังดึงข้อมูลหุ้นต่างประเทศ (DR)...'; body.style.display = 'none';
+    _rotGateState(gate, body, 'loading', 'กำลังดึงข้อมูลหุ้นต่างประเทศ (DR)...');
     try {
-      const d = await (await _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000)).json();
+      const d = await _rotFetchJson('/api/dr', IS_STATIC ? 25000 : 150000);
       if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
       // stale-while-revalidate: /api/dr ตอบชุดเก่าพร้อม refreshing=true ตอน cache หมดอายุ
       // แล้ว rebuild เบื้องหลัง — เดิมแท็บนี้โชว์ชุดเก่าเงียบๆ ไม่มีป้ายและไม่ดึงซ้ำ
@@ -1871,10 +1950,10 @@ async function loadDRRotation() {
       const rf = document.getElementById('drrot-refreshing');
       if (rf) rf.style.display = d.refreshing ? '' : 'none';
       if (d.refreshing) _drPollRefresh(0);
-    } catch (e) { gate.textContent = 'โหลดข้อมูล DR ไม่สำเร็จ: ' + e.message; return; }
+    } catch (e) { _rotGateState(gate, body, 'error', 'โหลดข้อมูล DR ไม่สำเร็จ: ' + e.message); return; }
   }
-  if (!_drData || !_drData.length) { gate.style.display = ''; gate.textContent = 'ไม่มีข้อมูล DR'; body.style.display = 'none'; return; }
-  gate.style.display = 'none'; body.style.display = '';
+  if (!_drData || !_drData.length) { _rotGateState(gate, body, 'error', 'ไม่มีข้อมูล DR'); return; }
+  _rotGateState(gate, body, 'ready');
   // เติมตัวเลือกภูมิภาคจากข้อมูลจริง — rebuild ทุกครั้งที่เปิดหน้า (คง selection เดิมไว้)
   // เดิมสร้างครั้งเดียวแล้วไม่แตะอีก region ใหม่ที่ auto-sync เพิ่มระหว่าง session ไม่โผล่
   const sel = document.getElementById('drrot-region');
@@ -1911,21 +1990,19 @@ function renderDRRotation() {
   // (ถ้าสลับโหมดและเลือกภูมิภาคเจาะจงแล้ว) — ดูว่าใครนำ/ตาม "เพื่อนร่วมภูมิภาค" แทนทั้งกลุ่ม
   const bmRegion = _drRotBenchmark === 'region' && region !== 'all';
   const bmSet = bmRegion ? shown : valid;
-  const avg = f => { const v = bmSet.filter(s => s[f] != null); return v.length ? v.reduce((a, s) => a + s[f], 0) / v.length : 0; };
-  const a3m = avg('ret_3m'), a1m = avg('ret_1m'), a1w = avg('ret_1w');
-  // relative return (หุ้น − ค่าเฉลี่ยกลุ่ม) ต่อทุก timeframe ที่ RRG ใช้
-  const a6m = avg('ret_6m'), a1y = avg('ret_1y');
-  const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
+  const R = _rotRelative(bmSet);
+  const { a3m, a1m, a1w, a6m, a1y } = R;
   const items = shown.map(s => ({
     name: s.sym, region: s.region, ind: s.ind,
-    ret_3m: rel(s.ret_3m, a3m), ret_1m: rel(s.ret_1m, a1m), ret_1w: rel(s.ret_1w, a1w),
-    ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
+    ...R.apply(s),
+    avg_rs: s.rs_score,
   }));
   const info = document.getElementById('drrot-info');
-  if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmRegion ? `ค่าเฉลี่ยภูมิภาค ${region}` : 'ค่าเฉลี่ย DR ทั้งกลุ่ม'} (${bmSet.length} ตัว)` +
+  const bmLabel = bmRegion ? `ค่าเฉลี่ยภูมิภาค ${region}` : 'ค่าเฉลี่ย DR ทั้งกลุ่ม';
+  if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmLabel} (${bmSet.length} ตัว)` +
     (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
              : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
-  drawRotationScatter(items, { canvasId: 'dr-rotation-map', legendId: 'dr-rot-legend', tf: _drRotTf, onOpen: openDRChartModal, relative: true });
+  drawRotationScatter(items, { canvasId: 'dr-rotation-map', legendId: 'dr-rot-legend', tf: _drRotTf, onOpen: openDRChartModal, relative: true, relativeLabel: bmLabel });
 }
 
 // วาดซ้ำอัตโนมัติตอนขนาดหน้าต่างเปลี่ยน/หมุนจอ — canvas เป็น bitmap ขนาดตายตัว ถูก CSS
@@ -2049,22 +2126,44 @@ function drawRotationScatter(sectors, opts = {}) {
   // Iterative collision resolution — ผลัก bubble ที่ซ้อนกันออก + spring ดึงกลับตำแหน่งจริง
   const MIN_DIST = BUBBLE_R * 2 + 3;   // ระยะขั้นต่ำระหว่างศูนย์กลาง (diameter + gap 3px)
   const SPRING  = 0.08;                 // แรงดึงกลับตำแหน่งเดิม (0=ไม่ดึง, 1=ดึงเต็มที่)
+  // จุดเยอะ (US "ทั้งหมด" ~800 ตัว) เช็คทุกคู่ตรงๆ (O(n²)) แพงมาก (~8M Math.hypot ต่อ
+  // render, ซ้ำทุกครั้งที่สลับ timeframe/benchmark/resize) — bucket จุดลง grid ขนาดเซลล์ =
+  // MIN_DIST แล้วเช็คแค่เพื่อนบ้าน 3x3 เซลล์รอบตัว จุดที่ไม่ได้อยู่เซลล์ติดกันห่างกันอย่าง
+  // น้อย MIN_DIST อยู่แล้วแน่ๆ (ไม่มีทางชน) จึงไม่พลาดคู่ที่ต้องเช็คเลย ผลลัพธ์เหมือนเดิม
+  // ทุกประการ แค่ข้ามคู่ที่รู้อยู่แล้วว่าไม่ชน
+  const cellOf = (x, y) => `${Math.floor(x / MIN_DIST)},${Math.floor(y / MIN_DIST)}`;
   for (let iter = 0; iter < 25; iter++) {
+    const grid = new Map();
     for (let i = 0; i < points.length; i++) {
-      for (let j = i + 1; j < points.length; j++) {
-        const dx = points[j].x - points[i].x;
-        const dy = points[j].y - points[i].y;
-        const dist = Math.hypot(dx, dy) || 0.01;
-        if (dist < MIN_DIST) {
-          const push = (MIN_DIST - dist) / 2;
-          const nx = dx / dist, ny = dy / dist;
-          points[i].x -= nx * push;  points[i].y -= ny * push;
-          points[j].x += nx * push;  points[j].y += ny * push;
+      const key = cellOf(points[i].x, points[i].y);
+      let bucket = grid.get(key);
+      if (!bucket) grid.set(key, bucket = []);
+      bucket.push(i);
+    }
+    for (let i = 0; i < points.length; i++) {
+      const pi = points[i];
+      const cx = Math.floor(pi.x / MIN_DIST), cy = Math.floor(pi.y / MIN_DIST);
+      for (let gx = cx - 1; gx <= cx + 1; gx++) {
+        for (let gy = cy - 1; gy <= cy + 1; gy++) {
+          const bucket = grid.get(`${gx},${gy}`);
+          if (!bucket) continue;
+          for (const j of bucket) {
+            if (j <= i) continue;   // เช็คแต่ละคู่ครั้งเดียว เหมือน i<j เดิม
+            const pj = points[j];
+            const dx = pj.x - pi.x, dy = pj.y - pi.y;
+            const dist = Math.hypot(dx, dy) || 0.01;
+            if (dist < MIN_DIST) {
+              const push = (MIN_DIST - dist) / 2;
+              const nx = dx / dist, ny = dy / dist;
+              pi.x -= nx * push;  pi.y -= ny * push;
+              pj.x += nx * push;  pj.y += ny * push;
+            }
+          }
         }
       }
       // Spring — ดึงกลับตำแหน่งข้อมูลจริง
-      points[i].x += (points[i].ox - points[i].x) * SPRING;
-      points[i].y += (points[i].oy - points[i].y) * SPRING;
+      pi.x += (pi.ox - pi.x) * SPRING;
+      pi.y += (pi.oy - pi.y) * SPRING;
     }
   }
 
@@ -7582,6 +7681,26 @@ const FS_FILTERS = [
     tip: '<strong>ระยะจากจุดสูงสุด 52 สัปดาห์</strong><br>ค่าติดลบ = ต่ำกว่า high (เช่น −8 คือย่อจาก high มา 8%)<br><br>เช่น ใส่ <b>-15</b> = ราคาห่าง high ไม่เกิน 15% (โซนใกล้ breakout ตามสูตร CANSLIM)<br><span style="color:var(--text2)">ค่าสดจากราคาปัจจุบัน · ใช้ได้ทั้งหุ้นไทยและ DR</span>' },
   { k: 'rvol',                label: 'RVOL ≥', unit: 'เท่า', cmp: 'gte',
     tip: '<strong>Relative Volume</strong><br>วอลุ่มวันนี้ ÷ วอลุ่มเฉลี่ย 20 วัน — สูง = มีแรงซื้อขายผิดปกติ (เจ้ามือ/สถาบันเข้า)<br><br>เช่น ใส่ <b>1.5</b> = วอลุ่มคึกกว่าปกติ 1.5 เท่า · ใช้กรอง breakout มีของจริง<br><span style="color:var(--text2)">หุ้นไทยเท่านั้น</span>' },
+  { g: 'ธรรมาภิบาล & ความยั่งยืน (SET.or.th)' },
+  { k: 'esg_rank',            label: 'SETESG rating ขั้นต่ำ', cmp: 'gte',
+    selectOptions: [
+      { v: 1, label: 'BBB ขึ้นไป (ต่ำสุดของ SET)' },
+      { v: 2, label: 'A ขึ้นไป' },
+      { v: 3, label: 'AA ขึ้นไป' },
+      { v: 4, label: 'AAA เท่านั้น' },
+    ],
+    tip: '<strong>SETESG Rating</strong><br>เรตติ้งความยั่งยืนทางการของ SET (AAA ดีสุด → BBB) ประเมินปีละครั้ง<br><br>เช่น เลือก <b>AA ขึ้นไป</b> = เอาเฉพาะ AAA และ AA<hr><span style="color:var(--text2)">⚠ มีข้อมูลแค่ ~358 จาก 931 หุ้นสามัญ (38%) — บริษัทที่ไม่ได้เข้าร่วมประเมินจะไม่มีค่า ไม่ได้แปลว่าแย่ (ไม่ตั้งค่าตัวนี้ถ้าไม่อยากตัดหุ้นไม่มีข้อมูลออก) · หุ้นไทยเท่านั้น</span>' },
+  { k: 'cg_score',            label: 'CG Score ≥', unit: '/5', cmp: 'gte', nullOk: true,
+    tip: '<strong>CG Score (การกำกับดูแลกิจการ)</strong><br>คะแนน 1-5 จาก IOD (สมาคมส่งเสริมสถาบันกรรมการบริษัทไทย)<br><br>เช่น ใส่ <b>4</b> = ตัดเฉพาะตัวที่ได้คะแนนต่ำ<hr><span style="color:var(--text2)">🛡 risk filter — ไม่มีข้อมูล = ไม่ตัด (บริษัทส่วนใหญ่ที่มีข้อมูลได้ 5 เต็ม ~85% ใช้แยกคุณภาพระหว่างกันไม่ได้ ใช้ตัดตัวคะแนนต่ำได้อย่างเดียว — อยากจัดอันดับจริงใช้ SETESG rating แทน) · หุ้นไทยเท่านั้น</span>' },
+  { g: 'โครงสร้างผู้ถือหุ้น (SET.or.th)' },
+  { k: 'free_float',          label: 'Free Float ≥', unit: '%', cmp: 'gte', range: true,
+    tip: '<strong>Free Float</strong><br>สัดส่วนหุ้นที่หมุนเวียนซื้อขายจริงในตลาด (ไม่นับหุ้นของผู้ถือหุ้นเชิงกลยุทธ์ที่ไม่ขาย)<br><br>เช่น ใส่ <b>30</b> = free float ≥ 30%<br><span style="color:var(--text2)">ต่ำกว่า 15% = สภาพคล่องต่ำ ราคาแกว่งแรง ปั่นง่าย · ช่องขวาใส่เพดานได้ · ต้องเคย sync ในหน้านี้ก่อน (ปุ่ม 🏛 ด้านบน) · หุ้นไทยเท่านั้น</span>' },
+  { k: 'total_shareholder',   label: 'จำนวนผู้ถือหุ้น ≥', unit: 'ราย', cmp: 'gte',
+    tip: '<strong>จำนวนผู้ถือหุ้นทั้งหมด</strong><br>จำนวนบัญชีที่ถือหุ้นนี้ ณ วันปิดสมุดล่าสุด — น้อย = กระจุกตัว<br><br>เช่น ใส่ <b>5000</b> = ตัดหุ้นที่มีผู้ถือน้อยเกินไปทิ้ง<br><span style="color:var(--text2)">หุ้นไทยเท่านั้น</span>' },
+  { k: 'nvdr_pct_holding',    label: 'NVDR ถือ ≥', unit: '%', cmp: 'gte',
+    tip: '<strong>สัดส่วนที่ไทยเอ็นวีดีอาร์ถือ</strong><br>บ.ไทยเอ็นวีดีอาร์ ถือแทนต่างชาติ — proxy ของแรงซื้อต่างชาติสะสม (ไม่ใช่เจ้าของจริง)<br><br>เช่น ใส่ <b>3</b> = ต่างชาติถือผ่าน NVDR ≥ 3%<br><span style="color:var(--text2)">ดูคู่กับ "ห้องต่างชาติใช้ไป" ด้านล่าง — สูงทั้งคู่ = ต่างชาติอยากได้แต่ซื้อตรงไม่ได้แล้ว · หุ้นไทยเท่านั้น</span>' },
+  { k: 'foreign_room_used_pct', label: 'ห้องต่างชาติใช้ไป ≥', unit: '%', cmp: 'gte', range: true,
+    tip: '<strong>โควตาต่างชาติที่ใช้ไปแล้ว</strong><br>กฎหมายไทยจำกัดสัดส่วนที่ต่างชาติถือได้ (ปกติ 49% บางกลุ่มต่ำกว่านั้น) — ค่านี้คือ % ที่ใช้ไปแล้วเทียบเพดาน<br><br>เช่น ใส่ <b>90</b> = หาหุ้นที่ห้องต่างชาติใกล้เต็ม<hr><span style="color:var(--text2)">ใกล้เต็ม = ต่างชาติต้องซื้อผ่าน NVDR แทน มักดัน NVDR premium ขึ้น · ต้องเคย sync ก่อน (ปุ่ม 🌏 ในหน้า Valuation หรือปุ่มด้านบน) · หุ้นไทยเท่านั้น</span>' },
   { g: 'ตัวกรองพื้นฐาน' },
   { k: 'quarters_available',  label: 'มีงบไตรมาสอย่างน้อย', unit: 'ไตรมาส', cmp: 'gte',
     tip: '<strong>จำนวนงบไตรมาสขั้นต่ำ</strong><br>กรองหุ้นที่มีประวัติงบไม่พอออก (IPO ใหม่ / ข้อมูลสั้น)<br><br>เช่น ใส่ <b>8</b> = ต้องมีงบ ≥ 8 ไตรมาส (2 ปี) · Finnomena มีสูงสุด ~65 ไตรมาส<br><span style="color:var(--text2)">หมายเหตุ: หุ้น HK ส่วนน้อย (~8%) รายงานครึ่งปี — ตัวเลขนี้จะนับเป็น "งวด" (32 งวด = 16 ปี)</span>' },
@@ -7633,7 +7752,9 @@ const FS_PRESETS = [
 // percentile พวกนี้จัดอันดับเฉพาะ universe ไทย/DR ใน /api/factor-screener เท่านั้น — ดู
 // app.py branch uni=='us'/'hk' ไม่มีการคำนวณ pe_sector_pctile/roe_sector_pctile/growth_percentile
 // เลย) ปิดถาวรจริงๆ เพราะกรองแล้วได้ศูนย์เสมอไม่ว่าหุ้นจะ sync งบ Yahoo หรือไม่ก็ตาม
-const FS_MIRROR_NEVER = new Set(['growth_percentile', 'pe_sector_pctile', 'roe_sector_pctile']);
+const FS_MIRROR_NEVER = new Set(['growth_percentile', 'pe_sector_pctile', 'roe_sector_pctile',
+  'esg_rank', 'cg_score', 'free_float', 'total_shareholder', 'nvdr_pct_holding',
+  'foreign_room_used_pct']);   // SET.or.th CG/ESG/ผู้ถือหุ้น/ห้องต่างชาติ — หุ้นไทยเท่านั้น mirror US/HK ไม่มีทางมีค่า
 
 // filter ที่ต้องใช้งบ Yahoo annual — หุ้น mirror US/HK ที่ "เคย sync งบ Yahoo" แล้ว (สมาชิก
 // ดัชนีหลักส่วนใหญ่ + ตัวที่เคยเปิดดู/on-demand fetch) จะมีค่าจริง ยืนยันจากรีวิว 2026-08-01:
@@ -7981,6 +8102,12 @@ const FS_COLS = [
   { k: 'fcf_yield', label: 'FCFYield%', tip: 'Free Cash Flow ÷ Market Cap × 100 — เขียว ≥5% (ดี) · แดง <0% (เผาเงินสด) · กด "📘 อธิบาย FCF Yield" เหนือตารางกรองเพื่ออ่านวิธีอ่านค่าเต็มๆ' },
   { k: 'dividend_coverage', label: 'FCFคุ้มปันผล(x)', tip: 'FCF ÷ เงินปันผลที่จ่ายทั้งปี — เขียว ≥1 เท่า (FCF พอจ่ายปันผล) · แดง <1 เท่า (จ่ายเกินตัว)' },
   { k: 'ps_percentile', label: 'P/S%ile', tip: 'P/S เทียบอดีตตัวเอง — เขียว ≤25 · แดง ≥75' },
+  { k: 'esg_rating', label: 'ESG', sep: true, tip: 'SETESG Rating (AAA/AA/A/BBB) — SET.or.th ประเมินปีละครั้ง มีเฉพาะ ~38% ของหุ้นทั้งหมด (ว่าง = ไม่ได้เข้าร่วมประเมิน ไม่ใช่คะแนนแย่) หุ้นไทยเท่านั้น' },
+  { k: 'cg_score', label: 'CG', tip: 'CG Score 1-5 จาก IOD — ส่วนใหญ่ที่มีข้อมูลได้เต็ม 5 (~85%) ใช้กรองตัดตัวคะแนนต่ำได้ ใช้จัดอันดับไม่ได้' },
+  { k: 'free_float', label: 'FreeFloat%', sep: true, tip: 'สัดส่วนหุ้นหมุนเวียนซื้อขายจริง — เขียว ≥40% · แดง <15% (สภาพคล่องต่ำ ปั่นง่าย) ต้องเคย sync ผู้ถือหุ้นก่อน' },
+  { k: 'total_shareholder', label: 'ผู้ถือหุ้น', tip: 'จำนวนบัญชีที่ถือหุ้นนี้ ณ วันปิดสมุด — น้อย = กระจุกตัว' },
+  { k: 'nvdr_pct_holding', label: 'NVDR%', tip: 'สัดส่วนที่บ.ไทยเอ็นวีดีอาร์ถือแทนต่างชาติ — ดูคู่กับห้องต่างชาติใช้ไป' },
+  { k: 'foreign_room_used_pct', label: 'ห้องตปท.%', tip: 'โควตาต่างชาติที่ใช้ไปแล้วเทียบเพดาน — แดง ≥95% · ส้ม ≥80% ต้องเคย sync ห้องต่างชาติก่อน' },
   { k: 'high_season_q', label: 'ไฮซีซั่น', sep: true, tip: 'ไตรมาสที่รายได้สูงสุดตามฤดูกาล (จากประวัติ ~16 ปี)' },
   { k: 'quarters_available', label: 'งบ(Q)', tip: 'จำนวนงบไตรมาสที่มีในระบบ (มาก = ประวัติยาว น่าเชื่อถือกว่า)' },
 ];
@@ -8007,6 +8134,10 @@ const FS_COL_CLR = {
   div_cagr_5y:         v => v >= 5 ? 'var(--green)' : (v < 0 ? 'var(--red)' : ''),
   fcf_yield:           v => v >= 5 ? 'var(--green)' : (v < 0 ? 'var(--red)' : ''),
   dividend_coverage:   v => v >= 1 ? 'var(--green)' : (v < 1 ? 'var(--red)' : ''),
+  esg_rating:          v => (v === 'AAA' || v === 'AA') ? 'var(--green)' : (v === 'BBB' ? '#e8a33d' : ''),
+  cg_score:            v => v <= 3 ? 'var(--red)' : (v === 5 ? 'var(--green)' : ''),
+  free_float:          v => v >= 40 ? 'var(--green)' : (v < 15 ? 'var(--red)' : ''),
+  foreign_room_used_pct: v => v >= 95 ? 'var(--red)' : (v >= 80 ? '#e8a33d' : ''),
 };
 const FS_MKT_BADGE = { TH: '#58a6ff', US: '#3fb950', HK: '#e3b341', DR: '#3fb950' };
 
@@ -8078,6 +8209,16 @@ function buildFsFilterUI() {
     }
     if (f.cmp === 'eq' && f.options) {
       const opts = f.options.map(o => `<option value="${o.v}">${o.label}</option>`).join('');
+      return `<div class="scr-group"><label class="scr-label" for="fsin-${f.k}">${f.label}${tip}</label>
+        <select class="scr-input" id="fsin-${f.k}" onchange="runFscreener()">
+          <option value="">— ทั้งหมด —</option>${opts}
+        </select></div>`;
+    }
+    if (f.cmp === 'gte' && f.selectOptions) {
+      // ตัวเลือกอันดับ (เช่น SETESG rating) แต่เปรียบเทียบแบบตัวเลข "ขั้นต่ำ" (gte)
+      // ไม่ใช่ตรงตัวแบบ eq — <select>.value เป็น string แต่ parseFloat ใน
+      // _fsReadConds() แปลงเป็นตัวเลขให้เองเหมือน input ปกติ
+      const opts = f.selectOptions.map(o => `<option value="${o.v}">${o.label}</option>`).join('');
       return `<div class="scr-group"><label class="scr-label" for="fsin-${f.k}">${f.label}${tip}</label>
         <select class="scr-input" id="fsin-${f.k}" onchange="runFscreener()">
           <option value="">— ทั้งหมด —</option>${opts}
@@ -8264,7 +8405,10 @@ async function loadFscreener() {
     _fsLoaded = true;
     gate.style.display = 'none'; body.style.display = '';
     const m = d.meta || {};
-    _fsMainMetaText = `${m.count || _fsRows.length} หุ้น · คำนวณเมื่อ ${m.computed_at || '-'}`;
+    _fsMainMetaText = `${m.count || _fsRows.length} หุ้น · คำนวณเมื่อ ${m.computed_at || '-'}`
+      + (m.esg_count ? ` · CG/ESG ${m.esg_count} บริษัท (${m.esg_updated_at || '-'})` : '')
+      + (m.shareholder_count ? ` · ผู้ถือหุ้นใหญ่ ${m.shareholder_count} ตัว (${m.shareholder_updated_at || '-'})` : '')
+      + (m.foreign_count ? ` · ห้องต่างชาติ ${m.foreign_count} ตัว (${m.foreign_updated_at || '-'})` : '');
     document.getElementById('fs-meta').textContent = _fsMainMetaText;
     resetFscreener(true);   // เคลียร์ค่าฟอร์มก่อน (skipRun=true: ไม่แตะผลลัพธ์/localStorage)
     loadFsSettings();       // ดึงค่าที่เคยตั้งไว้ล่าสุดกลับมา (persist เหมือนเมนู Screener ปกติ)
@@ -8274,6 +8418,56 @@ async function loadFscreener() {
     const moreBtn = document.getElementById('fs-more'); if (moreBtn) moreBtn.style.display = 'none';
   } catch (e) {
     gate.innerHTML = 'โหลดข้อมูลไม่สำเร็จ: ' + e.message;
+  }
+}
+
+// ดึง CG/ESG rating ทั้งตลาดใหม่จาก SET.or.th (1 call — ดู /api/sync-esg) แล้วโหลด
+// factor-screener ใหม่ทั้งชุดเพื่อให้คอลัมน์/filter ESG/CG ได้ค่าล่าสุด (ดู
+// PLAN_set_api_expansion.txt งาน #3)
+async function syncEsgData(btn) {
+  const note = document.getElementById('fs-esg-sync-note');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ กำลังดึง...';
+  if (note) note.textContent = '';
+  try {
+    const r = await _fetchTimeout('/api/sync-esg', 30000, undefined, { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'ไม่ทราบสาเหตุ');
+    if (note) note.textContent = `✓ อัพเดทแล้ว ${d.count} บริษัท (${d.updated_at || ''})`;
+    _fsLoaded = false;   // บังคับ loadFscreener() ดึง /api/factor-screener ใหม่
+    await loadFscreener();
+  } catch (e) {
+    if (note) note.textContent = `⚠ ไม่สำเร็จ: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
+// ดึงผู้ถือหุ้นใหญ่/free float (kind='shareholders') หรือโควตาต่างชาติ
+// (kind='foreign') ทั้งกระดานใหม่จาก SET.or.th แล้วโหลด factor-screener ใหม่ —
+// ดู PLAN_set_api_expansion.txt งาน #1/#2 (endpoint พารัลเลลทั้งกระดาน ~7-15 วิ)
+async function syncOwnershipData(kind, btn) {
+  const url = kind === 'foreign' ? '/api/sync-foreign-room' : '/api/sync-shareholders';
+  const label = kind === 'foreign' ? 'ห้องต่างชาติ' : 'ผู้ถือหุ้นใหญ่';
+  const note = document.getElementById('fs-esg-sync-note');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ กำลังดึง (~10 วิ)...';
+  if (note) note.textContent = '';
+  try {
+    const r = await _fetchTimeout(url, 30000, undefined, { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'ไม่ทราบสาเหตุ');
+    if (note) note.textContent = `✓ ${label}: ${d.fetched}/${d.total} ตัว (${d.updated_at || ''})`;
+    _fsLoaded = false;
+    await loadFscreener();
+  } catch (e) {
+    if (note) note.textContent = `⚠ ไม่สำเร็จ: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
   }
 }
 
@@ -8507,7 +8701,7 @@ function _fsColHtml(r, c) {
   }
   const raw = r[c.k];
   const clr = FS_COL_CLR[c.k];
-  if (clr && raw != null && typeof raw === 'number') {
+  if (clr && raw != null && (typeof raw === 'number' || c.k === 'esg_rating')) {
     const col = clr(raw);
     if (col) return `<span style="color:${col};font-weight:600">${v}</span>`;
   }
@@ -10218,6 +10412,10 @@ function renderTearsheet(d) {
   const quality = _tsQualityHtml(d.quality, h.symbol);
   const dividend = _tsDividendHtml(d.dividend, h.symbol);
 
+  // การ์ดย่อ SET Financial Health Check — หุ้นไทยเท่านั้น (ดู
+  // PLAN_set_api_expansion.txt งาน #5B) โหลด async แยก ไม่บล็อค render หลัก
+  const finHealthMini = mkt !== 'TH' ? '' : `<div id="ts-fin-health-mini" style="margin-bottom:12px"></div>`;
+
   // NVDR/insider (ร.59/246-2)/short sales เป็นข้อมูลเฉพาะตลาดหุ้นไทย — US/HK ไม่มีแนวคิดนี้
   const flow = mkt !== 'TH' ? '' : `
     <div class="card" style="padding:16px;margin-bottom:12px">
@@ -10236,7 +10434,32 @@ function renderTearsheet(d) {
           <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px">NVDR</div>
           <div id="ts-nvdr"><div class="empty" style="padding:8px 0;font-size:11px">กำลังโหลด...</div></div>
         </div>
+        <div style="flex:1;min-width:220px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px">ห้องต่างชาติ
+            <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:270px">
+              <strong>โควตาต่างชาติ (Foreign Room)</strong><br>
+              กฎหมายไทยจำกัดสัดส่วนที่ต่างชาติถือได้ (ปกติ 49% บางกลุ่ม เช่น สื่อสาร/ธนาคาร ต่ำกว่านั้น)<hr>
+              <b>ใกล้เต็ม = อ่านยังไง</b><br>
+              ต่างชาติที่อยากซื้อเพิ่มต้องไปซื้อ NVDR แทน → NVDR มักซื้อขายแพงกว่าหุ้นปกติ (premium)<br>
+              ตีความได้ 2 ทาง: ความต้องการต่างชาติสูง (บวก) หรือแรงซื้อต่างชาติชนเพดานแล้วหมดแรงหนุน (ลบ)<br>
+              <span style="color:var(--text2)">ดูคู่กับ NVDR% ทางซ้าย — NVDR สูง + ห้องต่างชาติใกล้เต็ม = ต่างชาติอยากได้แต่ซื้อตรงไม่ได้แล้ว</span>
+            </div></span>
+          </div>
+          <div id="ts-foreign-room"><div class="empty" style="padding:8px 0;font-size:11px">กำลังโหลด...</div></div>
+        </div>
       </div>
+    </div>`;
+
+  // ผู้ถือหุ้นใหญ่ + free float (SET.or.th ทางการ) — หุ้นไทยล้วน (ดู
+  // PLAN_set_api_expansion.txt งาน #1) ต้องเคยกด sync ในหน้า Screener+ ก่อนถึงจะมีค่า
+  const ownership = mkt !== 'TH' ? '' : `
+    <div class="card" style="padding:16px;margin-bottom:12px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:10px">🏛 โครงสร้างผู้ถือหุ้น
+        <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:260px">
+          ข้อมูลทางการจาก SET.or.th (ผู้ถือหุ้นใหญ่ 10 อันดับ + free float) ณ วันปิดสมุดทะเบียนล่าสุด — ไม่ใช่รายวัน อัพเดทเมื่อมี XM/XD ครั้งถัดไป
+        </div></span>
+      </div>
+      <div id="ts-ownership"><div class="empty" style="padding:8px 0;font-size:11px">กำลังโหลด...</div></div>
     </div>`;
 
   const seasonality = `<div id="ts-lts" style="margin-bottom:12px"></div>`;
@@ -10300,12 +10523,12 @@ function renderTearsheet(d) {
 
   const altValHtml = _tsAltValHtml(d);
 
-  document.getElementById('ts-body').innerHTML = header + liteBanner + calendarWeek + actionBar + valuation + peScenarioHtml + pbvScenarioHtml + finExtraHtml + dcfHtml + altValHtml + quality + dividend + flow + seasonality + news + docs;
+  document.getElementById('ts-body').innerHTML = header + liteBanner + calendarWeek + actionBar + valuation + peScenarioHtml + pbvScenarioHtml + finExtraHtml + dcfHtml + altValHtml + quality + dividend + finHealthMini + flow + ownership + seasonality + news + docs;
   requestAnimationFrame(() => {
     const canvas = document.getElementById('ts-spark');
     if (canvas && h.sparkline) drawSparkline(canvas, h.sparkline, h.ret_1y);
   });
-  if (mkt === 'TH') _tsLoadFlow(h.symbol);
+  if (mkt === 'TH') { _tsLoadFlow(h.symbol); _tsLoadOwnership(h.symbol); _tsLoadFinHealthMini(h.symbol, d.quality?.cash_cycle); }
   if (!lite) {
     _tsLoadCalendarWeek(h.symbol, mkt);
     _loadPriceAnalytics(h.symbol, 'ts-lts', () => _tsData?.symbol === h.symbol, mkt !== 'TH' ? h.symbol : null);
@@ -12044,6 +12267,106 @@ function _tsLoadFlow(sym) {
     if (box) box.innerHTML = renderNvdrPopup(sym);
   });
   _tsLoadInsider(sym);
+}
+
+// ผู้ถือหุ้นใหญ่/free float/ห้องต่างชาติ (SET.or.th ทางการ, ดู PLAN_set_api_expansion.txt
+// งาน #1/#2) — เติมทั้งคอลัมน์ที่ 4 ของการ์ด "เงินทุน & คนวงใน" (#ts-foreign-room) และ
+// การ์ด "🏛 โครงสร้างผู้ถือหุ้น" (#ts-ownership) ในคราวเดียว (endpoint เดียวกัน)
+async function _tsLoadOwnership(sym) {
+  const roomBox = document.getElementById('ts-foreign-room');
+  const ownBox = document.getElementById('ts-ownership');
+  try {
+    const r = await _fetchTimeout(`/api/company-ownership/${encodeURIComponent(sym)}`, 8000);
+    const d = await r.json();
+    if (_tsData?.symbol !== sym) return;
+    if (!r.ok) {
+      const msg = `<div class="empty" style="padding:8px 0;font-size:11px">ยังไม่เคย sync — ไปหน้า <a href="#" onclick="showPage('fscreener');return false" style="color:var(--blue)">🔬 Screener+</a> กด "🌱 Sync CG/ESG" หรือปุ่ม sync ผู้ถือหุ้น/ห้องต่างชาติก่อน</div>`;
+      if (roomBox) roomBox.innerHTML = msg;
+      if (ownBox) ownBox.innerHTML = msg;
+      return;
+    }
+    // คอลัมน์ห้องต่างชาติในการ์ด "เงินทุน & คนวงใน"
+    if (roomBox) {
+      const used = d.foreign_room_used_pct;
+      if (used == null) {
+        roomBox.innerHTML = '<div class="empty" style="padding:8px 0;font-size:11px">ไม่มีข้อมูล</div>';
+      } else {
+        const clr = used >= 95 ? 'var(--red)' : used >= 80 ? '#e8a33d' : 'var(--green)';
+        roomBox.innerHTML = `
+          <div style="font-size:18px;font-weight:700;color:${clr}">${used.toFixed(1)}%</div>
+          <div style="font-size:10.5px;color:var(--text2)">ใช้ไปแล้ว (เพดาน ${d.foreign_limit ?? '—'}%)</div>
+          <div style="height:5px;background:var(--card2);border-radius:3px;margin-top:4px;overflow:hidden">
+            <div style="height:100%;width:${Math.min(used,100)}%;background:${clr}"></div>
+          </div>
+          <div style="font-size:10px;color:var(--text2);margin-top:3px">ณ ${d.foreign_as_of || '—'}</div>`;
+      }
+    }
+    // การ์ด "🏛 โครงสร้างผู้ถือหุ้น" (renderer ใช้ร่วมกับหน้า Insider — ดู _ownershipCardHtml)
+    if (ownBox) ownBox.innerHTML = _ownershipCardHtml(d);
+  } catch (e) {
+    if (_tsData?.symbol !== sym) return;
+    const msg = '<div class="empty" style="padding:8px 0;font-size:11px;color:var(--red)">โหลดไม่สำเร็จ</div>';
+    if (roomBox) roomBox.innerHTML = msg;
+    if (ownBox) ownBox.innerHTML = msg;
+  }
+}
+
+// สร้าง HTML การ์ดผู้ถือหุ้นใหญ่+free float+ห้องต่างชาติ จาก /api/company-ownership
+// response ตัวเดียว — ใช้ร่วมกันทั้ง Tearsheet (#ts-ownership) และหน้า Insider
+// (#ins-own-result, ดู loadInsOwnership) กันโค้ด tile/ตารางซ้ำกัน 2 ที่
+function _ownershipCardHtml(d) {
+  if (d.free_float == null && d.foreign_room == null && !d.major_shareholders?.length) {
+    return '<div class="empty" style="padding:8px 0;font-size:11px">ไม่มีข้อมูล</div>';
+  }
+  const tile = (label, val, tip, clr) => `<div style="flex:1;min-width:120px">
+    <div style="font-size:20px;font-weight:700${clr ? `;color:${clr}` : ''}">${val ?? '—'}</div>
+    <div style="font-size:10.5px;color:var(--text2)">${label}${tip ? ` <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box">${tip}</div></span>` : ''}</div>
+  </div>`;
+  const used = d.foreign_room_used_pct;
+  const usedClr = used == null ? '' : used >= 95 ? 'var(--red)' : used >= 80 ? '#e8a33d' : 'var(--green)';
+  const rows = (d.major_shareholders || []).map(m => `
+    <tr>
+      <td style="text-align:center;color:var(--text2)">${m.seq}</td>
+      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap${m.is_nvdr ? ';color:#e8a33d;font-weight:600' : ''}" title="${(m.name||'').replace(/"/g,'&quot;')}${m.is_nvdr ? ' (บัญชี NVDR — ตัวแทนถือหุ้นแทนต่างชาติ ไม่ใช่เจ้าของจริง)' : ''}">${(m.name||'').replace(/</g,'&lt;')}${m.is_nvdr ? ' 🌐' : ''}</td>
+      <td style="text-align:right;font-weight:600">${m.pct != null ? m.pct.toFixed(2)+'%' : '—'}</td>
+      <td style="width:120px"><div style="height:6px;background:var(--card2);border-radius:3px;overflow:hidden"><div style="height:100%;width:${Math.min((m.pct||0)*4,100)}%;background:var(--blue)"></div></div></td>
+    </tr>`).join('');
+  return `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px">
+      ${tile('Free Float', d.free_float != null ? d.free_float.toFixed(1)+'%' : '—',
+        'สัดส่วนหุ้นที่หมุนเวียนซื้อขายจริงในตลาด (ไม่นับหุ้นของผู้ถือหุ้นเชิงกลยุทธ์ที่ไม่ขาย)<hr>ยิ่งต่ำ = สภาพคล่องน้อย ราคาแกว่งแรง ปั่นง่าย · ต่ำกว่า 15% เสี่ยงถูกเตือนจาก SET')}
+      ${tile('จำนวนผู้ถือหุ้น', d.total_shareholder != null ? d.total_shareholder.toLocaleString() : '—',
+        'จำนวนบัญชีที่ถือหุ้นนี้ ณ วันปิดสมุด — น้อย = กระจุกตัว')}
+      ${tile('NVDR ถือ', d.nvdr_pct_holding != null ? d.nvdr_pct_holding.toFixed(2)+'%' : '—',
+        'บ.ไทยเอ็นวีดีอาร์ ถือแทนต่างชาติ — ไม่ใช่เจ้าของตัวจริง ตัวเลขนี้คือ proxy ของแรงซื้อต่างชาติสะสม<hr>ดูคู่กับ "ห้องต่างชาติ" ทางขวา: NVDR สูง + ห้องต่างชาติใกล้เต็ม = ต่างชาติอยากได้แต่ซื้อตรงไม่ได้แล้ว')}
+      ${tile('ห้องต่างชาติใช้ไป', used != null ? used.toFixed(1)+'%' : '—',
+        `<strong>โควตาต่างชาติ (Foreign Room)</strong><br>กฎหมายไทยจำกัดสัดส่วนที่ต่างชาติถือได้ (ปกติ 49% บางกลุ่มต่ำกว่านั้น) — ค่านี้คือสัดส่วนที่ใช้ไปแล้วเทียบเพดาน ${d.foreign_limit ?? '—'}%<hr><span style="color:var(--text2)">ใกล้เต็ม (≥95%) = ต่างชาติต้องซื้อผ่าน NVDR แทน มักดัน NVDR premium ขึ้น</span>`, usedClr)}
+    </div>
+    ${rows ? `<div style="overflow-x:auto"><table class="tbl" style="min-width:400px;font-size:12px">
+      <thead><tr><th>#</th><th style="text-align:left">ผู้ถือหุ้น</th><th style="text-align:right">%</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>` : ''}
+    <div style="font-size:10.5px;color:var(--text2);margin-top:8px">ผู้ถือหุ้น ณ วันปิดสมุด ${d.book_close_date || '—'} · ห้องต่างชาติ ณ ${d.foreign_as_of || '—'} — ไม่ใช่รายวัน อัพเดทเมื่อมีรอบ sync ถัดไป</div>`;
+}
+
+// ค้นหาผู้ถือหุ้นใหญ่+ห้องต่างชาติของหุ้น 1 ตัวในหน้า Insider (ปุ่ม "ค้นหา" /
+// กด Enter ในช่อง ins-own-sym) ใช้ renderer เดียวกับ Tearsheet (_ownershipCardHtml)
+async function loadInsOwnership() {
+  initFinPage();   // เผื่อ fin-set-datalist (autocomplete) ยังไม่เคยถูกเติม (ไม่เคยเข้าหน้าอื่นมาก่อน) — เบามาก เรียกซ้ำได้
+  const sym = (document.getElementById('ins-own-sym').value || '').trim().toUpperCase();
+  const box = document.getElementById('ins-own-result');
+  if (!sym || !box) return;
+  box.innerHTML = '<div class="empty" style="padding:8px;font-size:12px">กำลังโหลด...</div>';
+  try {
+    const r = await _fetchTimeout(`/api/company-ownership/${encodeURIComponent(sym)}`, 8000);
+    const d = await r.json();
+    if (!r.ok) {
+      box.innerHTML = `<div class="empty" style="padding:8px;font-size:12px">${(d.error || 'ไม่พบข้อมูล').replace(/</g,'&lt;')}</div>`;
+      return;
+    }
+    box.innerHTML = _ownershipCardHtml(d);
+  } catch (e) {
+    box.innerHTML = '<div class="empty" style="padding:8px;font-size:12px;color:var(--red)">โหลดไม่สำเร็จ</div>';
+  }
 }
 
 async function _tsLoadInsider(sym) {
@@ -15679,26 +16002,24 @@ async function _rotLoad(mkt) {
   const c = _ROT_CFG[mkt];
   const gate = document.getElementById(`${c.prefix}-gate`), body = document.getElementById(`${c.prefix}-body`);
   if (!c.getData()) {
-    gate.style.display = ''; gate.textContent = `กำลังดึงข้อมูลหุ้น ${c.marketName}...`; body.style.display = 'none';
+    _rotGateState(gate, body, 'loading', `กำลังดึงข้อมูลหุ้น ${c.marketName}...`);
     try {
       // endpoint อ่าน cache local จึงเร็ว แต่ถ้า server ค้าง fetch เปล่าจะแขวน gate
       // "กำลังดึงข้อมูล..." ตลอดกาล — ห่อ timeout ให้หลุดมาเห็น error เสมอ
-      const d = await (await _fetchTimeout(c.endpoint, 30000,
-        `หมดเวลารอข้อมูลหุ้น ${c.marketName} (เกิน 30 วิ) — ลองใหม่อีกครั้ง`)).json();
-      if (d.error) throw new Error(d.error);
+      const d = await _rotFetchJson(c.endpoint, 30000,
+        `หมดเวลารอข้อมูลหุ้น ${c.marketName} (เกิน 30 วิ) — ลองใหม่อีกครั้ง`);
       c.setData(d);
     } catch (e) {
-      gate.textContent = `โหลดข้อมูลหุ้น ${c.marketName} ไม่สำเร็จ: ` + e.message;
+      _rotGateState(gate, body, 'error', `โหลดข้อมูลหุ้น ${c.marketName} ไม่สำเร็จ: ` + e.message);
       return;
     }
   }
   const data = c.getData();
   if (!data || !data.stocks || !data.stocks.length) {
-    gate.style.display = ''; body.style.display = 'none';
-    gate.textContent = `ยังไม่มีข้อมูล — กดปุ่ม 📈 ${c.marketName} Index Max หรือ ⚡ Quick Update ก่อน`;
+    _rotGateState(gate, body, 'error', `ยังไม่มีข้อมูล — กดปุ่ม 📈 ${c.marketName} Index Max หรือ ⚡ Quick Update ก่อน`);
     return;
   }
-  gate.style.display = 'none'; body.style.display = '';
+  _rotGateState(gate, body, 'ready');
   _rotRebuildSectorFilter(mkt);
   _rotRender(mkt);
 }
@@ -15739,21 +16060,25 @@ function _rotRender(mkt) {
   }
   // benchmark = ค่าเฉลี่ยทั้งดัชนี (ปกติ) หรือค่าเฉลี่ยเฉพาะ sector ที่เลือก (ถ้าสลับโหมด
   // และเลือก sector เจาะจงแล้ว) — ใช้ดูว่าใครแรง/อ่อนกว่า "เพื่อนร่วม sector" แทนทั้งตลาด
-  const bmSet = (c.getBenchmark() === 'sector' && sector !== 'ALL') ? shown : valid;
-  const avg = f => { const v = bmSet.filter(s => s[f] != null); return v.length ? v.reduce((a, s) => a + s[f], 0) / v.length : 0; };
-  const a3m = avg('ret_3m'), a1m = avg('ret_1m'), a1w = avg('ret_1w'), a6m = avg('ret_6m'), a1y = avg('ret_1y');
-  const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
+  const bmSector = c.getBenchmark() === 'sector' && sector !== 'ALL';
+  const bmSet = bmSector ? shown : valid;
+  const R = _rotRelative(bmSet);
+  const { a3m, a1m, a1w, a6m, a1y } = R;
   const items = shown.map(s => ({
     name: s.symbol, sector: s.sector,
-    ret_3m: rel(s.ret_3m, a3m), ret_1m: rel(s.ret_1m, a1m), ret_1w: rel(s.ret_1w, a1w),
-    ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
+    ...R.apply(s),
+    avg_rs: s.rs_score,
   }));
   const info = document.getElementById(`${c.prefix}-info`);
-  const bmLabel = bmSet === shown ? `เฉลี่ย sector "${sector}"` : 'เฉลี่ยทั้งดัชนี';
+  // เดิมเช็ค bmSet === shown (reference equality) แทนเช็ค bmSector ตรงๆ — ตอน sector==='ALL'
+  // (ค่า default ทุกครั้งที่เปิดแท็บ) shown และ bmSet ต่างก็ชี้ไปที่ array เดียวกัน (valid)
+  // ทำให้ bmSet === shown เป็น true โดยบังเอิญจาก object aliasing ไม่ใช่จาก logic จริง —
+  // label เลยกลายเป็น 'เฉลี่ย sector "ALL"' ทั้งที่ยังไม่ได้เทียบ sector เลย
+  const bmLabel = bmSector ? `เฉลี่ย sector "${sector}"` : 'เฉลี่ยทั้งดัชนี';
   if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmLabel} (${bmSet.length} ตัว)` +
     (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
              : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
-  drawRotationScatter(items, { canvasId: c.canvasId, legendId: c.legendId, tf: c.getTf(), onOpen: c.onOpen, relative: true });
+  drawRotationScatter(items, { canvasId: c.canvasId, legendId: c.legendId, tf: c.getTf(), onOpen: c.onOpen, relative: true, relativeLabel: bmLabel });
 }
 
 function setUsRotBenchmark(mode, btn) { _rotSetBenchmark('us', mode, btn); }
@@ -17981,17 +18306,15 @@ function setFinTab(tab, btn) {
   document.getElementById('fin-search-set').style.display = tab === 'set' ? '' : 'none';
   document.getElementById('fin-search-dr').style.display  = tab === 'dr'  ? '' : 'none';
   document.getElementById('fin-result').innerHTML = '';
-  // SET.or.th มีข้อมูลเฉพาะหุ้นไทย — หุ้นต่างประเทศ (DR) ปิดปุ่ม SET และเด้งกลับ Finnomena
+  // SET.or.th มีข้อมูลเฉพาะหุ้นไทย — หุ้นต่างประเทศ (DR) ปิดปุ่ม SET/สุขภาพการเงิน
+  // และเด้งกลับ Finnomena
   const setSrcBtn = document.getElementById('fin-view-set-btn');
+  const healthBtn = document.getElementById('fin-view-health-btn');
   if (tab === 'dr') {
-    setSrcBtn.disabled = true;
-    setSrcBtn.style.opacity = '0.4';
-    setSrcBtn.style.cursor = 'not-allowed';
-    if (_finView === 'set') setFinView('finnomena', document.getElementById('fin-view-finn-btn'));
+    [setSrcBtn, healthBtn].forEach(b => { b.disabled = true; b.style.opacity = '0.4'; b.style.cursor = 'not-allowed'; });
+    if (_finView === 'set' || _finView === 'health') setFinView('finnomena', document.getElementById('fin-view-finn-btn'));
   } else {
-    setSrcBtn.disabled = false;
-    setSrcBtn.style.opacity = '';
-    setSrcBtn.style.cursor = '';
+    [setSrcBtn, healthBtn].forEach(b => { b.disabled = false; b.style.opacity = ''; b.style.cursor = ''; });
   }
   initFinPage();
 }
@@ -18013,7 +18336,7 @@ function _finSyncViewButton(source) {
 
 function setFinView(view, btn) {
   _finView = view;
-  document.querySelectorAll('#fin-view-finn-btn,#fin-view-fyear-btn,#fin-view-yyear-btn,#fin-view-yq-btn,#fin-view-set-btn,#fin-view-qpl-btn,#fin-view-merged-btn,#fin-view-div-btn')
+  document.querySelectorAll('#fin-view-finn-btn,#fin-view-fyear-btn,#fin-view-yyear-btn,#fin-view-yq-btn,#fin-view-set-btn,#fin-view-health-btn,#fin-view-qpl-btn,#fin-view-merged-btn,#fin-view-div-btn')
     .forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('fin-result').innerHTML = '';
@@ -18068,6 +18391,14 @@ async function searchFinancials() {
     _finRecentAdd(sym, _finTab, isDrSym ? _finMirMarket : null);
     history.replaceState(null, '', '#fin/' + _finTab + '/' + (isDrSym ? _finMirMarket + ':' : '') + encodeURIComponent(sym));
     loadFinMergedReport(sym, isDrSym, isDrSym ? _finMirMarket : null, hint);
+    return;
+  }
+  // SET Financial Health Check — หุ้นไทยเท่านั้น (ปุ่มถูกปิดไว้แล้วตอนอยู่แท็บ DR ใน
+  // setFinTab แต่กันไว้อีกชั้นเผื่อ state ค้าง) ดู PLAN_set_api_expansion.txt งาน #5
+  if (_finView === 'health') {
+    _finRecentAdd(sym, _finTab);
+    history.replaceState(null, '', '#fin/' + _finTab + '/' + encodeURIComponent(sym));
+    loadFinHealthView(sym, hint);
     return;
   }
   // แปลงมุมมองที่ผู้ใช้เลือก -> source ที่ดึง (+ fallback ถ้าแหล่งนั้นไม่มีข้อมูลหุ้นตัวนี้)
@@ -18161,6 +18492,169 @@ async function _checkFinDQ(sym) {
 // ใช้ endpoint แยก /api/financials-qpl-report ไม่ใช่ financials-full (โครงสร้างข้อมูล
 // เป็นรายการต่อไตรมาสที่ผสานมาแล้ว ไม่ใช่ section->field->date) ดู compute_qpl_report()
 // ใน sources/financials_store.py
+// SET Financial Health Check — เมนูงบการเงิน แท็บ "🩺 สุขภาพการเงิน (SET)" (ดู
+// PLAN_set_api_expansion.txt งาน #5) โครงสร้าง theme > category > account > ค่า
+// 5 งวด (ปกติ 3 ปีเต็ม + 2 ครึ่งปี) ที่ SET จัดหมวดมาให้เอง (คุณภาพรายได้/สภาพคล่อง/
+// หนี้สิน ฯลฯ) ต่างจากตาราง P&L/งบรวมที่ dashboard ประกอบเอง — ตัวนี้เป็นเลขทางการที่
+// SET คำนวณจากงบที่บริษัทยื่นจริง
+async function loadFinHealthView(sym, hint) {
+  hint.textContent = 'กำลังโหลด...';
+  document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูล Financial Health...</div>';
+  try {
+    const r = await _fetchTimeout(`/api/financial-health/${encodeURIComponent(sym)}`, 20000,
+      'หมดเวลารอข้อมูล (เกิน 20 วิ) — ลองใหม่อีกครั้ง');
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    hint.textContent = '';
+    _renderFinHealth(d);
+  } catch (e) {
+    hint.textContent = '';
+    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${e.message}</div>`;
+  }
+}
+
+function _finHealthPeriodLabel(p) {
+  const q = p.quarter === 'YE' ? 'ปี' : p.quarter;
+  return `${q} ${p.year}`;
+}
+function _finHealthFmt(v, unit) {
+  if (v == null || isNaN(v)) return '—';
+  const n = Math.abs(v) >= 1000 ? v.toLocaleString('en-US', { maximumFractionDigits: 0 }) : v.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  return n;
+}
+function _finHealthChange(v, unit) {
+  if (v == null || isNaN(v)) return '';
+  const clr = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text2)';
+  const sign = v > 0 ? '+' : '';
+  return `<span style="font-size:10px;color:${clr}">${sign}${v.toFixed(1)}${unit === '%' ? 'pp' : (unit || '')}</span>`;
+}
+
+function _renderFinHealth(d) {
+  const box = document.getElementById('fin-result');
+  if (!d.themes || !d.themes.length) {
+    box.innerHTML = '<div class="empty" style="padding:24px">ไม่มีข้อมูล Financial Health ของหุ้นนี้</div>';
+    return;
+  }
+  const periods = d.periods || [];
+  const themesHtml = d.themes.map(theme => {
+    const catsHtml = theme.categories.map(cat => {
+      const rowsHtml = cat.accounts.map(acc => {
+        // จับคู่ค่าของบัญชีนี้กับ periods หลัก (แม่นยำกว่า index ตรงๆ — บาง account
+        // อาจไม่มีค่าครบทุกงวด SET จะข้ามงวดนั้นไปเงียบๆ)
+        const byKey = {};
+        (acc.values || []).forEach(v => { byKey[`${v.quarter}-${v.year}`] = v; });
+        const cellsHtml = periods.map(p => {
+          const v = byKey[`${p.quarter}-${p.year}`];
+          if (!v) return `<td style="text-align:right;color:var(--text2)">—</td>`;
+          return `<td style="text-align:right;white-space:nowrap">${_finHealthFmt(v.amount)}<br>${_finHealthChange(v.change, acc.change_unit)}</td>`;
+        }).join('');
+        return `<tr>
+          <td style="font-size:12px;max-width:260px">${(acc.name || '').replace(/</g,'&lt;')}${acc.unit ? ` <span style="color:var(--text2);font-size:10px">(${acc.unit})</span>` : ''}</td>
+          ${cellsHtml}
+        </tr>`;
+      }).join('');
+      return `<div style="margin-bottom:14px">
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px">${(cat.name || '').replace(/</g,'&lt;')}
+          ${cat.description ? ` <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:260px">${cat.description.replace(/</g,'&lt;')}</div></span>` : ''}
+        </div>
+        <div style="overflow-x:auto"><table class="tbl" style="min-width:520px;font-size:12px">
+          <thead><tr><th style="text-align:left">รายการ</th>${periods.map(p => `<th style="text-align:right">${_finHealthPeriodLabel(p)}</th>`).join('')}</tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table></div>
+      </div>`;
+    }).join('');
+    return `<div class="card" style="padding:16px;margin-bottom:12px">
+      <div style="font-size:14px;font-weight:700;margin-bottom:12px">${(theme.name || '').replace(/</g,'&lt;')}</div>
+      ${catsHtml}
+    </div>`;
+  }).join('');
+
+  box.innerHTML = `
+    <div style="font-size:11px;color:var(--text2);margin-bottom:12px">
+      เลขทางการที่ SET คำนวณจากงบที่บริษัทยื่นจริง — ${periods.length} งวด (ปีเต็ม + ครึ่งปี ไม่ใช่รายไตรมาสครบทุกงวด)
+      <span style="color:var(--text2)"> · แถวที่ชื่อลงท้าย * ใน SET หมายถึง ratio ที่ SET คำนวณเอง ไม่ใช่ตัวเลขจากงบตรงๆ</span>
+    </div>
+    ${themesHtml}`;
+}
+
+// หาบัญชีตาม code ทั่วทุก theme/category ของ Financial Health Check — ใช้กับการ์ดย่อ
+// Tearsheet ที่หยิบเฉพาะตัวเด่นจากทั้งหมดที่ SET จัดหมวดมาให้ (ดู _tsLoadFinHealthMini)
+function _finHealthFindAccount(themes, code) {
+  for (const th of themes || []) {
+    for (const c of th.categories || []) {
+      const a = (c.accounts || []).find(x => x.code === code);
+      if (a) return a;
+    }
+  }
+  return null;
+}
+
+// การ์ดย่อ "🩺 สุขภาพการเงิน (SET)" ใน Tearsheet — หยิบ 5 ตัวเด่นจาก Financial Health
+// Check เต็ม (ดู PLAN_set_api_expansion.txt งาน #5B) + cross-check วงจรเงินสดกับค่าที่
+// dashboard คำนวณเองจาก Yahoo ใน factor_snapshot (งาน #5C) เตือนถ้าต่างกันมาก (สูตร/
+// ช่วงเวลาที่ใช้อาจต่างกัน — ไม่จำเป็นว่าตัวไหนผิด แค่เตือนให้เช็ค)
+const _TS_FIN_HEALTH_PICKS = [
+  { code: 'r_debt_to_equity',          label: 'D/E',              suffix: ' เท่า' },
+  { code: 'q_cash_cycle',              label: 'วงจรเงินสด',       suffix: ' วัน' },
+  { code: 'p_net_income_margin',       label: 'Net Margin',       suffix: '%' },
+  { code: 'p_ebitda_margin',           label: 'EBITDA Margin',    suffix: '%' },
+  { code: 'r_interest_coverage_cfo',   label: 'Interest Coverage', suffix: ' เท่า' },
+];
+async function _tsLoadFinHealthMini(sym, yahooCashCycle) {
+  const box = document.getElementById('ts-fin-health-mini');
+  if (!box) return;
+  try {
+    const r = await _fetchTimeout(`/api/financial-health/${encodeURIComponent(sym)}`, 12000);
+    const d = await r.json();
+    if (_tsData?.symbol !== sym) return;
+    if (d.error) { box.innerHTML = ''; return; }   // ไม่มีข้อมูล — ซ่อนการ์ดเงียบๆ ไม่บังคับให้เห็น error รบกวน
+    const tiles = _TS_FIN_HEALTH_PICKS.map(p => {
+      const acc = _finHealthFindAccount(d.themes, p.code);
+      const latest = acc?.values?.length ? acc.values[acc.values.length - 1] : null;
+      const val = latest?.amount;
+      return `<div style="min-width:100px">
+        <div style="font-size:16px;font-weight:700">${val != null ? val.toFixed(2) + p.suffix : '—'}</div>
+        <div style="font-size:10.5px;color:var(--text2)">${p.label}</div>
+      </div>`;
+    }).join('');
+    if (!tiles) { box.innerHTML = ''; return; }
+
+    // cross-check วงจรเงินสด SET (q_cash_cycle) vs ที่ dashboard คำนวณเองจาก Yahoo
+    const setCC = _finHealthFindAccount(d.themes, 'q_cash_cycle')?.values?.slice(-1)[0]?.amount;
+    let crossCheck = '';
+    if (setCC != null && yahooCashCycle != null) {
+      const diff = Math.abs(setCC - yahooCashCycle);
+      if (diff >= 15) {
+        crossCheck = `<div style="font-size:10.5px;color:#e8a33d;margin-top:8px">⚠ วงจรเงินสดที่คำนวณเอง (Yahoo) = ${yahooCashCycle.toFixed(1)} วัน ต่างจาก SET ทางการ (${setCC.toFixed(1)} วัน) อยู่ ${diff.toFixed(0)} วัน — สูตร/ช่วงเวลาที่ใช้อาจต่างกัน ไม่จำเป็นว่าตัวไหนผิด ดูรายละเอียดเต็มในเมนูงบการเงิน</div>`;
+      }
+    }
+
+    box.innerHTML = `<div class="card" style="padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:13px;font-weight:700">🩺 สุขภาพการเงิน (SET)
+          <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:260px">
+            เลขทางการที่ SET คำนวณจากงบที่บริษัทยื่นจริง — หยิบมา 5 ตัวเด่นจากทั้งหมดที่ SET จัดหมวดไว้ (หนี้สิน/วงจรเงินสด/กำไร) ดูฉบับเต็มได้ในเมนูงบการเงิน
+          </div></span>
+        </div>
+        <a href="#" onclick="_tsGoFinHealth('${sym}');return false" style="font-size:11px;color:var(--blue)">ดูเต็มในเมนูงบการเงิน →</a>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap">${tiles}</div>
+      ${crossCheck}
+    </div>`;
+  } catch (e) {
+    if (_tsData?.symbol !== sym) return;
+    box.innerHTML = '';   // เป็นการ์ดเสริม — โหลดไม่สำเร็จก็ซ่อนไปเงียบๆ ไม่รบกวนหน้าหลัก
+  }
+}
+
+function _tsGoFinHealth(sym) {
+  showPage('financials');
+  setFinTab('set', document.getElementById('fin-tab-set-btn'));
+  document.getElementById('fin-sym-set').value = sym;
+  setFinView('health', document.getElementById('fin-view-health-btn'));
+  setTimeout(searchFinancials, 150);
+}
+
 async function loadFinQplReport(sym, isDr, market, hint) {
   hint.textContent = 'กำลังโหลด...';
   document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูลงบการเงิน...</div>';
@@ -19968,12 +20462,22 @@ let _calScopeMarket = 'TH';
 
 function _calSetScope(scope, btn) {
   _calScope = scope;
-  document.querySelectorAll('#cal-scope-watchlist,#cal-scope-all,#cal-scope-market').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#cal-scope-watchlist,#cal-scope-all,#cal-scope-market,#cal-scope-ipo').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   const marketRow = document.getElementById('cal-scope-market-row');
   if (marketRow) marketRow.style.display = scope === 'market' ? 'flex' : 'none';
   const refreshBtn = document.getElementById('cal-refresh-btn');
   if (refreshBtn) refreshBtn.style.display = scope === 'watchlist' ? '' : 'none';
+  // scope IPO เป็นตาราง 2 ก้อน (กำลังเข้า/เพิ่งเข้าตลาด) ไม่ใช่ event list ตามปกติ —
+  // ซ่อนตัวกรองมุมมอง/ทิศทาง/ช่วงเวลาที่ใช้ไม่ได้กับข้อมูลชุดนี้
+  ['cal-view-list', 'cal-view-grid'].forEach(id => {
+    const el = document.getElementById(id)?.closest('.filter-row');
+    if (el) el.style.display = scope === 'ipo' ? 'none' : '';
+  });
+  const dirRow = document.getElementById('cal-direction-row');
+  if (dirRow) dirRow.style.display = scope === 'ipo' ? 'none' : '';
+  const rangeRow = document.getElementById('cal-range-row');
+  if (rangeRow) rangeRow.style.display = scope === 'ipo' ? 'none' : '';
   loadCalendarPage();
 }
 
@@ -20034,6 +20538,8 @@ async function loadCalendarPage(refresh) {
   const note = document.getElementById('cal-fetch-note');
   if (note) note.textContent = '';
 
+  if (_calScope === 'ipo') { _calLoadIPO(); return; }
+
   if (_calScope === 'watchlist') {
     const { list } = _calResolveWatchlist();
     if (list.length === 0) {
@@ -20068,6 +20574,68 @@ async function loadCalendarPage(refresh) {
     } catch (e) { _calCache = []; }
   }
   _calRenderFromCache();
+}
+
+// หุ้น IPO กำลังจะเข้า/เพิ่งเข้าตลาด จาก SET.or.th (ดึงสด ไม่เก็บสะสม, ดู
+// PLAN_set_api_expansion.txt งาน #6) — เติมช่องว่างฝั่งตรงข้ามของ delisted_log
+// (ตัวออก) ระบบไม่มีตัวติดตาม "หุ้นเข้าใหม่" มาก่อนเลย
+async function _calLoadIPO() {
+  const box = document.getElementById('cal-result');
+  const note = document.getElementById('cal-fetch-note');
+  if (note) note.textContent = '';
+  box.innerHTML = '<div class="empty" style="padding:24px">กำลังโหลด...</div>';
+  try {
+    const r = await _fetchTimeout('/api/ipo-list', 25000);
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'โหลดไม่สำเร็จ');
+    const up = d.upcoming || [], rec = d.recently || [];
+
+    const upHtml = up.length ? `
+      <div class="card" style="padding:16px;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:700;margin-bottom:10px">🆕 กำลังจะเข้าตลาด (${up.length} บริษัท)</div>
+        <div style="overflow-x:auto"><table class="tbl" style="min-width:600px">
+          <thead><tr><th>Symbol</th><th style="text-align:left">ชื่อ</th><th>ตลาด</th><th>อุตสาหกรรม</th><th>ราคา IPO</th><th>สถานะ</th></tr></thead>
+          <tbody>${up.map(x => `<tr>
+            <td><strong>${x.symbol || '—'}</strong></td>
+            <td style="font-size:11px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(x.business_description || '').replace(/"/g,'&quot;').replace(/</g,'&lt;')}">${(x.name_th || x.name_en || '').replace(/</g,'&lt;')}</td>
+            <td style="font-size:11px;color:var(--text2)">${x.market || '—'}</td>
+            <td style="font-size:11px;color:var(--text2)">${x.industry_name || '—'}</td>
+            <td style="text-align:right">${x.ipo_price != null ? x.ipo_price : (x.ipo_price_desc || '—')}</td>
+            <td style="font-size:11px;color:var(--text2)">${x.status || '—'}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>` : '<div class="empty" style="padding:16px;margin-bottom:12px">ไม่มีหุ้นกำลังเสนอขาย IPO ตอนนี้</div>';
+
+    const recHtml = rec.length ? `
+      <div class="card" style="padding:16px">
+        <div style="font-size:13px;font-weight:700;margin-bottom:10px">📈 เพิ่งเข้าตลาด (${rec.length} บริษัท)
+          <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:270px">
+            <strong>ราคา IPO vs ราคาปัจจุบัน</strong><br>
+            เขียว = เทรดเหนือราคาจอง · แดง = ต่ำกว่าจอง (break ราคาจอง)<hr>
+            <span style="color:var(--text2)">⚠ หุ้น IPO ยังไม่มีในฐานราคา/งบของ dashboard จนกว่าจะรัน Full Update รอบถัดไป — เมนูอื่น (Screener/Tearsheet ฯลฯ) จะยังหาหุ้นพวกนี้ไม่เจอ</span>
+          </div></span>
+        </div>
+        <div style="overflow-x:auto"><table class="tbl" style="min-width:560px">
+          <thead><tr><th>Symbol</th><th style="text-align:left">ชื่อ</th><th>วันเทรดวันแรก</th><th>ราคา IPO</th><th>ราคาล่าสุด</th><th>%เปลี่ยน</th></tr></thead>
+          <tbody>${rec.map(x => {
+            const clr = (x.percent_change ?? 0) >= 0 ? 'var(--green)' : 'var(--red)';
+            return `<tr>
+              <td><strong>${x.symbol || '—'}</strong></td>
+              <td style="font-size:11px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(x.name || '').replace(/</g,'&lt;')}</td>
+              <td style="font-size:11px;color:var(--text2)">${x.first_trade_date || '—'}</td>
+              <td style="text-align:right">${x.ipo_price != null ? x.ipo_price.toFixed(2) : '—'}</td>
+              <td style="text-align:right;font-weight:600">${x.last != null ? x.last.toFixed(2) : '—'}</td>
+              <td style="text-align:right;font-weight:600;color:${clr}">${x.percent_change != null ? (x.percent_change >= 0 ? '+' : '') + x.percent_change.toFixed(1) + '%' : '—'}</td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table></div>
+      </div>` : '<div class="empty" style="padding:16px">ไม่มีข้อมูลหุ้นที่เพิ่งเข้าตลาด</div>';
+
+    box.innerHTML = upHtml + recHtml;
+    if (note) note.textContent = `ข้อมูล ณ ${d.as_of_date || '—'} · ดึงสดจาก SET.or.th ทุกครั้งที่เปิด (ไม่เก็บสะสม)`;
+  } catch (e) {
+    box.innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</div>`;
+  }
 }
 
 function _calScopeEmptyLabel() {
@@ -21570,6 +22138,7 @@ async function searchBand() {
 function _renderBandResult(data) {
   document.getElementById('band-result').style.display = 'block';
   document.getElementById('band-sym-title').textContent = data.symbol;
+  _loadBandSetCheck(data.symbol, data.pe?.current, data.pbv?.current);
   const cacheTag = document.getElementById('band-cache-tag');
   if (data.cached_at) {
     cacheTag.textContent = `cache ${data.cached_at}`;
@@ -21595,6 +22164,47 @@ function _renderBandResult(data) {
     `;
     requestAnimationFrame(() => _drawBandChart(`band-${type}-canvas`, d));
   });
+}
+
+// เส้นตรวจสอบ PE/PBV ทางการจาก SET.or.th (~6 เดือนล่าสุด, ดู
+// PLAN_set_api_expansion.txt งาน #4) — เทียบกับค่า "ปัจจุบัน" ที่ mrlikestock.com ให้
+// ในการ์ด Band ด้านบน ไม่ใช่แทนที่ pipeline หลัก (SET ให้ย้อนหลังแค่ ~6 เดือน band
+// ต้องใช้หลายปี) ถ้าห่างกันมาก = แหล่งใดแหล่งหนึ่งอาจเพี้ยน ควรเช็ค
+async function _loadBandSetCheck(sym, mrPe, mrPbv) {
+  const box = document.getElementById('band-set-check');
+  if (!box) return;
+  box.innerHTML = '';
+  try {
+    const r = await _fetchTimeout(`/api/set-valuation-check/${encodeURIComponent(sym)}`, 15000);
+    const d = await r.json();
+    if (d.error) return;   // เงียบๆ พอ — เป็นแค่เส้นตรวจสอบเสริม ไม่ควรบัง error ทับการ์ดหลัก
+    const diffRow = (label, mr, set) => {
+      if (mr == null || set == null) return '';
+      const diffPct = mr !== 0 ? Math.abs((set - mr) / mr * 100) : 0;
+      const clr = diffPct >= 15 ? 'var(--red)' : diffPct >= 5 ? '#e8a33d' : 'var(--green)';
+      return `<div style="display:flex;gap:10px;align-items:center;font-size:12px">
+        <span style="min-width:36px;color:var(--text2)">${label}</span>
+        <span>mrlikestock <b>${mr}</b></span>
+        <span style="color:var(--text2)">vs</span>
+        <span>SET.or.th <b>${set}</b></span>
+        <span style="color:${clr};font-weight:600">ต่างกัน ${diffPct.toFixed(1)}%</span>
+      </div>`;
+    };
+    const rows = diffRow('PE', mrPe, d.pe?.current) + diffRow('PBV', mrPbv, d.pbv?.current);
+    if (!rows) return;
+    box.innerHTML = `<div class="card" style="padding:12px 16px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:8px">🔍 เส้นตรวจสอบจาก SET.or.th ทางการ
+        <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:270px">
+          <strong>PE/PBV ทางการจาก SET.or.th</strong><br>
+          ตัวเลขเดียวกับที่ SET เผยแพร่บนหน้าหุ้นแต่ละตัว<hr>
+          ใช้เป็น <b>เส้นตรวจสอบ</b> ไม่ใช่แทนที่ band ด้านบน เพราะ SET ให้ย้อนหลังแค่ ~${d.count_days} วันทำการ (~6 เดือน) ส่วน band ต้องใช้หลายปี<br>
+          <span style="color:var(--text2)">ถ้าต่างกันมาก (≥15%) = แหล่งใดแหล่งหนึ่งอาจเพี้ยน ควรเช็ค (เช่น mrlikestock ขูดพลาด/ค้าง)</span>
+        </div></span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">${rows}</div>
+      <div style="font-size:10px;color:var(--text2);margin-top:6px">ข้อมูล SET.or.th ช่วง ${d.date_from} ถึง ${d.date_to} (${d.count_days} วันทำการ)</div>
+    </div>`;
+  } catch (e) { /* เงียบๆ — ข้อมูลเสริม ไม่กระทบการใช้งานหลัก */ }
 }
 
 function _renderNpResult(data) {
@@ -22436,14 +23046,38 @@ async function checkSetUniverseUpdates() {
           <tbody>${d.new.map(x => `<tr><td><strong>${x.symbol}</strong></td><td style="font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.name}</td><td style="font-size:11px;color:var(--text2)">${x.market}</td></tr>`).join('')}</tbody>
         </table></div>
       </div>` : '';
-    const remHtml = d.removed.length ? `
-      <div>
-        <div style="font-size:12px;font-weight:600;color:var(--red);margin-bottom:6px">🗑 มีในเครื่อง แต่ไม่อยู่ในลิสต์ SET.or.th แล้ว (${d.removed.length} ตัว)</div>
-        <div style="font-size:11.5px">${d.removed.join(', ')}</div>
-        <div style="font-size:10.5px;color:var(--text2);margin-top:4px">อาจเปลี่ยนชื่อย่อ/ควบรวม/เพิกถอน — ตรวจก่อนสรุปว่าเป็นเพิกถอนจริง (เช่นเช็คข่าว SET.or.th)<br>
-          ถ้ายืนยันแล้ว: เปลี่ยนชื่อย่อ (เช่น PSTC→POWER) ใช้ <code>python rename_symbol.py &lt;เก่า&gt; &lt;ใหม่&gt;</code> (ย้ายราคา/งบ/ปันผลให้ต่อเนื่อง) · ถูกควบรวมหายไปเลย (เช่น BPP→BANPU) ใช้ <code>python mark_delisted.py &lt;symbol&gt; "เหตุผล"</code> — มี .bat ให้ดับเบิลคลิกทั้งคู่ที่ root โปรเจกต์</div>
+    // removed: {symbol, renamed_to} — renamed_to มาจาก oldSymbols ของ SET (ดู
+    // /api/set-universe-check-updates) ถ้าเจอ = เปลี่ยนชื่อย่อ ไม่ใช่เพิกถอน แยกแสดง
+    // คนละกลุ่มกัน (ดู PLAN_set_api_expansion.txt งาน #8)
+    const renamedRows  = (d.removed || []).filter(x => x.renamed_to);
+    const delistedRows = (d.removed || []).filter(x => !x.renamed_to);
+    const renamedHtml = renamedRows.length ? `
+      <div style="margin-bottom:8px">
+        <div style="font-size:12px;font-weight:600;color:#e3b341;margin-bottom:6px">🔄 น่าจะแค่เปลี่ยนชื่อย่อ (${renamedRows.length} ตัว)
+          <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:270px">
+            <strong>เปลี่ยนชื่อ ≠ เพิกถอน</strong><br>
+            หุ้นที่หายจากรายชื่ออาจแค่เปลี่ยนชื่อย่อ (ควบรวม/rebrand) ราคาและงบเก่ายังใช้ได้
+            ต้องย้ายไปชื่อใหม่ ไม่ใช่ทิ้ง<hr>
+            ระบบเทียบจากรายชื่อทางการของ SET (oldSymbols) ให้แล้ว —
+            <b>ห้ามลบข้อมูลเก่าทิ้ง</b> กดคัดลอกคำสั่งแล้วรันใน terminal เพื่อย้ายราคา/งบไปชื่อใหม่แทน
+          </div></span>
+        </div>
+        <div style="overflow-x:auto"><table class="tbl" style="min-width:360px">
+          <thead><tr><th>เดิม</th><th></th><th>ชื่อใหม่</th><th>คำสั่ง</th></tr></thead>
+          <tbody>${renamedRows.map(x => `<tr>
+            <td><strong>${x.symbol}</strong></td><td style="color:var(--text2)">→</td><td><strong>${x.renamed_to}</strong></td>
+            <td><button class="filter-btn" style="font-size:10.5px;padding:3px 8px" onclick="_dhCopyRenameCmd('${x.symbol}','${x.renamed_to}',this)" title="คัดลอกคำสั่ง rename_symbol.py ไปวางใน terminal — ย้ายราคา/งบ/ปันผลไปชื่อใหม่ให้ต่อเนื่อง">📋 คัดลอกคำสั่ง</button></td>
+          </tr>`).join('')}</tbody>
+        </table></div>
       </div>` : '';
-    box.innerHTML = (newHtml || remHtml) ? newHtml + remHtml
+    const remHtml = delistedRows.length ? `
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--red);margin-bottom:6px">🗑 น่าจะเพิกถอนจริง — ไม่พบชื่อใหม่ (${delistedRows.length} ตัว)</div>
+        <div style="font-size:11.5px">${delistedRows.map(x => x.symbol).join(', ')}</div>
+        <div style="font-size:10.5px;color:var(--text2);margin-top:4px">ไม่เจอใน oldSymbols ของ SET — อาจเพิกถอน/ควบรวมหายไปเลย (เช่น BPP→BANPU) ตรวจก่อนสรุปว่าเป็นเพิกถอนจริง (เช่นเช็คข่าว SET.or.th)<br>
+          ถ้ายืนยันแล้ว: <code>python mark_delisted.py &lt;symbol&gt; "เหตุผล"</code> — มี .bat ให้ดับเบิลคลิกที่ root โปรเจกต์</div>
+      </div>` : '';
+    box.innerHTML = (newHtml || renamedHtml || remHtml) ? newHtml + renamedHtml + remHtml
       : '<div class="empty" style="padding:8px">ตรงกับ SET.or.th ทั้งหมด ไม่มีอะไรต้องอัปเดต</div>';
   } catch (e) {
     note.textContent = '';
@@ -22451,6 +23085,17 @@ async function checkSetUniverseUpdates() {
     box.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</div>`;
   } finally {
     btn.disabled = false;
+  }
+}
+
+function _dhCopyRenameCmd(oldSym, newSym, btn) {
+  const cmd = `python rename_symbol.py ${oldSym} ${newSym}`;
+  const orig = btn.textContent;
+  const done = () => { btn.textContent = '✓ คัดลอกแล้ว'; setTimeout(() => { btn.textContent = orig; }, 2500); };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(cmd).then(done).catch(() => _filCopyFallback(cmd, done));
+  } else {
+    _filCopyFallback(cmd, done);
   }
 }
 
@@ -23695,17 +24340,17 @@ const ETF_LOW_LIQ_BAHT = 100000;
 async function loadEtfRotation() {
   const gate = document.getElementById('etfrot-gate'), body = document.getElementById('etfrot-body');
   if (!_etfData || !_etfData.length) {
-    gate.style.display = ''; gate.textContent = 'กำลังดึงข้อมูล ETF...'; body.style.display = 'none';
+    _rotGateState(gate, body, 'loading', 'กำลังดึงข้อมูล ETF...');
     try {
-      const d = await (await _fetchTimeout('/api/etf', 60000)).json();
+      const d = await _rotFetchJson('/api/etf', 60000);
       if (d.stocks) { _etfData = d.stocks; _etfLoaded = true; _etfTs = d.ts; }
       const rf = document.getElementById('etfrot-refreshing');
       if (rf) rf.style.display = d.refreshing ? '' : 'none';
       if (d.refreshing) _etfPollRefresh(0);
-    } catch (e) { gate.textContent = 'โหลดข้อมูล ETF ไม่สำเร็จ: ' + e.message; return; }
+    } catch (e) { _rotGateState(gate, body, 'error', 'โหลดข้อมูล ETF ไม่สำเร็จ: ' + e.message); return; }
   }
-  if (!_etfData || !_etfData.length) { gate.style.display = ''; gate.textContent = 'ไม่มีข้อมูล ETF'; body.style.display = 'none'; return; }
-  gate.style.display = 'none'; body.style.display = '';
+  if (!_etfData || !_etfData.length) { _rotGateState(gate, body, 'error', 'ไม่มีข้อมูล ETF'); return; }
+  _rotGateState(gate, body, 'ready');
   _etfRotUpdateSubtitle();
   renderEtfRotation();
 }
@@ -23721,19 +24366,16 @@ function renderEtfRotation() {
     ? (s.ret_1m != null && s.ret_1w != null)
     : (s.ret_3m != null && s.ret_1m != null)));
   if (!valid.length) return;
-  const avg = f => { const v = valid.filter(s => s[f] != null); return v.length ? v.reduce((a, s) => a + s[f], 0) / v.length : 0; };
   // ใช้ TDEX เป็นเส้นฐานแทนค่าเฉลี่ยกลุ่ม ถ้าเลือกโหมด 'tdex' — fallback ไปค่าเฉลี่ยกลุ่ม
   // ถ้าหา TDEX ไม่เจอหรือ TDEX เองไม่มีค่าตอนนั้น (กันหน้าจอว่างเปล่าไปเลย)
-  const bm = f => useTdex && tdex && tdex[f] != null ? tdex[f] : avg(f);
-  const a3m = bm('ret_3m'), a1m = bm('ret_1m'), a1w = bm('ret_1w'), a6m = bm('ret_6m'), a1y = bm('ret_1y');
-  const rel = (v, a) => v != null ? +(v - a).toFixed(2) : null;
+  const R = _rotRelativeFromBm(f => useTdex && tdex && tdex[f] != null ? tdex[f] : _rotAvg(valid, f));
+  const { a3m, a1m, a1w, a6m, a1y } = R;
   const items = valid.map(s => {
     const lowLiq = s.value_avg20 != null && s.value_avg20 < ETF_LOW_LIQ_BAHT;
     const catLbl = ETF_CATEGORY_LABEL[s.category] || s.category || '';
     return {
       name: s.symbol, ind: [catLbl, s.name_th].filter(Boolean).join(' · '),
-      ret_3m: rel(s.ret_3m, a3m), ret_1m: rel(s.ret_1m, a1m), ret_1w: rel(s.ret_1w, a1w),
-      ret_6m: rel(s.ret_6m, a6m), ret_1y: rel(s.ret_1y, a1y),
+      ...R.apply(s),
       avg_rs: s.rs_score,
       lowLiq, liqText: lowLiq ? _drFmtCap(s.value_avg20) : undefined,
     };
@@ -23827,6 +24469,7 @@ function toggleIdxGuide() {
 }
 
 async function loadIndicesPage() {
+  _idxLoadFF();   // การ์ดเสริม FF-adjusted — แยกอิสระจากกริดหลัก ไม่ต้องรอ/ไม่บล็อคกัน
   if (_idxData) { renderIdxGrid(); return; }
   const grid = document.getElementById('idx-grid');
   grid.innerHTML = '<div style="color:var(--text2);padding:20px">กำลังโหลดข้อมูลดัชนี...</div>';
@@ -23848,6 +24491,53 @@ async function loadIndicesPage() {
   } catch(e) {
     grid.innerHTML = `<div style="color:var(--red)">โหลดไม่ได้: ${e.message}</div>`;
   }
+}
+
+// ดัชนี Free-Float Adjusted (SET50FF ฯลฯ) จาก SET.or.th โดยตรง real-time — ดู
+// PLAN_set_api_expansion.txt งาน #7 · TradingView ไม่มีตระกูลนี้เลย เป็น snapshot
+// วันนี้เท่านั้น (ไม่มีประวัติย้อนหลังให้คำนวณ RS/momentum เหมือนการ์ดหลัก) จึงแยก
+// กล่องต่างหาก ไม่ผสมกับ idx-grid — โหลดครั้งเดียวต่อเซสชัน (cache ใน _idxFFData)
+let _idxFFData = null;
+async function _idxLoadFF() {
+  const box = document.getElementById('idx-ff-box');
+  if (!box) return;
+  if (_idxFFData) { _idxRenderFF(_idxFFData); return; }
+  try {
+    const r = await _fetchTimeout('/api/index-info-list', 15000);
+    const d = await r.json();
+    if (!d.ok) return;   // เงียบๆ พอ — เป็นข้อมูลเสริม ไม่ควรโชว์ error รบกวนหน้าหลัก
+    const ff = (d.items || []).filter(x => (x.symbol || '').endsWith('FF'));
+    if (!ff.length) return;
+    _idxFFData = ff;
+    _idxRenderFF(ff);
+  } catch (e) { /* เงียบๆ — ข้อมูลเสริม ไม่กระทบการใช้งานหลัก */ }
+}
+function _idxRenderFF(ff) {
+  const box = document.getElementById('idx-ff-box');
+  if (!box) return;
+  const asOf = ff[0]?.market_datetime ? new Date(ff[0].market_datetime).toLocaleString('th-TH') : '—';
+  const status = ff[0]?.market_status || '—';
+  box.style.display = 'block';
+  box.innerHTML = `<div class="card" style="padding:14px 16px">
+    <div style="font-size:12.5px;font-weight:700;margin-bottom:8px">🌐 ดัชนี Free-Float Adjusted (SET.or.th real-time)
+      <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:270px">
+        <strong>FF = Free Float Adjusted</strong><br>
+        ถ่วงน้ำหนักด้วยหุ้นที่หมุนเวียนซื้อขายจริง ไม่ใช่หุ้นจดทะเบียนทั้งหมด — บริษัทที่ผู้ถือหุ้นใหญ่ถือเยอะจะมีน้ำหนักน้อยลงเทียบดัชนีปกติ สะท้อนสภาพตลาดจริงกว่า<hr>
+        <span style="color:var(--text2)">⚠ เป็นข้อมูล snapshot วันนี้จาก SET.or.th โดยตรง ไม่มีประวัติย้อนหลัง (ต่างจากการ์ด/heatmap ด้านล่างที่ใช้ TradingView ซึ่งไม่มีดัชนีตระกูลนี้)</span>
+      </div></span>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap">
+      ${ff.map(x => {
+        const clr = (x.percent_change ?? 0) > 0 ? 'var(--green)' : (x.percent_change ?? 0) < 0 ? 'var(--red)' : 'var(--text2)';
+        return `<div style="min-width:110px">
+          <div style="font-size:11px;color:var(--text2)">${x.symbol}</div>
+          <div style="font-size:16px;font-weight:700">${x.last != null ? x.last.toFixed(2) : '—'}</div>
+          <div style="font-size:11px;font-weight:600;color:${clr}">${x.percent_change != null ? (x.percent_change >= 0 ? '+' : '') + x.percent_change.toFixed(2) + '%' : '—'}</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="font-size:10px;color:var(--text2);margin-top:8px">ตลาด: ${status} · ข้อมูล ณ ${asOf}</div>
+  </div>`;
 }
 
 // ยังไม่เคยมี indices_cache.json บนเครื่องนี้เลย — เดิมปุ่มนี้แค่ยิง GET /api/indices
@@ -25118,6 +25808,68 @@ async function checkTradingHaltNew() {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '🚧 เช็คหุ้นหยุดพักเทรด';
+  }
+}
+
+// เช็คห้องต่างชาติใกล้เต็ม (SET.or.th ทางการ, ดู PLAN_set_api_expansion.txt งาน #2B) —
+// sync โควตาต่างชาติทั้งกระดานสด (~7 วิ) แล้วเรียงตาม "% ที่ใช้ไปแล้ว" มากสุดก่อน
+async function checkForeignRoomNew() {
+  const btn = document.getElementById('val-check-foreign-btn');
+  const status = document.getElementById('val-refresh-status');
+  const box = document.getElementById('val-foreign-room-result');
+  btn.disabled = true;
+  btn.textContent = '🔍 กำลังเช็ค...';
+  status.textContent = '';
+  box.style.display = 'none';
+
+  try {
+    const r = await _fetchTimeout('/api/check-foreign-room', 30000, undefined, { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'เช็คไม่สำเร็จ');
+
+    const asOf = d.as_of || '—';
+    if (!d.watchlist_hits.length) {
+      status.textContent = `✓ ไม่มีหุ้นใน Watchlist ที่ห้องต่างชาติตึง (ทั้งตลาดมีข้อมูล ${d.total_count} ตัว ณ ${asOf})`;
+      status.style.color = '#96c850';
+    } else {
+      status.textContent = `⚠ พบ ${d.watchlist_hits.length} ตัวใน Watchlist ที่ห้องต่างชาติใช้ไปเกิน 80% (ทั้งตลาดมีข้อมูล ${d.total_count} ตัว)`;
+      status.style.color = 'var(--red)';
+    }
+
+    const wlSet = new Set(d.watchlist_hits.map(x => x.symbol));
+    // โชว์ Watchlist ก่อนเสมอ + ตัวที่ใช้ไป ≥80% ของทั้งตลาด (ตารางเต็มยาวเกินจะดูไหว
+    // ถ้าโชว์ทั้ง 900 ตัว — เกณฑ์เดียวกับสีส้ม/แดงในตาราง)
+    const tight = d.rows.filter(x => (x.used_pct ?? 0) >= 80 && !wlSet.has(x.symbol));
+    const rows = [...d.watchlist_hits, ...tight];
+    box.style.display = 'block';
+    box.innerHTML = `<div class="card" style="padding:14px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+        ห้องต่างชาติใช้ไป ≥80% (${tight.length} ตัว) + หุ้นใน Watchlist ทุกระดับ — ข้อมูล ณ ${asOf}
+        <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:270px">
+          <strong>ห้องต่างชาติคืออะไร</strong><br>
+          กฎหมายไทยจำกัดสัดส่วนที่ต่างชาติถือได้ (ปกติ 49% บางกลุ่มต่ำกว่านั้น) — "ใช้ไป" คือสัดส่วนที่ถือแล้วเทียบเพดานนั้น<hr>
+          <span style="color:var(--text2)">เกณฑ์สี: 🔴 ≥95% · 🟠 ≥80% · หุ้นที่ไม่มีเพดานกำหนด (100%) จะไม่ขึ้นในตารางนี้ (ใช้ไปคำนวณไม่ได้)</span>
+        </div></span>
+      </div>
+      <div style="overflow-x:auto;max-height:420px;overflow-y:auto"><table class="tbl" style="min-width:480px">
+        <thead><tr><th>Symbol</th><th>ใช้ไป</th><th>เพดาน</th><th>เหลือ (หุ้น)</th></tr></thead>
+        <tbody>${rows.map(x => {
+          const clr = (x.used_pct ?? 0) >= 95 ? 'var(--red)' : (x.used_pct ?? 0) >= 80 ? '#e8a33d' : 'var(--text)';
+          return `<tr${wlSet.has(x.symbol) ? ' style="background:rgba(255,90,90,0.1)"' : ''}>
+            <td><strong>${wlSet.has(x.symbol) ? '⭐ ' : ''}${x.symbol}</strong></td>
+            <td style="font-weight:600;color:${clr}">${x.used_pct != null ? x.used_pct.toFixed(1)+'%' : '—'}</td>
+            <td style="font-size:11px;color:var(--text2)">${x.foreign_limit != null ? x.foreign_limit+'%' : '—'}</td>
+            <td style="font-size:11px;color:var(--text2)">${x.foreign_available != null ? x.foreign_available.toLocaleString() : '—'}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+    </div>`;
+  } catch (e) {
+    status.textContent = '✗ เช็คไม่สำเร็จ: ' + e.message;
+    status.style.color = 'var(--red)';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🌏 เช็คห้องต่างชาติใกล้เต็ม';
   }
 }
 

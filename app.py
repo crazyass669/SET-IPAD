@@ -220,6 +220,7 @@ from sources.etf_universe import fetch_etf_list_live
 from sources import sec_store
 from sources import financials_store
 from sources import factor_snapshot
+from sources import set_company
 from sources import dcf_screener
 from sources import dr_descriptions
 from sources import us_index_membership
@@ -1016,7 +1017,7 @@ def _dr_do_rebuild():
                 s = raw[yticker][field]
             else:
                 s = raw[field]
-            return s.dropna()
+            return s
         except (KeyError, TypeError):
             return pd.Series(dtype=float)
 
@@ -1029,14 +1030,20 @@ def _dr_do_rebuild():
 
     results = []
     price_failed = []   # sym ที่ดึงราคาไม่สำเร็จ/ข้อมูลไม่พอ — เก็บไว้แจ้งใน result["warnings"]
+    cur_year = _dt.now().year   # ใช้ตัด YTD — ปีเดียวกันตลอดทั้งรอบ ไม่ต้องคำนวณใหม่ทุกตัว (~283 ครั้ง)
     for stock in _dr_universe:
         yticker = stock["yf"]
         try:
-            close  = _series(yticker, "Close")
-            open_s = _series(yticker, "Open")
-            high_s = _series(yticker, "High")
-            low_s  = _series(yticker, "Low")
-            vol_s  = _series(yticker, "Volume")
+            # เดิม .dropna() แยกราย field ใน _series() ทำให้ open/high/low/volume อาจสั้น/
+            # ไม่ align กับ close ถ้า NaN ไม่ตรงกันระหว่าง field (เจอได้กับหุ้นเทรดเบามาก) —
+            # โค้ดด้านล่างใช้ .iloc[i] แบบ positional ล้วน จะจับคู่วันผิดกันเงียบๆ ถ้าความยาว
+            # ไม่เท่ากัน แก้โดย reindex ทุก field ให้ตรงกับ index ของ close เสมอ (เหมือนที่
+            # ETF pipeline ทำใน _etf_do_rebuild)
+            close  = _series(yticker, "Close").dropna()
+            open_s = _series(yticker, "Open").reindex(close.index).fillna(close)
+            high_s = _series(yticker, "High").reindex(close.index).fillna(close)
+            low_s  = _series(yticker, "Low").reindex(close.index).fillna(close)
+            vol_s  = _series(yticker, "Volume").reindex(close.index).fillna(0)
             if len(close) < 2:
                 price_failed.append(stock["sym"])
                 continue
@@ -1136,8 +1143,6 @@ def _dr_do_rebuild():
 
             # YTD%
             try:
-                import datetime as _datetime
-                cur_year   = _datetime.datetime.now().year
                 close_ytd  = close[close.index >= pd.Timestamp(f"{cur_year}-01-01")]
                 if len(close_ytd) > 0:
                     first_ytd = float(close_ytd.iloc[0])
@@ -1434,10 +1439,15 @@ def _etf_do_rebuild():
 
     results = []
     price_failed = []
+    # เปิด connection เดียวอ่านทุก ETF (iter_all_series) แทน get_ohlc_series ทีละตัว —
+    # เดิมแต่ละตัว connect+PRAGMA+close ใหม่ (~150-190 รอบ/รีบิลด์) ทั้งที่มี bulk reader
+    # แบบนี้อยู่แล้ว (ใช้ pattern เดียวกับ sources/index_metrics_common.py::_compute_all_rows)
+    all_series = dict(etf_store.iter_all_series(BASE_DIR))
+    cur_year = _dt.now().year   # ใช้ตัด YTD — ปีเดียวกันตลอดทั้งรอบ ไม่ต้องคำนวณใหม่ทุก ETF
     for e in etf_list:
         yticker = f"{e['symbol']}.BK"
         try:
-            series = etf_store.get_ohlc_series(BASE_DIR, yticker)
+            series = all_series.get(yticker)
             if not series or len(series["closes"]) < 2:
                 price_failed.append(e["symbol"])
                 continue
@@ -1450,6 +1460,21 @@ def _etf_do_rebuild():
             high_s = pd.Series(series["highs"], index=idx, dtype=float).fillna(close)
             low_s  = pd.Series(series["lows"],  index=idx, dtype=float).fillna(close)
             vol_s  = pd.Series(series["volumes"], index=idx, dtype=float).fillna(0)
+
+            # close เองก็เป็น NaN ได้ (เช่น SET API fast path คืน close:None ให้ ETF เทรด
+            # เบามากที่ไม่มีเทรดวันนั้น แล้วถูกเขียนลง etf_prices.db ตรงๆ) ถ้าหลุดเข้า
+            # jsonify() ทีหลัง Python จะ emit literal `NaN` token ซึ่งไม่ใช่ JSON ที่ถูกสเปก
+            # ทำให้ response.json() ฝั่ง frontend throw SyntaxError พังทั้งแท็บ ETF ไม่ใช่แค่
+            # ตัวที่มีปัญหา — ตัดแถวที่ close เป็น NaN ทิ้งก่อน ด้วย mask เดียวกันทุก field
+            # กันไม่ให้ open/high/low/volume เพี้ยนตำแหน่งจาก close (ไม่ใช้ .dropna() แยกราย
+            # field แบบเดิมของ DR pipeline ที่เจอบั๊ก misalignment)
+            valid_mask = close.notna()
+            if not valid_mask.all():
+                close  = close[valid_mask]
+                open_s = open_s[valid_mask]
+                high_s = high_s[valid_mask]
+                low_s  = low_s[valid_mask]
+                vol_s  = vol_s[valid_mask]
 
             if len(close) < 2:
                 price_failed.append(e["symbol"])
@@ -1513,7 +1538,6 @@ def _etf_do_rebuild():
             ath_pct  = round((price - ath) / ath * 100, 2) if ath else None
 
             try:
-                cur_year  = _dt.now().year
                 close_ytd = close[close.index >= pd.Timestamp(f"{cur_year}-01-01")]
                 if len(close_ytd) > 0:
                     first_ytd = float(close_ytd.iloc[0])
@@ -1747,7 +1771,7 @@ def dr_quick_update():
 
             def _series(yticker, field):
                 try:
-                    return (raw[yticker][field] if is_multi else raw[field]).dropna()
+                    return raw[yticker][field] if is_multi else raw[field]
                 except (KeyError, TypeError):
                     return pd.Series(dtype=float)
 
@@ -1755,14 +1779,18 @@ def dr_quick_update():
             stock_map = {s["sym"]: s for s in cached["stocks"]}
             updated = 0   # นับตัวที่อัปเดตราคาสำเร็จจริง — ให้ frontend โชว์ "สำเร็จ N/M ตัว"
                           # แบบเดียวกับปุ่ม "⚡ ราคาล่าสุด" ของ Watchlist (ดู wlRefreshLivePrices)
+            cur_year = _dt.now().year   # ใช้ตัด YTD — ปีเดียวกันตลอดทั้งรอบ ไม่ต้องคำนวณใหม่ทุกตัว
             for st in _universe:
                 sym, yticker = st["sym"], st["yf"]
                 try:
-                    close  = _series(yticker, "Close")
-                    open_s = _series(yticker, "Open")
-                    high_s = _series(yticker, "High")
-                    low_s  = _series(yticker, "Low")
-                    vol_s  = _series(yticker, "Volume")
+                    # reindex ทุก field ให้ align กับ index ของ close เสมอ — กัน .iloc[i]
+                    # ด้านล่างจับคู่วันผิดกันถ้า field ไหน dropna แล้วสั้นกว่า close (ดู
+                    # comment เดียวกันใน _dr_do_rebuild)
+                    close  = _series(yticker, "Close").dropna()
+                    open_s = _series(yticker, "Open").reindex(close.index).fillna(close)
+                    high_s = _series(yticker, "High").reindex(close.index).fillna(close)
+                    low_s  = _series(yticker, "Low").reindex(close.index).fillna(close)
+                    vol_s  = _series(yticker, "Volume").reindex(close.index).fillna(0)
                     if len(close) < 2:
                         continue
 
@@ -1818,8 +1846,15 @@ def dr_quick_update():
                             entry["live_price"] = round(live_price, 2)
                             entry["live_chg"]   = live_chg
                         else:
-                            entry.pop("live_price", None)
-                            entry.pop("live_chg", None)
+                            # เดิม pop() คีย์ทิ้ง — ทำให้ขนาด dict เปลี่ยนขณะที่ request อื่น
+                            # (เช่น GET /api/dr -> _dr_light) อาจกำลัง iterate s.items() ของ
+                            # entry ตัวเดียวกันอยู่พอดี (ไม่มี lock ร่วมกัน) เสี่ยง
+                            # RuntimeError: dictionary changed size during iteration -> 500
+                            # ทั้ง endpoint — เซ็ตเป็น None แทน (คีย์นี้มีอยู่แล้วเสมอตั้งแต่
+                            # _dr_do_rebuild บรรทัด ~1165-1166) ให้เป็นแค่ reassign ค่า
+                            # ไม่เปลี่ยนขนาด dict ปลอดภัยกว่า
+                            entry["live_price"] = None
+                            entry["live_chg"] = None
                         new_closes_raw = [round(float(c), 4) for c in close.tolist()]
                         new_dates_raw  = [str(d)[:10] for d in close.index.tolist()]
                         new_vols_raw   = [int(v) for v in vol_s.tolist()] if len(vol_s) == len(close) else [0] * len(close)
@@ -1896,7 +1931,6 @@ def dr_quick_update():
                             pass
                         # recalculate 52W, ATH, YTD from updated full history
                         try:
-                            import datetime as _datetime
                             closes_arr = old_closes
                             high_52w = round(max(closes_arr[-252:]), 4) if closes_arr else entry.get("high_52w")
                             low_52w  = round(min(closes_arr[-252:]), 4) if closes_arr else entry.get("low_52w")
@@ -1905,7 +1939,6 @@ def dr_quick_update():
                             entry["low_52w"]  = low_52w
                             entry["ath"]      = ath_val
                             entry["ath_pct"]  = round((price - ath_val) / ath_val * 100, 2) if ath_val else None
-                            cur_year = _datetime.datetime.now().year
                             ytd_idx  = next((i for i, d in enumerate(old_dates) if d >= f"{cur_year}-01-01"), None)
                             if ytd_idx is not None:
                                 first_ytd = old_closes[ytd_idx]
@@ -3624,6 +3657,113 @@ def get_calendar_events_endpoint(market, symbol):
     })
 
 
+_set_val_check_cache: dict = {}
+_SET_VAL_CHECK_TTL = 3600   # 1 ชม.
+
+
+@app.route("/api/set-valuation-check/<symbol>")
+def set_valuation_check(symbol):
+    """PE/PBV ทางการจาก SET.or.th (historical-trading, ~6 เดือนล่าสุด) ใช้เป็นเส้น
+    ตรวจสอบ Valuation Band (ดู PLAN_set_api_expansion.txt งาน #4) ไม่ใช่แทนที่
+    pipeline หลัก (mrlikestock.com ที่ให้ประวัติหลายปี) — cache ต่อ symbol 1 ชม."""
+    sym = symbol.upper().strip()
+    cached = _set_val_check_cache.get(sym)
+    if cached and (time.time() - cached["ts"] < _SET_VAL_CHECK_TTL):
+        return jsonify(cached["data"])
+    try:
+        from sources.set_api import fetch_historical_trading
+        rows = fetch_historical_trading(sym)
+        if not rows:
+            return jsonify({"error": f"ไม่มีข้อมูลราคา/PE/PBV ทางการของ {sym}"}), 404
+        pes = [r["pe"] for r in rows if r.get("pe") is not None]
+        pbvs = [r["pbv"] for r in rows if r.get("pbv") is not None]
+        latest = rows[-1]
+        result = {
+            "symbol": sym, "date_from": rows[0]["date"], "date_to": rows[-1]["date"],
+            "count_days": len(rows),
+            "pe": {"current": latest.get("pe"), "avg": round(sum(pes) / len(pes), 2) if pes else None,
+                   "min": round(min(pes), 2) if pes else None, "max": round(max(pes), 2) if pes else None},
+            "pbv": {"current": latest.get("pbv"), "avg": round(sum(pbvs) / len(pbvs), 2) if pbvs else None,
+                    "min": round(min(pbvs), 2) if pbvs else None, "max": round(max(pbvs), 2) if pbvs else None},
+        }
+        _set_val_check_cache[sym] = {"data": result, "ts": time.time()}
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+_fin_health_cache: dict = {}
+_FIN_HEALTH_TTL = 86400   # 24 ชม. — เปลี่ยนแค่ตอนมีงบใหม่ (รายไตรมาส) ไม่ต้องดึงสดทุกครั้ง
+
+
+@app.route("/api/financial-health/<symbol>")
+def financial_health(symbol):
+    """SET Financial Health Check ของหุ้น 1 ตัว (ดู PLAN_set_api_expansion.txt
+    งาน #5) — cache ต่อ symbol 24 ชม. เพราะเปลี่ยนแค่ตอนมีงบใหม่ ใช้กับแท็บ
+    "🩺 สุขภาพการเงิน (SET)" ในเมนูงบการเงิน + การ์ดย่อใน Tearsheet"""
+    sym = symbol.upper().strip()
+    cached = _fin_health_cache.get(sym)
+    if cached and (time.time() - cached["ts"] < _FIN_HEALTH_TTL):
+        return jsonify(cached["data"])
+    try:
+        from sources.set_api import fetch_financial_health
+        data = fetch_financial_health(sym)
+        if not data.get("themes"):
+            return jsonify({"error": f"ไม่มีข้อมูล Financial Health ของ {sym}"}), 404
+        _fin_health_cache[sym] = {"data": data, "ts": time.time()}
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+_index_info_cache: dict = {}
+_INDEX_INFO_TTL = 300   # 5 นาที — real-time แต่ไม่ต้อง sub-minute
+
+
+@app.route("/api/index-info-list")
+def index_info_list():
+    """ดัชนีทั้งหมด real-time จาก SET.or.th รวมตระกูล Free-Float adjusted (SET50FF
+    ฯลฯ) ที่ TradingView (indices_cache.json) ไม่มี — ใช้เป็นการ์ดเสริมในหน้า
+    ดัชนีกลุ่ม (ดู PLAN_set_api_expansion.txt งาน #7) ไม่มีประวัติย้อนหลัง"""
+    cached = _index_info_cache.get("result")
+    if cached and (time.time() - _index_info_cache.get("ts", 0) < _INDEX_INFO_TTL):
+        return jsonify(cached)
+    try:
+        from sources.set_api import fetch_index_info_list
+        items = fetch_index_info_list()
+        result = {"ok": True, "items": items}
+        _index_info_cache["result"] = result
+        _index_info_cache["ts"] = time.time()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+_ipo_list_cache: dict = {}
+_IPO_LIST_TTL = 1800   # 30 นาที — IPO list เปลี่ยนไม่บ่อย (ต่างจาก event ปฏิทินอื่น)
+
+
+@app.route("/api/ipo-list")
+def ipo_list():
+    """หุ้น IPO ที่กำลังจะเข้า + เพิ่งเข้าตลาด จาก SET.or.th (ดึงสดทุกครั้งที่แคชหมดอายุ
+    ไม่เก็บสะสมเหมือน calendar_events — ดู PLAN_set_api_expansion.txt งาน #6) ใช้กับ
+    scope 🆕 IPO ในหน้าปฏิทิน"""
+    cached = _ipo_list_cache.get("result")
+    if cached and (time.time() - _ipo_list_cache.get("ts", 0) < _IPO_LIST_TTL):
+        return jsonify(cached)
+    try:
+        from sources.set_api import fetch_ipo_upcoming, fetch_ipo_recently
+        upcoming = fetch_ipo_upcoming()
+        recently = fetch_ipo_recently()
+        result = {"ok": True, "as_of_date": upcoming["as_of_date"],
+                  "upcoming": upcoming["items"], "recently": recently}
+        _ipo_list_cache["result"] = result
+        _ipo_list_cache["ts"] = time.time()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/financials-meta")
 def financials_meta():
     """วันที่ sync งบการเงินเต็มล่าสุด — ใช้เช็คฝั่ง UI ว่าถึงรอบเตือนอัพเดท (~2 เดือน) หรือยัง"""
@@ -4503,6 +4643,12 @@ def factor_screener():
     def _pct_vs(price, base):
         return round((price / base - 1) * 100, 2) if (price and base and base > 0) else None
 
+    # CG/ESG + ผู้ถือหุ้นใหญ่/free float + โควตาต่างชาติ (SET.or.th ทางการ) — หุ้นไทย
+    # ล้วน ไม่มีทางมีค่าสำหรับ DR/mirror US/HK เลย (ดู PLAN_set_api_expansion.txt
+    # งาน #1/#2/#3) coverage ต่างกันตามชุด (ESG ~38%, free float/foreign room สูงกว่า
+    # มาก) — ไม่ raise ถ้ายังไม่เคย sync (get_company_map คืน {} เฉยๆ)
+    company_map = set_company.get_company_map(BASE_DIR)
+
     # overlay ค่าที่อิงราคาปัจจุบัน — หุ้นไทยจาก set_data.json, DR จาก dr_cache.json
     # รวม technical (RS / %เหนือ EMA200 / %จาก high 52wk / RVOL) สำหรับ screen
     # แบบ CANSLIM ครบสูตร (พื้นฐาน x ราคานำตลาด) — mirror US/HK ไม่มีราคารายวัน
@@ -4513,6 +4659,14 @@ def factor_screener():
             mc = s.get("mkt_cap")
             r["pe_live"] = pe
             r["mkt_cap"] = mc
+            comp = company_map.get(r["symbol"]) or {}
+            r["cg_score"] = comp.get("cg_score")
+            r["esg_rating"] = comp.get("esg_rating")
+            r["esg_rank"] = comp.get("esg_rank")
+            r["free_float"] = comp.get("free_float")
+            r["total_shareholder"] = comp.get("total_shareholder")
+            r["nvdr_pct_holding"] = comp.get("nvdr_pct_holding")
+            r["foreign_room_used_pct"] = comp.get("foreign_room_used_pct")
             # PEG = PE สด ÷ กำไรโต TTM (นิยามเดียวกับ snapshot/mirror) — ถ้าไม่มี pe สด
             # คงค่า peg จาก snapshot (PE Finnomena งวดล่าสุด) ไว้ตามเดิม
             g = r.get("profit_ttm_yoy")
@@ -4558,7 +4712,9 @@ def factor_screener():
         for r in sec_rows:
             r["pe_sector_pctile"] = pe_pct.get(r["symbol"])
             r["roe_sector_pctile"] = roe_pct.get(r["symbol"])
-    return jsonify({"rows": rows, "meta": factor_snapshot.snapshot_meta(BASE_DIR)})
+    meta = factor_snapshot.snapshot_meta(BASE_DIR)
+    meta.update(set_company.get_meta(BASE_DIR))   # esg_*/shareholder_*/foreign_* count+updated_at
+    return jsonify({"rows": rows, "meta": meta})
 
 
 def _widen_sector_group(candidates, level, group_key, base=None, sector_q=None):
@@ -5330,6 +5486,11 @@ def tearsheet(market, symbol):
         "f_score_detail": f.get("f_score_detail"),
         "z_score": z_score, "z_variant": f.get("z_variant"), "z_zone": z_zone,
         "z_excluded_reason": z_reason,
+        # cash_cycle จาก Yahoo (factor_snapshot) — ใช้ cross-check กับ q_cash_cycle
+        # ทางการของ SET ในการ์ด "🩺 สุขภาพการเงิน (SET)" (ดู PLAN_set_api_expansion.txt
+        # งาน #5C) None สำหรับ mirror US/HK ที่ cash_cycle ไม่น่าเชื่อถือ (ดู
+        # factor_snapshot.py) และ mirror อยู่แล้วเพราะไม่ใช่หุ้นไทย ไม่โชว์การ์ดนี้อยู่ดี
+        "cash_cycle": f.get("cash_cycle"),
     }
 
     # _mirror_sym ตัด suffix ".HK" ก่อนเสมอ — ตาราง dividends เก็บรหัสดิบไม่มี suffix
@@ -7934,7 +8095,12 @@ _SET_UNIVERSE_DIFF_TTL = 6 * 3600
 def set_universe_check_updates():
     """เทียบรายชื่อหุ้น SET+mai ที่ซื้อขายจริง (โหลดสดจาก SET.or.th) กับ universe
     ที่ใช้ดึงงบการเงินในเครื่อง (_financials_universe — กรอง DW/DR series/ดัชนีกลุ่ม/
-    หุ้นแขวนถาวรออกแล้ว) รายงานตัวใหม่/ตัวที่หายไปเท่านั้น ไม่แก้อะไรให้อัตโนมัติ"""
+    หุ้นแขวนถาวรออกแล้ว) รายงานตัวใหม่/ตัวที่หายไปเท่านั้น ไม่แก้อะไรให้อัตโนมัติ
+
+    ตัวที่หายไป (removed) จะพยายามเทียบกับ oldSymbols ของ /api/set/stock/list
+    (sources/set_api.py::fetch_stock_list) ก่อนว่า "เปลี่ยนชื่อย่อ" หรือ "เพิกถอนจริง"
+    (ดู PLAN_set_api_expansion.txt งาน #8) — ดึงไม่สำเร็จก็ไม่ทำให้ endpoint พัง แค่ไม่มี
+    renamed_to ให้ (เหมือนเดิมก่อนมีฟีเจอร์นี้ ผู้ใช้ยังเช็คมือได้)"""
     cached = _set_universe_diff_cache.get("result")
     if cached and (time.time() - _set_universe_diff_cache.get("ts", 0) < _SET_UNIVERSE_DIFF_TTL):
         return jsonify(cached)
@@ -7946,11 +8112,21 @@ def set_universe_check_updates():
         new_syms = sorted(set(live_map.keys()) - local_syms)
         removed_syms = sorted(local_syms - set(live_map.keys()))
         tracked_delisted = sum(1 for k in delisted_log.read_log(BASE_DIR) if k.startswith("TH:"))
+
+        old_to_new = {}
+        try:
+            from sources.set_api import fetch_stock_list
+            for s in fetch_stock_list():
+                for old in s.get("old_symbols") or []:
+                    old_to_new[old] = s["symbol"]
+        except Exception as e:
+            print(f"[set-universe-check] fetch_stock_list (oldSymbols) ไม่สำเร็จ ({e}) — ข้ามการเช็คเปลี่ยนชื่อ")
+
         result = {
             "live_count": len(live_map), "local_count": len(local_syms),
             "new": [{"symbol": s, "name": live_map[s]["name"], "market": live_map[s]["market"],
                      "sector": live_map[s]["sector"]} for s in new_syms],
-            "removed": removed_syms,
+            "removed": [{"symbol": s, "renamed_to": old_to_new.get(s)} for s in removed_syms],
             "tracked_delisted_count": tracked_delisted,
         }
         _set_universe_diff_cache["result"] = result
@@ -9504,6 +9680,94 @@ def insider_sync():
         n2 = sec_store.sync_major_changes(BASE_DIR)
         _invalidate_flow_signals()   # insider เป็น 1 ใน 3 ชั้นของสัญญาณรวม
         return jsonify({"ok": True, "insider_fetched": n1, "major_fetched": n2})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sync-esg", methods=["POST"])
+def sync_esg_route():
+    """sync CG/ESG rating ทั้งตลาดแบบ manual (เรียกจากปุ่มในหน้า Screener+) — 1 call
+    เดียวได้ทั้งตลาด (/api/set/esg/list) เร็ว ไม่ต้อง progress bar (ดู
+    sources/set_company.py::sync_esg — coverage ~38% ของหุ้นสามัญ ปกติ)"""
+    try:
+        n = set_company.sync_esg(BASE_DIR)
+        meta = set_company.get_meta(BASE_DIR)
+        return jsonify({"ok": True, "fetched": n, "count": meta["esg_count"],
+                        "updated_at": meta["esg_updated_at"]})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sync-shareholders", methods=["POST"])
+def sync_shareholders_route():
+    """sync ผู้ถือหุ้นใหญ่+free float ทั้งกระดานแบบ manual (เรียกจากปุ่มในหน้า
+    Screener+/Insider) — พารัลเลลทั้งกระดาน ~8 วิ (ดู
+    sources/set_company.py::sync_shareholders) ไม่ต้อง progress bar"""
+    try:
+        n, total = set_company.sync_shareholders(BASE_DIR)
+        meta = set_company.get_meta(BASE_DIR)
+        return jsonify({"ok": True, "fetched": n, "total": total,
+                        "count": meta["shareholder_count"],
+                        "updated_at": meta["shareholder_updated_at"]})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sync-foreign-room", methods=["POST"])
+def sync_foreign_room_route():
+    """sync โควตาต่างชาติทั้งกระดานแบบ manual (เรียกจากปุ่มในหน้า Screener+/Tearsheet)
+    — พารัลเลลทั้งกระดาน ~7 วิ (ดู sources/set_company.py::sync_profiles)"""
+    try:
+        n, total = set_company.sync_profiles(BASE_DIR)
+        meta = set_company.get_meta(BASE_DIR)
+        return jsonify({"ok": True, "fetched": n, "total": total,
+                        "count": meta["foreign_count"],
+                        "updated_at": meta["foreign_updated_at"]})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/company-ownership/<symbol>")
+def company_ownership(symbol):
+    """ผู้ถือหุ้นใหญ่ + โควตาต่างชาติของหุ้น 1 ตัว — อ่านจาก DB ที่ sync ไว้แล้ว
+    (set_company.get_ownership, เร็ว ไม่ยิง SET สด) ใช้กับการ์ด "🏛 โครงสร้างผู้ถือหุ้น"
+    ใน Tearsheet + section ผู้ถือหุ้นใหญ่ปัจจุบันในหน้า Insider คืน 404 ถ้ายังไม่เคย
+    sync หุ้นตัวนี้เลย (ต้องกด sync ก่อนอย่างน้อย 1 ครั้ง)"""
+    d = set_company.get_ownership(BASE_DIR, symbol.upper().strip())
+    if not d:
+        return jsonify({"error": f"ยังไม่มีข้อมูลผู้ถือหุ้น/โควตาต่างชาติของ {symbol} — "
+                                  f"กด sync ในหน้า Screener+ ก่อน"}), 404
+    return jsonify(d)
+
+
+_foreign_room_check_cache: dict = {}
+_FOREIGN_ROOM_CHECK_TTL = 900   # 15 นาที เหมือน check-trading-halt-th
+
+
+@app.route("/api/check-foreign-room", methods=["POST"])
+def check_foreign_room():
+    """sync โควตาต่างชาติทั้งกระดานสดแล้วคืนตัวที่ "ห้องต่างชาติใช้ไปแล้วมากสุด"
+    เรียงจากมากไปน้อย + เทียบกับ Watchlist แยกไว้ (แนวเดียวกับ check_trading_halt_th)
+    ใช้กับปุ่ม "🌏 เช็คห้องต่างชาติใกล้เต็ม" ในหน้า Valuation"""
+    cached = _foreign_room_check_cache.get("result")
+    if cached and (time.time() - _foreign_room_check_cache.get("ts", 0) < _FOREIGN_ROOM_CHECK_TTL):
+        return jsonify(cached)
+    try:
+        set_company.sync_profiles(BASE_DIR)
+        rows = set_company.get_foreign_room_ranking(BASE_DIR)
+        try:
+            with open(WATCHLIST_FILE, encoding="utf-8") as f:
+                wl_all = json.load(f)
+        except Exception:
+            wl_all = []
+        wl_syms = {s for s in wl_all if isinstance(s, str) and ":" not in s}
+        watchlist_hits = [r for r in rows if r["symbol"] in wl_syms]
+        meta = set_company.get_meta(BASE_DIR)
+        result = {"ok": True, "as_of": meta["foreign_updated_at"], "total_count": len(rows),
+                  "watchlist_hits": watchlist_hits, "rows": rows}
+        _foreign_room_check_cache["result"] = result
+        _foreign_room_check_cache["ts"] = time.time()
+        return jsonify(result)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

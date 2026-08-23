@@ -1,0 +1,576 @@
+================================================================================
+PLAN: ต่อยอด SET.or.th internal API — 7 ชุดข้อมูลใหม่เข้าเมนูเดิม
+สร้าง: 2026-08-23
+สถานะ: ร่าง (ยังไม่เริ่มลงมือ)
+================================================================================
+
+ที่มา: สำรวจ SET internal API รอบใหม่ (ดึง JS bundle ของ set.or.th มา grep หา
+endpoint แล้วยิงทดสอบจริงด้วย bootstrap cookie ตาม pattern เดิมใน
+sources/set_api.py) เจอ endpoint ที่ยังไม่ได้ใช้หลายตัว — แผนนี้เอาเข้า
+"เมนูที่มีอยู่แล้ว" ทั้งหมด ไม่สร้างเมนูใหม่แม้แต่อันเดียว
+
+กติกาที่ต้องยึดทุกงานในแผนนี้:
+- ทุก endpoint ใช้ _bootstrap_headers() + _get_json() จาก sources/set_api.py
+  ที่มีอยู่แล้ว ห้ามเขียน urllib/cookie เองซ้ำ
+- ทุกฟังก์ชัน fetch ต้องมี validation gate + raise ให้ caller fallback
+  (ตาม docstring หัวไฟล์ set_api.py — ห้ามรับข้อมูลไม่ครบเข้า pipeline เงียบๆ)
+- frontend เรียก endpoint ใหม่ที่มี fallback ดึงสด ต้องใช้ _fetchTimeout()
+  ไม่ใช่ fetch() เปล่า (ดู memory: frontend-fetch-timeout-pattern)
+- ต้องบั๊ก ?v= ของ dashboard.js/.css ทุกครั้งที่แก้ (ตอนนี้ css=20260822,
+  js=20260823) ไม่งั้น iPad แคชของเก่าค้าง
+- หน้า static (GitHub Pages) ต้อง degrade สวยๆ เมื่อไม่มี local backend
+- ทุกฟีเจอร์ต้องมีครบ 3 ชั้นคำอธิบาย (ดูหัวข้อ "มาตรฐาน UI" ด้านล่าง)
+
+
+================================================================================
+ผลสำรวจที่ยืนยันแล้วด้วยการยิงจริง (2026-08-23)
+================================================================================
+
+endpoint ที่ทดสอบผ่าน (200 + มีข้อมูลจริง):
+
+  /api/set/stock/<sym>/shareholder          ผู้ถือหุ้นใหญ่ + free float
+  /api/set/stock/<sym>/profile              โควตาต่างชาติ + ข้อมูลหลักทรัพย์
+  /api/set/company/<sym>/profile            CG/ESG + นโยบายปันผล + ผู้สอบบัญชี
+  /api/set/esg/list                         ★ BULK — ESG ทั้งตลาดใน 1 call
+  /api/set/stock/list                       ★ BULK — 3,940 ตัว + oldSymbols
+  /api/set/stock/<sym>/historical-trading   PE/PBV/BVPS/DivYield รายวัน
+  /api/set/stock/<sym>/financial-health     SET Financial Health Check
+  /api/set/ipo/upcoming, /api/set/ipo/recently   IPO
+  /api/set/index/info/list                  ดัชนีย่อยทั้งหมด real-time
+
+วัดความเร็วจริง (8 workers, สุ่มหุ้นจริงจาก securitySymbols):
+  shareholder : 120/120 สำเร็จใน 1.0 วิ  →  ทั้งกระดาน 931 ตัว ≈ 8 วิ
+  profile     : 120/120 สำเร็จใน 1.0 วิ  →  ทั้งกระดาน 931 ตัว ≈ 7 วิ
+  → เร็วพอที่จะ sync ทั้งกระดานได้จริง ไม่ต้องทำแบบ on-demand รายตัว
+
+coverage ที่วัดได้ (สำคัญมากต่อการออกแบบ filter):
+  free float      : 120/120 (100%)  ค่าไม่ซ้ำกัน 118 ค่า = ข้อมูลจริง
+  ผู้ถือหุ้นใหญ่   : 120/120 (100%)  10-35 รายต่อหุ้น
+  foreign room    : 114/120 (95%)
+  ESG (esg/list)  : 358/931 (38%)  ← มีแค่ 38% ของกระดาน! ดูข้อจำกัดใน งาน #3
+  oldSymbols      : 333 ตัวเคยเปลี่ยนชื่อย่อ
+
+ตัวอย่างสัญญาณจริงที่เจอตอนทดสอบ (พิสูจน์ว่าข้อมูลมีความหมาย ไม่ใช่ noise):
+  LRH    ห้องต่างชาติเหลือ  0.05% จากเพดาน 49%  = ใช้ไป 99.9%
+  SHANG  ห้องต่างชาติเหลือ  0.25% จากเพดาน 49%  = ใช้ไป 99.5%
+  AEONTS ห้องต่างชาติเหลือ  1.49% จากเพดาน 49%  = ใช้ไป 97.0%
+  DELTA  ห้องต่างชาติเหลือ  7.63% จากเพดาน 100% (สอดคล้อง NVDR premium สูง)
+
+endpoint ที่ลองแล้วใช้ไม่ได้ (บันทึกไว้กันไล่ซ้ำ):
+  404: major-shareholder(s), company-profile, board-of-directors, oppday,
+       dividend, dividend-payment, rights-benefit, factsheet, jump-plus,
+       stock-calendar/<sym>, ipo-report
+  406: /api/set/ranking/topGainer/set/L  (ต้องมี header/param เพิ่ม)
+  400: /api/set/ipo-stat/stock-list      (ต้องมี param ปี)
+  200 แต่ว่างเปล่า: /api/set/news/search?symbol=  (ต้องหา param ที่ถูก)
+  historical-trading ไม่รับ param วันที่ใดๆ (period/fromDate/startDate ลองครบ
+  แล้ว คืน 118 แท่งเท่าเดิมเสมอ)
+
+หมายเหตุ: /api/set/stock/<sym>/corporate-action ใช้อยู่แล้วใน
+financials_store.py:746 (XD/XM/XB) — ไม่อยู่ในแผนนี้
+
+
+================================================================================
+มาตรฐาน UI ที่ทุกงานในแผนนี้ต้องทำครบ (ผู้ใช้กำหนด)
+================================================================================
+
+ทุกฟีเจอร์ที่เพิ่ม ต้องมีครบ "3 ชั้น" ไม่มีข้อยกเว้น:
+
+1. tooltip (ชั้นเร็วสุด — hover เห็นทันที)
+   - ปุ่ม/แท็บ/nav ใช้ title="..." ธรรมดา
+   - ตัวเลขในการ์ดที่ต้องอธิบายยาว ใช้ data-vtip="..." (popup HTML ลอย
+     — ดู _vtip/.val-tip ใน dashboard.js:25847 ที่หน้า Valuation ใช้อยู่)
+
+2. tip box (ชั้นลึก — กด ℹ/? แล้วกางกล่องอธิบายเต็ม)
+   - ใช้ pattern เดิมเป๊ะๆ:
+     <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ
+       <div class="scr-tip-box" style="width:270px">...</div></span>
+   - onclick="_tipIconToggle" จำเป็นเสมอ — จอสัมผัส (iPad) ไม่มี hover
+     ถ้าลืมใส่ ผู้ใช้ iPad จะเปิดกล่องไม่ได้เลย
+   - หัวข้อหนาขึ้นต้น + <hr> คั่น + <span style="color:var(--text2)">
+     สำหรับคำเตือน/ข้อจำกัด (ตามที่ FS_FILTERS ทำอยู่)
+   - ทุกคอลัมน์ตารางใหม่ต้องมี tip อธิบายว่าเลขนี้คืออะไร + เกณฑ์สี
+
+3. helper text (ชั้นบริบท — อ่านได้โดยไม่ต้องกดอะไร)
+   - .page-sub ใต้ชื่อหน้า/การ์ด บอกว่าข้อมูลมาจากไหน สดแค่ไหน
+   - บรรทัดเล็ก 11px สี var(--text2) ใต้ input/ตาราง บอกข้อจำกัด
+   - **ทุกที่ที่ข้อมูลมีไม่ครบทั้งกระดาน ต้องเขียน coverage ให้เห็น**
+     (เช่น ESG มีแค่ 38% — ห้ามปล่อยให้ผู้ใช้เดาเองว่าทำไมหุ้นหาย)
+
+กฎเพิ่มสำหรับแผนนี้: ข้อมูลชุดใหม่ทุกตัวต้องบอก "ณ วันที่" ให้เห็น
+(bookCloseDate ของ free float, foreignLimitAsOf ของ foreign room, asOf ของ
+ESG) เพราะเป็นข้อมูลที่ไม่ได้สดรายวันทั้งหมด — ผู้ใช้ต้องรู้ว่ากำลังดูของ
+เมื่อไหร่ ไม่ใช่คิดว่าเป็นค่าวันนี้
+
+
+================================================================================
+โครงสร้างเก็บข้อมูล (ออกแบบรวมครั้งเดียว ใช้ร่วมกันทุกงาน)
+================================================================================
+
+ไฟล์ใหม่: sources/set_company.py
+  รวม fetch + store ของ "ข้อมูลบริษัท" ทั้งหมดจาก SET ไว้ที่เดียว
+  (shareholder / profile / esg / stock-list) — ไม่ปนกับ set_api.py ที่เป็น
+  client ชั้นล่าง (set_company.py เรียก set_api.py อีกที)
+
+ตารางใหม่ใน financials.db (local-only อยู่แล้ว ไม่ต้องแตะ .gitignore เพิ่ม):
+
+  set_company_master
+    symbol TEXT PRIMARY KEY
+    free_float REAL, total_shareholder INT, book_close_date TEXT
+    nvdr_pct_holding REAL          -- % ที่ ไทยเอ็นวีดีอาร์ ถือ (จาก major list)
+    foreign_room REAL, foreign_limit REAL, foreign_available INT
+    foreign_as_of TEXT
+    listed_share INT, par REAL, first_trade_date TEXT
+    cg_score INT, esg_rating TEXT, esg_as_of TEXT
+    setesg_index INT, djsi_index INT
+    esgbook_score REAL, refinitiv_score REAL, morningstar_risk REAL
+    dividend_policy TEXT, business_type TEXT, logo_url TEXT
+    updated_at TEXT
+
+  set_major_shareholders
+    symbol TEXT, seq INT, holder_name TEXT, shares INT, pct REAL,
+    is_nvdr INT, book_close_date TEXT
+    PRIMARY KEY(symbol, seq, book_close_date)
+    -- เก็บ book_close_date ใน PK ด้วย = ได้ประวัติสะสมข้ามงวดฟรี
+    -- (งวดหน้าเข้ามาไม่ทับของเก่า → ต่อยอดทำ "ใครเพิ่ม/ลดสัดส่วน" ได้ทีหลัง)
+
+ทำไมเก็บใน financials.db ไม่ใช่ DB ใหม่:
+  Screener+ ต้อง join กับ factor_snapshot ที่อยู่ใน financials.db —
+  ข้าม DB ทำให้ query ยุ่งโดยไม่จำเป็น และ DB นี้ local-only อยู่แล้ว
+
+ทำไมไม่ยัดลง factor_snapshot.factors ตรงๆ:
+  factor_snapshot ถูก DELETE+INSERT ทับทั้งตารางทุกครั้งที่ build_snapshot()
+  (ดู docstring sources/factor_snapshot.py) ข้อมูล ownership จะหายทุกรอบ
+  → ใช้ pattern "overlay ตอน query" แทน เหมือนที่ Screener+ overlay ราคาสด
+  จาก set_data.json อยู่แล้ว (ดูคอมเมนต์ในหัวไฟล์ factor_snapshot.py)
+
+จังหวะ sync (แต่ละชุดเปลี่ยนคนละความถี่ — อย่า sync ทุกอย่างทุกรอบ):
+  profile (foreign room)  รายวัน    — เปลี่ยนทุกวันทำการ
+  shareholder (free float) ราย 7 วัน — เปลี่ยนตอน book close เท่านั้น
+  esg/list                ราย 30 วัน — SETESG ประกาศปีละครั้ง
+  stock/list (oldSymbols) ราย 7 วัน  — เปลี่ยนเมื่อมีหุ้นเปลี่ยนชื่อ
+
+  wire เข้า run_quick_update() ใน services/refresh.py โดยมี staleness gate
+  ต่อชุด (เหมือน skip_up_to_date ของ index-sync — ดู memory:
+  index-members-yahoo-quarterly-sync) + ปุ่ม sync มือในหน้า Data Health
+  ต้นทุนจริงต่อรอบปกติ: ~7 วิ (เฉพาะ profile) ไม่ใช่ 15 วิ
+
+
+================================================================================
+งาน #1: ผู้ถือหุ้นใหญ่ + Free Float  →  Tearsheet / Insider / Screener+
+================================================================================
+endpoint : /api/set/stock/<sym>/shareholder
+คุ้มค่า   : ★★★★★  (ไม่มีข้อมูลแบบนี้ในระบบเลย · coverage 100%)
+
+ข้อมูลที่ได้: majorShareholders[] (ชื่อ/จำนวนหุ้น/%/isThaiNVDR),
+totalShareholder (จำนวนผู้ถือหุ้นทั้งหมด), freeFloat.percentFreeFloat,
+freeFloat.numberOfHolder, bookCloseDate, caType
+
+ทำไมสำคัญ: sec_filings.db ที่มีอยู่เก็บแค่ "การเปลี่ยนแปลง" (แบบ 246-2 จาก
+SEC) ไม่มี "รายชื่อผู้ถือหุ้นปัจจุบันจริง" เลย — คนละมิติ เสริมกันพอดี
+(246-2 บอกว่าใครขยับ, อันนี้บอกว่าตอนนี้ใครถืออยู่เท่าไหร่)
+
+--- 1A. Tearsheet: การ์ดใหม่ "🏛 โครงสร้างผู้ถือหุ้น" ---
+ตำแหน่ง: ต่อจากการ์ด "💸 เงินทุน & คนวงใน" (renderTearsheet ~dashboard.js:10321)
+เฉพาะ mkt === 'TH' เหมือนการ์ด flow (US/HK/JP ไม่มีแนวคิดนี้)
+
+  แถวบน 3 ตัวเลขใหญ่:
+    Free Float %   |   จำนวนผู้ถือหุ้น   |   NVDR ถือ %
+  ตารางล่าง: ผู้ถือหุ้นใหญ่ 10 อันดับ (ชื่อ / % / แถบ bar ตามสัดส่วน)
+  เน้นแถว isThaiNVDR ด้วยสีต่าง + tip อธิบายว่าทำไมแถวนี้ไม่ใช่ "เจ้าของจริง"
+
+  tooltip   : title= บนหัวการ์ด
+  tip box   : ℹ ข้าง "Free Float" →
+              "สัดส่วนหุ้นที่หมุนเวียนซื้อขายจริงในตลาด (ไม่นับหุ้นของ
+               ผู้ถือหุ้นเชิงกลยุทธ์ที่ไม่ขาย)<hr>ยิ่งต่ำ = สภาพคล่องน้อย
+               ราคาแกว่งแรง ปั่นง่าย · ต่ำกว่า 15% เสี่ยงถูกเตือนจาก SET"
+              ℹ ข้าง "NVDR ถือ %" →
+              "บ.ไทยเอ็นวีดีอาร์ ถือแทนต่างชาติ — ไม่ใช่เจ้าของตัวจริง
+               ตัวเลขนี้คือ proxy ของแรงซื้อต่างชาติสะสม<hr>ดูคู่กับ
+               'ห้องต่างชาติ' ในการ์ดเงินทุน: NVDR สูง + ห้องต่างชาติ
+               ใกล้เต็ม = ต่างชาติอยากได้แต่ซื้อตรงไม่ได้แล้ว"
+              ℹ ข้าง "จำนวนผู้ถือหุ้น" →
+              "จำนวนบัญชีที่ถือหุ้นนี้ ณ วันปิดสมุด — น้อย = กระจุกตัว"
+  helper    : บรรทัดเล็กใต้การ์ด "ข้อมูล ณ วันปิดสมุด {bookCloseDate}
+              ({caType}) — อัพเดทเมื่อมี XM/XD ครั้งถัดไป ไม่ใช่รายวัน"
+
+--- 1B. หน้า Insider: section ใหม่ "ผู้ถือหุ้นใหญ่ปัจจุบัน" ---
+ตำแหน่ง: หน้า page-insider (set_dashboard.html:2494) — ใต้ ins-accum-wrap
+ตอนนี้หน้านี้มีแต่ "การเปลี่ยนแปลง" ล้วน เพิ่ม snapshot ปัจจุบันเข้าไป
+
+  input ค้นหาหุ้น 1 ตัว → โชว์ตารางผู้ถือหุ้นใหญ่ + free float
+  ปุ่ม toggle "แสดงเฉพาะที่มีความเคลื่อนไหว 246-2 ใน 90 วัน" (join 2 แหล่ง)
+
+  tooltip   : title= บนปุ่ม toggle
+  tip box   : ? ข้างหัวข้อ section อธิบายความต่าง 246-2 vs snapshot
+  helper    : "แบบ 246-2 (ตารางล่าง) = ใครขยับ · ตารางนี้ = ตอนนี้ใครถือ
+               — ใช้คู่กันเห็นภาพครบ"
+
+--- 1C. Screener+: filter + column ใหม่ ---
+เพิ่มใน FS_FILTERS (dashboard.js:7557) กลุ่มใหม่ท้ายสุด:
+  { g: 'โครงสร้างผู้ถือหุ้น · ข้อมูลทางการจาก SET' }
+  free_float        'Free Float ≥' unit '%' cmp 'gte' range: true
+  total_shareholder 'จำนวนผู้ถือหุ้น ≥' unit 'ราย' cmp 'gte'
+  nvdr_pct_holding  'NVDR ถือ ≥' unit '%' cmp 'gte'
+
+เพิ่มใน FS_COLS (dashboard.js:8058):
+  { k:'free_float', label:'FreeFloat%', sep:true, tip:'...' }
+  { k:'total_shareholder', label:'ผู้ถือหุ้น', tip:'...' }
+
+เพิ่มใน FS_COL_CLR:
+  free_float: v => v >= 40 ? green : (v < 15 ? red : '')
+
+  ⚠ ต้องเพิ่ม 3 key นี้เข้า FS_MIRROR_NEVER (dashboard.js:7735) ด้วย
+    — เป็นข้อมูลหุ้นไทยล้วน universe us/hk ไม่มีทางมีค่า ถ้าไม่กันไว้
+    ผู้ใช้เลือก universe US แล้วกรองด้วยช่องนี้จะได้ผลลัพธ์ว่างโดยไม่รู้สาเหตุ
+
+  tip box (ใน FS_FILTERS.tip — กางเต็มเมื่อกด ?):
+    "<strong>Free Float</strong><br>สัดส่วนหุ้นหมุนเวียนจริงในตลาด<br><br>
+     เช่น ใส่ <b>30</b> = free float ≥ 30%<br>
+     <span style='color:var(--text2)'>ต่ำกว่า 15% = สภาพคล่องต่ำ ราคาแกว่ง
+     แรง · ช่องขวาใส่เพดานได้ · หุ้นไทยเท่านั้น</span>"
+  helper    : บรรทัดใต้กลุ่ม filter "ข้อมูลจาก SET.or.th ณ วันปิดสมุดล่าสุด
+              — หุ้นไทยเท่านั้น (universe US/HK ไม่มีค่า)"
+
+
+================================================================================
+งาน #2: โควตาต่างชาติ (Foreign Room)  →  Tearsheet / Valuation / Screener+
+================================================================================
+endpoint : /api/set/stock/<sym>/profile
+คุ้มค่า   : ★★★★★  (coverage 95% · เจอสัญญาณจริงตอนทดสอบ)
+
+ข้อมูลที่ได้: percentForeignRoom (ต่างชาติซื้อได้อีกกี่ %),
+percentForeignLimit (เพดาน), foreignAvailable (จำนวนหุ้นที่เหลือ),
+foreignLimitAsOf, listedShare, par, firstTradeDate, isin*
+
+ทำไมสำคัญ: ตอนนี้ระบบมีแค่ NVDR% แนวโน้ม (nvdr_data.json) ไม่มี "เพดาน"
+และ "ที่เหลือ" — พอห้องต่างชาติเต็ม ต่างชาติต้องไปซื้อ NVDR แทน ดัน NVDR
+premium ขึ้น เป็นกลไกที่อธิบายพฤติกรรมราคาได้จริง
+
+--- 2A. Tearsheet: คอลัมน์ที่ 4 ในการ์ด "💸 เงินทุน & คนวงใน" ---
+ตำแหน่ง: ต่อจากคอลัมน์ NVDR (dashboard.js:10334) — วางติดกันโดยตั้งใจ
+เพราะสองตัวนี้ต้องอ่านคู่กัน
+
+  แสดง: แถบ progress "ใช้ไป X% ของเพดาน" + ตัวเลข "เหลือ Y% (Z ล้านหุ้น)"
+  สี: ใช้ไป ≥95% แดง · ≥80% ส้ม · อื่นๆ ปกติ
+
+  tooltip   : data-vtip บนแถบ progress
+  tip box   : ℹ ข้างหัวข้อ "ห้องต่างชาติ" →
+              "<strong>โควตาต่างชาติ (Foreign Room)</strong><br>
+               กฎหมายไทยจำกัดสัดส่วนที่ต่างชาติถือได้ (ปกติ 49% บางกลุ่ม
+               30% เช่นสื่อสาร/ธนาคาร)<hr>
+               <b>ใกล้เต็ม = อ่านยังไง</b><br>
+               ต่างชาติที่อยากซื้อเพิ่มต้องไปซื้อ NVDR แทน → NVDR มัก
+               ซื้อขายแพงกว่าหุ้นปกติ (premium)<br>
+               ตีความได้ 2 ทาง: ความต้องการต่างชาติสูง (บวก) หรือ
+               แรงซื้อต่างชาติชนเพดานแล้วหมดแรงหนุน (ลบ)<br>
+               <span style='color:var(--text2)'>ดูคู่กับ NVDR% ทางซ้าย
+               และแนวโน้ม NVDR ในหน้า 🎯 สัญญาณรวม</span>"
+  helper    : "ณ {foreignLimitAsOf} · เพดาน {limit}% ตามข้อบังคับบริษัท"
+
+--- 2B. หน้า Valuation: ปุ่มใหม่ "🌏 เช็คห้องต่างชาติใกล้เต็ม" ---
+ตำแหน่ง: แถวปุ่มบนหน้า page-valuation (set_dashboard.html:2318) ต่อจาก
+"🚧 เช็คหุ้นหยุดพักเทรด" — ใช้ pattern เดียวกันเป๊ะ (ปุ่ม + data-vtip +
+modal ผลลัพธ์ + เทียบกับ Watchlist)
+
+  กดแล้ว: ยิง sync profile ทั้งกระดาน (~7 วิ) → modal ตารางเรียงตาม
+  "% ที่ใช้ไป" มากสุด + เน้นตัวที่อยู่ใน Watchlist ด้วยสี
+
+  tooltip   : data-vtip บนปุ่ม (pattern เดียวกับ val-check-halt-btn)
+              "<div class='tip-head'>ห้องต่างชาติใกล้เต็ม</div>
+               หาหุ้นที่ต่างชาติถือเกือบชนเพดานแล้ว<hr>
+               ใกล้เต็ม → ต่างชาติต้องซื้อผ่าน NVDR แทน ดัน premium ขึ้น
+               <hr>ข้อมูลสดจาก SET.or.th แคช 15 นาที ไม่แก้ไฟล์ใดๆ"
+  tip box   : ? ในหัว modal อธิบายเกณฑ์สี + วิธีอ่าน
+  helper    : ใต้ตาราง modal "เกณฑ์: 🔴 ใช้ไป ≥95% · 🟠 ≥80% ·
+              ข้อมูล ณ {as_of} — หุ้นที่ไม่มีเพดานกำหนด (100%) แสดงด้วย"
+
+--- 2C. Screener+: filter + column ---
+  foreign_room_used  'ห้องต่างชาติใช้ไป ≥' unit '%' cmp 'gte' range: true
+    (คำนวณ 100 - room/limit*100 ตอน overlay — เก็บ room/limit ดิบใน DB)
+  FS_COLS: { k:'foreign_room_used', label:'ห้องตปท.%', tip:'...' }
+  FS_COL_CLR: v => v >= 95 ? red : (v >= 80 ? '#e8a33d' : '')
+  ⚠ เข้า FS_MIRROR_NEVER เหมือนงาน #1
+
+
+================================================================================
+งาน #3: CG / ESG  →  Screener+ / Tearsheet / Peer Compare
+================================================================================
+endpoint : /api/set/esg/list  ★ BULK 1 call ได้ 358 บริษัท
+คุ้มค่า   : ★★★★☆  (ต้นทุนต่ำสุดในแผน แต่ coverage แค่ 38%)
+
+ข้อมูลที่ได้ต่อบริษัท: cgScore (1-5), setesgRating (AAA/AA/A/BBB),
+setesgIndex (bool), djsiIndex (bool), + thirdPartyScores 3 เจ้า:
+ESGBOOK (E/S/G แยก pillar), MORNINGSTAR (riskScore + url Sustainalytics),
+REFINITIV (E/S/G แยก pillar)
+
+⚠ ข้อจำกัดที่ต้องออกแบบรอบ (วัดจริงแล้ว):
+  - มีข้อมูลแค่ 358/931 = 38% ของกระดาน
+  - cgScore เบ้หนักมาก: score 5 = 285 ตัว, 4 = 40, 3 = 12
+    → cgScore แทบแยกหุ้นไม่ออก (85% ได้เต็ม) ใช้เป็น "ตัวกรองออก" ได้
+      อย่างเดียว (เอาไว้ตัดตัวที่ได้ 3) ห้ามใช้เป็นตัวจัดอันดับ
+  - setesgRating กระจายดีกว่า: AAA 101 / AA 79 / A 67 / BBB 16 / ไม่มี 95
+    → ตัวนี้ใช้จัดอันดับได้จริง
+
+  → **กฎออกแบบ**: filter ทั้งกลุ่มนี้ต้อง "ไม่มีค่า = ไม่กรองทิ้ง" เป็น
+    ค่าเริ่มต้นไม่ได้ (เพราะจะเงียบๆ ตัดหุ้น 62% ทิ้ง) ต้องมี checkbox
+    "รวมหุ้นที่ไม่มีข้อมูล ESG ด้วย" ติ๊กไว้เป็น default + helper text
+    บอก coverage ตรงๆ
+
+--- 3A. Screener+: กลุ่ม filter ใหม่ "ธรรมาภิบาล & ความยั่งยืน" ---
+  esg_rating   'SETESG rating ขั้นต่ำ' cmp 'eq' options:[AAA/AA/A/BBB]
+  cg_score     'CG score ≥' unit '/5' cmp 'gte'
+  setesg_index 'อยู่ในดัชนี SETESG' cmp 'bool'
+  djsi_index   'อยู่ในดัชนี DJSI' cmp 'bool'
+
+  FS_COLS: { k:'esg_rating', label:'ESG', sep:true, tip:'...' }
+           { k:'cg_score', label:'CG', tip:'...' }
+
+  tip box (esg_rating):
+    "<strong>SETESG Rating</strong><br>เรตติ้งความยั่งยืนทางการของ SET
+     (AAA ดีสุด → BBB)<br><br>เช่น เลือก <b>AA</b> = เอาเฉพาะ AAA และ AA
+     <hr><span style='color:var(--text2)'>⚠ มีข้อมูลแค่ 358 จาก 931 ตัว
+     (38%) — บริษัทที่ไม่ได้เข้าร่วมประเมินจะไม่มีค่า ไม่ได้แปลว่าแย่
+     ติ๊ก 'รวมหุ้นที่ไม่มีข้อมูล' ไว้ถ้าไม่อยากตัดทิ้ง</span>"
+  tip box (cg_score):
+    "<strong>CG Score (การกำกับดูแลกิจการ)</strong><br>คะแนน 1-5 จาก IOD
+     <hr><span style='color:var(--text2)'>⚠ 85% ของบริษัทที่มีข้อมูลได้ 5
+     เต็ม — ใช้ 'ตัดตัวที่ได้ต่ำ' ได้ แต่ใช้จัดอันดับไม่ได้ (แยกไม่ออก)
+     ถ้าอยากแยกคุณภาพจริง ใช้ SETESG rating แทน</span>"
+  helper    : ใต้กลุ่ม "ข้อมูล ณ {esg_as_of} · ครอบคลุม 358/931 ตัว (38%)
+              — ดึงครั้งเดียวทั้งตลาด อัพเดทเดือนละครั้งพอ"
+  + checkbox "☑ รวมหุ้นที่ไม่มีข้อมูล ESG ด้วย" พร้อม title= อธิบาย
+
+--- 3B. Tearsheet: badge ในการ์ด header ---
+เพิ่มใน _tsBadge แถว (dashboard.js:10291) เฉพาะ TH ที่มีข้อมูล:
+  ESG AAA  ·  CG ★5  ·  🌱 SETESG  ·  🌍 DJSI
+  แต่ละ badge มี data-vtip อธิบาย + ลิงก์ Sustainalytics ถ้ามี url
+  ถ้าไม่มีข้อมูล: ไม่แสดง badge เลย (ห้ามแสดง "—" จะดูเหมือนคะแนนแย่)
+
+--- 3C. Peer Compare: คอลัมน์ ESG/CG ---
+เพิ่มเป็นคอลัมน์ในมุมมองตาราง (หน้า page-peer) — เห็นได้ทันทีว่าใน sector
+เดียวกันใครธรรมาภิบาลดีกว่า พร้อม tip box มาตรฐานเดียวกับ 3A
+
+
+================================================================================
+งาน #4: PE/PBV/BVPS รายวันทางการ  →  Valuation Band
+================================================================================
+endpoint : /api/set/stock/<sym>/historical-trading
+คุ้มค่า   : ★★★☆☆  (ข้อมูลดีมาก แต่ลึกแค่ ~6 เดือน)
+
+ข้อมูลที่ได้ต่อวัน: OHLC + average + totalVolume/Value + **pe, pbv,
+bookValuePerShare, dividendYield, marketCap, listedShare, par,
+financialDate** + marketIndex (SET index วันนั้น) + marketPercentChange
+
+⚠ ข้อจำกัดที่ยืนยันแล้ว: คืน 118 แท่ง (~6 เดือน) ตายตัว ไม่รับ param
+วันที่ใดๆ (ลอง period / fromDate+toDate / startDate+endDate / 10Y ครบแล้ว
+ได้ 118 แท่งเท่าเดิมทุกครั้ง) → **แทน pipeline Valuation Band เดิมไม่ได้**
+(Band ต้องการย้อนหลังหลายปี)
+
+--- 4A. Valuation Band: overlay "PE/PBV ทางการจาก SET" ---
+ตำแหน่ง: หน้า page-band (set_dashboard.html:830)
+ตอนนี้ Band ใช้ mrlikestock.com (ขูดเว็บ) + 9hoon.com เป็นหลัก
+
+  ใช้ endpoint นี้เป็น "เส้นตรวจสอบ 6 เดือนล่าสุด" ทับบนกราฟ band เดิม:
+  - จุด/เส้นสีต่างวางทับช่วง 6 เดือนหลัง
+  - ถ้าค่าต่างจากแหล่งเดิมเกิน threshold → เตือนว่าแหล่งใดแหล่งหนึ่งเพี้ยน
+  - ประโยชน์จริง: จับกรณี mrlikestock ขูดพลาด/ค้าง โดยไม่ต้องเช็คมือ
+
+  tooltip   : title= บนปุ่ม toggle overlay
+  tip box   : ℹ "<strong>PE/PBV ทางการจาก SET.or.th</strong><br>
+               ตัวเลขเดียวกับที่ SET เผยแพร่บนหน้าหุ้นแต่ละตัว<hr>
+               ใช้เป็น <b>เส้นตรวจสอบ</b> ไม่ใช่แทนที่ band เดิม เพราะ
+               SET ให้ย้อนหลังแค่ ~118 วันทำการ (6 เดือน) ส่วน band ต้อง
+               ใช้หลายปี<br><span style='color:var(--text2)'>ถ้าเส้นนี้
+               ห่างจาก band เดิมมาก = แหล่งใดแหล่งหนึ่งเพี้ยน ควรเช็ค</span>"
+  helper    : "เทียบได้เฉพาะ 6 เดือนล่าสุด (ข้อจำกัดของ SET API)"
+
+--- 4B. (ต่อยอด optional) สะสมเองให้ยาวขึ้น ---
+เก็บ PE/PBV รายวันลง DB ทุกรอบ sync — ผ่านไป 1 ปีก็จะมีประวัติทางการ 1 ปี
+ที่ SET เองไม่ให้ย้อนหลัง (pattern เดียวกับที่ทำกับ SET P&L รายไตรมาส
+ที่ดึงย้อนหลังสดได้แค่ ~2 ปี — ดู CLAUDE.md) ทำทีหลังได้ ไม่ blocking
+
+
+================================================================================
+งาน #5: SET Financial Health Check  →  เมนูงบการเงิน / Tearsheet
+================================================================================
+endpoint : /api/set/stock/<sym>/financial-health
+คุ้มค่า   : ★★★☆☆
+
+ข้อมูลที่ได้: themes[] → categories[] → accounts[] แต่ละตัวมี code/name/
+unit/changeType/values[] ครอบคลุม 5 งวด (YE ย้อน 3 ปี + 6M ปีนี้/ปีก่อน)
+มี ratio สำเร็จรูปที่ SET คำนวณเอง เช่น q_average_collection_period
+(ระยะเวลาเก็บหนี้) พร้อม % change ต่องวด
+
+ทำไมน่าสนใจ: Cash Cycle ที่ระบบใช้อยู่ตอนนี้คำนวณเองจาก Yahoo (ดู memory:
+screener-financials-plan) — ตัวนี้เป็นเลขทางการที่ SET คำนวณจากงบที่ยื่นจริง
+ใช้ cross-check ได้ว่าสูตรเราตรงไหม
+
+--- 5A. เมนูงบการเงิน: มุมมองใหม่ "🩺 สุขภาพการเงิน (SET)" ---
+ตำแหน่ง: หน้า financials เพิ่มปุ่มมุมมองข้าง "P&L รายไตรมาส" ที่มีอยู่
+  แสดงตาม theme ที่ SET จัดมา (คุณภาพรายได้ / สภาพคล่อง / หนี้สิน / ฯลฯ)
+  แต่ละ account เป็นแถว 5 งวดเป็นคอลัมน์ + ลูกศรขึ้น/ลงตาม change
+
+  tooltip   : title= บนปุ่มมุมมอง
+  tip box   : ? ข้างชื่อ theme แต่ละอัน — ใช้ field "description" ที่
+              endpoint ส่งมาให้ตรงๆ (SET เขียนคำอธิบายไทยมาให้แล้ว
+              ไม่ต้องแต่งเอง) + ℹ ข้าง account ที่ลงท้าย * (SET ใช้ *
+              หมายถึง ratio ที่คำนวณเอง ไม่ใช่ตัวเลขจากงบตรงๆ)
+  helper    : "เลขทางการที่ SET คำนวณจากงบที่บริษัทยื่นจริง — 5 งวด
+               (ปีเต็ม 3 ปี + ครึ่งปี 2 งวด) ไม่ใช่รายไตรมาสครบทุกงวด"
+
+--- 5B. Tearsheet: การ์ดย่อ ---
+โชว์เฉพาะ 4-6 ตัวเด่น (ระยะเก็บหนี้ / สภาพคล่อง / D-E / กำไร) + ลิงก์
+"ดูเต็มในเมนูงบการเงิน →"
+
+--- 5C. cross-check Cash Cycle ---
+เอา q_average_collection_period เทียบกับ cash_cycle ที่คำนวณจาก Yahoo
+ใน factor_snapshot — ถ้าต่างกันมากแสดงว่าสูตรหรือแหล่งมีปัญหา
+เพิ่มเป็น item ใหม่ในหน้า Data Health หมวด "คุณภาพข้อมูล"
+
+
+================================================================================
+งาน #6: IPO เข้าใหม่  →  ปฏิทิน / Data Health
+================================================================================
+endpoint : /api/set/ipo/upcoming + /api/set/ipo/recently
+คุ้มค่า   : ★★★☆☆  (เติมช่องว่างฝั่งตรงข้ามของ delisted)
+
+ข้อมูลที่ได้:
+  upcoming : symbol/ชื่อ/status(Effective)/market/industry/ipoPrice/noOfIPO/
+             businessDescription/financialAdvisors/underwriters/
+             targetGroupOfferingPeriods
+  recently : symbol/ชื่อ/firstTradeDate/ipoPrice/last/change/percentChange/
+             volume/value  ← เทียบราคา IPO กับราคาปัจจุบันได้เลย
+
+ทำไมสำคัญ: ระบบมี delisted_log.json (ตัวออก) แต่ไม่มีตัวติดตาม "หุ้นเข้าใหม่"
+เลย — และ IPO ใหม่คือหุ้นที่ยังไม่มีในทุก universe/DB ของเรา
+
+--- 6A. ปฏิทิน: scope ใหม่ "🆕 IPO" ---
+ตำแหน่ง: แถว cal-scope-row (set_dashboard.html:3197) เพิ่มปุ่มที่ 4
+ต่อจาก "🌐 ตามตลาด"
+
+  แสดง 2 section:
+    "กำลังจะเข้า" — เรียงตามวันเสนอขาย + ราคา IPO + ที่ปรึกษาการเงิน
+    "เพิ่งเข้าตลาด" — ราคา IPO vs ราคาปัจจุบัน + % (เขียว/แดง)
+
+  tooltip   : title= บนปุ่ม scope "หุ้น IPO ที่กำลังจะเข้าและเพิ่งเข้าตลาด
+              จาก SET.or.th (ดึงสด ไม่เก็บสะสม)"
+  tip box   : ? ข้างหัว section "เพิ่งเข้าตลาด" →
+              "<strong>ราคา IPO vs ราคาปัจจุบัน</strong><br>
+               เขียว = เทรดเหนือราคาจอง · แดง = ต่ำกว่าจอง (break ราคาจอง)
+               <hr><span style='color:var(--text2)'>⚠ หุ้น IPO ยังไม่มีใน
+               ฐานราคา/งบของ dashboard จนกว่าจะรัน Full Update รอบถัดไป
+               — เมนูอื่นจะยังหาหุ้นพวกนี้ไม่เจอ</span>"
+  helper    : "ข้อมูล ณ {asOfDate} · ดึงสดจาก SET.or.th ทุกครั้งที่เปิด"
+
+--- 6B. Data Health: item ใหม่ "หุ้นเข้าใหม่ยังไม่เข้าระบบ" ---
+เทียบ ipo/recently กับ universe ในเครื่อง → ถ้ามีตัวที่เทรดแล้วแต่เรายังไม่มี
+ราคา ให้ขึ้นเตือนในหมวด "หุ้นเข้าใหม่/ถูกถอด" (หมวดนี้มีอยู่แล้ว —
+ดู _dh_drift_item app.py:6898) เป็นคู่ตรงข้ามของ delisted ที่มีอยู่
+
+
+================================================================================
+งาน #7: ดัชนีย่อยทั้งหมด real-time  →  ดัชนีกลุ่ม
+================================================================================
+endpoint : /api/set/index/info/list
+คุ้มค่า   : ★★☆☆☆  (ของเดิมมีอยู่แล้วบางส่วน แต่ตัวนี้ครบกว่าใน 1 call)
+
+ข้อมูลที่ได้: ทุกดัชนีในตลาด (SET, SET50, SET50FF, SET100, sSET, mai,
+รายอุตสาหกรรม/หมวด) พร้อม prior/open/high/low/last/change/percentChange/
+volume/value/marketStatus/level ในครั้งเดียว
+
+--- 7A. หน้าดัชนีกลุ่ม: เพิ่มตัวที่ยังไม่มี ---
+ตอนนี้หน้านี้ดึงจาก TradingView (indices_cache.json) — SET API ให้ดัชนี
+ตระกูล FF (free-float adjusted เช่น SET50FF) ที่ TradingView ไม่มี
+
+  ใช้เป็นแหล่งเสริม/fallback เมื่อ TradingView ไม่ตอบ (ไม่แทนที่ของเดิม
+  เพราะ TradingView ให้ประวัติย้อนหลังที่ SET API ไม่มี)
+
+  tooltip   : title= บนแถวดัชนีที่มาจาก SET API บอกแหล่ง
+  tip box   : ℹ ข้าง SET50FF → "<strong>FF = Free Float adjusted</strong>
+               <br>ถ่วงน้ำหนักด้วยหุ้นที่หมุนเวียนจริง ไม่ใช่หุ้นจดทะเบียน
+               ทั้งหมด<hr>ต่างจาก SET50 ปกติตรงที่บริษัทที่ผู้ถือหุ้นใหญ่
+               ถือเยอะจะมีน้ำหนักน้อยลง — สะท้อนสภาพตลาดจริงกว่า"
+  helper    : "marketStatus: {Open/Closed} · ข้อมูล ณ {marketDateTime}"
+
+
+================================================================================
+งาน #8 (โบนัส ไม่ได้อยู่ในโจทย์เดิม): oldSymbols → Data Health
+================================================================================
+endpoint : /api/set/stock/list  ★ BULK 1 call ได้ 3,940 ตัว
+คุ้มค่า   : ★★★★★  (แก้ปัญหาที่ตอนนี้ต้องทำมือทุกครั้ง)
+
+เจอโดยบังเอิญ: ทุกแถวมี field oldSymbols[] = ประวัติชื่อย่อเดิม
+วัดแล้ว **333 ตัวเคยเปลี่ยนชื่อ** เช่น
+  2S    <- ['S2']
+  3BBIF <- ['JASIF']
+  A     <- ['AREEYA']
+  A5    <- ['ADAM', 'RK']
+  AE    <- ['7UP', 'FER', 'MLINK']
+
+ทำไมสำคัญมาก: ตอนนี้เวลาเจอ "removed" ในหน้า Data Health ต้องเดาเองว่า
+หุ้นถูกเพิกถอนจริง หรือแค่เปลี่ยนชื่อย่อ แล้วรัน rename_symbol.py มือ
+(ดู memory: corporate-action-scripts) — field นี้ตอบให้ตรงๆ ทั้งตลาด
+
+--- 8A. Data Health: ยกระดับ item "หุ้นถูกถอด" ---
+ตำแหน่ง: หมวด "หุ้นเข้าใหม่/ถูกถอด" (app.py:6898 _dh_drift_item)
+
+  พอเจอ symbol ที่หายจาก universe → เช็คใน oldSymbols map ก่อน
+    ถ้าเจอ  → "🔄 เปลี่ยนชื่อเป็น {new} — รัน rename_symbol.py {old} {new}"
+              (พร้อมปุ่ม copy คำสั่ง)
+    ไม่เจอ → "❌ น่าจะเพิกถอนจริง — เช็คกับ delisted list"
+
+  tooltip   : title= บนปุ่ม copy คำสั่ง
+  tip box   : ? ข้าง item →
+              "<strong>เปลี่ยนชื่อ ≠ เพิกถอน</strong><br>
+               หุ้นที่หายจากรายชื่ออาจแค่เปลี่ยนชื่อย่อ (ควบรวม/rebrand)
+               ราคาและงบเก่ายังใช้ได้ ต้องย้ายไปชื่อใหม่ ไม่ใช่ทิ้ง<hr>
+               ระบบเช็คจากรายชื่อทางการของ SET (oldSymbols) ให้แล้ว —
+               <b>ห้ามลบข้อมูลเก่าทิ้ง</b> ให้รัน rename_symbol.py เพื่อ
+               ย้ายราคา/งบไปชื่อใหม่แทน"
+  helper    : "ตรวจจาก SET securities list (3,940 รายการ) — 333 ตัวใน
+               ตลาดเคยเปลี่ยนชื่อย่อมาแล้ว"
+
+
+================================================================================
+ลำดับแนะนำในการลงมือ (ตามต้นทุน/ผลตอบแทน + dependency)
+================================================================================
+
+รอบที่ 1 — โครงสร้างพื้นฐาน + ของที่ได้ผลเร็วสุด
+  งาน #0  sources/set_company.py + 2 ตารางใน financials.db + sync gate
+          (blocker ของ #1/#2/#3 — ต้องทำก่อน)
+  งาน #8  oldSymbols → Data Health   ← ต้นทุนต่ำสุด แก้ปัญหาที่เจ็บอยู่จริง
+  งาน #3  ESG/CG → Screener+          ← 1 call ได้ทั้งตลาด ถูกสุดในแผน
+
+รอบที่ 2 — ของที่ไม่มีในระบบเลย (คุ้มสุด)
+  งาน #1  ผู้ถือหุ้นใหญ่ + free float
+  งาน #2  foreign room
+  (ทำคู่กันเพราะใช้ sync/ตารางเดียวกัน และ UI อยู่การ์ดติดกันใน Tearsheet)
+
+รอบที่ 3 — ส่วนเสริม
+  งาน #6  IPO → ปฏิทิน
+  งาน #7  ดัชนีย่อย → ดัชนีกลุ่ม
+  งาน #5  financial-health → เมนูงบการเงิน
+  งาน #4  historical-trading → Valuation Band  (ทำท้ายสุด — ต้องคิดเรื่อง
+          สะสมประวัติเองให้ดีก่อน ไม่งั้นได้แค่ 6 เดือนแล้วตัน)
+
+เหตุผลที่เรียงแบบนี้:
+- #0 เป็น blocker จริงของ 3 งานหลัก ทำก่อนเสมอ
+- #8 กับ #3 เป็น bulk endpoint (1 call) ต้นทุน implement ต่ำสุด ได้ผลทันที
+- #1/#2 คุ้มสุดในแง่ "ข้อมูลที่ไม่มีในระบบเลย" แต่ต้องรอ #0
+- #4 อยู่ท้ายเพราะข้อจำกัด 6 เดือนทำให้ต้องออกแบบการสะสมเพิ่ม ซับซ้อนสุด
+
+
+================================================================================
+เช็คลิสต์ก่อนปิดแต่ละงาน (ห้ามข้าม)
+================================================================================
+[ ] tooltip ครบทุกปุ่ม/แท็บ/badge ใหม่ (title= หรือ data-vtip)
+[ ] tip box ครบทุกคอลัมน์ตาราง + ทุก filter ใหม่ และมี
+    onclick="_tipIconToggle(this,event)" เสมอ (ไม่งั้น iPad กดไม่ได้)
+[ ] helper text บอกแหล่ง + "ณ วันที่" + coverage ทุกจุดที่ข้อมูลไม่ครบ
+[ ] บั๊ก ?v= ของ dashboard.js/.css
+[ ] frontend ใช้ _fetchTimeout() ไม่ใช่ fetch() เปล่า
+[ ] หน้า static (GitHub Pages) ไม่พัง — degrade เป็นข้อความบอกว่าต้องรัน local
+[ ] filter ใหม่ที่เป็นข้อมูลหุ้นไทยล้วน เข้า FS_MIRROR_NEVER แล้ว
+[ ] ทดสอบในเบราว์เซอร์จริง (ไม่ใช่แค่ยิง endpoint ผ่าน)
+[ ] ไม่มีการลบ/เขียนทับไฟล์ .db ที่ root (ดู CLAUDE.md)

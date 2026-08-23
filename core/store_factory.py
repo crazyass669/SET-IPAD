@@ -185,23 +185,25 @@ def make_store(db_file):
                 "closes": list(c), "adj_closes": list(a), "volumes": list(v)}
 
     def iter_all_series(base_dir):
-        """generator: yield (ticker, {'dates','closes','volumes','highs','lows'}) เรียงตาม ticker
-        รูปแบบเดียวกับ core.store.iter_all_series — ใช้กับ services/breadth.py"""
+        """generator: yield (ticker, {'dates','closes','volumes','highs','lows','opens'}) เรียงตาม ticker
+        รูปแบบเดียวกับ core.store.iter_all_series — ใช้กับ services/breadth.py + _etf_do_rebuild
+        (app.py) เปิด connection เดียวอ่านทุก ticker แทนเปิดทีละ connection ต่อตัว 'opens' เพิ่มมา
+        แบบ additive (consumer เก่าที่อ่านแค่ dates/closes/volumes/highs/lows ไม่กระทบ)"""
         if not db_exists(base_dir):
             return
         con = _connect(base_dir)
         try:
             cur = con.execute(
-                "SELECT ticker, date, close, volume, high, low FROM prices ORDER BY ticker, date")
-            cur_t, d, c, v, h, lo = None, [], [], [], [], []
-            for t, dt, cl, vol, hi, low in cur:
+                "SELECT ticker, date, close, volume, high, low, open FROM prices ORDER BY ticker, date")
+            cur_t, d, c, v, h, lo, op = None, [], [], [], [], [], []
+            for t, dt, cl, vol, hi, low, o in cur:
                 if t != cur_t:
                     if cur_t is not None:
-                        yield cur_t, {"dates": d, "closes": c, "volumes": v, "highs": h, "lows": lo}
-                    cur_t, d, c, v, h, lo = t, [], [], [], [], []
-                d.append(dt); c.append(cl); v.append(vol); h.append(hi); lo.append(low)
+                        yield cur_t, {"dates": d, "closes": c, "volumes": v, "highs": h, "lows": lo, "opens": op}
+                    cur_t, d, c, v, h, lo, op = t, [], [], [], [], [], []
+                d.append(dt); c.append(cl); v.append(vol); h.append(hi); lo.append(low); op.append(o)
             if cur_t is not None:
-                yield cur_t, {"dates": d, "closes": c, "volumes": v, "highs": h, "lows": lo}
+                yield cur_t, {"dates": d, "closes": c, "volumes": v, "highs": h, "lows": lo, "opens": op}
         finally:
             con.close()
 

@@ -339,6 +339,12 @@
       </div>
     </div>
   </div>
+  <!-- ดัชนี Free-Float Adjusted จาก SET.or.th โดยตรง (real-time, ดู
+       PLAN_set_api_expansion.txt งาน #7) — TradingView ไม่มีตระกูล FF เลย เป็น
+       แหล่งเสริม snapshot วันนี้เท่านั้น ไม่มีประวัติย้อนหลัง จึงแยกกล่องต่างหาก
+       ไม่ปนกับการ์ด/heatmap/เปรียบเทียบด้านล่างที่ต้องใช้ประวัติ -->
+  <div id="idx-ff-box" style="display:none;margin-bottom:12px"></div>
+
   <div id="idx-group-row" class="filter-row" style="margin-bottom:14px">
     <button class="filter-btn active" onclick="setIdxGroup('ALL',this)">ทั้งหมด</button>
     <button class="filter-btn" onclick="setIdxGroup('SET_INDICES',this)">SET Indices</button>
@@ -855,6 +861,7 @@
           <canvas id="band-pbv-canvas" style="width:100%;display:block;border-radius:6px;background:#0d1117"></canvas>
         </div>
       </div>
+      <div id="band-set-check" style="margin-top:12px"></div>
       <div class="card" id="np-card" style="display:none;margin-top:16px">
         <div class="band-card-label">กำไรสุทธิรายไตรมาส (ข้อมูลจาก 9hoon.com)</div>
         <div id="np-error" style="display:none;color:var(--red);padding:8px 0;font-size:13px"></div>
@@ -2321,6 +2328,12 @@
       data-vtip="&lt;div class='tip-head'&gt;หลักทรัพย์ที่หยุดพักการซื้อขายชั่วคราว&lt;/div&gt;ดึงรายชื่อหุ้นที่มีเครื่องหมาย &lt;b&gt;SP/H/P&lt;/b&gt; อยู่ตอนนี้จาก &lt;b&gt;SET.or.th&lt;/b&gt; (สด)&lt;br&gt;เทียบกับ Watchlist ในเครื่องแล้วเน้นแสดงตัวที่เกี่ยวข้อง&lt;hr&gt;ข้อมูลแคช 15 นาที ไม่แก้ไฟล์ใดๆ ให้อัตโนมัติ">
       🚧 เช็คหุ้นหยุดพักเทรด
     </button>
+    <button id="val-check-foreign-btn" onclick="checkForeignRoomNew()"
+      style="font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border);
+             background:var(--bg-card2);color:#c8d0dc;cursor:pointer;display:flex;align-items:center;gap:6px"
+      data-vtip="&lt;div class='tip-head'&gt;ห้องต่างชาติใกล้เต็ม&lt;/div&gt;หาหุ้นที่ต่างชาติถือเกือบชนเพดานแล้ว (&lt;b&gt;percentForeignRoom&lt;/b&gt; จาก SET.or.th)&lt;hr&gt;ใกล้เต็ม → ต่างชาติต้องซื้อผ่าน &lt;b&gt;NVDR&lt;/b&gt; แทน มักดัน NVDR premium ขึ้น&lt;hr&gt;ดึงสดทั้งกระดาน ~7 วิ (พารัลเลล 8 เธรด) แคช 15 นาที ไม่แก้ไฟล์ใดๆ ให้อัตโนมัติ">
+      🌏 เช็คห้องต่างชาติใกล้เต็ม
+    </button>
     <span id="val-refresh-status" style="font-size:11px;color:var(--muted)"></span>
   </div>
   <div class="page-sub">P/E และ P/BV ย้อนหลัง เพื่อประเมิน Valuation Zone ของตลาด
@@ -2329,6 +2342,7 @@
   <div id="val-data-month" style="font-size:12px;margin:4px 0 2px;color:var(--muted)"></div>
   <div id="val-delisted-result" style="display:none;margin-bottom:14px"></div>
   <div id="val-halt-result" style="display:none;margin-bottom:14px"></div>
+  <div id="val-foreign-room-result" style="display:none;margin-bottom:14px"></div>
 
   <!-- P/E-P/BV รายวันจาก SET.or.th โดยตรง (คู่กับค่ารายเดือนจาก Excel ด้านล่าง) -->
   <div id="val-daily-box" style="display:none;margin-bottom:14px"></div>
@@ -2504,6 +2518,24 @@
       <button id="ins-days-90" class="filter-btn" onclick="setInsDays(90,this)"  title="ย้อนหลัง 90 วัน">90 วัน</button>
       <button id="ins-days-180" class="filter-btn" onclick="setInsDays(180,this)" title="ย้อนหลัง 180 วัน (ค่าสูงสุดที่ระบบเก็บสะสมไว้)">180 วัน</button>
     </div>
+  </div>
+
+  <!-- ผู้ถือหุ้นใหญ่ปัจจุบัน (SET.or.th ทางการ) — snapshot ตอนนี้ ต่างจากตาราง 246-2
+       ด้านล่างที่เป็นประวัติการเปลี่ยนแปลง -->
+  <div class="card" style="padding:14px 16px;margin-bottom:14px">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:700">🏛 ผู้ถือหุ้นใหญ่ปัจจุบัน
+        <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:280px">
+          <strong>ต่างจากตารางสะสมด้านล่างยังไง</strong><br>
+          ตารางด้านล่าง (แบบ 246-2) = ใครขยับ ซื้อ/ขายเมื่อไหร่ — ประวัติการเปลี่ยนแปลง<br>
+          กล่องนี้ = ตอนนี้ใครถืออยู่เท่าไหร่ (snapshot ณ วันปิดสมุดล่าสุดจาก SET.or.th) — ใช้คู่กันเห็นภาพครบ
+        </div></span>
+      </div>
+      <input id="ins-own-sym" list="fin-set-datalist" placeholder="พิมพ์ชื่อหุ้น เช่น PTT" onkeydown="if(event.key==='Enter') loadInsOwnership()"
+        style="background:var(--bg-card2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:12px;color:#c8d0dc;width:150px">
+      <button class="btn-secondary" style="font-size:12px" onclick="loadInsOwnership()">ค้นหา</button>
+    </div>
+    <div id="ins-own-result"><div class="empty" style="padding:8px;font-size:12px">พิมพ์ชื่อหุ้นเพื่อดูผู้ถือหุ้นใหญ่+ห้องต่างชาติปัจจุบัน (ข้อมูลทางการจาก SET.or.th — ต้องเคย sync ในหน้า Screener+ ก่อนอย่างน้อย 1 ครั้ง)</div></div>
   </div>
 
   <!-- Summary stats bar -->
@@ -2970,11 +3002,7 @@
         <canvas id="dr-rotation-map" style="width:100%;display:block"></canvas>
       </div>
       <div id="dr-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
-      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
-        🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
-        🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่<br>
-        <span style="color:var(--yellow)">⚠ ราคาท้องถิ่น (ไม่แปลงค่าเงิน) — หุ้นคนละตลาดมีค่าเงินปนอยู่บ้าง เหมาะดู "ตัวไหนนำ/ตามในกลุ่ม DR" มากกว่าเทียบ absolute</span>
-      </div>
+      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7" id="dr-rot-quadnote"></div>
     </div>
   </div>
 
@@ -3004,10 +3032,7 @@
         <canvas id="us-rotation-map" style="width:100%;display:block"></canvas>
       </div>
       <div id="us-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
-      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
-        🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
-        🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
-      </div>
+      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7" id="us-rot-quadnote"></div>
     </div>
   </div>
 
@@ -3037,10 +3062,7 @@
         <canvas id="hk-rotation-map" style="width:100%;display:block"></canvas>
       </div>
       <div id="hk-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
-      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
-        🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
-        🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
-      </div>
+      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7" id="hk-rot-quadnote"></div>
     </div>
   </div>
 
@@ -3064,10 +3086,7 @@
         <canvas id="jp-rotation-map" style="width:100%;display:block"></canvas>
       </div>
       <div id="jp-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
-      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
-        🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
-        🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่
-      </div>
+      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7" id="jp-rot-quadnote"></div>
     </div>
   </div>
 
@@ -3091,11 +3110,7 @@
         <canvas id="etf-rotation-map" style="width:100%;display:block"></canvas>
       </div>
       <div id="etf-rot-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
-      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7">
-        🟢 <b>Leading</b> (ขวาบน) แข็งกว่ากลุ่ม + โมเมนตัมเร่ง · 🔵 <b>Improving</b> (ซ้ายบน) ยังอ่อนกว่ากลุ่มแต่กำลังฟื้น ·
-        🟡 <b>Weakening</b> (ขวาล่าง) ยังแข็งกว่ากลุ่มแต่โมเมนตัมชะลอ · 🔴 <b>Lagging</b> (ซ้ายล่าง) อ่อนกว่ากลุ่ม + โมเมนตัมแย่<br>
-        <span style="color:var(--yellow)">⚠ ตัด ETF ประเภท Leveraged/Inverse ออกจาก cohort — beta ผิดธรรมชาติ เทียบกับตัวอื่นไม่ได้</span>
-      </div>
+      <div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.7" id="etf-rot-quadnote"></div>
     </div>
   </div>
 </div>
@@ -3123,6 +3138,15 @@
           <option value="hk">🇭🇰 หุ้น HK ทั้งหมด (Finnomena)</option>
         </select>
         <span id="fs-meta" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <button class="filter-btn" style="font-size:11px" onclick="syncEsgData(this)"
+          title="ดึงคะแนน CG/ESG rating ทั้งตลาดจาก SET.or.th ใหม่ (1 call เดียวได้ทุกบริษัท เร็ว ~1 วิ) — ปกติอัพเดทปีละครั้งพอ ไม่ต้องกดบ่อย">🌱 Sync CG/ESG</button>
+        <button class="filter-btn" style="font-size:11px" onclick="syncOwnershipData('shareholders', this)"
+          title="ดึงผู้ถือหุ้นใหญ่+free float ทั้งกระดานใหม่จาก SET.or.th (พารัลเลลทั้งตลาด ~8-15 วิ) — เปลี่ยนเฉพาะตอนมีวันปิดสมุดใหม่ (XM/XD) sync ราวสัปดาห์ละครั้งพอ">🏛 Sync ผู้ถือหุ้นใหญ่</button>
+        <button class="filter-btn" style="font-size:11px" onclick="syncOwnershipData('foreign', this)"
+          title="ดึงโควตาต่างชาติทั้งกระดานใหม่จาก SET.or.th (พารัลเลลทั้งตลาด ~7-10 วิ) — เปลี่ยนได้ทุกวันทำการ sync บ่อยกว่าชุดอื่นได้">🌏 Sync ห้องต่างชาติ</button>
+        <span id="fs-esg-sync-note" style="font-size:11px;color:var(--muted)"></span>
       </div>
 
       <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">💡 สูตรสำเร็จ — กดเพื่อเติมค่า แล้วปรับเองได้</div>
@@ -3214,7 +3238,8 @@
       <div class="filter-row" style="gap:0;margin:0" id="cal-scope-row">
         <button class="filter-btn active" id="cal-scope-watchlist" onclick="_calSetScope('watchlist',this)" style="border-radius:6px 0 0 6px" title="เฉพาะหุ้นใน Watchlist เท่านั้น">⭐ Watchlist</button>
         <button class="filter-btn" id="cal-scope-all" onclick="_calSetScope('all',this)" title="ทุกหุ้นที่เคยดึงปฏิทินไว้ในเครื่อง ไม่ fetch สด">🗃️ ทั้งหมดที่มีข้อมูล</button>
-        <button class="filter-btn" id="cal-scope-market" onclick="_calSetScope('market',this)" style="border-radius:0 6px 6px 0" title="กรองตามตลาด จากข้อมูลที่มีในเครื่อง">🌐 ตามตลาด</button>
+        <button class="filter-btn" id="cal-scope-market" onclick="_calSetScope('market',this)" title="กรองตามตลาด จากข้อมูลที่มีในเครื่อง">🌐 ตามตลาด</button>
+        <button class="filter-btn" id="cal-scope-ipo" onclick="_calSetScope('ipo',this)" style="border-radius:0 6px 6px 0" title="หุ้น IPO ที่กำลังจะเข้าและเพิ่งเข้าตลาด จาก SET.or.th (ดึงสด ไม่เก็บสะสม)">🆕 IPO</button>
       </div>
       <div class="filter-row" style="gap:0;margin:0;display:none" id="cal-scope-market-row">
         <button class="filter-btn active" onclick="_calSetScopeMarket('TH',this)" style="border-radius:6px 0 0 6px">TH</button>
@@ -3274,6 +3299,8 @@
         title="งบรายไตรมาสละเอียดจาก Yahoo (~5-6 ไตรมาสล่าสุด สะสมยาวขึ้นทุกรอบ sync)">📆 Yahoo · รายไตรมาส</button>
       <button class="filter-btn" id="fin-view-set-btn" onclick="setFinView('set',this)" style="min-width:130px"
         title="งบทางการจาก SET.or.th (หุ้นไทยเท่านั้น)">🇹🇭 SET.or.th</button>
+      <button class="filter-btn" id="fin-view-health-btn" onclick="setFinView('health',this)" style="min-width:170px"
+        title="SET Financial Health Check — สุขภาพการเงินตามหมวดที่ SET จัดมาให้ (คุณภาพรายได้/สภาพคล่อง/หนี้สิน ฯลฯ) 5 งวด (หุ้นไทยเท่านั้น)">🩺 สุขภาพการเงิน (SET)</button>
       <button class="filter-btn" id="fin-view-qpl-btn" onclick="setFinView('qpl',this)" style="min-width:150px"
         title="ตาราง P&L รายไตรมาสสไตล์ broker research (รายได้/ต้นทุนขาย/SG&A แยกขาย-บริหาร/กำไรดำเนินงาน/ภาษี ฯลฯ) — ผสาน Finnomena (ยาว) + Yahoo (ละเอียด)">📋 P&amp;L รายไตรมาส</button>
       <button class="filter-btn" id="fin-view-merged-btn" onclick="setFinView('merged',this)" style="min-width:150px"
@@ -5179,6 +5206,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260823b"></script>
+<script src="static/dashboard.js?v=20260823h"></script>
 </body>
 </html>
