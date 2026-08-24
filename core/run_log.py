@@ -88,7 +88,9 @@ def read_recent_failures(base_dir, limit=100):
     ตาราง "ประวัติล้มเหลวล่าสุด" ในหน้า Data Health (ต่างจาก /api/update-status ที่
     บอกได้แค่รอบล่าสุดต่อ source)"""
     hist = read_history(base_dir)
+    # rec ต้องเป็น dict เท่านั้น — กันไฟล์ประวัติเสีย/ถูกแก้มือทำ record ผิดรูปจน
+    # .get() throw AttributeError จน /api/update-history คืน 500
     fails = [{"source": src, **rec} for src, recs in hist.items()
-             for rec in recs if not rec.get("ok")]
+             for rec in recs if isinstance(rec, dict) and not rec.get("ok")]
     fails.sort(key=lambda x: x.get("at", ""), reverse=True)
     return fails[:limit]

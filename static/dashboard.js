@@ -705,17 +705,22 @@ async function resetStuckJob() {
 }
 
 function renderAll() {
-  renderOverview();
-  renderRotation();
-  renderSectors();
-  renderStocks();
-  renderWatchlist();
-  renderBreakout();
-  renderMomentum();
-  renderEmergingLeaders();
-  renderHeatmap();
-  renderEMABreadth();
-  loadNewHighChart();
+  // ห่อแต่ละ render ด้วย try/catch แยกตัว — ถ้าตัวใดตัวหนึ่ง throw (เช่นข้อมูลผิดรูป)
+  // ตัวที่เหลือยังต้อง render ต่อได้ ไม่งั้นทั้งหน้าจะค้างว่างเปล่าจากจุดที่พังจุดเดียว
+  const _steps = [
+    renderOverview, renderRotation, renderSectors, renderStocks, renderWatchlist,
+    renderBreakout, renderMomentum, renderEmergingLeaders, renderHeatmap,
+    renderEMABreadth, loadNewHighChart,
+  ];
+  for (const fn of _steps) {
+    try { fn(); } catch (e) { console.error(`[renderAll] ${fn.name} failed:`, e); }
+  }
+  // เผื่อเปิดหน้าเว็บด้วย deep-link ตรง #page/peer หรือ #peer/th/SYM — DOMContentLoaded
+  // อาจเรียก initPeerPage()/initFinPage() ไปแล้วตอน DATA ยังโหลดไม่เสร็จ (script ไม่ได้ defer)
+  // ทำให้ Sector dropdown/TH datalist ค้างว่างถาวรทั้งเซสชัน ทั้งสองฟังก์ชัน idempotent อยู่แล้ว
+  // (เช็ค dataset.built/childElementCount เอง) เรียกซ้ำได้ฟรีถ้าเคย build สำเร็จแล้ว
+  if (typeof _peerBuildSectorSelect === 'function') _peerBuildSectorSelect();
+  if (typeof initFinPage === 'function') initFinPage();
 }
 
 // ============================================================
@@ -2822,8 +2827,11 @@ function renderSectorRankTable() {
   if (!DATA) return;
   const el = document.getElementById('sector-rank-tbody');
   if (!el) return;
-  _ensureIdxDataLoaded(renderSectorRankTable);
-  const groups = (sectorView === 'sector' ? DATA.sectors : DATA.industries).map(_sectorWithIdxOverride);
+  // ส่ง renderSectors (ไม่ใช่ renderSectorRankTable ตรงๆ) เป็น waiter — ถ้าผู้ใช้สลับ
+  // sectorMode/sectorView ก่อน fetch /api/indices จะเสร็จ callback ที่ถูกเก็บไว้จะยังอ่าน
+  // mode/view ปัจจุบันตอนถูกเรียกจริง แทนที่จะ hardcode ไปที่ตารางเดิมที่อาจถูกซ่อนไปแล้ว
+  _ensureIdxDataLoaded(renderSectors);
+  const groups = ((sectorView === 'sector' ? DATA.sectors : DATA.industries) ?? []).map(_sectorWithIdxOverride);
 
   // จัดอันดับต่อ horizon (1 = return สูงสุด) — กลุ่มที่ค่าเป็น null ไม่ถูกจัด
   const H = [['ret_1w', 'r1w'], ['ret_1m', 'r1m'], ['ret_3m', 'r3m'], ['ret_6m', 'r6m'], ['ret_1y', 'r1y']];
@@ -2943,7 +2951,7 @@ function _sectorWithIdxOverride(s) {
 
 function renderSectorTable() {
   if (!DATA) return;
-  _ensureIdxDataLoaded(renderSectorTable);
+  _ensureIdxDataLoaded(renderSectors);  // ดู comment ที่ renderSectorRankTable — กัน callback ค้าง view เก่า
 
   // นับหุ้นที่ทำ 52W High ใหม่ (price >= high_52w) ต่อ sector/industry
   const groupKey = sectorView === 'sector' ? 'sector' : 'industry';
@@ -2961,7 +2969,7 @@ function renderSectorTable() {
   const mktRet1m = _idxData?.['^SET.BK']?.ret_1m ??
     (stocks1m.length ? stocks1m.reduce((a, s) => a + s.ret_1m, 0) / stocks1m.length : 0);
 
-  const data = [...(sectorView === "sector" ? DATA.sectors : DATA.industries)].map(s => {
+  const data = [...((sectorView === "sector" ? DATA.sectors : DATA.industries) ?? [])].map(s => {
     const merged = _sectorWithIdxOverride(s);
     return {
       ...merged,
@@ -8829,6 +8837,7 @@ const PEER_COLS = {
 };
 
 let _peerMarket = 'TH';
+let _peerFetchToken = 0;   // กัน response เก่าที่มาถึงทีหลัง (สลับหุ้น/กลุ่มเร็วๆ ติดกัน) เขียนทับผลของ request ใหม่กว่า
 
 function initPeerPage() {
   initFinPage();        // ให้ fin-set-datalist populate ก่อน แล้วโคลนมาใช้
@@ -8847,8 +8856,11 @@ function setPeerMarket(mkt, btn) {
   document.getElementById('peer-meta').textContent = '';
   // สลับตลาดต้องล้างผลลัพธ์ค้างของตลาดก่อนหน้าด้วย ไม่งั้นกด preset/view mode ก่อนค้นหุ้นใหม่
   // จะ render ตารางตลาดเก่ากลับมาแสดงทั้งที่แท็บสลับไปแล้ว (renderPeerResults ยึด _peerRows เดิม)
+  // ++token ทั้งคู่กันด้วย — request ของตลาดเก่าที่ยังค้างอยู่ (fetch ช้า/mirror on-demand)
+  // resolve ทีหลังจะโดนทิ้งแทนที่จะมาเขียนทับข้อมูลตลาดใหม่ที่เพิ่งสลับมา
+  _peerFetchToken++; _peerGroupFetchToken++;
   _peerRows = []; _peerMedian = null; _peerMeta = null; _peerSort = null;
-  _peerGroupSyms = []; _peerGroupRows = null; _peerGroupSort = {};
+  _peerGroupSyms = null; _peerGroupRows = null; _peerGroupSort = {};
   _peerDestroyScatterChart();
   document.getElementById('peer-results').innerHTML = '<div class="empty">พิมพ์ชื่อหุ้นหรือเลือก Sector เพื่อเริ่มเทียบ</div>';
   _peerBuildDatalist();
@@ -9013,11 +9025,15 @@ async function _peerFetch(url) {
   _peerDestroyScatterChart();
   box.innerHTML = '<div class="empty">กำลังโหลด...</div>';
   meta.textContent = '';
+  // กัน response เก่าเขียนทับใหม่กว่า — สลับหุ้น/กลุ่มเร็วๆ ก่อน request เดิม (เช่น mirror
+  // หุ้นนอกดัชนีที่ fetch sector สดจาก Yahoo ช้ากว่าปกติ) resolve เสร็จ
+  const token = ++_peerFetchToken;
   try {
     // หุ้น mirror นอกดัชนีหลัก (US/HK) ต้อง fetch sector สดจาก Yahoo ก่อนตอบ (ดู
     // fetch_header ใน app.py) — ใช้ timeout เดียวกับ tearsheet กันหน้าค้าง "กำลังโหลด..." ไม่รู้จบ
     const r = await _fetchTimeout(url, 35000, 'โหลดข้อมูลกลุ่มนี้ช้าเกินไป (เกิน 35 วิ) — ลองใหม่อีกครั้ง');
     const d = await r.json();
+    if (token !== _peerFetchToken) return;   // มี request ใหม่กว่าแซงไปแล้ว ทิ้งผลลัพธ์นี้
     if (!d.rows || !d.rows.length) {
       box.innerHTML = `<div class="empty">${(d.meta && d.meta.note) || 'ไม่พบข้อมูลกลุ่มนี้'}</div>`;
       return;
@@ -9026,10 +9042,13 @@ async function _peerFetch(url) {
     _peerMedian = d.median;
     _peerMeta = d.meta;
     // กลุ่มเปลี่ยน (ค้นหุ้นใหม่/เลือก sector ใหม่/ขยาย industry) — ล้างการเลือกหุ้นของมุมมอง
-    // "การ์ดเทียบกลุ่ม" เดิมทิ้ง ให้ auto-pick top mkt_cap ใหม่ตามกลุ่มล่าสุดเสมอ
-    _peerGroupSyms = []; _peerGroupRows = null; _peerGroupSort = {};
+    // "การ์ดเทียบกลุ่ม" เดิมทิ้ง ให้ auto-pick top mkt_cap ใหม่ตามกลุ่มล่าสุดเสมอ (null สั่ง
+    // ให้ renderPeerGroupCards/renderPeerSectorWorkspace auto-pick ใหม่ ต่างจาก [] ที่แปลว่า
+    // ผู้ใช้ติ๊กออกจนหมดเองโดยตั้งใจ — ดู comment ที่จุดประกาศ _peerGroupSyms)
+    _peerGroupSyms = null; _peerGroupRows = null; _peerGroupSort = {};
     renderPeerResults();
   } catch (e) {
+    if (token !== _peerFetchToken) return;
     box.innerHTML = '<div class="empty" style="color:var(--red)">โหลดไม่สำเร็จ: ' + e.message + '</div>';
   }
 }
@@ -9298,7 +9317,10 @@ function openPeerFromModal() {
 // ทุกตัวในกลุ่ม sector/industry เดียวกัน (ตัดออกทีละตัวได้ผ่าน checkbox) ให้เห็นการ์ด Margins/
 // Cash Cycle/รายการการเงินรายไตรมาส/อันดับกำไรโต แบบเดียวกับตารางเทียบหุ้น 2 ตัว แต่ขยายเป็นกลุ่ม
 // ============================================================
-let _peerGroupSyms = [];      // symbol ที่เลือกอยู่ตอนนี้ (ค่าเริ่มต้น = ทั้งกลุ่ม, ตัดออกได้เอง)
+// null = ยังไม่เคยตั้งค่า (จะ auto-pick ทั้งกลุ่มตอน render) ต่างจาก [] ที่แปลว่าผู้ใช้ติ๊กออก
+// จนหมดกลุ่มเองโดยตั้งใจ (เดิมใช้ [] ทั้งสองความหมายปนกัน ทำให้ติ๊กออกตัวสุดท้ายแล้ว auto-pick
+// ดันกลับมาเลือกทั้งกลุ่มใหม่ทันที ไม่มีทางดูหุ้นตัวเดียวโดดๆ จากมุมมองนี้ได้เลย)
+let _peerGroupSyms = null;    // symbol ที่เลือกอยู่ตอนนี้ (ค่าเริ่มต้น = ทั้งกลุ่ม, ตัดออกได้เอง)
 let _peerGroupRows = null;    // แถวล่าสุดจาก /api/peer-group-detail
 let _peerGroupCharts = [];    // Chart.js instances — ทำลายก่อน render ใหม่ทุกครั้งกัน canvas ค้าง
 
@@ -9428,7 +9450,7 @@ function renderPeerGroupCards() {
     return;
   }
   if (!_peerRows.length) return;
-  if (!_peerGroupSyms.length) _peerGroupSyms = _peerGroupAutoPick();
+  if (_peerGroupSyms === null) _peerGroupSyms = _peerGroupAutoPick();
   box.innerHTML = _peerGroupChipsHtml() + '<div id="peer-group-body"><div class="empty">กำลังโหลด...</div></div>';
   _peerGroupFetch();
 }
@@ -9465,7 +9487,6 @@ function _peerGroupToggle(sym, on) {
 let _peerGroupFetchToken = 0;   // กัน response เก่าที่มาถึงทีหลัง (ติ๊กหุ้นออกเร็วๆ ติดกัน) เขียนทับผลของ request ใหม่กว่า
 async function _peerGroupFetch() {
   const bodyId = _peerViewMode === 'workspace' ? 'peer-workspace-body' : 'peer-group-body';
-  const body = document.getElementById(bodyId);
   const baseSym = (_peerMeta && _peerMeta.base_symbol) || '';
   const token = ++_peerGroupFetchToken;
   try {
@@ -9480,6 +9501,11 @@ async function _peerGroupFetch() {
     else _peerGroupRenderBody();
   } catch (e) {
     if (token !== _peerGroupFetchToken) return;
+    // หา node สดตอนนี้แทนการใช้ reference ที่จับไว้ก่อน await — ถ้าผู้ใช้สลับ view mode ระหว่างรอ
+    // (โดยไม่มี request ใหม่มาบัมพ์ token) node เดิมอาจหลุดจาก DOM ไปแล้ว เขียน error เข้า node
+    // ที่ไม่มีใครเห็นแบบเงียบๆ — เช็คสดกันพลาดจุดนี้ (ถ้า mode สลับไปจริง node ใหม่จะไม่มี id นี้
+    // อยู่แล้ว ก็แค่ไม่เขียน ไม่ error)
+    const body = document.getElementById(bodyId);
     if (body) body.innerHTML = '<div class="empty" style="color:var(--red)">โหลดไม่สำเร็จ: ' + e.message + '</div>';
   }
 }
@@ -9758,7 +9784,7 @@ function renderPeerSectorWorkspace() {
     return;
   }
   if (!_peerRows.length) return;
-  if (!_peerGroupSyms.length) _peerGroupSyms = _peerGroupAutoPick();
+  if (_peerGroupSyms === null) _peerGroupSyms = _peerGroupAutoPick();
   box.innerHTML = _peerGroupChipsHtml() + '<div id="peer-workspace-body"><div class="empty">กำลังโหลด...</div></div>';
   _peerGroupFetch();
 }
@@ -13164,7 +13190,7 @@ function renderBreakout() {
   const secRanks = computeSectorRanks();
   const stocks = DATA.stocks.map(s => {
     const anchor     = isHigh ? s.high_52w : s.low_52w;
-    const fromAnchor = anchor > 0 ? (s.price - anchor) / anchor * 100 : null;
+    const fromAnchor = (anchor > 0 && s.price != null) ? (s.price - anchor) / anchor * 100 : null;
     const range      = (s.high_52w ?? 0) - (s.low_52w ?? 0);
     const rangePct   = range > 0 ? Math.round((s.price - s.low_52w) / range * 100) : null;
     const sr = secRanks[s.symbol];
@@ -20523,6 +20549,7 @@ function _calMonthNav(delta, toToday) {
 }
 
 let _calCache = [];   // flat: [{symbol(display), market, type, date, confidence, source, detail}]
+let _calFetchToken = 0;   // กัน request เก่า (สลับ scope เร็วๆ ก่อนของเดิม resolve) เขียนทับ _calCache ใหม่กว่า
 
 // ตัวกรองขอบเขต — เฟส A เดิมล็อกตายตัวที่ watchlist เท่านั้น ตอนนี้เพิ่มเลือกได้ 3 แบบ (ดู
 // PLAN_stock_study_suite.txt งาน #4 ช่วง "Filter: watchlist-only (default ON) / ทั้งหมดที่มี
@@ -20568,10 +20595,13 @@ function _calSetScopeMarket(mkt, btn) {
 function _calResolveWatchlist() {
   const out = [];
   watchlist.forEach(sym => {
-    if (sym.startsWith('DR:')) out.push({ symbol: sym.slice(3), market: 'DR', display: 'DR:' + sym.slice(3) });
-    else if (sym.startsWith('US:')) out.push({ symbol: sym.slice(3), market: 'US', display: sym.slice(3) });
-    else if (sym.startsWith('HK:')) out.push({ symbol: sym.slice(3), market: 'HK', display: sym.slice(3) });
-    else out.push({ symbol: sym, market: 'TH', display: sym });
+    // เช็ค prefix ว่างเปล่า ("DR:" ไม่มีรหัสตามหลัง — ไม่ควรเกิดจาก UI ปกติแต่กันไว้กันยิง
+    // /api/calendar-events/DR/ ด้วย symbol ว่าง) ข้ามทิ้งเงียบๆ แทนที่จะนับเป็น fail ที่แจ้งผู้ใช้
+    if (sym.startsWith('DR:')) { const s = sym.slice(3); if (s) out.push({ symbol: s, market: 'DR', display: 'DR:' + s }); }
+    else if (sym.startsWith('US:')) { const s = sym.slice(3); if (s) out.push({ symbol: s, market: 'US', display: s }); }
+    else if (sym.startsWith('HK:')) { const s = sym.slice(3); if (s) out.push({ symbol: s, market: 'HK', display: s }); }
+    else if (sym.startsWith('JP:')) { const s = sym.slice(3); if (s) out.push({ symbol: s, market: 'JP', display: s }); }
+    else if (sym) out.push({ symbol: sym, market: 'TH', display: sym });
   });
   return { list: out };
 }
@@ -20612,6 +20642,10 @@ async function loadCalendarPage(refresh) {
 
   if (_calScope === 'ipo') { _calLoadIPO(); return; }
 
+  // กัน request เก่าเขียนทับใหม่กว่า — สลับ scope (watchlist/all/market) เร็วๆ ก่อนของเดิม
+  // resolve (watchlist ยิง Promise.all รวมหลายหุ้น มักช้ากว่า scope อื่นที่ fetch ก้อนเดียว)
+  const token = ++_calFetchToken;
+
   if (_calScope === 'watchlist') {
     const { list } = _calResolveWatchlist();
     if (list.length === 0) {
@@ -20632,6 +20666,7 @@ async function loadCalendarPage(refresh) {
         return (d.events || []).map(e => ({ ...e, symbol: it.symbol, market: it.market }));
       } catch (e) { failCount++; return []; }
     }));
+    if (token !== _calFetchToken) return;   // มี request ใหม่กว่าแซงไปแล้ว ทิ้งผลลัพธ์นี้
     const deduped = _calDedupeEvents(results.flat());
     _calCache = deduped.map(e => ({ ...e, symbol: _calDisplayFor(e.market, e.symbol) }));
     if (note && failCount) note.textContent = `⚠ ดึงไม่สำเร็จ ${failCount}/${list.length} ตัว (timeout/error) — ปฏิทินที่เห็นอาจไม่ครบ ลองกด "ดึงข้อมูลใหม่ทั้งหมด" อีกครั้ง`;
@@ -20641,10 +20676,15 @@ async function loadCalendarPage(refresh) {
     try {
       const r = await _fetchTimeout(`/api/calendar-events-all${qs}`, 25000);
       const d = await r.json();
+      if (token !== _calFetchToken) return;
       const deduped = _calDedupeEvents(d.events || []);
       _calCache = deduped.map(e => ({ ...e, symbol: _calDisplayFor(e.market, e.symbol) }));
-    } catch (e) { _calCache = []; }
+    } catch (e) {
+      if (token !== _calFetchToken) return;
+      _calCache = [];
+    }
   }
+  if (token !== _calFetchToken) return;
   _calRenderFromCache();
 }
 
@@ -20732,6 +20772,7 @@ function _calSourceLink(e) {
   if (e.type !== 'earnings' || e.market !== 'TH') return null;
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const dt = new Date(e.date + 'T00:00:00');
+  if (isNaN(dt.getTime())) return null;   // e.date พังฟอร์แมต — กัน .toISOString() ด้านล่าง throw RangeError
   if (dt >= today) return null;
   // ต้องส่ง fromDate/toDate เอง ไม่งั้นหน้า SET จะ default เป็นช่วงสั้นๆ (~1 เดือนล่าสุดจากวันนี้)
   // ซึ่งอาจไม่ครอบคลุมวันที่ประกาศจริง เพราะวันที่ในปฏิทินเราเป็นแค่ 'ประมาณการ' จาก yfinance
@@ -20913,7 +20954,10 @@ function _calGridRows(year, month, byDate, today) {
         const title = escAttr(`${e.symbol} ${e.detail || ''}${link ? ' — คลิกดูงบจริงที่ SET.or.th' : ''}`);
         const style = "font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 3px;margin-top:2px;border-radius:3px;background:var(--bg2)" + (link ? ";cursor:pointer;text-decoration:underline" : "");
         const onclick = link ? ` onclick="window.open('${link}','_blank','noopener')"` : '';
-        return `<div title="${title}" style="${style}"${onclick}>${_CAL_TYPE_ICON[e.type] || '•'} ${e.symbol}</div>`;
+        // escape e.symbol เหมือน title ข้างบน — เดิม render ดิบ ต่างจาก _calRenderList ที่ escape
+        // ไว้แล้ว (watchlist entry ที่มี prefix DR:/US:/HK: ไม่ผ่านการเช็ค whitelist ชื่อหุ้นจริง
+        // ดู addToWatchlist ทำให้มี HTML แทรกเข้ามาได้ในทางทฤษฎี)
+        return `<div title="${title}" style="${style}"${onclick}>${_CAL_TYPE_ICON[e.type] || '•'} ${escAttr(e.symbol)}</div>`;
       }).join('');
       const more = dayEvents.length > 3 ? `<div style="font-size:9px;color:var(--text2)">+${dayEvents.length - 3} อื่นๆ</div>` : '';
       html += `<td style="vertical-align:top;padding:4px;height:76px;max-width:120px;border:1px solid var(--border);${isToday ? 'background:color-mix(in srgb, var(--blue) 12%, transparent)' : ''}">

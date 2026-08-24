@@ -190,9 +190,9 @@ def _ensure_factors_dr(base_dir, dr_sym, region):
     """sync งบ Yahoo เข้า namespace DR: (is_dr=True) ถ้ายังไม่มี — 46/63 ตัวมีอยู่แล้วจาก DR
     pipeline เดิม (update_financials.sync_all is_dr=True) ตัวที่เหลือดึงสดตอนเปิดครั้งแรก
     (fetch_yahoo_full resolve yf ticker จาก DR universe ให้เอง เช่น GSEMI -> 2243.T)"""
-    if fs.get(base_dir, dr_sym, "yahoo", is_dr=True):
-        return
     try:
+        if fs.get(base_dir, dr_sym, "yahoo", is_dr=True):
+            return
         payload = fs.fetch_yahoo_full(dr_sym, is_dr=True, market=region)
         fs.upsert(base_dir, dr_sym, "yahoo", payload, is_dr=True)
     except Exception as e:
@@ -205,7 +205,12 @@ def _ensure_factors(base_dir, ex, ticker):
     Compare เห็นข้อมูลโดยไม่ต้องรอ batch sync (sources/financials_store.sync_mirror_yahoo_index)
     รอบถัดไป"""
     key = fs._mirror_key(ex, ticker)
-    if not fs.get(base_dir, key, "yahoo", is_dr=False):
+    try:
+        has_yahoo = fs.get(base_dir, key, "yahoo", is_dr=False)
+    except Exception as e:
+        print(f"[MirrorOndemand] เช็คงบ Yahoo {ex}:{ticker} ล้มเหลว: {str(e)[:80]}")
+        return
+    if not has_yahoo:
         try:
             payload = fs.fetch_yahoo_full(ticker, is_dr=True, market=ex)
             fs.upsert(base_dir, key, "yahoo", payload, is_dr=False)
@@ -213,8 +218,11 @@ def _ensure_factors(base_dir, ex, ticker):
             print(f"[MirrorOndemand] sync งบ Yahoo {ex}:{ticker} ล้มเหลว: {str(e)[:80]}")
             return
 
-    f = factor_snapshot._factors_for(base_dir, key, is_dr=False, z_variant="Z")
-    if f is None:
-        return
-    f["div_cagr_5y"] = factor_snapshot._div_cagr_5y(base_dir, ticker, ex)
-    factor_snapshot.upsert_mirror_row(base_dir, ticker, ex, f)
+    try:
+        f = factor_snapshot._factors_for(base_dir, key, is_dr=False, z_variant="Z")
+        if f is None:
+            return
+        f["div_cagr_5y"] = factor_snapshot._div_cagr_5y(base_dir, ticker, ex)
+        factor_snapshot.upsert_mirror_row(base_dir, ticker, ex, f)
+    except Exception as e:
+        print(f"[MirrorOndemand] คำนวณ/บันทึก factor {ex}:{ticker} ล้มเหลว: {str(e)[:80]}")

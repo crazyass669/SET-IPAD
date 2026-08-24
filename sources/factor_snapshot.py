@@ -670,7 +670,11 @@ def get_mirror_snapshot(base_dir, market):
         out = []
         for sym, mkt, factors, at in cur.fetchall():
             row = {"symbol": sym, "is_dr": True, "market": mkt, "name": sym, "computed_at": at}
-            row.update(json.loads(factors))
+            try:
+                row.update(json.loads(factors))
+            except (TypeError, ValueError) as e:
+                print(f"[factor_snapshot] mirror factors JSON เสีย {mkt}:{sym}: {str(e)[:80]}")
+                continue
             out.append(row)
     finally:
         con.close()
@@ -721,7 +725,11 @@ def get_snapshot(base_dir, is_dr=None):
         out = []
         for sym, dr, market, name, factors, at in cur.fetchall():
             row = {"symbol": sym, "is_dr": bool(dr), "market": market, "name": name, "computed_at": at}
-            row.update(json.loads(factors))
+            try:
+                row.update(json.loads(factors))
+            except (TypeError, ValueError) as e:
+                print(f"[factor_snapshot] snapshot factors JSON เสีย {market}:{sym}: {str(e)[:80]}")
+                continue
             out.append(row)
     finally:
         con.close()
