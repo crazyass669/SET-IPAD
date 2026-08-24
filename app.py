@@ -10721,9 +10721,13 @@ def get_prices():
         except Exception:
             pass
 
-    # DR underlying stocks from cache (ราคา foreign currency)
+    # DR underlying stocks from cache (ราคา foreign currency) — cache อาจค้างได้หลายวันถ้าไม่มี
+    # ใครเปิดหน้า DR เลย (มีแค่ /api/dr ที่ rebuild ให้) เช็ค TTL เองแล้ว kick rebuild เบื้องหลัง
+    # กัน checkAlerts() เช็คราคาแช่แข็งตั้งแต่ server restart ครั้งล่าสุดแบบไม่มีใครรู้
     dr_result = _dr_cache.get("result")
     if dr_result:
+        if _dr_cache.get("ts") is not None and time.time() - _dr_cache["ts"] >= _DR_CACHE_TTL:
+            _kick_dr_rebuild()
         for s in dr_result.get("stocks", []):
             if s.get("sym") and s.get("price") is not None:
                 prices["DR:" + s["sym"]] = s["price"]
@@ -10739,6 +10743,26 @@ def get_prices():
     for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", []):
         if s.get("symbol") and s.get("price") is not None:
             prices["HK:" + s["symbol"]] = s["price"]
+
+    # หุ้น mirror นอกดัชนีหลัก (US/HK) ที่มีการตั้ง price alert ไว้จาก Watchlist — เติมราคาจาก
+    # cache on-demand (mirror_ondemand, ดู sources/mirror_ondemand.py) ไม่งั้น checkAlerts()
+    # จะไม่เจอราคาเลย (ไม่อยู่ใน 3 แหล่งบนที่ครอบแค่สมาชิกดัชนีหลัก) ทำให้ alert เงียบตลอดไป
+    if os.path.exists(PRICE_ALERTS_FILE):
+        try:
+            with open(PRICE_ALERTS_FILE, encoding="utf-8") as f:
+                alerts = json.load(f)
+            for a in alerts:
+                sym = a.get("symbol") if isinstance(a, dict) else None
+                if not isinstance(sym, str) or sym in prices:
+                    continue
+                market = "US" if sym.startswith("US:") else "HK" if sym.startswith("HK:") else None
+                if not market:
+                    continue
+                payload, _stale = financials_store.get_mirror_ondemand(BASE_DIR, sym[3:], market)
+                if payload and payload.get("price") is not None:
+                    prices[sym] = payload["price"]
+        except Exception:
+            pass
 
     if not prices:
         return jsonify({"error": "no data"}), 404
@@ -10839,8 +10863,12 @@ def get_watchlist():
     try:
         with open(WATCHLIST_FILE, encoding="utf-8") as f:
             return jsonify(json.load(f))
-    except Exception:
-        return jsonify([])
+    except Exception as e:
+        # ห้ามคืน [] ตอนไฟล์อ่านไม่ได้ (เช่น JSON เสียจาก git merge conflict) — frontend
+        # (_wlSyncFromServer) แยกไม่ออกระหว่าง "ว่างจริง" กับ "อ่านพัง" แล้วจะ sync ทับไฟล์
+        # ด้วยลิสต์ของเครื่องเดียวนี้ ทำให้ตัวที่เครื่องอื่น sync ไว้หายถาวร — ตอบ 500 ให้ชัดแทน
+        print(f"[watchlist] read error: {e}")
+        return jsonify({"error": "read failed"}), 500
 
 
 @app.route("/api/watchlist", methods=["POST"])
@@ -10867,14 +10895,19 @@ def get_price_alerts():
     try:
         with open(PRICE_ALERTS_FILE, encoding="utf-8") as f:
             return jsonify(json.load(f))
-    except Exception:
-        return jsonify([])
+    except Exception as e:
+        # เหตุผลเดียวกับ get_watchlist ด้านบน — ห้ามคืน [] ตอนไฟล์อ่านไม่ได้ ไม่งั้น sync
+        # ข้ามเครื่องจะเห็นว่า "ว่างจริง" แล้วทับไฟล์ด้วยลิสต์ของเครื่องเดียวนี้
+        print(f"[price-alerts] read error: {e}")
+        return jsonify({"error": "read failed"}), 500
 
 
 def _valid_price_alert(a):
     """เช็คโครงสร้างขั้นต่ำของ 1 alert — กัน record เพี้ยน (targetPrice หาย/ไม่ใช่ตัวเลข)
     หลุดเข้าไปสะสมใน price_alerts.json แล้ว sync กระจายไปทุกเครื่อง ทำให้ a.targetPrice.toFixed()
-    ฝั่ง frontend throw ตอน render จนตาราง Watchlist/แผงแจ้งเตือนค้างทั้งหน้า (ดู _wlAlertCell)"""
+    ฝั่ง frontend throw ตอน render จนตาราง Watchlist/แผงแจ้งเตือนค้างทั้งหน้า (ดู _wlAlertCell)
+    เช็ค triggeredPrice/triggeredAt ด้วยเหตุผลเดียวกัน — เคยหลุดผ่านได้เพราะเช็คแค่ targetPrice
+    ทำให้ a.triggeredPrice.toFixed() ใน _renderWlExistingAlerts/renderAlertPanel throw แทน"""
     if not (isinstance(a, dict) and isinstance(a.get("id"), str)):
         return False
     tp = a.get("targetPrice")
@@ -10883,6 +10916,11 @@ def _valid_price_alert(a):
     if a.get("condition") not in ("above", "below"):
         return False
     if not isinstance(a.get("symbol"), str):
+        return False
+    trig_p = a.get("triggeredPrice")
+    if trig_p is not None and not (isinstance(trig_p, (int, float)) and not isinstance(trig_p, bool) and math.isfinite(trig_p)):
+        return False
+    if a.get("triggeredAt") is not None and not isinstance(a.get("triggeredAt"), str):
         return False
     return True
 

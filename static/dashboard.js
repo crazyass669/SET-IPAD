@@ -33,8 +33,26 @@ let watchlist = (() => { try { return JSON.parse(localStorage.getItem("set_wl") 
 // บันทึก watchlist ทั้ง localStorage (ทันที) และไฟล์ data/watchlist.json ฝั่งเซิร์ฟเวอร์
 // (ให้ git push/pull พาไปเครื่องอื่นได้ — ดู /api/watchlist ใน app.py) merge แบบ union
 // เท่านั้น ไม่มีการลบข้ามเครื่องอัตโนมัติ กันข้อมูลหายถ้าอีกเครื่องยังไม่ pull ล่าสุด
+//
+// ก่อน POST จะ GET ไฟล์ล่าสุดจากเซิร์ฟเวอร์มา union เข้ากับ list ปัจจุบันก่อนเสมอ (ไม่ใช่ POST
+// ทับตรงๆ) กันเคสเปิด 2 เครื่องพร้อมกัน: เครื่อง A เพิ่มหุ้นแล้ว sync ขึ้นไฟล์ ก่อนที่เครื่อง B
+// (ที่เปิดค้างไว้นานกว่า ยังไม่เห็นของ A) จะเพิ่มหุ้นอื่นแล้ว save ทับไฟล์ด้วย list เก่าที่ไม่มี
+// ของ A อยู่ — พบจากรีวิวโค้ด 2026-08-24
 function _wlSave() {
   localStorage.setItem("set_wl", JSON.stringify(watchlist));
+  fetch('/api/watchlist').then(r => r.ok ? r.json() : Promise.reject())
+    .then(serverList => {
+      if (Array.isArray(serverList)) {
+        let changed = false;
+        serverList.forEach(s => { if (typeof s === 'string' && !_wlListHas(watchlist, s)) { watchlist.push(s); changed = true; } });
+        if (changed) localStorage.setItem("set_wl", JSON.stringify(watchlist));
+      }
+    })
+    .catch(() => {})
+    .then(_wlPostSave);
+}
+
+function _wlPostSave() {
   fetch('/api/watchlist', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -75,7 +93,7 @@ function _wlListHas(list, sym) {
 }
 
 (function _wlSyncFromServer() {
-  fetch('/api/watchlist').then(r => r.json()).then(serverList => {
+  fetch('/api/watchlist').then(r => r.ok ? r.json() : Promise.reject()).then(serverList => {
     if (!Array.isArray(serverList)) return;
     let changed = false;
     serverList.forEach(s => { if (typeof s === 'string' && !_wlListHas(watchlist, s)) { watchlist.push(s); changed = true; } });
@@ -3481,10 +3499,14 @@ async function _wlFetchMirror(sym, mkt, under) {
   _wlMirrorFetching.add(sym);
   try {
     const res = await _wlFetchTearsheetHeader(mkt, under);
+    // ผู้ใช้อาจลบ sym ออกจาก watchlist ไปแล้วระหว่างรอ fetch (สูงสุด 35 วิ) — ถ้าลบไปแล้ว
+    // ทิ้งผลลัพธ์ ไม่งั้น cache (ทั้ง in-memory และ localStorage) จะฟื้นคืนชีพหุ้นที่ลบไปแล้ว
+    // กลับมาโผล่อีกครั้งถ้าเพิ่มซ้ำภายใน 24 ชม. (พบจากรีวิวโค้ด 2026-08-24)
+    if (!watchlist.includes(sym)) return;
     _wlMirrorData[sym] = res;
     if (!res.error) _wlMirrorCacheSave(sym, res);
   } catch (e) {
-    _wlMirrorData[sym] = { error: e.message || 'โหลดไม่สำเร็จ' };
+    if (watchlist.includes(sym)) _wlMirrorData[sym] = { error: e.message || 'โหลดไม่สำเร็จ' };
   } finally {
     _wlMirrorFetching.delete(sym);
     renderWatchlist();
@@ -3502,6 +3524,9 @@ async function _wlFetchMirrorGuessMarket(sym) {
     let res = await _wlFetchTearsheetHeader('US', sym);
     let mkt = 'US';
     if (res.error) { res = await _wlFetchTearsheetHeader('HK', sym); mkt = 'HK'; }
+    // เหตุผลเดียวกับ _wlFetchMirror — ผู้ใช้อาจลบ sym ออกไปแล้วระหว่างรอ fetch (สูงสุด ~70 วิ
+    // ถ้าต้องลองทั้ง US แล้ว HK) กันฟื้นคืนชีพหุ้นที่ลบไปแล้ว
+    if (!watchlist.includes(sym)) return;
     if (!res.error) {
       const idx = watchlist.indexOf(sym);
       if (idx !== -1) { watchlist[idx] = mkt + ':' + sym; _wlSave(); }
@@ -3510,7 +3535,7 @@ async function _wlFetchMirrorGuessMarket(sym) {
     }
     _wlMirrorData[sym] = res;   // cache ผลไว้ (สำเร็จ/พลาดก็ตาม) กัน retry วนทุก render
   } catch (e) {
-    _wlMirrorData[sym] = { error: e.message || 'โหลดไม่สำเร็จ' };
+    if (watchlist.includes(sym)) _wlMirrorData[sym] = { error: e.message || 'โหลดไม่สำเร็จ' };
   } finally {
     _wlMirrorFetching.delete(sym);
     renderWatchlist();
@@ -3929,7 +3954,11 @@ function renderWatchlist() {
         if (closes.length >= 2) {
           // สร้าง price_history format ที่ drawSparkline รองรับ ([date, price])
           const history = closes.map((p, i) => [i, p]);
-          const ret = closes.length >= 2 ? (closes[closes.length-1] - closes[closes.length-22]) / closes[closes.length-22] * 100 : null;
+          // ต้องมีอย่างน้อย 22 วันถึงคำนวณ return ~1 เดือนได้ — น้อยกว่านั้น closes[negative
+          // index] จะได้ undefined แล้ว undefined-number = NaN ซึ่ง drawSparkline's (retVal||0)
+          // ปัดเป็น 0 (>=0) ทำให้หุ้นที่เพิ่งมีประวัติราคาไม่ถึง 22 วัน (เช่น IPO ใหม่) ได้สี
+          // sparkline เขียว(ขึ้น)เสมอไม่ว่าราคาจริงจะร่วงแรงแค่ไหนก็ตาม
+          const ret = closes.length >= 22 ? (closes[closes.length-1] - closes[closes.length-22]) / closes[closes.length-22] * 100 : null;
           drawSparkline(canvas, history, ret);
         }
       } catch(e) {}
@@ -13513,7 +13542,9 @@ function wlImport() {
   if (!syms.length) { alert('ไม่พบรายชื่อหุ้นในข้อความ'); return; }
   const before = watchlist.length;
   // เพดานเดียวกับ backend (500 ตัว) — กันนำเข้าจนลิสต์บวมเกิน sync ข้ามเครื่องไม่ขึ้น
-  syms.forEach(s => { if (!watchlist.includes(s) && watchlist.length < 500) watchlist.push(s); });
+  // ใช้ _wlListHas (รู้จัก prefix) แทน .includes ตรงๆ — กันเข้าซ้ำเวลาอีกเครื่อง export ก่อน
+  // migrate เป็น prefix (เช่น "OKTA" bare) แต่เครื่องนี้มี "US:OKTA" อยู่แล้ว ไม่งั้นได้ 2 แถว
+  syms.forEach(s => { if (!_wlListHas(watchlist, s) && watchlist.length < 500) watchlist.push(s); });
   _wlSave();
 
   let newAlerts = 0;
@@ -28386,7 +28417,10 @@ function saveWlAlert() {
   const cond = document.getElementById("wl-al-cond").value;
   const price = parseFloat(document.getElementById("wl-al-price").value);
   const note = document.getElementById("wl-al-note").value.trim();
-  if (!price || price <= 0) { document.getElementById("wl-al-price").focus(); return; }
+  // Number.isFinite กัน Infinity (เช่นพิมพ์ "1e400") ที่ !price||price<=0 หลุดผ่านไม่ทัน —
+  // Infinity ผ่าน JSON.stringify กลายเป็น null แล้วโดน _valid_price_alert ฝั่ง server reject
+  // ทั้ง array ทำให้ alert อื่นที่ถูกต้องอยู่แล้วใน batch เดียวกัน sync ข้ามเครื่องไม่ขึ้นไปด้วย
+  if (!Number.isFinite(price) || price <= 0) { document.getElementById("wl-al-price").focus(); return; }
 
   const alerts = _loadAlerts();
   alerts.unshift({
@@ -28469,7 +28503,43 @@ function _saveAlerts(arr) {
 // ยกเว้นสถานะ triggered ที่ทำเป็น ratchet ทางเดียว (ใครทริกก่อนถือว่าทริกแล้วทุกเครื่อง)
 // กันเด้ง popup ซ้ำตอน sync กลับมาหาเครื่องที่ยังไม่เห็นว่าทริกไปแล้ว
 // ============================================================
+
+// union เข้า `local` (แก้ในที่) ด้วยรายการจาก `serverList`: alert ใหม่ push เข้า, alert ที่
+// serverList บอกว่า triggered แล้วแต่ local ยังไม่เห็น จะ ratchet ไปข้างหน้าทางเดียว — ใช้ร่วมกัน
+// ทั้งตอน sync ตอนโหลดหน้า (_alertsSyncFromServer) และก่อน POST ทุกครั้ง (_alertsPush) กันเคส
+// เครื่อง B save alert ของตัวเองทับไฟล์ด้วย local array เก่าที่ยังไม่เห็นว่าเครื่อง A ทริกไปแล้ว
+// (ย้อน triggered กลับเป็น false ทำให้ popup เด้งซ้ำ — พบจากรีวิวโค้ด 2026-08-24)
+function _mergeAlertRatchet(local, serverList) {
+  const byId = new Map(local.map(a => [a.id, a]));
+  let changed = false;
+  serverList.forEach(remote => {
+    if (!remote || typeof remote.id !== 'string') return;
+    const cur = byId.get(remote.id);
+    if (!cur) { local.push(remote); byId.set(remote.id, remote); changed = true; return; }
+    if (remote.triggered && !cur.triggered) {
+      cur.triggered = true;
+      cur.triggeredAt = remote.triggeredAt;
+      cur.triggeredPrice = remote.triggeredPrice;
+      changed = true;
+    }
+  });
+  return changed;
+}
+
 function _alertsPush(arr) {
+  fetch('/api/price-alerts').then(r => r.ok ? r.json() : Promise.reject())
+    .then(serverList => {
+      if (Array.isArray(serverList) && _mergeAlertRatchet(arr, serverList)) {
+        localStorage.setItem(ALERT_STORAGE_KEY, JSON.stringify(arr));
+        _updateBellBadge();
+        if (_alertPanelOpen) renderAlertPanel();
+      }
+    })
+    .catch(() => {})
+    .then(() => _alertsPost(arr));
+}
+
+function _alertsPost(arr) {
   fetch('/api/price-alerts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -28492,29 +28562,17 @@ function _alertsPush(arr) {
 }
 
 (function _alertsSyncFromServer() {
-  fetch('/api/price-alerts').then(r => r.json()).then(serverList => {
+  fetch('/api/price-alerts').then(r => r.ok ? r.json() : Promise.reject()).then(serverList => {
     if (!Array.isArray(serverList)) return;
     const local = _loadAlerts();
-    const byId = new Map(local.map(a => [a.id, a]));
-    let changed = false;
-    serverList.forEach(remote => {
-      if (!remote || typeof remote.id !== 'string') return;
-      const cur = byId.get(remote.id);
-      if (!cur) { local.push(remote); byId.set(remote.id, remote); changed = true; return; }
-      if (remote.triggered && !cur.triggered) {
-        cur.triggered = true;
-        cur.triggeredAt = remote.triggeredAt;
-        cur.triggeredPrice = remote.triggeredPrice;
-        changed = true;
-      }
-    });
+    const changed = _mergeAlertRatchet(local, serverList);
     if (changed) {
       localStorage.setItem(ALERT_STORAGE_KEY, JSON.stringify(local));
       _updateBellBadge();
       if (_alertPanelOpen) renderAlertPanel();
     }
     // เผื่อเครื่องนี้มี alert ใหม่ที่อีกเครื่องยังไม่มี ก็ sync กลับขึ้นไฟล์ด้วย
-    if (local.length && (changed || local.length !== serverList.length)) _alertsPush(local);
+    if (local.length && (changed || local.length !== serverList.length)) _alertsPost(local);
   }).catch(() => {});
 })();
 
