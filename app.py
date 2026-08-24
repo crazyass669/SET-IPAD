@@ -189,7 +189,12 @@ def _swr_get_or_refresh(cache, lock, ttl, compute_fn):
       แล้วปล่อยให้ค่าเก่าอยู่ต่อ (ดีกว่าเดิมที่ error จะทำให้ endpoint ตอบ 500 ทันที)
     - ไม่เคยมีค่าเลย (cold — เพิ่ง restart/clear และยังไม่ถูก warmup แตะ): คำนวณ synchronous
       ใต้ lock เหมือนเดิมทุกประการ (double-checked pattern) — เพื่อไม่ให้ request แรกสุดได้
-      ค่า None ไป ต่างจากเคส "เก่า" ที่มีของเก่าให้คืนก่อนได้"""
+      ค่า None ไป ต่างจากเคส "เก่า" ที่มีของเก่าให้คืนก่อนได้
+
+    _bg() เขียนผลกลับต้องเช็ค cache["ts"] เทียบกับเวลาที่เริ่มคำนวณ (t_start) ก่อนเขียน —
+    กันเคส event อื่น (เช่น sync งบเสร็จ) ล้าง cache แล้วคำนวณ synchronous ใหม่แทรกระหว่างที่
+    _bg() นี้กำลังคำนวณค้างอยู่ (ช้า ~6-13 วิ) ถ้าไม่เช็คจะเอาผลเก่าของ _bg() มาเขียนทับ
+    ผลสดที่เพิ่ง warmup ไปได้ (ts ใหม่กว่าด้วยซ้ำ ดูเหมือนสดทั้งที่เป็นข้อมูลก่อน sync)"""
     result = cache.get("result")
     if result is not None:
         if time.time() - cache.get("ts", 0) < ttl:
@@ -199,14 +204,18 @@ def _swr_get_or_refresh(cache, lock, ttl, compute_fn):
                 cache["_revalidating"] = True
 
                 def _bg():
+                    t_start = time.time()
                     try:
                         new_result = compute_fn()
-                        cache["result"] = new_result
-                        cache["ts"] = time.time()
+                        with lock:
+                            if cache.get("ts", 0) < t_start:
+                                cache["result"] = new_result
+                                cache["ts"] = time.time()
                     except Exception as e:
                         print(f"[SWR] คำนวณใหม่เบื้องหลังล้มเหลว (ใช้ค่าเก่าต่อ): {e}")
                     finally:
-                        cache["_revalidating"] = False
+                        with lock:
+                            cache["_revalidating"] = False
 
                 threading.Thread(target=_bg, daemon=True).start()
         return result
@@ -2391,7 +2400,11 @@ def hk_index_metrics_route():
     set_data_fetcher.process_stock() + core.metrics.rank_rs() — เหมือนหุ้นไทย/US ทุกประการ
     ต่างแค่ field เสริม in_hsi/in_hscei/in_hstech สำหรับกรองตามดัชนี"""
     from sources import hk_index_metrics
-    return jsonify(hk_index_metrics.load_local(BASE_DIR))
+    try:
+        return jsonify(hk_index_metrics.load_local(BASE_DIR))
+    except Exception as e:
+        print(f"[HKIndexMetrics] {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/hk-sector-ranks")
@@ -2406,8 +2419,13 @@ def hk_sector_ranks():
     flag = {"HSI": "in_hsi", "HSCEI": "in_hscei", "HSTECH": "in_hstech"}.get(idx)
     if not flag:
         return jsonify({"error": "index ต้องเป็น HSI, HSCEI หรือ HSTECH เท่านั้น"}), 400
-    stocks = [s for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", []) if s.get(flag)]
-    return jsonify({"sectors": summarize_groups(stocks, "sector")})
+    try:
+        stocks = [s for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", [])
+                  if isinstance(s, dict) and s.get(flag)]
+        return jsonify({"sectors": summarize_groups(stocks, "sector")})
+    except Exception as e:
+        print(f"[HKSectorRanks] {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/hk-history/<symbol>")
@@ -4247,6 +4265,16 @@ def financials_analytics():
     _compute_fin_analytics_for) — ใช้ตอน bake ไฟล์ static สำหรับเว็บมือถือ/ไอแพด
     cache แยกจากโหมดปกติ (คนละผลลัพธ์กัน)"""
     yahoo_only = request.args.get("source") == "yahoo"
+    return jsonify(_financials_analytics_core(yahoo_only))
+
+
+def _financials_analytics_core(yahoo_only: bool):
+    """ตัวคำนวณจริงของ /api/financials-analytics แยกออกมาจาก view function เพราะ
+    sector_compare()'s _compute() ต้องเรียกใช้ผลลัพธ์นี้จาก background thread ของ
+    _swr_get_or_refresh (ไม่มี Flask request context ในนั้น) — เดิมเรียก
+    financials_analytics().get_json() ตรงๆ ซึ่งบรรทัดแรกอ่าน request.args ทำให้ throw
+    RuntimeError('Working outside of request context') ทุกครั้งที่ sector-compare
+    revalidate เบื้องหลัง (ถูก catch เงียบๆ ใน _bg() ผลคือ cache ไม่เคย refresh อัตโนมัติ)"""
     cache_key = "yahoo" if yahoo_only else "default"
 
     # setdefault ต้องอยู่ใน lock — ถ้า .clear() แทรกระหว่างอ่าน cache_key กับสร้าง slot
@@ -4288,8 +4316,7 @@ def financials_analytics():
     # ที่ _fin_analytics_lock) — stale-while-revalidate (ดู _swr_get_or_refresh): ถ้ามีค่าเก่า
     # อยู่แล้วแค่หมดอายุ ตอบค่าเก่าทันทีแล้วคำนวณใหม่เบื้องหลัง ไม่บล็อก request คำนวณสด
     # แบบ synchronous เฉพาะตอนไม่เคยมีค่าเลย (cold หลัง restart/clear)
-    result = _swr_get_or_refresh(slot, _fin_analytics_lock, _FIN_ANALYTICS_CACHE_TTL, _compute)
-    return jsonify(result)
+    return _swr_get_or_refresh(slot, _fin_analytics_lock, _FIN_ANALYTICS_CACHE_TTL, _compute)
 
 
 @app.route("/api/sector-compare")
@@ -4316,7 +4343,7 @@ def sector_compare():
 
         compare = financials_store.get_sector_qpl_compare(BASE_DIR, sector_by_symbol)
 
-        fin_data = financials_analytics().get_json()
+        fin_data = _financials_analytics_core(yahoo_only=False)
         roe_by_sector = {}
         for sym, sector in sector_by_symbol.items():
             roe = fin_data.get("set", {}).get(sym, {}).get("roe")
@@ -6633,22 +6660,50 @@ def _fetch_indices_tv(existing: dict, full_refresh: bool = False) -> dict:
     return result, stats
 
 
+def _fetch_indices_tv_guarded(existing: dict, full_refresh: bool = False):
+    """เรียก _fetch_indices_tv ภายใต้ _indices_job_lock/_indices_job_state เสมอ — เดิม
+    /api/indices-quick-update และ /api/indices-refresh คุมด้วย lock/state คู่นี้ แต่
+    _run_refresh/_run_quick (Full Refresh/Quick Update หลัก) เรียก _fetch_indices_tv ตรงๆ
+    ข้าม lock ไปเลย ถ้าผู้ใช้กดปุ่มอัปเดตดัชนีเองพร้อมกับ Full Refresh/Quick Update พอดี
+    จะได้ 2 thread เขียน _indices_cache/indices_cache.json แข่งกัน (lost update) — รวมทุก
+    caller มาผ่านจุดเดียวนี้กัน race ให้ครบทุกทาง คืน (None, None) ถ้ามี job อื่นถืออยู่แล้ว
+    (caller เดิม catch Exception เป็น warning อยู่แล้ว ไม่ทำให้ Full Refresh/Quick Update ทั้งรอบล้ม)"""
+    with _indices_job_lock:
+        if _indices_job_state["running"]:
+            print("[Indices] ข้ามอัปเดตดัชนี — มี indices job อื่นกำลังรันอยู่แล้ว")
+            return None, None
+        _indices_job_state["running"] = True
+    try:
+        return _fetch_indices_tv(existing, full_refresh=full_refresh)
+    finally:
+        with _indices_job_lock:
+            _indices_job_state["running"] = False
+
+
 # payload ~4.5MB ไม่บีบอัด (เต็มไปด้วย dates/closes รายวันของทุกดัชนี ซึ่ง frontend ใช้ทำกราฟ
 # ใน openIdxChartModal จริง ตัดทิ้งแบบ _dr_light ไม่ได้) — cache gzip ไว้ต่อ id(data) ก้อนเดียว
 # กัน compress ซ้ำทุก request (data ถูก reassign เป็น dict ใหม่ทุกครั้งที่เนื้อหาเปลี่ยนจริง)
+# lock คุ้ม check+compute+write ก้อนเดียว แล้วอ่าน raw/gz เป็น local var ก่อนปล่อย lock — กัน
+# request คนละ snapshot (waitress หลาย thread) แย่ง id/raw/gz ของกันและกันตอน refresh คาบเกี่ยว
 _indices_gz_cache = {"id": None, "raw": None, "gz": None}
+_indices_gz_lock = threading.Lock()
 
 
 def _indices_response(data):
     import gzip as _gzip
     key = id(data)
-    if _indices_gz_cache["id"] != key:
-        raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        _indices_gz_cache.update(id=key, raw=raw, gz=_gzip.compress(raw, compresslevel=6))
+    with _indices_gz_lock:
+        if _indices_gz_cache["id"] != key:
+            raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            gz = _gzip.compress(raw, compresslevel=6)
+            _indices_gz_cache.update(id=key, raw=raw, gz=gz)
+        else:
+            raw = _indices_gz_cache["raw"]
+            gz = _indices_gz_cache["gz"]
     if "gzip" in request.headers.get("Accept-Encoding", "").lower():
-        return Response(_indices_gz_cache["gz"], mimetype="application/json",
+        return Response(gz, mimetype="application/json",
                         headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
-    return Response(_indices_gz_cache["raw"], mimetype="application/json")
+    return Response(raw, mimetype="application/json")
 
 
 @app.route("/api/indices")
@@ -8690,8 +8745,9 @@ def _run_refresh(period="max"):
         try:
             global _indices_cache
             existing = _load_indices_existing()
-            result, _stats = _fetch_indices_tv(existing, full_refresh=True)
-            _indices_cache["data"] = result
+            result, _stats = _fetch_indices_tv_guarded(existing, full_refresh=True)
+            if result is not None:
+                _indices_cache["data"] = result
         except Exception as e:
             print(f"[FullRefresh] Indices error: {e}")
             warnings.append(f"Indices ล้มเหลว: {e}")
@@ -9544,8 +9600,9 @@ def _run_quick():
         def _indices():
             global _indices_cache
             existing = _load_indices_existing()
-            result, _stats = _fetch_indices_tv(existing, full_refresh=False)
-            _indices_cache["data"] = result
+            result, _stats = _fetch_indices_tv_guarded(existing, full_refresh=False)
+            if result is not None:
+                _indices_cache["data"] = result
         _sub_step("Indices", 93, "อัพเดท Indices...", _indices)
 
         # อัพเดทราคา US Index (S&P500/Dow/NDX gap-update) + คำนวณ RS/EMA/Stage/52W ใหม่
@@ -10790,12 +10847,16 @@ def flow_signals_endpoint():
     now = time.time()
     if _flow_signals_cache["result"] and (now - _flow_signals_cache["ts"] < _FLOW_SIGNALS_TTL):
         return jsonify(_flow_signals_cache["result"])
-    rows = flow_signals.build_flow_signals(BASE_DIR)
-    result = {"stocks": rows, "count": len(rows),
-              "generated_at": _dt.now(_tz(_td(hours=7))).strftime("%Y-%m-%d %H:%M")}
-    _flow_signals_cache["result"] = result
-    _flow_signals_cache["ts"] = now
-    return jsonify(result)
+    try:
+        rows = flow_signals.build_flow_signals(BASE_DIR)
+        result = {"stocks": rows, "count": len(rows),
+                  "generated_at": _dt.now(_tz(_td(hours=7))).strftime("%Y-%m-%d %H:%M")}
+        _flow_signals_cache["result"] = result
+        _flow_signals_cache["ts"] = now
+        return jsonify(result)
+    except Exception as e:
+        print(f"[FlowSignals] {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/nvdr")

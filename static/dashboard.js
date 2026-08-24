@@ -24898,9 +24898,10 @@ function renderIdxHeatmap(items) {
         <div style="font-size:12px;font-weight:700">${label}</div>
       </div>`;
     }).join('');
-    const avg = sorted.filter(x=>v(x)!=null).reduce((s,x)=>s+v(x),0) / (sorted.filter(x=>v(x)!=null).length||1);
-    const avgStr = isNaN(avg) ? '—' : isRS ? 'RS ' + Math.round(avg) : pct(avg);
-    const avgCls = isRS ? (avg >= 50 ? 'green' : 'red') : (avg >= 0 ? 'green' : 'red');
+    const validVals = sorted.filter(x=>v(x)!=null);
+    const avg = validVals.length ? validVals.reduce((s,x)=>s+v(x),0) / validVals.length : null;
+    const avgStr = avg == null ? '—' : isRS ? 'RS ' + Math.round(avg) : pct(avg);
+    const avgCls = avg == null ? '' : isRS ? (avg >= 50 ? 'green' : 'red') : (avg >= 0 ? 'green' : 'red');
     return `<div style="margin-bottom:20px">
       <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px;display:flex;align-items:center;gap:8px">
         ${groupLabel[g]}

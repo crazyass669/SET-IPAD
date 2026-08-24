@@ -72,7 +72,8 @@ def _trend_dir(daily, key, min_points=3, window=TREND_WINDOW):
     ตัดเหลือ window snapshots ล่าสุดก่อนคำนวณเสมอ — daily เก็บยาวถึง 365 วัน ถ้าใช้
     ทั้งชุดจะกลายเป็นเทียบ "ค่าเฉลี่ย 4 เดือนแรกของปี vs 4 เดือนท้าย" ซึ่งไม่ใช่
     สัญญาณ flow ระยะใกล้อีกต่อไป (ตอนเขียนมีข้อมูลแค่ ~24 วันเลยยังไม่เห็นอาการ)"""
-    vals = [(d.get("date"), d.get(key)) for d in (daily or []) if d.get(key) is not None]
+    vals = [(d.get("date"), d.get(key)) for d in (daily or [])
+            if d.get(key) is not None and d.get("date") is not None]
     if len(vals) < min_points:
         return None
     vals.sort()
