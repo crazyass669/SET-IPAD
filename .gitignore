@@ -119,6 +119,10 @@ financials.db-wal
 financials.db-shm
 financials_backups/
 
+# มาจาก Finnomena internal API (build_mirror_names.py) — ห้ามคอมมิทข้อมูลจาก Finnomena
+# internal API เด็ดขาด (เคยหลุดขึ้น GitHub มาแล้ว 1 ครั้ง untrack ตอนรีวิวโค้ด 2026-08-25)
+mirror_names.json
+
 # Rotation quadrant alert state
 rotation_state.json
 
