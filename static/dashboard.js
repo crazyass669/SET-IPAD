@@ -6724,21 +6724,23 @@ function _patchFinTooltips() {
 // COVERAGE CHECK — รู้ว่า sync ครบหรือยัง หุ้นไหนขาด (โดนบล็อค/ไม่มีข้อมูลจริง)
 // เทียบ universe หุ้นทั้งหมด (จาก set_prices.db) กับที่มีอยู่จริงใน financials.db
 // ============================================================
-async function checkFinCoverage() {
-  const box = document.getElementById('fin-coverage-result');
+async function checkFinCoverage(resultId = 'fin-coverage-result') {
+  const box = document.getElementById(resultId);
+  if (!box) return;
   box.style.display = 'block';
   box.innerHTML = '<div class="empty" style="padding:16px">กำลังตรวจสอบ...</div>';
   try {
     const r = await fetch('/api/financials-coverage');
     const d = await r.json();
-    _renderFinCoverage(d);
+    _renderFinCoverage(d, resultId);
   } catch (e) {
     box.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ ตรวจสอบไม่สำเร็จ: ${e.message}</div>`;
   }
 }
 
-function _renderFinCoverage(d) {
-  const box = document.getElementById('fin-coverage-result');
+function _renderFinCoverage(d, resultId = 'fin-coverage-result') {
+  const box = document.getElementById(resultId);
+  if (!box) return;
   const yh = d.yahoo || { covered: 0, total: 0, missing: [] };
   const st = d.set   || { covered: 0, total: 0, missing: [] };
   const allMissing = [...new Set([...yh.missing, ...st.missing])];
@@ -6764,12 +6766,12 @@ function _renderFinCoverage(d) {
         หุ้นที่ขาดอาจเป็นเพราะโดนบล็อค/rate-limit ชั่วคราว (ลองดึงซ้ำได้) หรือแหล่งข้อมูลนั้นไม่มีข้อมูลจริง
         (เช่น หุ้นเล็กบางตัว Yahoo ไม่ครอบคลุม) — ถ้าลองหลายรอบแล้วยังขาดเท่าเดิม แปลว่าน่าจะไม่มีข้อมูลจริงจากแหล่งนั้น
       </div>
-      <button class="filter-btn active" style="font-size:12px" onclick='retryFinMissing(${JSON.stringify(allMissing)})'>🔄 ลองดึงเฉพาะที่ขาด (${allMissing.length} หุ้น)</button>
+      <button class="filter-btn active" style="font-size:12px" onclick='retryFinMissing(${JSON.stringify(allMissing)},${JSON.stringify(resultId)})'>🔄 ลองดึงเฉพาะที่ขาด (${allMissing.length} หุ้น)</button>
     ` : `<div style="font-size:12px;color:var(--green);margin-top:6px">✓ ครบทั้งหมดแล้ว ไม่มีหุ้นขาด</div>`}
   </div>`;
 }
 
-function retryFinMissing(symbols) {
+function retryFinMissing(symbols, resultId = 'fin-coverage-result') {
   const beforeCount = symbols.length;
   // skip_up_to_date: หุ้นในลิสต์ "ขาด" อาจขาดแค่บางแหล่ง — คู่ (หุ้น×แหล่ง) ที่มีงวดล่าสุดอยู่แล้ว
   // ให้ข้าม ไม่ยิงซ้ำ (เดิมยิงครบ 4 แหล่งทุกตัว เช่น 910 หุ้น = 3,640 งาน ทั้งที่ของจริงขาดไม่กี่ร้อยคู่)
@@ -6779,11 +6781,11 @@ function retryFinMissing(symbols) {
       const note = document.getElementById('fin-meta-note');
       if (note && d.last_synced_at) note.textContent = `sync ล่าสุด: ${d.last_synced_at} · ${d.symbol_count} หุ้น`;
     }).catch(() => {});
-    await checkFinCoverage();
+    await checkFinCoverage(resultId);
     // แสดงผลจริงของรอบนี้ค้างไว้ถาวร (ข้อความ ok/fail เดิมโชว์ในแถบ progress แค่ 0.8 วิ
     // แล้วหายไป — ผู้ใช้พลาดดูบ่อย ทำให้เข้าใจผิดว่าระบบ "ไม่บันทึกผล" ทั้งที่จริงคือดึงไม่สำเร็จ
     // เพราะ Yahoo/SET.or.th ไม่มีข้อมูลจริงสำหรับหุ้นกลุ่มนี้ — ไม่ใช่บั๊ก)
-    const box = document.getElementById('fin-coverage-result');
+    const box = document.getElementById(resultId);
     if (box && box.firstElementChild && s?.message) {
       const banner = document.createElement('div');
       banner.style.cssText = 'margin-bottom:10px;padding:10px 12px;border-radius:8px;background:#1f6feb14;border:1px solid #1f6feb55;font-size:12px;line-height:1.6';
@@ -17724,7 +17726,7 @@ function _finRecentRender() {
   box.style.alignItems = 'center';
   box.innerHTML = '<span style="color:var(--text2);margin-right:2px">🕓 เพิ่งดู:</span>' +
     list.map(r => `<button class="filter-btn" style="font-size:11px;padding:3px 10px"
-      onclick="_finRecentPick('${r.sym}','${r.tab}','${r.mkt || ''}')">${r.tab === 'dr' ? (FIN_RECENT_FLAG[r.mkt] || '🌏') : '🇹🇭'} ${r.sym}</button>`).join('');
+      onclick="_finRecentPick('${_escJsAttr(r.sym)}','${_escJsAttr(r.tab)}','${_escJsAttr(r.mkt || '')}')">${r.tab === 'dr' ? (FIN_RECENT_FLAG[r.mkt] || '🌏') : '🇹🇭'} ${_escHtml(r.sym)}</button>`).join('');
 }
 
 function _finRecentPick(sym, tab, mkt) {
@@ -20116,10 +20118,16 @@ function _finKeyRatiosHtml(qs) {
   // งบดุล/กระแสเงินสดรายไตรมาสจาก Yahoo มักตามหลัง P&L (ที่มาจาก SET/Finnomena) อยู่ 1 งวด —
   // ไตรมาสล่าสุดสุดอาจมี revenue/net_profit แล้วแต่ total_equity/cfo ยังไม่มา ใช้ pattern เดียวกับ
   // _latest_value ใน app.py (peer-group-detail): หา "ไตรมาสล่าสุดที่มี field นี้จริง" ก่อนเสมอ
-  // แทนอ่านจากไตรมาสสุดท้ายของทั้งชุดตรงๆ (lookback 4 ไตรมาสพอสำหรับความล่าช้าปกติ)
+  // แทนอ่านจากไตรมาสสุดท้ายของทั้งชุดตรงๆ (lookback 4 ไตรมาสพอสำหรับความล่าช้าปกติ) — ต้องเทียบ
+  // ผ่าน byKey (year_be*4+q) เหมือน ttm() ด้านล่าง ไม่ใช่ไล่ตำแหน่ง sorted[i] ตรงๆ (เดิมเป็นแบบนั้น
+  // ถ้า quarters มีไตรมาสไหนขาดหายไปทั้งงวด ตำแหน่ง "4 ตัวท้าย" จะย้อนไกลเกิน 4 ไตรมาสปฏิทินจริง
+  // โดยไม่รู้ตัว — บั๊กเดียวกับที่แก้ไปแล้วใน app.py _latest_value)
+  const anchorKey = sorted.length ? sorted[sorted.length - 1].year_be * 4 + sorted[sorted.length - 1].q : null;
   const latestVal = field => {
-    for (let i = sorted.length - 1; i >= Math.max(0, sorted.length - 4); i--) {
-      if (sorted[i][field] != null) return sorted[i][field];
+    if (anchorKey == null) return null;
+    for (let off = 0; off < 4; off++) {
+      const row = byKey[anchorKey - off];
+      if (row && row[field] != null) return row[field];
     }
     return null;
   };
@@ -20485,7 +20493,7 @@ function _renderDividendsView(d, sym, market, hint) {
     <div class="card" style="padding:16px 18px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <h3 style="margin:0">💵 ประวัติปันผล ${sym}</h3>
-        <button class="filter-btn" style="font-size:12px" onclick="loadDividendsView('${sym}','${market}',document.getElementById('${hint.id}'),true)">🔄 ดึงข้อมูลปันผลใหม่</button>
+        <button class="filter-btn" style="font-size:12px" onclick="loadDividendsView('${_escJsAttr(sym)}','${_escJsAttr(market)}',document.getElementById('${_escJsAttr(hint.id)}'),true)">🔄 ดึงข้อมูลปันผลใหม่</button>
       </div>
       ${summary}
       <div style="display:flex;align-items:flex-end;gap:3px;overflow-x:auto;padding-bottom:4px;margin-bottom:16px">${bars}</div>
@@ -20500,7 +20508,7 @@ function _renderDividendsView(d, sym, market, hint) {
       <div style="font-size:11px;color:var(--text2);margin-top:10px">
         ปันผลปรับตาม stock split แล้ว (yfinance) · Payout Ratio = DPS ปีล่าสุด ÷ EPS งวดล่าสุด
         (${d.eps_latest_date || '—'}) จากงบ Yahoo — ไม่มีค่าถ้าขาดทุนหรือไม่มีข้อมูล EPS ·
-        yield รายปีรองรับ TH/US/HK (DR ยังไม่รองรับ — ไม่มี local price store ให้ underlying)
+        yield รายปีรองรับ TH/US/HK/JP (DR ยังไม่รองรับ — ไม่มี local price store ให้ underlying)
       </div>
     </div>`;
 }

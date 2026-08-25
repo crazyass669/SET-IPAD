@@ -2900,14 +2900,22 @@ def get_financials(symbol):
     import traceback
 
     sym = symbol.upper().strip()
+    # is_dr ต้องระบุชัดเจนจาก caller (pattern เดียวกับ /api/financials-full, /api/financials-qpl-report
+    # ฯลฯ) — เดิมค้นใน DR universe ก่อนเสมอโดยไม่มีทางบอกเจตนา ทำให้ symbol ที่ชนกันระหว่างหุ้นไทย
+    # กับ DR (เช่น 'META' มีทั้ง DR ของ Meta Platforms และหุ้นไทย mai 'META Corporation') resolve
+    # เป็น DR เสมอ ผิดตัวแบบเงียบๆ แล้วแคชค้าง 24h (ดู _dr_key()/financials_store.get() ที่แก้
+    # ปัญหานี้ไปแล้วสำหรับ endpoint อื่น)
+    is_dr = request.args.get("is_dr") == "1"
+    cache_key = f"{sym}:{'dr' if is_dr else 'set'}"
 
-    cached = _fin_cache.get(sym)
+    cached = _fin_cache.get(cache_key)
     if cached and (time.time() - cached["ts"] < _FIN_CACHE_TTL):
         return jsonify(cached["data"])
 
-    # หา yfinance ticker: ค้นใน DR universe (static+auto) ก่อน ไม่เจอ → ใช้ .BK
-    dr_entry = next((s for s in load_dr_universe(BASE_DIR) if s["sym"] == sym), None)
-    if dr_entry:
+    if is_dr:
+        dr_entry = next((s for s in load_dr_universe(BASE_DIR) if s["sym"] == sym), None)
+        if not dr_entry:
+            return jsonify({"error": f"ไม่พบ {sym} ใน DR universe"}), 404
         yf_ticker, stock_type, stock_name = dr_entry["yf"], "dr", dr_entry["name"]
     else:
         yf_ticker, stock_type, stock_name = sym + ".BK", "set", sym
@@ -3094,7 +3102,7 @@ def get_financials(symbol):
             "income": income, "balance": balance, "cashflow": cashflow,
             "ttm_income": ttm_income, "ttm_balance": ttm_balance, "ttm_cashflow": ttm_cashflow,
         }
-        _fin_cache[sym] = {"ts": time.time(), "data": data}
+        _fin_cache[cache_key] = {"ts": time.time(), "data": data}
         return jsonify(data)
 
     except Exception as e:
@@ -3183,7 +3191,13 @@ def get_financials_full(symbol):
     # finnomena_y = งบรายปี รวมสดจากไตรมาส Finnomena (ไม่เก็บแยก — คำนวณจาก finnomena_q)
     # ได้ประวัติลึก ~16-20 ปี ต่างจาก Yahoo รายปีที่ให้แค่ ~5 ปี
     if source == "finnomena_y":
-        q = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr)
+        # financials_store.get() เปิด connection ใหม่ (busy_timeout=5000) — ถ้า background
+        # job (sync-all/mirror) กำลังเขียน financials.db นานเกิน 5s พอดี อาจได้
+        # sqlite3.OperationalError: database is locked (pattern เดียวกับ /api/financials-qpl-report)
+        try:
+            q = financials_store.get(BASE_DIR, sym, "finnomena_q", is_dr=is_dr)
+        except Exception:
+            q = None
         if not q:
             try:
                 fresh = financials_store.fetch_finnomena_quarterly(sym, is_dr=is_dr)
@@ -3218,7 +3232,10 @@ def get_financials_full(symbol):
                 pass
         return data
 
-    data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr, market=market)
+    try:
+        data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr, market=market)
+    except Exception:
+        data = None
     if data:
         return jsonify(_with_quality(data))
 
@@ -3235,7 +3252,10 @@ def get_financials_full(symbol):
         return jsonify({"error": str(e)}), 404
 
     financials_store.upsert(BASE_DIR, sym, source, payload, is_dr=is_dr)
-    data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr, market=market)
+    try:
+        data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr, market=market)
+    except Exception:
+        data = None
     return jsonify(_with_quality(data))
 
 
@@ -3567,8 +3587,8 @@ def get_dividends_endpoint(market, symbol):
     """ประวัติปันผล + สถิติ (streak/CAGR/YoY/ความถี่/yield รายปี) — เก็บใน financials.db
     (local-only) ดึงสดจาก yfinance ครั้งแรกหรือเมื่อข้อมูลเก่าเกิน 30 วัน, ?refresh=1 บังคับดึงสด
     yield รายปีคำนวณจากราคาปิดในเครื่อง — TH จาก set_prices.db, US จาก us_prices.db, HK จาก
-    hk_prices.db (เฉพาะสมาชิกดัชนีหลักที่มีราคาโหลดไว้แล้ว) DR ยังไม่รองรับ (ต้องมี price series
-    ในเครื่องของ underlying ก่อน ยังไม่มี local store แยกให้)"""
+    hk_prices.db, JP จาก jp_prices.db (เฉพาะสมาชิกดัชนีหลักที่มีราคาโหลดไว้แล้ว) DR ยังไม่รองรับ
+    (ต้องมี price series ในเครื่องของ underlying ก่อน ยังไม่มี local store แยกให้)"""
     from sources import dividend_stats
     from datetime import datetime as _dt, timedelta as _td
     mkt = (market or "TH").upper()
@@ -3612,6 +3632,13 @@ def get_dividends_endpoint(market, symbol):
         # ต้องแปลงกลับก่อนเสมอ ไม่งั้นจะหาราคาไม่เจอเงียบๆ (บั๊กคลาสเดียวกับ .HK suffix mismatch
         # ที่เจอมาก่อนใน US/HK support ของ Tearsheet/Peer Compare)
         data = hk_store.get_ohlc_series(BASE_DIR, sym.zfill(4) + ".HK")
+        if data:
+            price_series = {"dates": data["dates"], "closes": data["closes"]}
+    elif mkt == "JP":
+        from core import jp_store
+        # jp_prices.db เก็บ ticker แบบมี suffix ".T" ตรงกับ jp_index_membership.json (ตาราง
+        # dividends เก็บรหัสดิบไม่มี suffix เหมือน HK — ดู resolve_yf_ticker ใน dr_descriptions.py)
+        data = jp_store.get_ohlc_series(BASE_DIR, sym + ".T")
         if data:
             price_series = {"dates": data["dates"], "closes": data["closes"]}
 
@@ -3823,7 +3850,10 @@ def ipo_list():
 @app.route("/api/financials-meta")
 def financials_meta():
     """วันที่ sync งบการเงินเต็มล่าสุด — ใช้เช็คฝั่ง UI ว่าถึงรอบเตือนอัพเดท (~2 เดือน) หรือยัง"""
-    return jsonify(financials_store.get_meta_summary(BASE_DIR))
+    try:
+        return jsonify(financials_store.get_meta_summary(BASE_DIR))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 _FIN_UNIVERSE_STALE_DAYS = 180   # ราคาไม่ขยับเกินนี้ = น่าจะแขวน SP/เพิกถอน/ฟื้นฟูกิจการถาวร
@@ -3838,6 +3868,7 @@ _FIN_UNIVERSE_STALE_DAYS = 180   # ราคาไม่ขยับเกิน
 # ด้านล่างและ _load_short_data) ใส่วันที่ในคีย์ด้วยเพราะเกณฑ์ "ราคาไม่ขยับเกิน 180 วัน"
 # อิง now() — ข้ามวันแล้วต้องคำนวณใหม่แม้ไฟล์ไม่เปลี่ยน
 _fin_universe_cache = {"key": None, "result": None}
+_fin_universe_lock = threading.Lock()
 
 
 def _fin_universe_cache_key():
@@ -3854,7 +3885,13 @@ def _fin_universe_cache_key():
 def _financials_universe():
     ck = _fin_universe_cache_key()
     if _fin_universe_cache["key"] != ck:
-        _fin_universe_cache.update(key=ck, result=_financials_universe_uncached())
+        # ล็อคกัน check-then-act race — ไม่งั้น 2 request แข่งกันเรียก
+        # _financials_universe_uncached() ซ้อนกัน ซึ่งข้างในเรียก record_delisted_bulk()
+        # ที่อ่าน+เขียน delisted_log.json ทั้งไฟล์ (read-modify-write ไม่มี lock ของตัวเอง)
+        # แข่งกันเขียนทับกันได้
+        with _fin_universe_lock:
+            if _fin_universe_cache["key"] != ck:
+                _fin_universe_cache.update(key=ck, result=_financials_universe_uncached())
     # คืนสำเนาเสมอ — caller บางตัวส่งต่อเป็น target ให้ sync_all/get_coverage
     # ที่อาจ sort/แก้ list ได้ ไม่ให้กระทบก้อนที่ cache ไว้
     return list(_fin_universe_cache["result"])
@@ -4012,19 +4049,22 @@ def financials_coverage():
     """เทียบ universe หุ้นทั้งหมดกับที่มีข้อมูลจริงใน DB แล้วต่อแหล่ง (yahoo/set)
     ใช้เช็คว่า sync ครบหรือยัง หุ้นไหนโดนบล็อค/ยังไม่มีข้อมูล — คืน missing แยกตาม source
     ?universe=dr เช็คเฉพาะหุ้นต่างประเทศ (มีแค่ yahoo — SET.or.th ไม่มีข้อมูลหุ้นต่างประเทศ)"""
-    if request.args.get("universe") == "dr":
-        symbols = _dr_financials_universe()
-        coverage = financials_store.get_coverage(BASE_DIR, symbols, sources=("yahoo",), is_dr=True)
-        # ETF/กองทุนไม่มีงบการเงินแบบบริษัท — รายงานแยกพร้อมเหตุผล (ไม่นับเป็น missing)
-        coverage["excluded_etf"] = sorted(
-            [{"sym": s["sym"], "name": s.get("name", ""),
-              "reason": "ETF/กองทุน — ไม่มีงบการเงินแบบบริษัท"}
-             for s in load_dr_universe(BASE_DIR) if s.get("etf")],
-            key=lambda x: x["sym"])
-    else:
-        symbols = _financials_universe()
-        coverage = financials_store.get_coverage(BASE_DIR, symbols)
-    return jsonify(coverage)
+    try:
+        if request.args.get("universe") == "dr":
+            symbols = _dr_financials_universe()
+            coverage = financials_store.get_coverage(BASE_DIR, symbols, sources=("yahoo",), is_dr=True)
+            # ETF/กองทุนไม่มีงบการเงินแบบบริษัท — รายงานแยกพร้อมเหตุผล (ไม่นับเป็น missing)
+            coverage["excluded_etf"] = sorted(
+                [{"sym": s["sym"], "name": s.get("name", ""),
+                  "reason": "ETF/กองทุน — ไม่มีงบการเงินแบบบริษัท"}
+                 for s in load_dr_universe(BASE_DIR) if s.get("etf")],
+                key=lambda x: x["sym"])
+        else:
+            symbols = _financials_universe()
+            coverage = financials_store.get_coverage(BASE_DIR, symbols)
+        return jsonify(coverage)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/financials-quarter-coverage")
@@ -4033,15 +4073,18 @@ def financials_quarter_coverage():
     /api/financials-coverage ที่เช็คแค่ 'มีข้อมูลหรือยัง' (เก่าแค่ไหนก็นับว่ามี) ตัวนี้เช็ค
     'ข้อมูลที่มีเป็นงวดล่าสุดจริงหรือยัง' — ใช้ตอบคำถาม 'ไตรมาสล่าสุดยังขาดกี่ตัว'
     ?universe=dr เช็คเฉพาะหุ้นต่างประเทศ (DR/DRx, ไม่มี set/set_qpl เพราะ SET.or.th ไม่มีข้อมูลหุ้นต่างประเทศ)"""
-    if request.args.get("universe") == "dr":
-        symbols = _dr_financials_universe()
-        coverage = financials_store.get_quarter_coverage(
-            BASE_DIR, symbols, sources=("yahoo_q", "finnomena_q"), is_dr=True)
-    else:
-        symbols = _financials_universe()
-        coverage = financials_store.get_quarter_coverage(
-            BASE_DIR, symbols, sources=("set", "set_qpl", "yahoo_q", "finnomena_q"), is_dr=False)
-    return jsonify(coverage)
+    try:
+        if request.args.get("universe") == "dr":
+            symbols = _dr_financials_universe()
+            coverage = financials_store.get_quarter_coverage(
+                BASE_DIR, symbols, sources=("yahoo_q", "finnomena_q"), is_dr=True)
+        else:
+            symbols = _financials_universe()
+            coverage = financials_store.get_quarter_coverage(
+                BASE_DIR, symbols, sources=("set", "set_qpl", "yahoo_q", "finnomena_q"), is_dr=False)
+        return jsonify(coverage)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/financials-quarter-coverage-by-index")
@@ -4052,7 +4095,10 @@ def financials_quarter_coverage_by_index():
     not_tracked แยกกัน เพราะ yahoo_q มีแค่ตัวในพอร์ต DR เท่านั้น ส่วน finnomena_q ครอบคลุม
     กว้างกว่านั้น (เช็ค 'FINN:{ex}:' namespace จากปุ่ม 'Mirror ทั้งตลาด' เพิ่มด้วย)
     ดู docstring _index_group_quarter_coverage"""
-    return jsonify(_index_group_quarter_coverage())
+    try:
+        return jsonify(_index_group_quarter_coverage())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 def _warmup_fin_dependent_caches():
@@ -4098,7 +4144,12 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_dat
                 st = sync_dr_universe(BASE_DIR)
                 if st.get("added") or st.get("appended"):
                     _dr_diff_cache.clear()   # ลิสต์เปลี่ยน — ผลเช็คหุ้นใหม่เดิมไม่ตรงแล้ว
-                    _dr_cache.clear()        # ล้าง cache ราคา — เปิดหน้า DR รอบหน้า rebuild เห็นหุ้นใหม่เลย
+                    # ตั้ง ts=0 แทน clear() ทั้งก้อน — clear() แข่งกับ get_dr_data()/
+                    # _rebuild_dr_cache() ที่กำลังอ่าน _dr_cache["ts"] อยู่พอดี (TOCTOU)
+                    # กลายเป็น KeyError -> 500 ดิบไม่มี JSON error body (บั๊กเดียวกับที่
+                    # แก้แล้วใน dr_full_refresh() ดู comment ที่นั่น)
+                    if _dr_cache.get("result"):
+                        _dr_cache["ts"] = 0
                     print(f"[DR-sync] ก่อนดึงงบ: underlying ใหม่ {st.get('added', 0)}, "
                           f"series ใหม่ {st.get('appended', 0)}, ยัง map ไม่ได้ {st.get('unmapped', 0)}")
             except Exception as e:
@@ -4284,7 +4335,14 @@ def financials_analytics():
     _compute_fin_analytics_for) — ใช้ตอน bake ไฟล์ static สำหรับเว็บมือถือ/ไอแพด
     cache แยกจากโหมดปกติ (คนละผลลัพธ์กัน)"""
     yahoo_only = request.args.get("source") == "yahoo"
-    return jsonify(_financials_analytics_core(yahoo_only))
+    # try/except ครอบ cold path เหมือน sector_compare()/market_trend() (ดูคอมเมนต์ที่นั่น) —
+    # เดิม endpoint นี้ไม่มีเลยทั้งที่เป็นตัวที่ _compute() ของทั้งสองฝั่งเรียกใช้ผลลัพธ์ต่อ
+    # exception ตอนคำนวณสดครั้งแรก/หลัง .clear() จะหลุดเป็น Flask 500 HTML แทน JSON error
+    try:
+        return jsonify(_financials_analytics_core(yahoo_only))
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"คำนวณ growth/PEG/FCF ล้มเหลว: {e}"}), 500
 
 
 def _financials_analytics_core(yahoo_only: bool):
@@ -5034,14 +5092,27 @@ def _peer_group_quarters(sym, con=None):
         return None
 
 
-def _ttm_sum(quarters, field):
-    """ผลรวม field ของ 4 ไตรมาสล่าสุด — None ถ้าไม่ครบ 4 ไตรมาส หรือมีงวดไหนไม่มีค่า field นี้เลย
-    (กันยอด TTM เพี้ยนจากการนับไม่ครบ)"""
-    if len(quarters) < 4:
-        return None
-    vals = [q.get(field) for q in quarters[-4:]]
-    if any(v is None for v in vals):
-        return None
+def _qkey(row):
+    """คีย์ไตรมาสแบบเรียงเชิงเส้น (year_ad*4+q) — เทียบ 2 ไตรมาสว่าติดกันจริงตามปฏิทินได้ตรงๆ
+    ต่างจากอิงตำแหน่งใน list (quarters[-4:] ฯลฯ) ที่ผิดเงียบๆ ถ้าบางไตรมาสไม่มีข้อมูลในทุกแหล่งเลย
+    (list จะขาดช่วงตรงนั้นไปโดยไม่รู้ตัว ทำให้ 'ตำแหน่ง -4 ถึง -1' ไม่ใช่ 4 ไตรมาสติดกันจริง)"""
+    return row["year_ad"] * 4 + row["q"]
+
+
+def _qmap(quarters):
+    return {_qkey(q): q for q in quarters}
+
+
+def _ttm_sum(qmap, anchor_key, field):
+    """ผลรวม field ของ 4 ไตรมาสปฏิทินจริงที่ต่อเนื่องกัน จบที่ anchor_key (anchor, -1, -2, -3
+    เทียบผ่าน qmap) — None ถ้าไตรมาสไหนในช่วงนี้ไม่มีอยู่จริงในชุดข้อมูล (กัน TTM ข้ามไตรมาสที่
+    ขาดหายไปกลางช่วงแบบเงียบๆ) หรือมีงวดไหนไม่มีค่า field นี้เลย"""
+    vals = []
+    for off in range(4):
+        row = qmap.get(anchor_key - off)
+        if row is None or row.get(field) is None:
+            return None
+        vals.append(row[field])
     return sum(vals)
 
 
@@ -5051,23 +5122,32 @@ def _peer_group_pct_change(cur, prev):
     return round((cur - prev) / abs(prev) * 100, 2)
 
 
-def _avg_last4(quarters, field):
-    """ค่าเฉลี่ย field จาก 4 ไตรมาสล่าสุดที่มีค่าจริง (ไม่ต้องครบ 4 ไตรมาสเป๊ะเหมือน _ttm_sum —
-    ใช้กับ field งบดุล ณ จุดเวลา เช่น total_assets/inventory/accounts_receivable ที่เอาไว้หา
-    ค่าเฉลี่ยไตรมาสสำหรับอัตราส่วนหมุนเวียน) คืน None ถ้าไม่มีค่าเลยสักไตรมาส"""
-    vals = [q.get(field) for q in quarters[-4:] if q.get(field) is not None]
+def _avg_last4(qmap, anchor_key, field):
+    """ค่าเฉลี่ย field จาก 4 ไตรมาสปฏิทินล่าสุดที่จบที่ anchor_key ที่มีค่าจริง (ไม่ต้องครบ 4
+    ไตรมาสเป๊ะเหมือน _ttm_sum แต่ยังยึดไตรมาสตามปฏิทินจริงผ่าน qmap ไม่ใช่ตำแหน่งใน list) ใช้กับ
+    field งบดุล ณ จุดเวลา เช่น total_assets/inventory/accounts_receivable คืน None ถ้าไม่มีค่า
+    เลยสักไตรมาส"""
+    vals = []
+    for off in range(4):
+        row = qmap.get(anchor_key - off)
+        if row is not None and row.get(field) is not None:
+            vals.append(row[field])
     return (sum(vals) / len(vals)) if vals else None
 
 
-def _latest_value(quarters, field, lookback=4):
-    """ค่า field ล่าสุดที่ไม่ใช่ None ย้อนดูสูงสุด lookback ไตรมาสจากท้ายสุด — งบดุล/กระแสเงินสด
-    รายไตรมาสจาก Yahoo มักตามหลัง P&L ที่มาจาก SET/Finnomena อยู่ 1 งวด (ไตรมาสล่าสุดสุดของ
-    total_assets/total_debt/current_assets ฯลฯ อาจยังไม่มีค่าทั้งที่ revenue/net_profit มาแล้ว)
-    ใช้แทน quarters[-1].get(field) ตรงๆ สำหรับอัตราส่วน ณ จุดเวลาที่ต้องการค่าล่าสุดเท่าที่มีจริง"""
-    for q in reversed(quarters[-lookback:]):
-        v = q.get(field)
-        if v is not None:
-            return v
+def _latest_value(qmap, anchor_key, field, lookback=4):
+    """ค่า field ล่าสุดที่ไม่ใช่ None ย้อนดูสูงสุด lookback ไตรมาสปฏิทินจริงจาก anchor_key (เทียบ
+    ผ่าน qmap — กันเผลอย้อนไกลเกิน lookback ไตรมาสจริงตอนข้อมูลมีช่วงขาดหายกลางทาง ซึ่งอิงตำแหน่ง
+    ใน list เดิมจะย้อนไกลเกินโดยไม่รู้ตัว) — งบดุล/กระแสเงินสดรายไตรมาสจาก Yahoo มักตามหลัง P&L
+    ที่มาจาก SET/Finnomena อยู่ 1 งวด (ไตรมาสล่าสุดสุดของ total_assets/total_debt/current_assets
+    ฯลฯ อาจยังไม่มีค่าทั้งที่ revenue/net_profit มาแล้ว) ใช้แทนอ่านไตรมาสล่าสุดตรงๆ สำหรับ
+    อัตราส่วน ณ จุดเวลาที่ต้องการค่าล่าสุดเท่าที่มีจริง"""
+    for off in range(lookback):
+        row = qmap.get(anchor_key - off)
+        if row is not None:
+            v = row.get(field)
+            if v is not None:
+                return v
     return None
 
 
@@ -5123,24 +5203,26 @@ def _peer_group_detail_row(sym, entry, f, con):
     if not quarters:
         return {"symbol": sym, "name": entry.get("name") or sym, "no_data": True}
 
+    qmap = _qmap(quarters)
     last = quarters[-1]
-    prior_q = quarters[-2] if len(quarters) >= 2 else None
-    yoy_q = quarters[-5] if len(quarters) >= 5 else None
+    anchor = _qkey(last)
+    prior_q = qmap.get(anchor - 1)
+    yoy_q = qmap.get(anchor - 4)
 
-    rev_ttm = _ttm_sum(quarters, "revenue")
-    np_ttm = _ttm_sum(quarters, "net_profit")
-    gp_ttm = _ttm_sum(quarters, "gross_profit")
-    op_ttm = _ttm_sum(quarters, "operating_profit")
-    cogs_ttm = _ttm_sum(quarters, "cogs")
-    cfo_ttm = _ttm_sum(quarters, "cfo")
-    cfi_ttm = _ttm_sum(quarters, "cfi")
-    capex_ttm = _ttm_sum(quarters, "capex")
+    rev_ttm = _ttm_sum(qmap, anchor, "revenue")
+    np_ttm = _ttm_sum(qmap, anchor, "net_profit")
+    gp_ttm = _ttm_sum(qmap, anchor, "gross_profit")
+    op_ttm = _ttm_sum(qmap, anchor, "operating_profit")
+    cogs_ttm = _ttm_sum(qmap, anchor, "cogs")
+    cfo_ttm = _ttm_sum(qmap, anchor, "cfo")
+    cfi_ttm = _ttm_sum(qmap, anchor, "cfi")
+    capex_ttm = _ttm_sum(qmap, anchor, "capex")
     fcf_approx = (cfo_ttm + cfi_ttm) if (cfo_ttm is not None and cfi_ttm is not None) else None
 
-    equity_avg = _avg_last4(quarters, "total_equity")
-    assets_avg = _avg_last4(quarters, "total_assets")
-    inventory_avg = _avg_last4(quarters, "inventory")
-    ar_avg = _avg_last4(quarters, "accounts_receivable")
+    equity_avg = _avg_last4(qmap, anchor, "total_equity")
+    assets_avg = _avg_last4(qmap, anchor, "total_assets")
+    inventory_avg = _avg_last4(qmap, anchor, "inventory")
+    ar_avg = _avg_last4(qmap, anchor, "accounts_receivable")
 
     mkt_cap = entry.get("mkt_cap")
     pe = (mkt_cap / np_ttm) if (mkt_cap and np_ttm and np_ttm > 0) else f.get("pe_value")
@@ -5149,19 +5231,19 @@ def _peer_group_detail_row(sym, entry, f, con):
     # ของฟังก์ชันนี้ — งบดุลรายไตรมาสมีแค่บาง symbol) — ใช้ _latest_value แทน last.get() ตรงๆ
     # เพราะงบดุลจาก Yahoo มักตามหลัง P&L อยู่ 1 งวด (ไตรมาสล่าสุดสุดมี revenue/net_profit
     # แต่ total_equity/total_debt/current_assets ยังไม่ sync มา)
-    equity_latest = _latest_value(quarters, "total_equity")
+    equity_latest = _latest_value(qmap, anchor, "total_equity")
     pbv = (mkt_cap / equity_latest) if (mkt_cap and equity_latest and equity_latest > 0) else f.get("pbv_value")
-    ibd_latest = _latest_value(quarters, "total_debt")
-    current_assets_latest = _latest_value(quarters, "current_assets")
-    current_liabilities_latest = _latest_value(quarters, "current_liabilities")
-    cash_latest = _latest_value(quarters, "cash")
+    ibd_latest = _latest_value(qmap, anchor, "total_debt")
+    current_assets_latest = _latest_value(qmap, anchor, "current_assets")
+    current_liabilities_latest = _latest_value(qmap, anchor, "current_liabilities")
+    cash_latest = _latest_value(qmap, anchor, "cash")
     # ROIC = NOPAT TTM (กำไรจากการดำเนินงาน หลังหักภาษี) ÷ Invested Capital (งวดล่าสุด) — สูตร
     # เดียวกับ ROIC (TTM) ใน "📌 อัตราส่วนหลัก" ของหน้างบรวมทุกแหล่ง (dashboard.js บรรทัด
     # ~17850) ทำตรงนี้ให้ตรงกันเป๊ะ (เดิมเคยลองใช้ flat 20% แทน แต่จะได้ตัวเลข ROIC ไม่ตรงกับ
     # ที่หน้าอื่นโชว์สำหรับหุ้นตัวเดียวกัน — clamp อัตราภาษี 0-60% กันไตรมาสขาดทุน/มีรายการพิเศษ
     # ทำให้ tax_expense/pretax_profit เพี้ยนสุดขั้ว)
-    pretax_ttm = _ttm_sum(quarters, "pretax_profit")
-    tax_ttm = _ttm_sum(quarters, "tax_expense")
+    pretax_ttm = _ttm_sum(qmap, anchor, "pretax_profit")
+    tax_ttm = _ttm_sum(qmap, anchor, "tax_expense")
     roic = None
     if (op_ttm is not None and pretax_ttm is not None and tax_ttm is not None
             and ibd_latest is not None and equity_latest is not None and cash_latest is not None):
@@ -5223,17 +5305,17 @@ def _peer_group_detail_row(sym, entry, f, con):
     # YoY ของ TTM กำไรสุทธิ — เทียบ TTM ปัจจุบันกับ TTM ที่จบเมื่อ 4 ไตรมาสก่อน (ต้องมีอย่างน้อย
     # 8 ไตรมาสถึงจะมีข้อมูลพอทำ TTM สองช่วงที่ไม่ทับกัน)
     if len(quarters) >= 8 and np_ttm is not None:
-        prior_ttm = _ttm_sum(quarters[:-4], "net_profit")
+        prior_ttm = _ttm_sum(qmap, anchor - 4, "net_profit")
         row["ttm_net_profit_yoy"] = _peer_group_pct_change(np_ttm, prior_ttm)
         row["net_profit_ttm_prior"] = prior_ttm
     # CAGR 3 ปีเป๊ะ (ต่างจาก rev_cagr/profit_cagr ของ factor_snapshot ที่เป็นเต็มช่วงข้อมูล) —
     # เทียบ TTM ปัจจุบันกับ TTM ที่จบเมื่อ 12 ไตรมาสก่อน ต้องมีอย่างน้อย 16 ไตรมาสถึงจะมีข้อมูล
     # พอทำ TTM สองช่วงที่ไม่ทับกัน (เฉพาะกรณีทั้งคู่เป็นบวก — ฐานลบ/ศูนย์ทำ CAGR ไม่มีความหมาย)
     if len(quarters) >= 16:
-        rev_ttm_3y_ago = _ttm_sum(quarters[:-12], "revenue")
+        rev_ttm_3y_ago = _ttm_sum(qmap, anchor - 12, "revenue")
         if rev_ttm and rev_ttm_3y_ago and rev_ttm > 0 and rev_ttm_3y_ago > 0:
             row["rev_cagr_3y"] = round(((rev_ttm / rev_ttm_3y_ago) ** (1 / 3) - 1) * 100, 2)
-        np_ttm_3y_ago = _ttm_sum(quarters[:-12], "net_profit")
+        np_ttm_3y_ago = _ttm_sum(qmap, anchor - 12, "net_profit")
         if np_ttm and np_ttm_3y_ago and np_ttm > 0 and np_ttm_3y_ago > 0:
             row["profit_cagr_3y"] = round(((np_ttm / np_ttm_3y_ago) ** (1 / 3) - 1) * 100, 2)
     return row
@@ -5305,11 +5387,13 @@ def get_financials_sankey_sector(symbol):
                 quarters = _peer_group_quarters(s, con=con)
                 if not quarters:
                     continue
-                rev_ttm = _ttm_sum(quarters, "revenue")
+                qmap = _qmap(quarters)
+                anchor = _qkey(quarters[-1])
+                rev_ttm = _ttm_sum(qmap, anchor, "revenue")
                 if not rev_ttm or rev_ttm <= 0:
                     continue
                 for f in _SANKEY_SECTOR_PCT_FIELDS:
-                    v = _ttm_sum(quarters, f)
+                    v = _ttm_sum(qmap, anchor, f)
                     if v is not None:
                         pct_samples[f].append(v / rev_ttm * 100)
             except Exception:
@@ -5680,7 +5764,12 @@ def track_search():
 @app.route("/api/mirror-symbols")
 def mirror_symbols():
     """รายชื่อ symbol หุ้น US/HK ทั้งตลาด (mirror) สำหรับ datalist ค้นหาในหน้างบการเงิน"""
-    return jsonify(factor_snapshot.get_mirror_symbols(BASE_DIR))
+    try:
+        return jsonify(factor_snapshot.get_mirror_symbols(BASE_DIR))
+    except Exception:
+        # factor_snapshot_mirror table ถูก DELETE+bulk INSERT ทับระหว่างงาน "Mirror ทั้งตลาด"
+        # — ถ้าเจอ DB locked พอดี fallback เป็นค่าว่างเหมือน mirror_names() แทนที่จะ 500
+        return jsonify({})
 
 
 @app.route("/api/us-index-membership")
