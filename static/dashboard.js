@@ -10461,9 +10461,9 @@ function renderTearsheet(d) {
       </div>
       <canvas id="ts-spark" width="600" height="60" style="width:100%;height:60px;display:block;margin-bottom:10px"></canvas>
       <div style="display:flex;gap:16px;flex-wrap:wrap;padding-top:8px;border-top:1px solid var(--border)">
-        ${_tsBadge('RS', h.rs_score ?? '—', h.rs_score >= 80 ? 'var(--green)' : h.rs_score < 40 ? 'var(--red)' : 'var(--text)')}
+        ${_tsBadge('RS', h.rs_score ?? '—', h.rs_score == null ? 'var(--text2)' : h.rs_score >= 80 ? 'var(--green)' : h.rs_score < 40 ? 'var(--red)' : 'var(--text)')}
         ${_tsBadge('Stage', stageBadge(h.stage), '')}
-        ${_tsBadge('จาก High52', h.pct_off_high52 != null ? h.pct_off_high52.toFixed(1)+'%' : '—', h.pct_off_high52 >= -5 ? 'var(--green)' : h.pct_off_high52 <= -30 ? 'var(--red)' : 'var(--text)')}
+        ${_tsBadge('จาก High52', h.pct_off_high52 != null ? h.pct_off_high52.toFixed(1)+'%' : '—', h.pct_off_high52 == null ? 'var(--text2)' : h.pct_off_high52 >= -5 ? 'var(--green)' : h.pct_off_high52 <= -30 ? 'var(--red)' : 'var(--text)')}
         ${_tsBadge('Momentum', h.rs_momentum ?? '—', momColor)}
         ${_tsBadge('EMA', emaBadge, '')}
         ${_tsBadge('ATR%', h.atr14_pct ?? '—', '')}
@@ -11224,11 +11224,16 @@ function _tsDcfHtml(dcf, price) {
       <div class="empty" style="padding:4px 0;font-size:11.5px">สูตร DCF ใช้ไม่ได้กับกลุ่มการเงิน (ธนาคาร/เงินทุน/ประกัน) เพราะ FCF ไม่มีความหมายกับธุรกิจกลุ่มนี้</div>
     </div>`;
   }
+  // dcf.forecast (DCF Model เต็มรูปแบบ) มาจากงบ Yahoo annual คนละแหล่งกับ fcf/mkt_cap
+  // (factor_snapshot) — คำนวณสำเร็จได้แม้ Reverse/Forward DCF ด้านล่างขาดข้อมูล จึงต้องโชว์
+  // เสมอถ้ามี ไม่ผูกกับเงื่อนไข fcf/mkt_cap/price ด้านล่าง (เดิม return ก่อนถึงบรรทัดนี้เลย
+  // ทำให้ dcf.forecast ที่ backend คำนวณไว้ครบหายไปเงียบๆ)
+  const modelHtml = dcf.forecast ? _tsDcfModelHtml(dcf.forecast, dcf) : '';
   if (dcf.fcf == null || !dcf.mkt_cap || !price) {
     return `<div class="card" style="padding:16px;margin-bottom:12px">
       <div style="font-size:13px;font-weight:700;margin-bottom:6px">🎯 มูลค่าเหมาะสม (DCF)</div>
-      <div class="empty" style="padding:4px 0;font-size:11.5px">ข้อมูลไม่พอสำหรับคำนวณ (ต้องมี Free Cash Flow + มูลค่าตลาด)</div>
-    </div>`;
+      <div class="empty" style="padding:4px 0;font-size:11.5px">ข้อมูลไม่พอสำหรับคำนวณ Reverse/Forward DCF (ต้องมี Free Cash Flow + มูลค่าตลาด)</div>
+    </div>${modelHtml}`;
   }
   const negNote = dcf.fcf <= 0
     ? `<div style="font-size:11px;color:var(--red);margin-bottom:8px">⚠ FCF ปีล่าสุดติดลบ — ผลลัพธ์ด้านล่างอาจไม่สมเหตุผล ควรดูแนวโน้มหลายปีประกอบก่อนเชื่อตัวเลขนี้</div>` : '';
@@ -11285,7 +11290,7 @@ function _tsDcfHtml(dcf, price) {
     </div>
 
     <div style="font-size:10px;color:var(--text2);margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">⚠ เป็นกรอบคิดคร่าวๆ ไม่ใช่คำแนะนำซื้อ/ขาย — ผลลัพธ์ไวมากต่อสมมติฐาน growth/discount rate ที่ใส่ ใช้ FCF ปีล่าสุด (ไม่ใช่ TTM หรือค่าเฉลี่ยหลายปี) หุ้นที่ FCF ผันผวน/เป็นวัฏจักรควรดูย้อนหลังหลายปีประกอบก่อนเชื่อตัวเลขนี้</div>
-    ${dcf.forecast ? _tsDcfModelHtml(dcf.forecast, dcf) : ''}
+    ${modelHtml}
   </div>`;
 }
 
@@ -11685,8 +11690,11 @@ function _tsDcfRecalc() {
   if (!dcf || !revBox || !fwdBox || !sensBox || dcf.is_financial_sector ||
       dcf.fcf == null || !dcf.mkt_cap || !dcf.price) return;
   const rInput = document.getElementById('ts-dcf-discount'), tgInput = document.getElementById('ts-dcf-terminal');
-  const r = (parseFloat(rInput?.value) || dcf.discount_rate_default) / 100;
-  const tg = (parseFloat(tgInput?.value) || dcf.terminal_growth_default) / 100;
+  // Number.isFinite แทน || — parseFloat('0') ให้ 0 ซึ่งเป็น falsy ทำให้ || ตกไปใช้ default
+  // เงียบๆ ทั้งที่ผู้ใช้พิมพ์ 0% มาจริงๆ (Terminal Growth 0% เป็นค่าที่ใส่ได้ตามปกติ min="0")
+  const rRaw = parseFloat(rInput?.value), tgRaw = parseFloat(tgInput?.value);
+  const r = (Number.isFinite(rRaw) ? rRaw : dcf.discount_rate_default) / 100;
+  const tg = (Number.isFinite(tgRaw) ? tgRaw : dcf.terminal_growth_default) / 100;
   const price = dcf.price, shares = dcf.mkt_cap / price, netCash = dcf.net_cash || 0, ev = dcf.mkt_cap - netCash;
   const histGrowth = dcf.profit_cagr ?? dcf.rev_cagr ?? null;
 

@@ -3805,12 +3805,21 @@ def financial_health(symbol):
     if cached and (time.time() - cached["ts"] < _FIN_HEALTH_TTL):
         return jsonify(cached["data"])
     try:
+        import urllib.error
         from sources.set_api import fetch_financial_health
         data = fetch_financial_health(sym)
         if not data.get("themes"):
             return jsonify({"error": f"ไม่มีข้อมูล Financial Health ของ {sym}"}), 404
         _fin_health_cache[sym] = {"data": data, "ts": time.time()}
         return jsonify(data)
+    except urllib.error.HTTPError as e:
+        # SET.or.th คืน 404 สำหรับหุ้นกลุ่มการเงิน (ธนาคาร/เงินทุน/ประกัน) — Financial
+        # Health Check ไม่ครอบกลุ่มนี้ (เหมือน Z-Score ที่ยกเว้นกลุ่มเดียวกัน สูตรไม่ valid
+        # กับงบดุลธนาคาร) ไม่ใช่ error จริง — คืน 404 พร้อมเหตุผลชัดๆ แทน 500
+        if e.code == 404:
+            return jsonify({"error": f"ไม่มีข้อมูล Financial Health ของ {sym} "
+                                      "(SET.or.th ไม่ครอบคลุมกลุ่มธนาคาร/เงินทุน/ประกัน)"}), 404
+        return jsonify({"error": str(e)}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -5666,8 +5675,13 @@ def tearsheet(market, symbol):
     # แค่สมาชิกดัชนีหลักที่มี sector) — บังคับซ่อน Z-Score เองตรงนี้แทนสำหรับกลุ่มการเงิน (เหมือนที่
     # ทำใน /api/peer-compare)
     z_score, z_zone, z_reason = f.get("z_score"), f.get("z_zone"), f.get("z_excluded_reason")
+    z_variant = f.get("z_variant")
     if is_financial and mkt != "TH":
-        z_score, z_zone = None, None
+        # z_variant ต้อง null ด้วย ไม่ใช่แค่ z_score/z_zone — frontend (_tsQualityHtml) ใช้
+        # "z_variant === null" เป็นตัวบ่งชี้ว่าถูก exclude แล้วโชว์ z_excluded_reason แทน ถ้า
+        # ปล่อย z_variant เดิมไว้ (ไม่ null เพราะ factor_snapshot_mirror ไม่รู้ sector ตอนคำนวณ)
+        # จะไม่เข้าเงื่อนไขไหนเลย ทำให้ทั้ง Z-Score tile และคำอธิบายเหตุผลหายไปเงียบๆ
+        z_score, z_zone, z_variant = None, None, None
         z_reason = "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"
 
     quality = {
@@ -5676,7 +5690,7 @@ def tearsheet(market, symbol):
         "dividend_coverage": f.get("dividend_coverage"),
         "f_score": f.get("f_score"), "f_score_max": f.get("f_score_max"),
         "f_score_detail": f.get("f_score_detail"),
-        "z_score": z_score, "z_variant": f.get("z_variant"), "z_zone": z_zone,
+        "z_score": z_score, "z_variant": z_variant, "z_zone": z_zone,
         "z_excluded_reason": z_reason,
         # cash_cycle จาก Yahoo (factor_snapshot) — ใช้ cross-check กับ q_cash_cycle
         # ทางการของ SET ในการ์ด "🩺 สุขภาพการเงิน (SET)" (ดู PLAN_set_api_expansion.txt
@@ -5688,7 +5702,15 @@ def tearsheet(market, symbol):
     # _mirror_sym ตัด suffix ".HK" ก่อนเสมอ — ตาราง dividends เก็บรหัสดิบไม่มี suffix
     # เหมือน factor_snapshot mirror (ดู sync_dividends_batch/get_dividends_endpoint)
     # lite: dividends อยู่ใต้ market "DR" (key = DR sym) ถ้าเคย sync จากหน้าปันผล/batch
-    div_rows, _div_synced = financials_store.get_dividends(BASE_DIR, fkey, "DR" if lite else mkt)
+    # get_dividends()/financials_store.get() เปิด connection ใหม่ (busy_timeout=5000) — ถ้า
+    # background job (sync-all/mirror) กำลังเขียน financials.db นานเกิน 5s พอดี อาจได้
+    # sqlite3.OperationalError: database is locked ต้องกันไว้ไม่ให้ Tearsheet ทั้งหน้า 500
+    # (pattern เดียวกับ /api/financials-full, /api/calendar-events) — เคสนี้เสี่ยงกว่าที่อื่น
+    # เพราะ Watchlist ยิง Tearsheet header หลายหุ้นพร้อมกันผ่าน Promise.all
+    try:
+        div_rows, _div_synced = financials_store.get_dividends(BASE_DIR, fkey, "DR" if lite else mkt)
+    except Exception:
+        div_rows, _div_synced = [], None
     dividend = {
         "yield": s.get("div_yield"),
         "cagr_5y": f.get("div_cagr_5y"),
@@ -5718,7 +5740,13 @@ def tearsheet(market, symbol):
             yahoo_key, yahoo_is_dr = sym, False
         else:
             yahoo_key, yahoo_is_dr = f"FINN:{mkt}:{fkey}", False
-        y_payload = financials_store.get(BASE_DIR, yahoo_key, "yahoo", is_dr=yahoo_is_dr)
+        # เหตุผลเดียวกับ get_dividends ด้านบน — กัน sqlite "database is locked" ไม่ให้ทั้ง
+        # response (header/valuation/quality ที่คำนวณสำเร็จแล้ว) หายไปเพราะแค่ field เสริม
+        # (DCF forecast) พังตอน DB ถูกล็อกชั่วคราว
+        try:
+            y_payload = financials_store.get(BASE_DIR, yahoo_key, "yahoo", is_dr=yahoo_is_dr)
+        except Exception:
+            y_payload = None
         if y_payload:
             dcf["forecast"] = financials_store.compute_dcf_forecast_inputs(y_payload)
 
@@ -9887,9 +9915,12 @@ def insider_trades():
     try:
         records = sec_store.query_insider_trades(BASE_DIR, days)
         last_synced = sec_store._get_meta(BASE_DIR, "insider_last_synced_at")
-    except Exception as e:
-        # sec_filings.db อาจถูก Quick Update/insider-sync เขียนอยู่พอดี (sqlite locked)
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        # sec_filings.db อาจถูก Quick Update/insider-sync เขียนอยู่พอดี (sqlite locked ชั่วคราว)
+        # ถือว่ายังไม่มีข้อมูลตอนนี้แทน 500 (pattern เดียวกับ /api/calendar-events) — กัน
+        # Tearsheet ที่ยิง endpoint นี้พร้อมกันหลายหุ้นผ่าน Watchlist ทั้งหน้าล้มเพราะ lock ชั่วคราว
+        records = []
+        last_synced = sec_store._get_meta(BASE_DIR, "insider_last_synced_at")
     return jsonify({
         "records": records,
         "days": days,
@@ -9919,8 +9950,10 @@ def major_changes():
     try:
         records = sec_store.query_major_changes(BASE_DIR, days)
         last_synced = sec_store._get_meta(BASE_DIR, "major_last_synced_at")
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        # เหตุผลเดียวกับ /api/insider-trades — sqlite lock ชั่วคราวไม่ควรทำให้ Tearsheet 500
+        records = []
+        last_synced = sec_store._get_meta(BASE_DIR, "major_last_synced_at")
     return jsonify({
         "records": records,
         "days": days,
