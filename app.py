@@ -921,16 +921,26 @@ _dr_rebuild_lock = threading.Lock()
 
 
 def _kick_dr_rebuild():
-    """rebuild DR cache ใน background thread — ไม่ start ซ้อนถ้ามีตัวหนึ่งรันอยู่แล้ว"""
-    if _dr_rebuild_lock.locked():
+    """rebuild DR cache ใน background thread — ไม่ start ซ้อนถ้ามีตัวหนึ่งรันอยู่แล้ว
+
+    ใช้ acquire(blocking=False) แทนการเช็ค .locked() เฉยๆ — เดิม 2 request ที่มาพร้อมกัน
+    หลัง cache หมดอายุ อาจเห็น locked()==False พร้อมกันทั้งคู่ (TOCTOU) แล้วสปอน thread
+    รีบิลด์ซ้อนกัน 2 ชุด ยิง yf.download()/market-cap batch ซ้ำเปล่าๆ — acquire แบบนี้
+    การเช็ค+จองคิวเป็นจังหวะเดียวแบบ atomic เลยกันซ้อนได้จริง"""
+    if not _dr_rebuild_lock.acquire(blocking=False):
         return
 
     def _bg():
         try:
-            _rebuild_dr_cache()
+            # เช็คซ้ำเผื่อมี rebuild อื่น (เช่น blocking path จาก request คนละตัว) เพิ่งเสร็จ
+            if not (_dr_cache.get("result") and _dr_cache.get("ts") is not None
+                    and time.time() - _dr_cache["ts"] < 120):
+                _dr_do_rebuild()
             print("[DR] background refresh เสร็จ")
         except Exception as e:
             print(f"[DR] background refresh ล้มเหลว: {e}")
+        finally:
+            _dr_rebuild_lock.release()
 
     threading.Thread(target=_bg, daemon=True).start()
 
@@ -943,13 +953,19 @@ def get_dr_data():
     (stale-while-revalidate) — ผู้ใช้ไม่ต้องรอ 1-2 นาทีเหมือนเดิมอีก
     ?fresh=1 = บังคับทำสดแบบ blocking (ใช้ตอน bake static site — ห้ามได้ข้อมูลเก่า)"""
     fresh = request.args.get("fresh") == "1"
-    cached = _dr_cache.get("result")
-    if not fresh and cached and cached.get("stocks") and _dr_cache.get("ts") is not None:
-        age = time.time() - _dr_cache["ts"]
-        if age < _DR_CACHE_TTL:
-            return jsonify(_dr_light(cached))
-        _kick_dr_rebuild()
-        return jsonify(_dr_light(cached, refreshing=True))
+    # snapshot ครั้งเดียวแทนอ่าน _dr_cache["result"]/["ts"] แยก 2 จังหวะ — เดิม background
+    # thread อาจ .update() คั่นกลางพอดี ทำให้ได้ result เก่าคู่กับ ts ใหม่ (torn read)
+    snap = dict(_dr_cache)
+    cached = snap.get("result")
+    if not fresh and cached and cached.get("stocks") and snap.get("ts") is not None:
+        age = time.time() - snap["ts"]
+        try:
+            if age < _DR_CACHE_TTL:
+                return jsonify(_dr_light(cached))
+            _kick_dr_rebuild()
+            return jsonify(_dr_light(cached, refreshing=True))
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
     # ไม่มี cache เลย (รันครั้งแรกสุดของเครื่อง) หรือ fresh=1 — ทำสดแบบ blocking
     try:
@@ -1062,8 +1078,8 @@ def _dr_do_rebuild():
     price_failed = []   # sym ที่ดึงราคาไม่สำเร็จ/ข้อมูลไม่พอ — เก็บไว้แจ้งใน result["warnings"]
     cur_year = _dt.now().year   # ใช้ตัด YTD — ปีเดียวกันตลอดทั้งรอบ ไม่ต้องคำนวณใหม่ทุกตัว (~283 ครั้ง)
     for stock in _dr_universe:
-        yticker = stock["yf"]
         try:
+            yticker = stock["yf"]
             # เดิม .dropna() แยกราย field ใน _series() ทำให้ open/high/low/volume อาจสั้น/
             # ไม่ align กับ close ถ้า NaN ไม่ตรงกันระหว่าง field (เจอได้กับหุ้นเทรดเบามาก) —
             # โค้ดด้านล่างใช้ .iloc[i] แบบ positional ล้วน จะจับคู่วันผิดกันเงียบๆ ถ้าความยาว
@@ -1106,7 +1122,7 @@ def _dr_do_rebuild():
 
             price = float(close.iloc[-1])
             prev  = float(close.iloc[-2])
-            chg   = (price - prev) / prev * 100 if prev else 0
+            chg   = (price - prev) / prev * 100 if prev else None
             live_chg = round((live_price - price) / price * 100, 2) if live_price and price else None
 
             close100 = [round(float(x), 4) for x in close.tail(100).tolist()]
@@ -1196,7 +1212,7 @@ def _dr_do_rebuild():
                 "ind":      stock["ind"],
                 "yf":       stock["yf"],
                 "price":    round(price, 2),
-                "chg":      round(chg, 2),
+                "chg":      round(chg, 2) if chg is not None else None,
                 "live_price": round(live_price, 2) if live_price is not None else None,
                 "live_chg":   live_chg,
                 "ret_1w":   ret_1w,
@@ -9731,8 +9747,12 @@ def _run_quick():
 
         def _insider():
             from sources import sec_store as _sec_store
-            _sec_store.sync_insider_trades(BASE_DIR)
-            _sec_store.sync_major_changes(BASE_DIR)
+            # ต้องผ่าน _sec_first_sync_lock เดียวกับ _ensure_sec_db_ready()/insider_sync()
+            # ไม่งั้น Quick Update เขียน sec_filings.db พร้อมกับ request /api/insider-trades
+            # ที่มาชนกันเองได้ (เคยเจอ sqlite throw "database is locked" มาแล้ว)
+            with _sec_first_sync_lock:
+                _sec_store.sync_insider_trades(BASE_DIR)
+                _sec_store.sync_major_changes(BASE_DIR)
             _sec_store.bake_backup(BASE_DIR)   # no-op นอก CI — ดู sec_store.bake_backup
             _invalidate_flow_signals()   # insider เป็น 1 ใน 3 ชั้นของสัญญาณรวม
         _sub_step("Insider/ผู้ถือหุ้นใหญ่", 91, "อัพเดท Insider/ผู้ถือหุ้นใหญ่...", _insider)
@@ -9864,8 +9884,12 @@ def insider_trades():
         except Exception as e:
             return jsonify({"error": f"sync ครั้งแรกล้มเหลว: {e}"}), 500
 
-    records = sec_store.query_insider_trades(BASE_DIR, days)
-    last_synced = sec_store._get_meta(BASE_DIR, "insider_last_synced_at")
+    try:
+        records = sec_store.query_insider_trades(BASE_DIR, days)
+        last_synced = sec_store._get_meta(BASE_DIR, "insider_last_synced_at")
+    except Exception as e:
+        # sec_filings.db อาจถูก Quick Update/insider-sync เขียนอยู่พอดี (sqlite locked)
+        return jsonify({"error": str(e)}), 500
     return jsonify({
         "records": records,
         "days": days,
@@ -9892,8 +9916,11 @@ def major_changes():
         except Exception as e:
             return jsonify({"error": f"sync ครั้งแรกล้มเหลว: {e}"}), 500
 
-    records = sec_store.query_major_changes(BASE_DIR, days)
-    last_synced = sec_store._get_meta(BASE_DIR, "major_last_synced_at")
+    try:
+        records = sec_store.query_major_changes(BASE_DIR, days)
+        last_synced = sec_store._get_meta(BASE_DIR, "major_last_synced_at")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
     return jsonify({
         "records": records,
         "days": days,

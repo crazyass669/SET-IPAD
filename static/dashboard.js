@@ -321,6 +321,7 @@ async function loadData() {
       `${_typeIcon} <b>${_asOf}</b> <span style="color:var(--text2);font-size:10px">${_upTime.slice(11,16)}</span>` +
       `</span>` + _staticNote;
     _populateScrIndustry();
+    _scrMigrateRvolOnce();
     loadScreenerSettings();
     initScreenerAutosave();
     renderSavedPresets();
@@ -6224,7 +6225,10 @@ function _scrComputeSorted() {
     const fromLow  = s.low_52w  > 0 ? (s.price - s.low_52w)  / s.low_52w  * 100 : null;
     const rvCalc   = _rvolCalc(s, rvolDaysNow);
     const rvol     = rvCalc ? rvCalc.rv * 100 : null;
-    const sr = secRanks[s.symbol];
+    // secRanks มาจาก DATA.stocks (หุ้นไทยเท่านั้น) — key ด้วย symbol ดิบ ถ้าไม่กัน universe
+    // หุ้น DR ที่ symbol ชนกับหุ้นไทยจริงโดยบังเอิญ (เช่น META = Meta Platforms ฝั่ง DR
+    // และหุ้น mai ไทยชื่อ META พร้อมกัน) จะได้ sec_rank ของหุ้นไทยตัวนั้นไปแปะผิดๆ
+    const sr = s._isDR ? null : secRanks[s.symbol];
     return { ...s, fromHigh, fromLow, rvol, sec_rank: sr?.rank ?? null, sec_total: sr?.total ?? null };
   });
   return [...withRange].sort((a, b) => {
@@ -7295,6 +7299,9 @@ async function _loadScrInsider() {
   try {
     // เว็บมือถือ/ไอแพด (IS_STATIC) ไม่มี live sync ให้รอ ต้อง timeout สั้น (ดู fetchInsiderData)
     const res = await _fetchTimeout('/api/insider-trades?days=90', IS_STATIC ? 20000 : 200000).then(r => r.json());
+    // backend คืน 500+JSON {"error":...} ตอน sync/DB ล้มเหลว — res.records จะไม่มี ต้องเช็ค
+    // error ก่อน ไม่งั้นเข้าใจผิดว่า "โหลดสำเร็จ ได้ 0 รายการ" แล้วล็อกฟิลเตอร์เป็น 0 ผลลัพธ์ถาวร
+    if (res && res.error) throw new Error(res.error);
     // เวอร์ชันเว็บ (static) เก็บ 180 วันคงที่ — กรองซ้ำฝั่ง client ให้เหลือ 90 วันจริง
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 90);
     const cutoffStr = cutoff.toISOString().slice(0, 10);
@@ -7319,6 +7326,7 @@ async function runScreener() {
   if (!DATA) return;
 
   const includeDR = document.getElementById('scr-include-dr')?.checked;
+  let _drFetchFailed = false;
   if (includeDR && !_drData) {
     const resultBox = document.getElementById('screener-results');
     if (resultBox) resultBox.innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูลหุ้นต่างประเทศ (DR) — อาจใช้เวลา 1-2 นาทีตอนโหลดครั้งแรก...</div>';
@@ -7329,15 +7337,22 @@ async function runScreener() {
         .finally(() => { _drFetchPromise = null; });
     }
     const d = await _drFetchPromise;
-    if (d && d.stocks) { _drData = d.stocks; _drLoaded = true; _mergeFinAnalyticsInto(_drData, s => s.sym, 'dr'); }
+    // /api/dr คืน {"error":...} เป็น HTTP 500 (เช่น cache ว่าง + rebuild พัง) — ยัง parse
+    // เป็น JSON ได้ d.stocks จึงเป็น falsy เงียบๆ ต้องเช็คไว้เตือนผู้ใช้ ไม่งั้นดูเหมือน
+    // ค้นแล้วไม่เจอหุ้น DR เลย ทั้งที่จริงๆ ข้อมูล DR ไม่ถูกโหลดเลย
+    if (d && d.stocks) { _drData = d.stocks; _drLoaded = true; }
+    else _drFetchFailed = true;
   }
   // หุ้น DR มี price_history/vol_history จาก /api/dr แล้ว (server ผูก above_ema50/200
   // ให้ด้วย) — เรียก _enrichTechSignals ตัวเดียวกับหุ้นไทยเพื่อคำนวณ EMA/SMA cross,
   // RSI rebound, bullish volume ให้ DR ด้วย ไม่งั้นติ๊ก "รวมหุ้นต่างประเทศ" +
   // signal เทคนิคใดๆ จะกรอง DR ออกหมดเสมอ (ทำทุกครั้งเพราะราคาถูกอัพเดทได้เรื่อยๆ
-  // ต้นทุนคำนวณต่ำ ~280 หุ้น ไม่คุ้มจะเก็บ state แยก)
+  // ต้นทุนคำนวณต่ำ ~280 หุ้น ไม่คุ้มจะเก็บ state แยก) — merge growth/PEG/FCF เข้าไปด้วยทุก
+  // ครั้งเช่นกัน เพราะ _drData อาจถูกตั้งค่าไว้ก่อนแล้วจากหน้าอื่น (เช่น drQuickUpdate)
+  // โดยยังไม่เคย merge เลย ถ้า merge แค่ตอน fetch เอง (!_drData) จะพลาดกรณีนี้ไปเงียบๆ
   if (includeDR && _drData) {
     _drData.forEach(s => { if (s.ret_1d == null) s.ret_1d = s.chg; });
+    _mergeFinAnalyticsInto(_drData, s => s.sym, 'dr');
     _enrichTechSignals(_drData);
   }
   saveScreenerSettings();
@@ -7404,7 +7419,7 @@ async function runScreener() {
   const goldenX   = document.getElementById('scr-golden-cross').checked;
   const mkt       = document.getElementById('scr-market').value;
   const industry  = document.getElementById('scr-industry').value;
-  const sig52h      = document.getElementById('scr-new52h').checked;
+  const sig52h      = document.getElementById('scr-new52h')?.checked || false;
   const sigSmaCr50  = document.getElementById('scr-sma-cross50').checked;
   const sigSmaCr200 = document.getElementById('scr-sma-cross200').checked;
   const sigEmaCr50  = document.getElementById('scr-ema-cross50').checked;
@@ -7491,6 +7506,10 @@ async function runScreener() {
     // margin ขยายตัว (จุด%) — YoY เทียบไตรมาสเดียวกันปีก่อน / TTM เทียบ 4 ไตรมาสชุดก่อน
     if (!isNaN(marginYoyqMin) && (s.margin_yoyq_delta == null || s.margin_yoyq_delta < marginYoyqMin)) return false;
     if (!isNaN(ttmMarginMin)  && (s.ttm_margin_delta  == null || s.ttm_margin_delta  < ttmMarginMin))  return false;
+    // _scrInsiderNetBuy มาจาก ก.ล.ต. (หุ้นไทยเท่านั้น) key ด้วย symbol ดิบ — หุ้น DR ไม่มี
+    // ข้อมูล insider ไทยจริงๆ ต้องกันไว้ก่อนเช็ค set ไม่งั้น symbol ชนกับหุ้นไทยโดยบังเอิญ
+    // (เช่น META) จะได้ insider flag ของหุ้นไทยตัวนั้นไปใช้ผิดๆ
+    if (insiderBuy && s._isDR) return false;
     if (insiderBuy && _scrInsiderLoaded && !_scrInsiderNetBuy.has(s.symbol)) return false;
     if (!isNaN(grossMarginMin) && (s.gross_margin == null || s.gross_margin < grossMarginMin)) return false;
     if (!isNaN(roeMin)         && (s.roe          == null || s.roe          < roeMin))         return false;
@@ -7555,7 +7574,8 @@ async function runScreener() {
   _scrSortDir = 1;
 
   document.getElementById('screener-count').textContent = `พบ ${_scrStocks.length} หุ้น` +
-    (insiderBuy && !_scrInsiderLoaded ? ' — ⚠ โหลดข้อมูล Insider ไม่สำเร็จ ข้ามตัวกรองนั้นไปก่อน' : '');
+    (insiderBuy && !_scrInsiderLoaded ? ' — ⚠ โหลดข้อมูล Insider ไม่สำเร็จ ข้ามตัวกรองนั้นไปก่อน' : '') +
+    (_drFetchFailed ? ' — ⚠ โหลดข้อมูลหุ้นต่างประเทศ (DR) ไม่สำเร็จ ค้นเฉพาะหุ้นไทย' : '');
   const csvBtn = document.getElementById('btn-export-csv');
   if (csvBtn) csvBtn.style.display = _scrStocks.length > 0 ? '' : 'none';
   if (_scrStocks.length === 0) {
@@ -7568,7 +7588,7 @@ async function runScreener() {
 function resetScreener() {
   _SCR_FIELDS.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   _SCR_CHECKS.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
-  document.getElementById('scr-market').value = 'ALL';
+  const mk = document.getElementById('scr-market'); if (mk) mk.value = 'ALL';
   const ind = document.getElementById('scr-industry'); if (ind) ind.value = 'ALL';
   const yb = document.getElementById('scr-ratio-years-back'); if (yb) yb.value = '1';
   const rvd = document.getElementById('scr-rvol-days'); if (rvd) rvd.value = '20';
@@ -13386,7 +13406,10 @@ function saveScreenerSettings() {
   _SCR_CHECKS.forEach(id => { const el = document.getElementById(id); if (el) s[id] = el.checked; });
   const mk = document.getElementById('scr-market'); if (mk) s['scr-market'] = mk.value;
   const ind = document.getElementById('scr-industry'); if (ind) s['scr-industry'] = ind.value;
-  localStorage.setItem(_SCR_LS, JSON.stringify(s));
+  // localStorage.setItem อาจ throw (QuotaExceededError เต็ม/SecurityError โดน block) —
+  // runScreener() เรียกฟังก์ชันนี้เป็นบรรทัดแรก ถ้าไม่กันไว้ throw ตรงนี้จะทำให้กด "ค้นหา"
+  // ไม่ทำงานเลยทั้งฟังก์ชัน โดยไม่มีข้อความอะไรบอกผู้ใช้เลย
+  try { localStorage.setItem(_SCR_LS, JSON.stringify(s)); } catch(e) {}
 }
 
 function loadScreenerSettings() {
@@ -13394,14 +13417,39 @@ function loadScreenerSettings() {
     const raw = localStorage.getItem(_SCR_LS);
     if (!raw) return;
     const s = JSON.parse(raw);
-    // migrate: RVOL เปลี่ยนหน่วยจาก % เป็น 'เท่า' — ค่าเก่าที่บันทึกไว้แบบ % (เช่น 150)
-    // ตีความใหม่เป็นเท่า (1.5) อัตโนมัติ (ค่าเกิน 20 ไม่มีทางเป็น 'เท่า' ที่ตั้งใจ)
-    if (s['scr-rvol'] != null && parseFloat(s['scr-rvol']) > 20) s['scr-rvol'] = String(parseFloat(s['scr-rvol']) / 100);
     _SCR_FIELDS.forEach(id => { if (s[id] != null) { const el = document.getElementById(id); if (el) el.value = s[id]; } });
     _SCR_CHECKS.forEach(id => { if (s[id] != null) { const el = document.getElementById(id); if (el) el.checked = s[id]; } });
     if (s['scr-market']) { const el = document.getElementById('scr-market'); if (el) el.value = s['scr-market']; }
     if (s['scr-industry']) { const el = document.getElementById('scr-industry'); if (el) el.value = s['scr-industry']; }
   } catch(e) {}
+}
+
+// migrate ครั้งเดียวตลอดไป (ไม่ใช่ทุกครั้งที่โหลดหน้า) — RVOL เปลี่ยนหน่วยจาก % เป็น 'เท่า'
+// ค่าเก่าที่บันทึกไว้แบบ % (เช่น 150) ตีความใหม่เป็นเท่า (1.5) ครั้งเดียว มี flag กันรันซ้ำ
+// เดิม heuristic นี้รันทุกครั้งที่โหลดหน้า (>20 -> หาร100) ทำให้ถ้าผู้ใช้ตั้งใจพิมพ์
+// RVOL>=21 เท่าจริงๆ (ล่าหุ้นปริมาณเบา) ค่าจะโดนบิดเหลือ 0.21 อัตโนมัติทุกครั้งที่ refresh
+// ทำแบบรวมศูนย์ที่นี่ (แทนที่จะซ้ำใน loadScreenerSettings/loadSavedPreset แยกกัน) เพื่อให้
+// ทั้ง autosave และ preset ที่บันทึกไว้ก่อนหน้านี้ได้ migrate เหมือนกันแน่นอน
+const _SCR_RVOL_MIGRATED_LS = 'set_scr_rvol_migrated_v1';
+function _scrMigrateRvolOnce() {
+  try {
+    if (localStorage.getItem(_SCR_RVOL_MIGRATED_LS)) return;
+    const migrateOne = (s) => {
+      if (s && s['scr-rvol'] != null && parseFloat(s['scr-rvol']) > 20) {
+        s['scr-rvol'] = String(parseFloat(s['scr-rvol']) / 100);
+      }
+    };
+    const raw = localStorage.getItem(_SCR_LS);
+    if (raw) {
+      const s = JSON.parse(raw);
+      migrateOne(s);
+      localStorage.setItem(_SCR_LS, JSON.stringify(s));
+    }
+    const presets = _loadPresets();
+    Object.values(presets).forEach(migrateOne);
+    localStorage.setItem(_PRESETS_LS, JSON.stringify(presets));
+    localStorage.setItem(_SCR_RVOL_MIGRATED_LS, '1');
+  } catch (e) {}
 }
 
 // autosave ทุกครั้งที่แก้ค่า filter — เดิมบันทึกเฉพาะตอนกด "ค้นหา"
@@ -13439,7 +13487,8 @@ function saveCurrentPreset() {
   const mk = document.getElementById('scr-market'); if (mk) s['scr-market'] = mk.value;
   const ind = document.getElementById('scr-industry'); if (ind) s['scr-industry'] = ind.value;
   presets[name] = s;
-  localStorage.setItem(_PRESETS_LS, JSON.stringify(presets));
+  // setItem อาจ throw (เต็ม/ถูก block) — ไม่กันไว้จะเงียบๆ ไม่บันทึก preset โดยผู้ใช้ไม่รู้
+  try { localStorage.setItem(_PRESETS_LS, JSON.stringify(presets)); } catch(e) {}
   document.getElementById('preset-name-input').value = '';
   renderSavedPresets();
 }
@@ -13452,6 +13501,13 @@ function loadSavedPreset(name) {
   // preset นี้ไว้ค้างค่าจากการค้นหาครั้งก่อนหน้าปนเข้าไปในผลลัพธ์
   _SCR_FIELDS.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   _SCR_CHECKS.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
+  // ตั้ง default เหมือน applyPreset() ก่อนใส่ค่าจาก preset — preset เก่าที่บันทึกไว้ก่อน
+  // field เหล่านี้จะมีถูกเว้นว่าง(select ไม่มี option ว่างเลย selectedIndex เป็น -1) หรือ
+  // สืบทอดค่าที่เลือกค้างอยู่ในหน้าจอแทนการค้นทั้งตลาดตามที่ preset ตั้งใจ
+  const mk = document.getElementById('scr-market'); if (mk) mk.value = 'ALL';
+  const ind = document.getElementById('scr-industry'); if (ind) ind.value = 'ALL';
+  const yb = document.getElementById('scr-ratio-years-back'); if (yb) yb.value = '1';
+  const rvd = document.getElementById('scr-rvol-days'); if (rvd) rvd.value = '20';
   _SCR_FIELDS.forEach(id => { if (s[id] != null) { const el = document.getElementById(id); if (el) el.value = s[id]; } });
   _SCR_CHECKS.forEach(id => { if (s[id] != null) { const el = document.getElementById(id); if (el) el.checked = s[id]; } });
   if (s['scr-market']) { const el = document.getElementById('scr-market'); if (el) el.value = s['scr-market']; }
@@ -13462,7 +13518,7 @@ function loadSavedPreset(name) {
 function deleteSavedPreset(name) {
   const presets = _loadPresets();
   delete presets[name];
-  localStorage.setItem(_PRESETS_LS, JSON.stringify(presets));
+  try { localStorage.setItem(_PRESETS_LS, JSON.stringify(presets)); } catch(e) {}
   renderSavedPresets();
 }
 
