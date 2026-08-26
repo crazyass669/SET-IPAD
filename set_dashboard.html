@@ -50,6 +50,7 @@
   <button class="nav-btn" onclick="showPage('stock-rotation',this)" title="Stock Rotation — RRG รายหุ้น ไทย(DR)/US/HK/JP รวมหน้าเดียว สลับตลาดด้วยแท็บ 🇹🇭🇺🇸🇭🇰🇯🇵">🔄 Stock Rotation</button>
   <button class="nav-btn" onclick="showPage('band',this)">Val. Band</button>
   <button class="nav-btn" onclick="showPage('dcf-screener',this)" title="DCF Screener — รัน DCF Model (พยากรณ์เต็มรูปแบบ) กับหุ้นไทยทุกตัวที่คำนวณได้ ด้วยสมมติฐาน WACC/Growth ค่าเริ่มต้นเดียวกันทั้งตลาด (Beta=1.00 คงที่) เรียงตาม upside% มาก→น้อย เป็นการคัดกรองเบื้องต้น ไม่ใช่คำแนะนำซื้อ/ขาย · local-only">🎯 DCF Screener</button>
+  <button class="nav-btn" onclick="showPage('growth-screener',this)" title="หุ้นโตแรงรายไตรมาส — รายได้/กำไรสุทธิ QoQ%/YoY% ทั้งตลาด SET+mai เลือกไตรมาสย้อนหลังได้ กดหัวตารางเรียงหาหุ้นโตแรงสุด (source: SET.or.th official รายไตรมาส) · local-only">🚀 หุ้นโตแรงรายไตรมาส</button>
   <button class="nav-btn nav-btn-highlight" onclick="showPage('watchlist',this)">⭐ Watchlist</button>
   <button class="nav-btn" onclick="showPage('dr',this)">DR/DRx</button>
   <button class="nav-btn" onclick="showPage('etf',this)" title="ETF ไทย — ราคา/NAV/Premium-Discount/RS ของ ETF ที่จดทะเบียนบน SET โดยตรง (ดัชนีในประเทศ/ต่างประเทศ/ตราสารหนี้/สินค้าโภคภัณฑ์/Leveraged-Inverse)">🏦 ETF ไทย<span id="etf-new-badge" class="etf-new-badge" style="display:none"></span></button>
@@ -1251,6 +1252,17 @@
       </div>
       <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">💰 มูลค่าหุ้น (Valuation)</div>
       <div class="scr-group">
+        <div class="scr-label">P/E ≥
+          <span class="scr-tip-icon">?<div class="scr-tip-box">
+            <strong>P/E ขั้นต่ำ (พื้น)</strong><br>
+            ราคาหุ้น ÷ กำไรต่อหุ้น (Trailing 12M)<br><br>
+            เช่น ใส่ 3 = ตัด P/E ต่ำกว่า 3 ออก<br>
+            <span style="color:var(--text2)">P/E ต่ำผิดปกติมักเป็นกำไรพิเศษครั้งเดียว/กำลังจะถูกลดประมาณการ — ปล่อยว่าง = ไม่กรองพื้น</span>
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-pe-min" type="number" placeholder="เช่น 3" min="0">
+      </div>
+      <div class="scr-group">
         <div class="scr-label">P/E ≤
           <span class="scr-tip-icon">?<div class="scr-tip-box">
             <strong>Price-to-Earnings Ratio</strong><br>
@@ -1260,6 +1272,17 @@
           </div></span>
         </div>
         <input class="scr-input" id="scr-pe" type="number" placeholder="เช่น 15" min="0">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">P/BV ≥
+          <span class="scr-tip-icon">?<div class="scr-tip-box">
+            <strong>P/BV ขั้นต่ำ (พื้น)</strong><br>
+            ราคาหุ้น ÷ มูลค่าทางบัญชีต่อหุ้น<br><br>
+            เช่น ใส่ 0.3 = ตัด P/BV ต่ำกว่า 0.3 ออก<br>
+            <span style="color:var(--text2)">P/BV ต่ำสุดขั้วมักเป็น value trap (ธุรกิจกำลังโดน disrupt) — ปล่อยว่าง = ไม่กรองพื้น</span>
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-pbv-min" type="number" placeholder="เช่น 0.3" min="0">
       </div>
       <div class="scr-group">
         <div class="scr-label">P/BV ≤
@@ -2495,10 +2518,11 @@
       P/E &amp; P/BV รายกลุ่ม (Sector Cross-sectional)
       <span class="val-tip" data-vtip="&lt;div class='tip-head'&gt;วิธีอ่านตาราง&lt;/div&gt;แต่ละแถวคือ Sector หนึ่ง&lt;br&gt;ค่าที่แสดงคือ distribution ของหุ้นใน sector นั้น&lt;hr&gt;&lt;b&gt;avg±σ&lt;/b&gt; = ค่าเฉลี่ย±ส่วนเบี่ยงเบนมาตรฐาน&lt;br&gt;&lt;b&gt;+1σ/-1σ&lt;/b&gt; = ขอบเขตปกติ (ครอบคลุม ~68% ของหุ้น)&lt;br&gt;&lt;b&gt;+2σ/-2σ&lt;/b&gt; = ขอบเขตผิดปกติ (~95%)&lt;hr&gt;ใช้เปรียบเทียบว่าหุ้นแต่ละตัวถูก/แพงเทียบ peer">ⓘ</span>
     </div>
-    <div style="display:flex;gap:8px;margin-bottom:10px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <button class="filter-btn active" onclick="setValSecSort('pe',this)">เรียง PE avg</button>
       <button class="filter-btn" onclick="setValSecSort('pbv',this)">เรียง PBV avg</button>
       <button class="filter-btn" onclick="setValSecSort('n',this)">เรียง จำนวนหุ้น</button>
+      <span id="val-sector-legend" style="font-size:11px;color:var(--muted);margin-left:auto"></span>
     </div>
     <div id="val-sector-table" style="overflow-x:auto"></div>
   </div>
@@ -4161,6 +4185,43 @@
   <div id="dcf-screener-table"></div>
 </div>
 
+<!-- PAGE: QUARTERLY GROWTH SCREENER — 🚀 หุ้นโตแรงรายไตรมาส — ลิสหุ้น SET+mai ทั้งตลาดแบบแบน
+     (ไม่จัดกลุ่ม sector) revenue/กำไรสุทธิ QoQ%/YoY% ต่อหุ้น เลือกไตรมาสย้อนหลังได้ ดู
+     sources/financials_store.py::get_qpl_growth_screener + route /api/quarterly-growth-screener
+     ใน app.py — local-only, อ่านจาก set_qpl ที่ sync ไว้แล้ว ไม่มี network call เพิ่ม -->
+<div id="page-growth-screener" class="page">
+  <div class="page-title">🚀 หุ้นโตแรงรายไตรมาส</div>
+  <div class="page-sub">
+    รายได้/กำไรสุทธิรายไตรมาสทั้งตลาด SET+mai เทียบไตรมาสก่อนหน้า (QoQ) และไตรมาสเดียวกันปีก่อน (YoY)
+    เป็น % — เลือกไตรมาสย้อนหลังได้จากช่องด้านล่าง กดหัวตารางเพื่อเรียงหาหุ้นที่โตแรงสุด ข้อมูลจาก
+    SET.or.th official รายไตรมาส (source <code>set_qpl</code>) — กลุ่มการเงิน/ประกันไม่มีรายการ
+    "รายได้จากการขายและให้บริการ" ในผังบัญชี จึงโชว์รายได้เป็น "—" แต่กำไรสุทธิยังคำนวณได้ปกติ ·
+    หุ้นที่พลิกจากขาดทุน/เท่าทุนเป็นกำไรจะโชว์ป้าย "🔄 พลิกกำไร" แทน % (หารด้วยฐานติดลบไม่มีความหมาย)
+  </div>
+
+  <div class="card" style="padding:10px 16px;margin-bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:6px">
+      <button class="filter-btn" id="growth-scr-prev-btn" onclick="_growthScrShiftQuarter(1)" title="ไตรมาสก่อนหน้า">◀</button>
+      <select id="growth-scr-quarter-select" class="scr-input" style="min-width:130px" onchange="_growthScrJumpQuarter(this.value)"></select>
+      <button class="filter-btn" id="growth-scr-next-btn" onclick="_growthScrShiftQuarter(-1)" title="ไตรมาสถัดไป">▶</button>
+    </div>
+    <input id="growth-scr-search" class="scr-input" style="width:180px;font-size:13px" placeholder="ค้น ticker/ชื่อ..." oninput="renderGrowthScreener()">
+    <select id="growth-scr-sector" class="scr-input" style="min-width:160px" onchange="renderGrowthScreener()">
+      <option value="">ทุก Sector</option>
+    </select>
+    <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:6px;cursor:pointer">
+      <input type="checkbox" id="growth-scr-hide-na" onchange="renderGrowthScreener()"> ซ่อนหุ้นที่ % เทียบไม่ได้เลย
+    </label>
+    <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:6px;cursor:pointer" title="ตัดหุ้นที่ฐานเทียบ (งวดก่อน) เล็กกว่า 50 ล้านบาท กันโต % หลอกจากฐานจิ๋ว">
+      <input type="checkbox" id="growth-scr-min-base" checked onchange="renderGrowthScreener()"> ตัดฐานเทียบเล็กเกินไป
+    </label>
+    <button id="growth-scr-export-btn" class="filter-btn" onclick="exportGrowthScreenerCsv()">⬇️ Export CSV</button>
+    <span id="growth-scr-count" style="font-size:11.5px;color:var(--text2);margin-left:auto"></span>
+  </div>
+
+  <div id="growth-screener-table"></div>
+</div>
+
 <!-- PAGE: DATA HEALTH — ความสดของทุกไฟล์/DB ที่ dashboard ใช้ + ปิงแหล่งข้อมูลภายนอก
      (local-only — ต้องรันผ่าน Flask ไม่มีบน GitHub Pages เพราะไม่มี backend ให้เช็ค) -->
 <div id="page-data-health" class="page">
@@ -4838,6 +4899,12 @@
           <span style="width:8px;height:8px;border-radius:50%;background:#1fd18f;display:inline-block"></span>
           Jitta
         </a>
+        <a id="cm-iaa-link" href="#" target="_blank" rel="noopener"
+          style="display:none;align-items:center;gap:5px;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--text2);text-decoration:none;cursor:pointer"
+          title="เปิดหน้า IAA Consensus บน SETTRADE (บทวิเคราะห์นักวิเคราะห์)">
+          <span style="width:8px;height:8px;border-radius:50%;background:#ff8c00;display:inline-block"></span>
+          IAA Consensus
+        </a>
         <button class="cm-close" onclick="closeChartModal()">✕</button>
       </div>
     </div>
@@ -5206,6 +5273,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260826d"></script>
+<script src="static/dashboard.js?v=20260826h"></script>
 </body>
 </html>

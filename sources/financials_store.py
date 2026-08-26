@@ -2687,6 +2687,128 @@ def _prev_quarter(y, q):
     return (y - 1, 4) if q == 1 else (y, q - 1)
 
 
+_QTR_END_MD = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}   # เดือน/วันสิ้นไตรมาสปฏิทิน
+
+
+def _QTR_END_DATE(y, q):
+    """วันสิ้นไตรมาสปฏิทินของ (year_ad, q) — เหมือน mapping ใน _payload_latest_period ด้านบน
+    ใช้กรองคีย์ไตรมาส 'อนาคต' (วันสิ้นงวดยังไม่ถึงวันนี้) ออกจาก available_quarters ใน
+    get_qpl_growth_screener"""
+    m, d = _QTR_END_MD[q]
+    return date(y, m, d)
+
+
+def _stock_pct_change(cur_val, prior_val):
+    """% เปลี่ยนแปลง QoQ/YoY ต่อหุ้น — prior_val <= 0 (ไม่ใช่แค่ ==0) กันหุ้นพลิกกำไร/ขาดทุนหนักขึ้น
+    หารด้วยฐานติดลบพลิกเครื่องหมายผลลัพธ์ กลายเป็น % หลอก (เช่น พลิกจากขาดทุนเป็นกำไรจะโชว์ % ติดลบ
+    มหาศาล ทั้งที่จริงคือข่าวดีที่สุด) กรณีนี้ต้องดู net_profit ตรงๆ ไม่ใช่ % — caller เช็คฐานดิบ
+    (revenue_prior/profit_prior ฯลฯ ที่ผลลัพธ์แนบมาด้วยเสมอ) แทนถ้าอยากหาหุ้นพลิกกำไรจริง"""
+    if cur_val is None or prior_val is None or prior_val <= 0:
+        return None
+    return round((cur_val / prior_val - 1) * 100, 1)
+
+
+def _qpl_stock_growth_rows(parsed, target):
+    """รายได้/กำไรสุทธิรายไตรมาส (source 'set_qpl') ต่อหุ้นแบบแบน (ไม่จัดกลุ่ม sector) เทียบไตรมาส
+    ก่อนหน้า (QoQ) และไตรมาสเดียวกันปีก่อน (YoY) ของ target ที่ caller กำหนด — ใช้ร่วมกันโดย
+    get_sector_qpl_compare (group ตาม sector ต่อ) และ get_qpl_growth_screener (คืนแบนตรงๆ ให้
+    sort/filter ทั้งตลาดได้ทีละไตรมาสที่เลือก)
+
+    คืน list ของ {symbol, revenue, net_profit, revenue_prior, profit_prior, revenue_prior_qoq,
+    profit_prior_qoq, revenue_yoy, profit_yoy, revenue_qoq, profit_qoq, gpm, npm, revenue_ttm,
+    profit_ttm} เฉพาะหุ้นที่มีข้อมูลงวด target แล้ว (revenue หรือ net_profit อย่างน้อยหนึ่งตัว) —
+    ไม่แนบ sector มาด้วย (caller แนบเอง เพราะบางจุดจัดกลุ่ม บางจุดไม่จัดกลุ่ม)"""
+    prior_key = (target[0] - 1, target[1])   # YoY เทียบไตรมาสเดียวกันปีก่อน ไม่ใช่ _prev_quarter (QoQ)
+    prior_qoq_key = _prev_quarter(*target)   # QoQ เทียบไตรมาสก่อนหน้าติดกัน (ต่างจาก prior_key)
+
+    def _ttm_sum(qs, field):
+        total, y, q = 0, target[0], target[1]
+        for _ in range(4):
+            row = qs.get((y, q))
+            if not row or row.get(field) is None:
+                return None
+            total += row[field]
+            y, q = _prev_quarter(y, q)
+        return total
+
+    rows = []
+    for sym, qs in parsed.items():
+        cur = qs.get(target)
+        if not cur:
+            continue
+        rev, net = cur.get("revenue"), cur.get("net_profit")
+        if rev is None and net is None:
+            continue
+        prev = qs.get(prior_key) or {}
+        prev_qoq = qs.get(prior_qoq_key) or {}
+        gross = cur.get("gross_profit")
+        rows.append({
+            "symbol": sym, "revenue": rev, "net_profit": net,
+            "revenue_prior": prev.get("revenue"), "profit_prior": prev.get("net_profit"),
+            "revenue_prior_qoq": prev_qoq.get("revenue"), "profit_prior_qoq": prev_qoq.get("net_profit"),
+            "revenue_yoy": _stock_pct_change(rev, prev.get("revenue")),
+            "profit_yoy": _stock_pct_change(net, prev.get("net_profit")),
+            "revenue_qoq": _stock_pct_change(rev, prev_qoq.get("revenue")),
+            "profit_qoq": _stock_pct_change(net, prev_qoq.get("net_profit")),
+            "gpm": round(gross / rev * 100, 1) if gross is not None and rev else None,
+            "npm": round(net / rev * 100, 1) if net is not None and rev else None,
+            "revenue_ttm": _ttm_sum(qs, "revenue"),
+            "profit_ttm": _ttm_sum(qs, "net_profit"),
+        })
+    return rows
+
+
+def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_by_symbol=None):
+    """ตารางเติบโต QoQ/YoY รายหุ้นทั้งตลาดแบบแบน (ไม่จัดกลุ่ม sector ต่างจาก get_sector_qpl_compare)
+    เลือกไตรมาสย้อนหลังได้ผ่าน target_quarter ("YYYY-Q" string) — ไม่ผูกกับไตรมาสล่าสุดตายตัวเหมือน
+    get_sector_qpl_compare เพื่อให้กดดูไตรมาสอื่นได้ (เมนู "หุ้นโตแรงรายไตรมาส")
+
+    caller ต้องโหลด parsed เอง (financials_store._load_set_qpl_all) แล้วส่งเข้ามา แทนที่จะให้ฟังก์ชัน
+    นี้โหลดเอง — เพื่อให้ route แคชผลโหลด sqlite+JSON parse (แพงกว่า) แยกจากการเลือกไตรมาส (ถูกมาก
+    แค่ loop ในหน่วยความจำ) ทำให้สลับไตรมาสไปมาในหน้าเว็บไม่ต้องอ่าน DB ใหม่ทุกครั้ง
+
+    target_quarter ที่ parse ไม่ได้ หรือไม่มีอยู่จริงในข้อมูล -> fallback ไปไตรมาสล่าสุด (เหมือนไม่ใส่)
+
+    คืน {"quarter": "YYYY-Q" หรือ None, "available_quarters": [...ทั้งหมดที่มีข้อมูลจริง เรียง
+    ใหม่->เก่า...], "stocks": [...]} โครง stock เหมือน _qpl_stock_growth_rows + "sector" ต่อแถว
+    (ไม่มี sector ใน sector_by_symbol -> "อื่นๆ")
+
+    กรอง key ไตรมาสที่ "วันสิ้นงวดยังไม่ถึงวันนี้" ทิ้งจาก available_quarters เสมอ — พบจริงว่าหุ้น
+    ปีบัญชีไม่ตรงปฏิทิน (BTS/VGI/STANLY/TIF1 ฯลฯ ดู qpl-quarterly-report-view memory) บางตัวยังมี
+    key ค้างจากก่อนแก้บั๊ก mislabel (คีย์จาก fiscal label เก่าแทน endDate จริง) โผล่เป็นไตรมาส
+    "อนาคต" เช่น 2027-1 ทั้งที่วันนี้ยังไม่ถึง — ข้อมูลเก่านี้จะถูกทับด้วย key ที่ถูกต้องเองรอบ sync
+    ถัดไป (ไม่ต้องแก้ DB มือ) แต่ dropdown เลือกไตรมาสไม่ควรโชว์ตัวเลือกที่เป็นไปไม่ได้ระหว่างนั้น"""
+    if not parsed:
+        return {"quarter": None, "available_quarters": [], "stocks": []}
+
+    today = date.today()
+    all_keys = {q for qs in parsed.values() for q in qs}
+    available = sorted((q for q in all_keys if _QTR_END_DATE(*q) <= today), reverse=True)
+
+    target = None
+    if target_quarter:
+        try:
+            y_s, q_s = target_quarter.split("-")
+            cand = (int(y_s), int(q_s))
+            if cand in available:
+                target = cand
+        except (ValueError, AttributeError):
+            pass
+    if target is None:
+        target = _target_quarter(parsed)
+
+    rows = _qpl_stock_growth_rows(parsed, target)
+    for row in rows:
+        row["sector"] = sector_by_symbol.get(row["symbol"], "อื่นๆ")
+        row["name"] = (name_by_symbol or {}).get(row["symbol"])
+
+    return {
+        "quarter": f"{target[0]}-{target[1]}",
+        "available_quarters": [f"{y}-{q}" for y, q in available],
+        "stocks": rows,
+    }
+
+
 def get_sector_qpl_compare(base_dir, sector_by_symbol):
     """รวมรายได้/กำไรสุทธิรายไตรมาส (source='set_qpl', official SET เท่านั้น — sync ครบทุกหุ้น
     ไทยแล้วผ่าน update_financials.py) กลุ่มตาม Sector (SET) ที่ caller ส่งมา (data/set_data.json
@@ -2722,56 +2844,14 @@ def get_sector_qpl_compare(base_dir, sector_by_symbol):
         return {"quarter": None, "sectors": []}
 
     target = _target_quarter(parsed)
-    prior_key = (target[0] - 1, target[1])   # YoY เทียบไตรมาสเดียวกันปีก่อน ไม่ใช่ _prev_quarter (QoQ)
-    prior_qoq_key = _prev_quarter(*target)   # QoQ เทียบไตรมาสก่อนหน้าติดกัน (ต่างจาก prior_key)
-
-    def _ttm_sum(qs, field):
-        total, y, q = 0, target[0], target[1]
-        for _ in range(4):
-            row = qs.get((y, q))
-            if not row or row.get(field) is None:
-                return None
-            total += row[field]
-            y, q = _prev_quarter(y, q)
-        return total
-
-    def _stock_yoy(cur_val, prior_val):
-        # prior_val <= 0 (ไม่ใช่แค่ ==0) กันหุ้นพลิกกำไร/ขาดทุนหนักขึ้น — หารด้วยฐานติดลบพลิก
-        # เครื่องหมายผลลัพธ์ กลายเป็น % หลอก (เช่น พลิกจากขาดทุนเป็นกำไรจะโชว์ % ติดลบมหาศาล
-        # ทั้งที่จริงคือข่าวดีที่สุด) กรณีนี้ต้องดู net_profit ตรงๆ ไม่ใช่ %  — ดู
-        # get_market_trend ด้านล่างที่หลบปัญหาเดียวกันด้วย flipped_profit/flipped_loss แทนเปอร์เซ็นต์
-        if cur_val is None or prior_val is None or prior_val <= 0:
-            return None
-        return round((cur_val / prior_val - 1) * 100, 1)
 
     sector_all_symbols = {}   # sector -> set ของหุ้นทั้งหมดที่ classify ลงกลุ่มนี้ (ไม่ว่าจะมีงบหรือไม่)
     for sym, sector in sector_by_symbol.items():
         sector_all_symbols.setdefault(sector, set()).add(sym)
 
     buckets = {}   # sector -> list of per-stock dict
-    for sym, qs in parsed.items():
-        cur = qs.get(target)
-        if not cur:
-            continue
-        rev, net = cur.get("revenue"), cur.get("net_profit")
-        if rev is None and net is None:
-            continue
-        prev = qs.get(prior_key) or {}
-        prev_qoq = qs.get(prior_qoq_key) or {}
-        gross = cur.get("gross_profit")
-        buckets.setdefault(sector_by_symbol[sym], []).append({
-            "symbol": sym, "revenue": rev, "net_profit": net,
-            "revenue_prior": prev.get("revenue"), "profit_prior": prev.get("net_profit"),
-            "revenue_prior_qoq": prev_qoq.get("revenue"), "profit_prior_qoq": prev_qoq.get("net_profit"),
-            "revenue_yoy": _stock_yoy(rev, prev.get("revenue")),
-            "profit_yoy": _stock_yoy(net, prev.get("net_profit")),
-            "revenue_qoq": _stock_yoy(rev, prev_qoq.get("revenue")),
-            "profit_qoq": _stock_yoy(net, prev_qoq.get("net_profit")),
-            "gpm": round(gross / rev * 100, 1) if gross is not None and rev else None,
-            "npm": round(net / rev * 100, 1) if net is not None and rev else None,
-            "revenue_ttm": _ttm_sum(qs, "revenue"),
-            "profit_ttm": _ttm_sum(qs, "net_profit"),
-        })
+    for row in _qpl_stock_growth_rows(parsed, target):
+        buckets.setdefault(sector_by_symbol[row["symbol"]], []).append(row)
 
     total_profit_all = sum(r["net_profit"] for items in buckets.values() for r in items
                             if r["net_profit"] is not None)

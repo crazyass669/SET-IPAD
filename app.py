@@ -144,6 +144,15 @@ _SECTOR_COMPARE_CACHE_TTL = 24 * 3600
 # _fin_analytics_lock เองข้างใน — ถ้าใช้ lock ตัวเดียวกันครอบทั้งคู่จะ deadlock ทันที (Lock ไม่ reentrant)
 _sector_compare_lock = threading.Lock()
 
+# Quarterly growth screener cache — เก็บผลโหลดดิบ financials_store._load_set_qpl_all (sqlite+JSON
+# parse ~930 หุ้น) แยกจาก _sector_compare_cache แม้อ่านตารางเดียวกัน เพราะเมนู "🚀 หุ้นโตแรงรายไตรมาส"
+# ต้องคำนวณซ้ำได้ทุกไตรมาสที่ผู้ใช้กด ◀▶/dropdown เลือก (ไม่ใช่แค่ไตรมาสล่าสุดตายตัวแบบ sector-compare)
+# แคชแค่ชั้นโหลด ส่วนคำนวณ QoQ/YoY ต่อไตรมาส (get_qpl_growth_screener) รันสดทุก request เพราะเร็ว
+# (loop ในหน่วยความจำ ไม่มี I/O) — สลับไตรมาสในหน้าเว็บจึงไม่ต้องอ่าน DB ใหม่ทุกครั้ง
+_qpl_parsed_cache: dict = {}
+_QPL_PARSED_CACHE_TTL = 24 * 3600
+_qpl_parsed_lock = threading.Lock()
+
 # Market trend cache — แนวโน้มตลาดย้อนหลัง 20 ไตรมาส (หน้า "📈 แนวโน้มตลาด") คำนวณ ROE/Cash
 # Quality เองจาก finnomena_q ไม่ได้ยืม financials_analytics() เหมือน sector-compare จึงไม่เสี่ยง
 # deadlock กับ _fin_analytics_lock แต่ยังแยก cache/lock ของตัวเองเพื่อความชัดเจน
@@ -4132,7 +4141,8 @@ def _warmup_fin_dependent_caches():
     path เอง ~20-30 วิ) เรียกจาก thread เดิมของ sync ได้เลยเพราะ sync ก็รันใน background
     thread อยู่แล้ว — ไม่บล็อก request อื่น"""
     tc = app.test_client()
-    for ep in ("/api/financials-analytics", "/api/sector-compare", "/api/market-trend"):
+    for ep in ("/api/financials-analytics", "/api/sector-compare", "/api/market-trend",
+               "/api/quarterly-growth-screener"):
         try:
             t0 = time.time()
             tc.get(ep)
@@ -4192,6 +4202,7 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_dat
                                            is_dr=is_dr, skip_up_to_date=skip_up_to_date)
         _fin_analytics_cache.clear()   # ข้อมูลเปลี่ยน — บังคับคำนวณ growth/PEG/FCF ใหม่รอบถัดไป
         _sector_compare_cache.clear()
+        _qpl_parsed_cache.clear()
         _market_trend_cache.clear()
         _sector_trend_cache.clear()
         _warmup_fin_dependent_caches()
@@ -4474,6 +4485,47 @@ def sector_compare():
         traceback.print_exc()
         return jsonify({"error": f"รวมข้อมูล sector ล้มเหลว: {e}"}), 500
     return jsonify(compare)
+
+
+@app.route("/api/quarterly-growth-screener")
+def quarterly_growth_screener():
+    """หน้าใหม่ "🚀 หุ้นโตแรงรายไตรมาส" — ลิสหุ้น SET+mai ทั้งตลาดแบบแบน (ไม่จัดกลุ่ม sector ต่างจาก
+    /api/sector-compare) revenue/net_profit QoQ%/YoY% ต่อหุ้น เลือกไตรมาสย้อนหลังได้ผ่าน query
+    param ?quarter=YYYY-Q (ไม่ใส่/parse ไม่ได้/ไม่มีในข้อมูล -> ไตรมาสล่าสุด) ดู
+    financials_store.get_qpl_growth_screener สำหรับ logic เต็ม
+
+    แคชแยกชั้นจาก /api/sector-compare แม้อ่านตาราง set_qpl เดียวกัน (ดูคอมเมนต์ _qpl_parsed_cache
+    ด้านบน) — ชั้นโหลดดิบ (sqlite+JSON parse) แคช 24h, ชั้นคำนวณ QoQ/YoY รันสดทุก request ตาม
+    quarter param ที่ขอมา"""
+    def _compute_parsed():
+        sector_by_symbol = {}
+        name_by_symbol = {}
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, encoding="utf-8") as f:
+                    for s in json.load(f).get("stocks", []):
+                        if s.get("market") in ("SET", "mai") and s.get("sector"):
+                            sector_by_symbol[s["symbol"]] = s["sector"]
+                        if s.get("name"):
+                            name_by_symbol[s["symbol"]] = s["name"]
+            except Exception:
+                pass
+        parsed = financials_store._load_set_qpl_all(BASE_DIR, sector_by_symbol)
+        return {"parsed": parsed, "sector_by_symbol": sector_by_symbol, "name_by_symbol": name_by_symbol}
+
+    # try/except ครอบทั้งก้อน เหมือน /api/sector-compare ด้านบน — กัน error ที่ไม่คาดคิดหลุดเป็น
+    # หน้า 500 HTML ของ Flask ที่ frontend parse JSON ไม่ได้
+    try:
+        cached = _swr_get_or_refresh(_qpl_parsed_cache, _qpl_parsed_lock,
+                                      _QPL_PARSED_CACHE_TTL, _compute_parsed)
+        quarter = request.args.get("quarter") or None
+        result = financials_store.get_qpl_growth_screener(
+            cached["parsed"], cached["sector_by_symbol"], target_quarter=quarter,
+            name_by_symbol=cached["name_by_symbol"])
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"โหลดข้อมูลเติบโตรายไตรมาสล้มเหลว: {e}"}), 500
+    return jsonify(result)
 
 
 @app.route("/api/market-trend")
@@ -8631,6 +8683,7 @@ def _run_financials_update_all():
                 BASE_DIR, "JP", jp_syms, price_by_ticker=jp_price_by_ticker)
         _fin_analytics_cache.clear()
         _sector_compare_cache.clear()
+        _qpl_parsed_cache.clear()
         _market_trend_cache.clear()
         _sector_trend_cache.clear()
         _warmup_fin_dependent_caches()
@@ -11276,6 +11329,7 @@ if __name__ == "__main__":
         # breadth ~6 วิ + market-internals ~10 วิ ทำให้หน้า "ดัชนีกลุ่มอุตสาหกรรม SET & mai"
         # กับ "แนวโน้มตลาด" ยังเย็นอยู่ ~40 วิแรกหลังเปิดแอป (ตอนนี้พร้อมภายใน ~17 วิ)
         for ep in ("/api/financials-analytics", "/api/sector-compare", "/api/market-trend",
+                   "/api/quarterly-growth-screener",
                    "/api/data-health",
                    "/api/market-flow", "/api/market-internals", "/api/breadth?range=1y",
                    "/api/us-breadth?range=1y", "/api/hk-breadth?range=1y", "/api/jp-breadth?range=1y"):

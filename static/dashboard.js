@@ -4139,6 +4139,7 @@ function showPage(id, btn) {
   if (id === "data-health")    loadDataHealth();
   if (id === "hedge")          loadHedgePage();
   if (id === "dcf-screener")   loadDcfScreenerPage();
+  if (id === "growth-screener") loadGrowthScreenerPage();
   if (id === "overview")       { setTimeout(() => { if (!_nhLoaded) loadNewHighChart(); }, 100); }
 }
 
@@ -4699,6 +4700,271 @@ function exportDcfScreenerCsv() {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+// ============================================================
+// QUARTERLY GROWTH SCREENER — 🚀 หุ้นโตแรงรายไตรมาส — ดู /api/quarterly-growth-screener +
+// financials_store.get_qpl_growth_screener ใน backend (source 'set_qpl', SET.or.th official)
+// ต่างจาก /api/sector-compare (ใช้ขับหน้า Market Trend Top10 + ⚖ เปรียบเทียบ Sector) ตรงที่
+// เมนูนี้คืนลิสหุ้นแบบแบนทั้งตลาด (ไม่จัดกลุ่ม sector) + เลือกไตรมาสย้อนหลังได้ ไม่ผูกไตรมาสล่าสุด
+// ตายตัว — cache ผลตอบกลับต่อไตรมาสไว้ฝั่ง client กันยิง fetch ซ้ำตอนกด ◀▶ ไปมา
+// ============================================================
+let _growthScrCache = {};        // "YYYY-Q" -> API response ({quarter, available_quarters, stocks})
+let _growthScrQuarter = null;    // ไตรมาสที่กำลังดูอยู่ตอนนี้ (string "YYYY-Q")
+let _growthScrLoading = false;
+let _growthScrSort = { key: 'profit_yoy', dir: 'desc' };
+const GROWTH_SCR_MIN_BASE = 50_000_000;   // บาท — ฐานเทียบขั้นต่ำกันโต % หลอกจากฐานจิ๋ว (เหมือน
+                                           // _MT_PROFIT_GROWTH_MIN_BASE ใน Market Trend แต่ใช้กับทั้งรายได้/กำไร)
+const GROWTH_SCR_COLS = [
+  { key: 'symbol', label: 'หุ้น', align: 'left' },
+  { key: 'sector', label: 'Sector', align: 'left' },
+  { key: 'revenue', label: 'รายได้', align: 'right' },
+  { key: 'revenue_qoq', label: 'รายได้ QoQ', align: 'right' },
+  { key: 'revenue_yoy', label: 'รายได้ YoY', align: 'right' },
+  { key: 'net_profit', label: 'กำไรสุทธิ', align: 'right' },
+  { key: 'profit_qoq', label: 'กำไร QoQ', align: 'right' },
+  { key: 'profit_yoy', label: 'กำไร YoY', align: 'right' },
+  { key: 'npm', label: 'NPM', align: 'right' },
+];
+
+function _growthScrEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function loadGrowthScreenerPage() {
+  if (_growthScrQuarter && _growthScrCache[_growthScrQuarter]) { renderGrowthScreener(); return; }
+  fetchGrowthScreener();
+}
+
+// quarter=null -> ไตรมาสล่าสุด (ค่าเริ่มต้นของ backend) — ต้อง return fetch chain เสมอ (ไม่ fire-and-forget)
+// เพราะ _growthScrShiftQuarter/_growthScrJumpQuarter เรียก .then() ต่อ (บั๊กที่เจอจริงกับ DCF Screener
+// ตอนลืม return — ปุ่มจะดูเหมือนใช้งานได้ปกติเวลาเทสต์คร่าวๆ แต่จริงๆ race กันอยู่ ดู dcf-screener-batch memory)
+function fetchGrowthScreener(quarter) {
+  if (_growthScrLoading) return Promise.resolve();
+  _growthScrLoading = true;
+  const box = document.getElementById('growth-screener-table');
+  if (box && !_growthScrQuarter) box.innerHTML = '<div class="empty">กำลังโหลด...</div>';
+  const qs = quarter ? ('?quarter=' + encodeURIComponent(quarter)) : '';
+  return _fetchTimeout('/api/quarterly-growth-screener' + qs, 30000,
+      'หมดเวลารอข้อมูลเติบโตรายไตรมาส (เกิน 30 วิ)')
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) throw new Error(d.error);
+      _growthScrCache[d.quarter] = d;
+      _growthScrQuarter = d.quarter;
+      _growthScrPopulateQuarterSelect(d.available_quarters || []);
+      _growthScrPopulateSectorSelect(d.stocks || []);
+      renderGrowthScreener();
+    })
+    .catch(e => {
+      if (box) box.innerHTML = `<div class="empty">โหลดข้อมูลไม่สำเร็จ: ${_growthScrEsc(e.message || e)}</div>`;
+    })
+    .finally(() => { _growthScrLoading = false; });
+}
+
+function _growthScrQuarterLabel(q) {
+  if (!q) return '—';
+  const [y, qq] = q.split('-');
+  return `Q${qq}/${parseInt(y, 10) + 543}`;   // ปี พ.ศ.
+}
+
+function _growthScrPopulateQuarterSelect(list) {
+  const sel = document.getElementById('growth-scr-quarter-select');
+  if (!sel) return;
+  sel.innerHTML = list.map(q => `<option value="${q}">${_growthScrQuarterLabel(q)}</option>`).join('');
+  sel.value = _growthScrQuarter;
+}
+
+function _growthScrPopulateSectorSelect(stocks) {
+  const sel = document.getElementById('growth-scr-sector');
+  if (!sel) return;
+  const cur = sel.value;
+  const sectors = [...new Set(stocks.map(s => s.sector).filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">ทุก Sector</option>'
+    + sectors.map(s => `<option value="${_growthScrEsc(s)}">${_growthScrEsc(s)}</option>`).join('');
+  if (sectors.includes(cur)) sel.value = cur;
+}
+
+// ปุ่ม ◀▶ เลื่อนทีละไตรมาสจาก available_quarters ของรอบที่โหลดล่าสุด (เรียงใหม่->เก่า ดังนั้น
+// dir=+1 = ไตรมาสก่อนหน้า (index มากขึ้น), dir=-1 = ไตรมาสถัดไป/ใหม่กว่า (index น้อยลง)
+function _growthScrShiftQuarter(dir) {
+  const d = _growthScrCache[_growthScrQuarter];
+  const list = d?.available_quarters || [];
+  const idx = list.indexOf(_growthScrQuarter);
+  if (idx === -1) return;
+  const next = list[idx + dir];
+  if (!next) return;
+  _growthScrJumpQuarter(next);
+}
+
+function _growthScrJumpQuarter(quarter) {
+  if (!quarter || quarter === _growthScrQuarter) return;
+  if (_growthScrCache[quarter]) {
+    _growthScrQuarter = quarter;
+    const sel = document.getElementById('growth-scr-quarter-select');
+    if (sel) sel.value = quarter;
+    renderGrowthScreener();
+    return;
+  }
+  fetchGrowthScreener(quarter);
+}
+
+function _growthScrSetSort(key) {
+  if (_growthScrSort.key === key) {
+    _growthScrSort.dir = _growthScrSort.dir === 'desc' ? 'asc' : 'desc';
+  } else {
+    _growthScrSort.key = key;
+    _growthScrSort.dir = (key === 'symbol' || key === 'sector') ? 'asc' : 'desc';
+  }
+  renderGrowthScreener();
+}
+
+// เช็คว่าแถวนี้ "พลิกกำไร" ในมุมที่ระบุ (qoq/yoy) — ฐานงวดก่อน (profit_prior/profit_prior_qoq) ติดลบ
+// หรือเท่ากับศูนย์ แต่กำไรสุทธิงวดนี้เป็นบวก (profit_qoq/profit_yoy เป็น null เสมอในเคสนี้ตามที่ตั้งใจ
+// ฝั่ง backend — หารด้วยฐานติดลบ % ไม่มีความหมาย ดู _stock_pct_change ใน financials_store.py)
+function _growthScrIsTurnaround(row, mode) {
+  const prior = row[mode === 'qoq' ? 'profit_prior_qoq' : 'profit_prior'];
+  return prior != null && prior <= 0 && row.net_profit != null && row.net_profit > 0;
+}
+
+// ใช้ checkbox "ตัดฐานเทียบเล็กเกินไป" — mask เฉพาะ % ที่คำนวณได้จริง (ฐาน > 0 อยู่แล้วเพราะ backend
+// คืน null ให้ฐาน<=0 ไปแล้ว) ไม่แตะเคสพลิกกำไร (null เพราะฐานติดลบ คนละเหตุผลกับฐานจิ๋ว)
+function _growthScrMaskedRows(stocks) {
+  const minBaseOn = document.getElementById('growth-scr-min-base')?.checked;
+  if (!minBaseOn) return stocks;
+  const mask = (row, valKey, baseKey) => {
+    if (row[valKey] != null && row[baseKey] != null && row[baseKey] < GROWTH_SCR_MIN_BASE) row[valKey] = null;
+  };
+  return stocks.map(r => {
+    const row = { ...r };
+    mask(row, 'revenue_qoq', 'revenue_prior_qoq');
+    mask(row, 'revenue_yoy', 'revenue_prior');
+    mask(row, 'profit_qoq', 'profit_prior_qoq');
+    mask(row, 'profit_yoy', 'profit_prior');
+    return row;
+  });
+}
+
+function _growthScrHasAnyGrowth(row) {
+  return row.revenue_qoq != null || row.revenue_yoy != null || row.profit_qoq != null || row.profit_yoy != null
+    || _growthScrIsTurnaround(row, 'qoq') || _growthScrIsTurnaround(row, 'yoy');
+}
+
+// หุ้นพลิกกำไร (คอลัมน์ profit_qoq/profit_yoy เป็น null) นับเป็น "โตสุดขีด" เสมอ ให้ลอยขึ้นบนสุดตอน
+// เรียงมาก->น้อย (ลอยไปล่างสุดตอนเรียงน้อย->มาก โดยธรรมชาติของ comparator ด้านล่าง ไม่ต้องเขียนพิเศษ)
+function _growthScrSortVal(row, key) {
+  const v = row[key];
+  if (v == null && (key === 'profit_qoq' || key === 'profit_yoy')) {
+    if (_growthScrIsTurnaround(row, key === 'profit_qoq' ? 'qoq' : 'yoy')) return Infinity;
+  }
+  return v;
+}
+
+// ใช้ร่วมกันทั้งตอน render ตารางและตอน export CSV — export เอาแถวที่กรอง/เรียงตามที่เห็นบนจอ
+function _growthScrFilteredSorted() {
+  const d = _growthScrCache[_growthScrQuarter];
+  if (!d || !d.stocks) return [];
+  const q = (document.getElementById('growth-scr-search')?.value || '').toUpperCase().trim();
+  const sector = document.getElementById('growth-scr-sector')?.value || '';
+  const hideNoGrowth = document.getElementById('growth-scr-hide-na')?.checked;
+  let rows = _growthScrMaskedRows(d.stocks);
+  if (q) rows = rows.filter(r => r.symbol.includes(q) || (r.name || '').toUpperCase().includes(q));
+  if (sector) rows = rows.filter(r => r.sector === sector);
+  if (hideNoGrowth) rows = rows.filter(_growthScrHasAnyGrowth);
+  const key = _growthScrSort.key, dir = _growthScrSort.dir === 'asc' ? 1 : -1;
+  rows = rows.slice().sort((a, b) => {
+    const av = _growthScrSortVal(a, key), bv = _growthScrSortVal(b, key);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'string') return dir * av.localeCompare(bv);
+    return dir * (av - bv);
+  });
+  return rows;
+}
+
+function _growthScrThb(v) {
+  if (v == null) return '<span class="text2">—</span>';
+  return (v / 1e6).toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' ลบ.';
+}
+
+// เซลล์ % กำไร — โชว์ป้ายพลิกกำไรแทนขีดกลางเฉยๆ ถ้าเข้าเงื่อนไข turnaround (ต่างจากเซลล์รายได้ที่
+// ไม่มีแนวคิดพลิกกำไร/ขาดทุน เพราะรายได้ติดลบไม่มีทางเกิดจริง)
+function _growthScrProfitCell(row, key) {
+  const v = row[key];
+  if (v != null) return pct(v, 1);
+  if (_growthScrIsTurnaround(row, key === 'profit_qoq' ? 'qoq' : 'yoy')) {
+    return '<span class="green" title="ฐานงวดก่อนขาดทุน/เท่าทุน งวดนี้พลิกเป็นกำไร — % ไม่มีความหมายจึงไม่แสดงตัวเลข">🔄 พลิกกำไร</span>';
+  }
+  return '<span class="text2">—</span>';
+}
+
+function renderGrowthScreener() {
+  const d = _growthScrCache[_growthScrQuarter];
+  const box = document.getElementById('growth-screener-table');
+  const countBox = document.getElementById('growth-scr-count');
+  if (!box) return;
+  if (!d || !d.stocks || !d.stocks.length) {
+    box.innerHTML = '<div class="empty">ยังไม่มีข้อมูล</div>';
+    return;
+  }
+  const rows = _growthScrFilteredSorted();
+  if (countBox) countBox.textContent = `${rows.length}/${d.stocks.length} ตัว · ไตรมาส ${_growthScrQuarterLabel(d.quarter)}`;
+  if (!rows.length) { box.innerHTML = '<div class="empty">ไม่พบหุ้นตรงเงื่อนไข</div>'; return; }
+
+  const rowsHtml = rows.map(r => `<tr>
+      <td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a>
+        ${r.name ? `<div class="text2" style="font-size:10px">${_growthScrEsc(r.name)}</div>` : ''}</td>
+      <td class="text2">${_growthScrEsc(r.sector || '')}</td>
+      <td style="text-align:right">${_growthScrThb(r.revenue)}</td>
+      <td style="text-align:right">${pct(r.revenue_qoq, 1)}</td>
+      <td style="text-align:right">${pct(r.revenue_yoy, 1)}</td>
+      <td style="text-align:right">${_growthScrThb(r.net_profit)}</td>
+      <td style="text-align:right">${_growthScrProfitCell(r, 'profit_qoq')}</td>
+      <td style="text-align:right">${_growthScrProfitCell(r, 'profit_yoy')}</td>
+      <td style="text-align:right">${r.npm != null ? r.npm.toFixed(1) + '%' : '<span class="text2">—</span>'}</td>
+    </tr>`).join('');
+  const headHtml = GROWTH_SCR_COLS.map(c => {
+    const arrow = _growthScrSort.key === c.key ? (_growthScrSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
+    return `<th style="text-align:${c.align};cursor:pointer;user-select:none;white-space:nowrap" onclick="_growthScrSetSort('${c.key}')" title="กดเรียงลำดับ">${c.label}${arrow}</th>`;
+  }).join('');
+  box.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%">
+    <thead><tr>${headHtml}</tr></thead>
+    <tbody>${rowsHtml}</tbody></table></div>`;
+}
+
+function exportGrowthScreenerCsv() {
+  const rows = _growthScrFilteredSorted();
+  if (!rows.length) { alert('ไม่มีข้อมูลให้ export'); return; }
+  const csvEsc = v => {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const headers = ['Symbol', 'Name', 'Sector', 'Revenue', 'Revenue QoQ %', 'Revenue YoY %',
+    'Net Profit', 'Profit QoQ %', 'Profit YoY %', 'NPM %', 'Quarter'];
+  const lines = [headers.map(csvEsc).join(',')];
+  rows.forEach(r => {
+    lines.push([
+      r.symbol, r.name || '', r.sector || '',
+      r.revenue ?? '', r.revenue_qoq ?? '', r.revenue_yoy ?? '',
+      r.net_profit ?? '', r.profit_qoq ?? '', r.profit_yoy ?? '', r.npm ?? '',
+      _growthScrQuarter || '',
+    ].map(csvEsc).join(','));
+  });
+  const csv = '﻿' + lines.join('\r\n');   // BOM กัน Excel เปิดภาษาไทยเพี้ยน
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  a.href = url;
+  a.download = `growth_screener_${_growthScrQuarter || ''}_${ts}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 
 // ============================================================
 // HEDGE HOLDINGS (13F / superinvestors จาก Dataroma)
@@ -7367,7 +7633,9 @@ async function runScreener() {
   const fromHighMax = parseFloat(document.getElementById('scr-from-high').value);
   const athDistMax  = parseFloat(document.getElementById('scr-ath-dist').value);
   const fromLowMax  = parseFloat(document.getElementById('scr-from-low').value);
+  const peMin       = parseFloat(document.getElementById('scr-pe-min').value);
   const peMax       = parseFloat(document.getElementById('scr-pe').value);
+  const pbvMin      = parseFloat(document.getElementById('scr-pbv-min').value);
   const pbvMax      = parseFloat(document.getElementById('scr-pbv').value);
   const psMax       = parseFloat(document.getElementById('scr-ps').value);
   const dyMin       = parseFloat(document.getElementById('scr-dy').value);
@@ -7476,7 +7744,9 @@ async function runScreener() {
       const fl = s.low_52w > 0 ? (s.price - s.low_52w) / s.low_52w * 100 : null;
       if (fl == null || fl > fromLowMax) return false;
     }
+    if (!isNaN(peMin)  && (s.pe  == null || s.pe  < peMin))               return false;
     if (!isNaN(peMax)  && peMax  > 0 && (s.pe  == null || s.pe  > peMax))  return false;
+    if (!isNaN(pbvMin) && (s.pbv == null || s.pbv < pbvMin))              return false;
     if (!isNaN(pbvMax) && pbvMax > 0 && (s.pbv == null || s.pbv > pbvMax)) return false;
     if (!isNaN(psMax)  && psMax  > 0 && (s.ps  == null || s.ps  > psMax))  return false;
     if (!isNaN(dyMin)  && dyMin  > 0 && (s.div_yield == null || s.div_yield < dyMin)) return false;
@@ -13393,7 +13663,7 @@ function renderMomentum() {
 const _SCR_LS = 'set_scr_v1';
 const _SCR_FIELDS = ['scr-rs-min','scr-1m','scr-3m','scr-1d','scr-ytd','scr-cap',
                      'scr-price-min','scr-price-max','scr-from-high','scr-ath-dist','scr-from-low',
-                     'scr-pe','scr-pbv','scr-ps','scr-dy','scr-rvol','scr-atr-max','scr-seas-min','scr-1w','scr-6m','scr-1y',
+                     'scr-pe-min','scr-pe','scr-pbv-min','scr-pbv','scr-ps','scr-dy','scr-rvol','scr-atr-max','scr-seas-min','scr-1w','scr-6m','scr-1y',
                      'scr-growth-min','scr-peg-max','scr-fcf-yield-min','scr-div-cover-min','scr-rev-streak-min','scr-profit-streak-min',
                      'scr-rev-qoq-min','scr-profit-qoq-min','scr-rev-yoyq-min','scr-profit-yoyq-min',
                      'scr-rev-qstreak-min','scr-profit-qstreak-min','scr-margin-qstreak-min',
@@ -13884,6 +14154,8 @@ function openDRChartModal(sym) {
   if (drSetLink) drSetLink.style.display = 'none';
   const drBpLink = document.getElementById('cm-bullpedia-link');
   if (drBpLink) drBpLink.style.display = 'none';
+  const drIaaLink = document.getElementById('cm-iaa-link');
+  if (drIaaLink) drIaaLink.style.display = 'none';
   // สถิติระยะยาว (cm-lts) — หุ้น DR ไม่มีใน set_prices.db (หุ้นไทยเท่านั้น) ใช้ yfinance
   // สดแทน (s.yf = ticker จริงที่ DR universe แม็บไว้แล้ว เช่น 0700.HK, NVDA)
   _loadPriceAnalytics(sym, 'cm-lts', () => _cmStock?.symbol === sym, s.yf);
@@ -13965,6 +14237,8 @@ function openUsChartModal(symbol, rowOverride) {
   if (setLink) setLink.style.display = 'none';
   const bpLinkUsIdx = document.getElementById('cm-bullpedia-link');
   if (bpLinkUsIdx) bpLinkUsIdx.style.display = 'none';
+  const iaaLinkUsIdx = document.getElementById('cm-iaa-link');
+  if (iaaLinkUsIdx) iaaLinkUsIdx.style.display = 'none';
 
   const mk = (val, lbl, cls = '') =>
     `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
@@ -14058,6 +14332,8 @@ function openHkChartModal(symbol, rowOverride) {
   if (setLink) setLink.style.display = 'none';
   const bpLinkHkIdx = document.getElementById('cm-bullpedia-link');
   if (bpLinkHkIdx) bpLinkHkIdx.style.display = 'none';
+  const iaaLinkHkIdx = document.getElementById('cm-iaa-link');
+  if (iaaLinkHkIdx) iaaLinkHkIdx.style.display = 'none';
 
   const mk = (val, lbl, cls = '') =>
     `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
@@ -14145,6 +14421,8 @@ function openJpChartModal(symbol, rowOverride) {
   if (setLink) setLink.style.display = 'none';
   const bpLinkJpIdx = document.getElementById('cm-bullpedia-link');
   if (bpLinkJpIdx) bpLinkJpIdx.style.display = 'none';
+  const iaaLinkJpIdx = document.getElementById('cm-iaa-link');
+  if (iaaLinkJpIdx) iaaLinkJpIdx.style.display = 'none';
 
   const mk = (val, lbl, cls = '') =>
     `<div><div class="cm-metric-val ${cls}">${val}</div><div class="cm-metric-lbl">${lbl}</div></div>`;
@@ -14550,6 +14828,8 @@ function openChartModal(symbol) {
   const jittaLinkTh = document.getElementById('cm-jitta-link');
   jittaLinkTh.style.display = 'inline-flex';
   jittaLinkTh.onclick = ev => openJittaTH(s.symbol, ev);
+  const iaaLinkTh = document.getElementById('cm-iaa-link');
+  if (iaaLinkTh) { iaaLinkTh.href = `https://www.settrade.com/th/equities/quote/${encodeURIComponent(s.symbol)}/analyst-consensus`; iaaLinkTh.style.display = 'inline-flex'; }
   const fsLink = document.getElementById('cm-factsheet-link');
   if (fsLink) { fsLink.href = `https://www.set.or.th/th/market/product/stock/quote/${encodeURIComponent(s.symbol.toLowerCase())}/factsheet`; fsLink.style.display = 'inline-flex'; }
   const setLink = document.getElementById('cm-set-link');
@@ -24478,7 +24758,7 @@ function openETFChartModal(sym) {
   _cmLivePrice = null; _cmLivePriceSym = null;
   _cmFinLoaded = null;
   // ETF ไม่มีงบการเงิน/สมาชิกดัชนี/factsheet SET รูปแบบหุ้น — ซ่อนปุ่มที่ไม่เกี่ยวข้องทั้งหมด
-  ['cm-mode-stocks', 'cm-mode-fin', 'cm-factsheet-link', 'cm-set-link', 'cm-bullpedia-link'].forEach(id => {
+  ['cm-mode-stocks', 'cm-mode-fin', 'cm-factsheet-link', 'cm-set-link', 'cm-bullpedia-link', 'cm-iaa-link'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   });
@@ -25277,6 +25557,8 @@ function openIdxChartModal(sym) {
   if (setLinkIdx) setLinkIdx.style.display = 'none';
   const bpLinkIdx = document.getElementById('cm-bullpedia-link');
   if (bpLinkIdx) bpLinkIdx.style.display = 'none';
+  const iaaLinkIdx = document.getElementById('cm-iaa-link');
+  if (iaaLinkIdx) iaaLinkIdx.style.display = 'none';
 
   // set chart state
   _cmStock       = fakeStock;
@@ -25739,13 +26021,31 @@ async function renderValSectorTable() {
   if (_valSecSort === 'n')   rows.sort((a,b) => b.n_stocks - a.n_stocks);
 
   const mkt = data.market;
+  const legendEl = document.getElementById('val-sector-legend');
+  if (legendEl) legendEl.innerHTML = (mkt.pe || mkt.pbv)
+    ? `<span style="color:#3ab464">●</span> ต่ำกว่า -1σ ตลาด (ถูกชัดเจน) &nbsp;
+       <span style="color:#e0d060">●</span> ต่ำกว่าเฉลี่ยตลาด &nbsp;
+       <span style="color:#dca032">●</span> สูงกว่าเฉลี่ยตลาด &nbsp;
+       <span style="color:#dc503c">●</span> สูงกว่า +1σ ตลาด (แพงชัดเจน)`
+    : '';
 
-  function bandCell(dist) {
+  // เทียบ avg ของ sector กับค่าเฉลี่ย/แบนด์ ±1σ ของตลาดรวม เพื่อไฮไลต์ sector ที่ถูก/แพงกว่าตลาด
+  function avgVsMkt(avg, mktRef) {
+    if (!mktRef) return { style: '', title: '' };
+    if (avg < mktRef.bands['-1σ']) return { style: 'color:#3ab464;font-weight:700', title: 'ต่ำกว่า -1σ ของตลาดรวม — ถูกกว่าตลาดชัดเจน' };
+    if (avg < mktRef.avg)          return { style: 'color:#e0d060;font-weight:700', title: 'ต่ำกว่าค่าเฉลี่ยตลาดรวม' };
+    if (avg > mktRef.bands['+1σ']) return { style: 'color:#dc503c;font-weight:700', title: 'สูงกว่า +1σ ของตลาดรวม — แพงกว่าตลาดชัดเจน' };
+    if (avg > mktRef.avg)          return { style: 'color:#dca032;font-weight:700', title: 'สูงกว่าค่าเฉลี่ยตลาดรวม' };
+    return { style: '', title: '' };
+  }
+
+  function bandCell(dist, mktRef) {
     if (!dist) return '<td colspan="4" style="color:var(--muted);text-align:center">—</td>';
     const {avg, std, median} = dist;
     const b = dist.bands;
+    const av = avgVsMkt(avg, mktRef);
     return `
-      <td style="text-align:right">${avg.toFixed(1)}<span style="color:var(--muted);font-size:10px"> ±${std.toFixed(1)}</span></td>
+      <td style="text-align:right;${av.style}" title="${av.title}">${avg.toFixed(1)}<span style="color:var(--muted);font-size:10px"> ±${std.toFixed(1)}</span></td>
       <td style="text-align:right;color:#dca032">${b['+1σ'].toFixed(1)}</td>
       <td style="text-align:right;color:#96c850">${Math.max(0,b['-1σ']).toFixed(1)}</td>
       <td style="text-align:right;color:#5ab4ff;font-size:10px">${median.toFixed(1)}</td>`;
@@ -25777,8 +26077,8 @@ async function renderValSectorTable() {
             ${r.sec}
           </span>
         </td>
-        ${bandCell(r.pe)}
-        ${bandCell(r.pbv)}
+        ${bandCell(r.pe, mkt.pe)}
+        ${bandCell(r.pbv, mkt.pbv)}
         <td style="text-align:right;color:var(--muted);padding:5px 8px">${r.n_stocks}</td>
       </tr>`).join('')}
     </tbody>

@@ -260,7 +260,8 @@ def run_with_progress(callback, base_dir=None, period="max"):
 def run_quick_update(callback, base_dir=None):
     """
     Quick Update: โหลด set_history.json → download gap → recalculate metrics
-    ไม่ดึง fundamentals (ใช้ค่าเดิม) → บันทึก set_history.json + set_data.json
+    → ดึง fundamentals (P/E, P/BV, Div Yield) ใหม่ผ่าน SET API (fallback Yahoo)
+    → บันทึก set_history.json + set_data.json
     """
     if base_dir is None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -506,20 +507,47 @@ def run_quick_update(callback, base_dir=None):
         if done % 100 == 0:
             callback(done, total, f"คำนวณ {done}/{total}...")
 
-    # คงค่า fundamentals เดิมไว้ (ไม่ดึงใหม่ใน Quick Update)
+    # ดึง fundamentals (P/E, P/BV, Div Yield, Market Cap) ใหม่ทุกครั้ง — เดิม Quick Update
+    # แค่ carry-forward ค่าเก่าเพื่อความเร็ว แต่ยอมรับเวลาเพิ่ม ~15-20 วิ (ทั้งกระดานผ่าน
+    # SET API, เหมือน Full Refresh ที่ services/refresh.py:207-226) เพื่อให้ตัวกรอง
+    # P/E-P/BV ใน Screener (scr-pe/scr-pe-min/scr-pbv/scr-pbv-min) สดทุกครั้งที่กด
+    callback(0, total, f"ดึง Fundamentals ({len(stocks)} หุ้น)...")
+    cap_tickers = [s["ticker"] for s in stocks]
+    fundamentals = {}
+    try:
+        from sources.set_api import fetch_fundamentals
+        fundamentals = fetch_fundamentals(cap_tickers, callback=callback)
+        logging.info(f"[QuickUpdate][Fundamentals] SET API: {len(fundamentals)}/{len(cap_tickers)} ตัว")
+    except Exception as e:
+        logging.warning(f"[QuickUpdate][Fundamentals] SET API ล้มเหลว ({e}) — fallback Yahoo...")
+        callback(0, total, f"Fundamentals fallback Yahoo ({len(stocks)} หุ้น)...")
+        try:
+            fundamentals = fetch_market_caps_parallel(cap_tickers, callback=callback)
+        except Exception as e2:
+            logging.warning(f"[QuickUpdate][Fundamentals] Yahoo ก็ล้มเหลว ({e2}) — คงค่าเดิมจากรอบก่อนแทน")
+            fundamentals = {}
+
+    # หุ้นที่ fetch ใหม่ไม่ได้ (ทั้ง SET API และ Yahoo ล้มเหลว หรือหุ้นตัวนั้นไม่มีใน
+    # response) — fallback ไปใช้ค่าเดิมจาก set_data.json รอบก่อนแทนการปล่อย None ทั้งตัว
+    # กัน P/E-P/BV หายวับทั้งกระดานเวลา API ล่มชั่วคราวรอบเดียว
     existing_data_path = os.path.join(base_dir, OUT_FILE)
+    old_fund_map = {}
     if os.path.exists(existing_data_path):
         try:
             with open(existing_data_path, encoding="utf-8") as f:
                 old = json.load(f)
-            fund_map = {s["ticker"]: {k: s.get(k) for k in ("mkt_cap","pe","pbv","div_yield")}
-                        for s in old.get("stocks", [])}
-            for s in stocks:
-                fund = fund_map.get(s["ticker"]) or {}
-                for k in ("mkt_cap","pe","pbv","div_yield"):
-                    s[k] = fund.get(k)
+            old_fund_map = {s["ticker"]: {k: s.get(k) for k in ("mkt_cap","pe","pbv","div_yield")}
+                            for s in old.get("stocks", [])}
         except Exception:
             pass
+    for s in stocks:
+        fund = fundamentals.get(s["ticker"])
+        if fund is None:
+            fund = old_fund_map.get(s["ticker"]) or {}
+        s["mkt_cap"]   = fund.get("mkt_cap")
+        s["pe"]        = fund.get("pe")
+        s["pbv"]       = fund.get("pbv")
+        s["div_yield"] = fund.get("div_yield")
 
     data_as_of = max(get_last_dates(base_dir).values(), default=None)
 
