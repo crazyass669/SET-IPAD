@@ -1093,6 +1093,7 @@
   </div>
   <div class="card" style="margin-bottom:16px">
     <div class="scr-row">
+      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">📊 โมเมนตัม & ผลตอบแทนราคา</div>
       <div class="scr-group">
         <div class="scr-label">RS Score ≥
           <span class="scr-tip-icon">?<div class="scr-tip-box">
@@ -1103,6 +1104,30 @@
           </div></span>
         </div>
         <input class="scr-input" id="scr-rs-min" type="number" placeholder="0" min="0" max="99">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">1D% ≥
+          <span class="scr-tip-icon">?<div class="scr-tip-box">
+            <strong>ผลตอบแทนวันนี้</strong><br>
+            % เปลี่ยนแปลงราคาของวันล่าสุด เทียบกับวันก่อนหน้า<br><br>
+            เช่น ใส่ 2 = หุ้นที่ขึ้น ≥ 2% วันนี้<br>
+            ใส่ -3 = รวมหุ้นที่ลงได้ถึง 3% (ret_1d ≥ -3%)<br>
+            <span style="color:var(--text2)">ค่าที่ใส่คือ ขั้นต่ำ — ลงมากกว่านั้นจะถูกตัดออก</span>
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-1d" type="number" placeholder="เช่น 1">
+      </div>
+      <div class="scr-group">
+        <div class="scr-label">1W% ≥
+          <span class="scr-tip-icon">?<div class="scr-tip-box">
+            <strong>ผลตอบแทน 1 สัปดาห์</strong><br>
+            % เปลี่ยนแปลงราคาย้อนหลัง 1 สัปดาห์ (5 วันทำการ)<br><br>
+            เช่น ใส่ 3 = หุ้นที่ขึ้น ≥ 3% ในสัปดาห์ที่ผ่านมา<br>
+            ใช้จับ short-term momentum ก่อน breakout<br><br>
+            <span style="color:#3fb950">ใส่ค่าติดลบได้</span> เช่น -5 = ลงมาแล้ว แต่ไม่เกิน 5%
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-1w" type="number" placeholder="เช่น 3">
       </div>
       <div class="scr-group">
         <div class="scr-label">1M% ≥
@@ -1125,16 +1150,16 @@
         <input class="scr-input" id="scr-3m" type="number" placeholder="เช่น 10">
       </div>
       <div class="scr-group">
-        <div class="scr-label">1D% ≥
+        <div class="scr-label">6M% ≥
           <span class="scr-tip-icon">?<div class="scr-tip-box">
-            <strong>ผลตอบแทนวันนี้</strong><br>
-            % เปลี่ยนแปลงราคาของวันล่าสุด เทียบกับวันก่อนหน้า<br><br>
-            เช่น ใส่ 2 = หุ้นที่ขึ้น ≥ 2% วันนี้<br>
-            ใส่ -3 = รวมหุ้นที่ลงได้ถึง 3% (ret_1d ≥ -3%)<br>
-            <span style="color:var(--text2)">ค่าที่ใส่คือ ขั้นต่ำ — ลงมากกว่านั้นจะถูกตัดออก</span>
+            <strong>ผลตอบแทน 6 เดือน</strong><br>
+            % เปลี่ยนแปลงราคาย้อนหลัง 6 เดือน (ประมาณ 126 วันทำการ)<br><br>
+            เช่น ใส่ 20 = หุ้นที่ขึ้น ≥ 20% ใน 6 เดือน<br>
+            ใช้ยืนยัน trend ระยะกลาง ป้องกัน momentum trap<br><br>
+            <span style="color:#e3b341">เทียบกับ 1M%</span> — ถ้า 1M สูงแต่ 6M ต่ำ = อาจเป็นแค่ dead cat bounce
           </div></span>
         </div>
-        <input class="scr-input" id="scr-1d" type="number" placeholder="เช่น 1">
+        <input class="scr-input" id="scr-6m" type="number" placeholder="เช่น 20">
       </div>
       <div class="scr-group">
         <div class="scr-label">YTD% ≥
@@ -1146,6 +1171,19 @@
         </div>
         <input class="scr-input" id="scr-ytd" type="number" placeholder="เช่น 20">
       </div>
+      <div class="scr-group">
+        <div class="scr-label">1Y% ≥
+          <span class="scr-tip-icon">?<div class="scr-tip-box">
+            <strong>ผลตอบแทน 1 ปี</strong><br>
+            % เปลี่ยนแปลงราคาย้อนหลัง 1 ปี (250 วันทำการ)<br><br>
+            เช่น ใส่ 30 = หุ้นที่ขึ้น ≥ 30% ในปีที่ผ่านมา<br>
+            ใช้คัด long-term winners ที่แข็งแกร่งจริง<br><br>
+            <span style="color:#3fb950">RS Score</span> ใช้ข้อมูล 1Y เป็นหนึ่งในตัวแปรคำนวณด้วย
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-1y" type="number" placeholder="เช่น 30">
+      </div>
+      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">💵 ราคา & มูลค่าตลาด</div>
       <div class="scr-group">
         <div class="scr-label">MKT CAP ≥ (B)
           <span class="scr-tip-icon">?<div class="scr-tip-box">
@@ -1211,6 +1249,7 @@
         </div>
         <input class="scr-input" id="scr-from-low" type="number" placeholder="เช่น 10" min="0">
       </div>
+      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">💰 มูลค่าหุ้น (Valuation)</div>
       <div class="scr-group">
         <div class="scr-label">P/E ≤
           <span class="scr-tip-icon">?<div class="scr-tip-box">
@@ -1247,6 +1286,23 @@
         <input class="scr-input" id="scr-ps" type="number" placeholder="เช่น 2" min="0">
       </div>
       <div class="scr-group">
+        <div class="scr-label">PEG ≤
+          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
+            <strong>PEG Ratio (P/E ÷ %โตของกำไร TTM)</strong><br>
+            P/E หารด้วยอัตราเติบโตของ<u>กำไร</u> (รวม 4 ไตรมาสล่าสุด เทียบ 4 ไตรมาสของปีก่อน) — เทียบว่า "แพงคุ้มกับที่โตไหม" ไม่ใช่ดูแค่ P/E เฉยๆ · นิยามเดียวกับ Screener+ ค่าตรงกันสองเมนู<br><br>
+            <span style="color:var(--text2)">
+            <b>ตัวอย่าง:</b> หุ้น A ราคา P/E 15 เท่า กำไรโต 20%/ปี → PEG = 15 ÷ 20 = <b class="green">0.75</b> (ต่ำกว่า 1 = ถูกเมื่อเทียบกับการเติบโต แม้ P/E จะดูไม่ถูกก็ตาม)<br><br>
+            หุ้น B ราคา P/E 15 เท่าเท่ากัน แต่กำไรโตแค่ 5%/ปี → PEG = 15 ÷ 5 = <b class="red">3.0</b> (แพงเกินตัวเมื่อเทียบกับการเติบโตที่ช้า)
+            </span><br><br>
+            เช่น ใส่ 1 = กรองเฉพาะหุ้นที่ PEG ≤ 1 (คุ้มค่า)<br>
+            ไม่มีค่าเมื่อ: หุ้นขาดทุน/กำไรหด · กำไรโต &lt;1% (PEG จะระเบิดจนไร้ความหมาย) · โต &gt;200% (มักเป็น base effect จากฐานกำไรจิ๋ว ทำ PEG ต่ำหลอกตา)<br>
+            <span style="color:var(--text2)">หมายเหตุ: หุ้นที่ไม่มี P/E สดในระบบ (REIT/กองทุนบางตัว ~19 ตัว) ช่องนี้จะว่าง แต่ Screener+ ใช้ PE จาก Finnomena แทนจึงอาจมีค่า — เป็นความต่างเดียวของ PEG สองเมนู</span><br>
+            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
+          </div></span>
+        </div>
+        <input class="scr-input" id="scr-peg-max" type="number" placeholder="เช่น 1" min="0">
+      </div>
+      <div class="scr-group">
         <div class="scr-label">Div Yield ≥ (%)
           <span class="scr-tip-icon">?<div class="scr-tip-box">
             <strong>Dividend Yield (%)</strong><br>
@@ -1279,6 +1335,7 @@
         </div>
         <input class="scr-input" id="scr-div-cover-min" type="number" placeholder="เช่น 1.5">
       </div>
+      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">📈 การเติบโต (รายปี)</div>
       <div class="scr-group">
         <div class="scr-label">Growth Score ≥
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
@@ -1293,23 +1350,6 @@
           </div></span>
         </div>
         <input class="scr-input" id="scr-growth-min" type="number" placeholder="เช่น 5">
-      </div>
-      <div class="scr-group">
-        <div class="scr-label">PEG ≤
-          <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
-            <strong>PEG Ratio (P/E ÷ %โตของกำไร TTM)</strong><br>
-            P/E หารด้วยอัตราเติบโตของ<u>กำไร</u> (รวม 4 ไตรมาสล่าสุด เทียบ 4 ไตรมาสของปีก่อน) — เทียบว่า "แพงคุ้มกับที่โตไหม" ไม่ใช่ดูแค่ P/E เฉยๆ · นิยามเดียวกับ Screener+ ค่าตรงกันสองเมนู<br><br>
-            <span style="color:var(--text2)">
-            <b>ตัวอย่าง:</b> หุ้น A ราคา P/E 15 เท่า กำไรโต 20%/ปี → PEG = 15 ÷ 20 = <b class="green">0.75</b> (ต่ำกว่า 1 = ถูกเมื่อเทียบกับการเติบโต แม้ P/E จะดูไม่ถูกก็ตาม)<br><br>
-            หุ้น B ราคา P/E 15 เท่าเท่ากัน แต่กำไรโตแค่ 5%/ปี → PEG = 15 ÷ 5 = <b class="red">3.0</b> (แพงเกินตัวเมื่อเทียบกับการเติบโตที่ช้า)
-            </span><br><br>
-            เช่น ใส่ 1 = กรองเฉพาะหุ้นที่ PEG ≤ 1 (คุ้มค่า)<br>
-            ไม่มีค่าเมื่อ: หุ้นขาดทุน/กำไรหด · กำไรโต &lt;1% (PEG จะระเบิดจนไร้ความหมาย) · โต &gt;200% (มักเป็น base effect จากฐานกำไรจิ๋ว ทำ PEG ต่ำหลอกตา)<br>
-            <span style="color:var(--text2)">หมายเหตุ: หุ้นที่ไม่มี P/E สดในระบบ (REIT/กองทุนบางตัว ~19 ตัว) ช่องนี้จะว่าง แต่ Screener+ ใช้ PE จาก Finnomena แทนจึงอาจมีค่า — เป็นความต่างเดียวของ PEG สองเมนู</span><br>
-            ⚠ ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง
-          </div></span>
-        </div>
-        <input class="scr-input" id="scr-peg-max" type="number" placeholder="เช่น 1" min="0">
       </div>
       <div class="scr-group">
         <div class="scr-label">รายได้โตต่อเนื่อง ≥ (ปี)
@@ -1337,8 +1377,7 @@
         </div>
         <input class="scr-input" id="scr-profit-streak-min" type="number" placeholder="เช่น 3" min="0">
       </div>
-
-      <!-- การเติบโตรายไตรมาส (จากงบ quarterly — source yahoo_q) -->
+      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">🗓️ การเติบโตรายไตรมาส (งบ Yahoo รายไตรมาส — ต้องอัพเดทงบการเงินก่อน)</div>
       <div class="scr-group">
         <div class="scr-label">รายได้โต QoQ ≥ (%) *
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
@@ -1503,8 +1542,7 @@
         </div>
         <input class="scr-input" id="scr-ttm-margin-min" type="number" placeholder="เช่น 0.5" step="0.5">
       </div>
-
-      <!-- Gross Margin / ROE / Net Margin — snapshot ปีล่าสุด -->
+      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">🩺 ความสามารถทำกำไร (ปีล่าสุด)</div>
       <div class="scr-group">
         <div class="scr-label">Gross Margin ≥ (%)
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
@@ -1538,8 +1576,7 @@
         </div>
         <input class="scr-input" id="scr-net-margin-min" type="number" placeholder="เช่น 10">
       </div>
-
-      <!-- เทรนด์เทียบย้อนหลัง N ปี — ใช้ selector ตัวเดียวร่วมกันทั้ง 5 filter ด้านล่าง -->
+      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">📐 เทรนด์เทียบย้อนหลัง N ปี</div>
       <div class="scr-group">
         <div class="scr-label">เทียบย้อนหลัง (ปี)
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
@@ -1613,8 +1650,7 @@
       <div class="scr-group" style="align-self:flex-end;padding-bottom:8px">
         <span style="color:var(--text2);font-size:12px">* ใช้ร่วมกับ dropdown "เทียบย้อนหลัง (ปี)" ด้านบน</span>
       </div>
-
-      <!-- D/E Ratio / Interest Coverage — snapshot ปีล่าสุด (ไม่เกี่ยวกับ dropdown เทียบย้อนหลัง) -->
+      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">🏦 งบดุล / ความเสี่ยง</div>
       <div class="scr-group">
         <div class="scr-label">D/E Ratio ≤ (เท่า)
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
@@ -1638,7 +1674,7 @@
         </div>
         <input class="scr-input" id="scr-interest-coverage-min" type="number" placeholder="เช่น 5">
       </div>
-
+      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">⚡ เทคนิค & ความผันผวน</div>
       <div class="scr-group">
         <div class="scr-label">RVOL ≥ (เท่า)
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
@@ -1688,42 +1724,6 @@
           </div></span>
         </div>
         <input class="scr-input" id="scr-seas-min" type="number" step="any" placeholder="เช่น 2">
-      </div>
-      <div class="scr-group">
-        <div class="scr-label">1W% ≥
-          <span class="scr-tip-icon">?<div class="scr-tip-box">
-            <strong>ผลตอบแทน 1 สัปดาห์</strong><br>
-            % เปลี่ยนแปลงราคาย้อนหลัง 1 สัปดาห์ (5 วันทำการ)<br><br>
-            เช่น ใส่ 3 = หุ้นที่ขึ้น ≥ 3% ในสัปดาห์ที่ผ่านมา<br>
-            ใช้จับ short-term momentum ก่อน breakout<br><br>
-            <span style="color:#3fb950">ใส่ค่าติดลบได้</span> เช่น -5 = ลงมาแล้ว แต่ไม่เกิน 5%
-          </div></span>
-        </div>
-        <input class="scr-input" id="scr-1w" type="number" placeholder="เช่น 3">
-      </div>
-      <div class="scr-group">
-        <div class="scr-label">6M% ≥
-          <span class="scr-tip-icon">?<div class="scr-tip-box">
-            <strong>ผลตอบแทน 6 เดือน</strong><br>
-            % เปลี่ยนแปลงราคาย้อนหลัง 6 เดือน (ประมาณ 126 วันทำการ)<br><br>
-            เช่น ใส่ 20 = หุ้นที่ขึ้น ≥ 20% ใน 6 เดือน<br>
-            ใช้ยืนยัน trend ระยะกลาง ป้องกัน momentum trap<br><br>
-            <span style="color:#e3b341">เทียบกับ 1M%</span> — ถ้า 1M สูงแต่ 6M ต่ำ = อาจเป็นแค่ dead cat bounce
-          </div></span>
-        </div>
-        <input class="scr-input" id="scr-6m" type="number" placeholder="เช่น 20">
-      </div>
-      <div class="scr-group">
-        <div class="scr-label">1Y% ≥
-          <span class="scr-tip-icon">?<div class="scr-tip-box">
-            <strong>ผลตอบแทน 1 ปี</strong><br>
-            % เปลี่ยนแปลงราคาย้อนหลัง 1 ปี (250 วันทำการ)<br><br>
-            เช่น ใส่ 30 = หุ้นที่ขึ้น ≥ 30% ในปีที่ผ่านมา<br>
-            ใช้คัด long-term winners ที่แข็งแกร่งจริง<br><br>
-            <span style="color:#3fb950">RS Score</span> ใช้ข้อมูล 1Y เป็นหนึ่งในตัวแปรคำนวณด้วย
-          </div></span>
-        </div>
-        <input class="scr-input" id="scr-1y" type="number" placeholder="เช่น 30">
       </div>
     </div>
     <div class="scr-check-row">
@@ -5206,6 +5206,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260826a"></script>
+<script src="static/dashboard.js?v=20260826d"></script>
 </body>
 </html>

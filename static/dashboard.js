@@ -7627,6 +7627,8 @@ const FS_FILTERS = [
     tip: '<strong>พลิกกำไรจริง (YoY)</strong><br>ไตรมาสเดียวกันปีก่อนขาดทุน/เท่ากับศูนย์ แต่ไตรมาสล่าสุดกำไรเป็นบวก<br><br><span style="color:var(--text2)">ต่างจาก "กำไร YoY-Q ≥" ตรงที่ field นั้นเป็น None เสมอตอนฐานติดลบ (% ไม่มีความหมาย) — ตัวนี้เจาะจงหาหุ้นพลิกกำไรที่ field เปอร์เซ็นต์มองไม่เห็นโดยเฉพาะ</span>' },
   { k: 'profit_turnaround_qoq', label: 'พลิกกำไร (QoQ)', cmp: 'bool',
     tip: '<strong>พลิกกำไรจริง (QoQ)</strong><br>ไตรมาสก่อนหน้าขาดทุน/เท่ากับศูนย์ แต่ไตรมาสล่าสุดกำไรเป็นบวก<br><br><span style="color:var(--text2)">⚠ ไม่ตัด seasonality — ธุรกิจมี high/low season อาจ "พลิกกำไร" ทุกปีตามฤดู ใช้คู่กับ "พลิกกำไร (YoY)" เพื่อยืนยัน</span>' },
+  { k: 'rev_accel_streak',    label: 'รายได้เร่งตัวติดกัน ≥', unit: 'ไตรมาส', cmp: 'gte',
+    tip: '<strong>รายได้เร่งตัว (acceleration)</strong><br>จำนวนไตรมาสติดกันที่ %YoY รายได้<u>สูงขึ้นเรื่อยๆ</u> เช่น โต 10% → 15% → 22% = เร่งตัว 2 ไตรมาส<br><br>เช่น ใส่ <b>2</b> = โตเร็วขึ้น 2 ไตรมาสติด<br><span style="color:var(--text2)">ใช้คู่กับ "กำไรเร่งตัวติดกัน" เพื่อยืนยันว่าเป็นการเร่งตัวจากธุรกิจจริง ไม่ใช่แค่กำไรโตเพราะลดต้นทุน/margin ขยายจากรายการพิเศษ · ต้องมีงบไตรมาสหลายงวดค่าถึงจะขึ้น</span>' },
   { k: 'profit_accel_streak', label: 'กำไรเร่งตัวติดกัน ≥', unit: 'ไตรมาส', cmp: 'gte',
     tip: '<strong>กำไรเร่งตัว (acceleration)</strong><br>จำนวนไตรมาสติดกันที่ %YoY กำไร<u>สูงขึ้นเรื่อยๆ</u> — คือ "โตเร็วขึ้น" ไม่ใช่แค่โต<br><br>เช่น ใส่ <b>2</b> = โตเร็วขึ้น 2 ไตรมาสติด<br><span style="color:var(--text2)">หัวใจ CANSLIM · ต้องมีงบไตรมาสหลายงวดค่าถึงจะขึ้น</span>' },
   { k: 'profit_qoq_streak',   label: 'กำไรโตติดกัน ≥', unit: 'ไตรมาส', cmp: 'gte',
@@ -7645,6 +7647,8 @@ const FS_FILTERS = [
     tip: '<strong>คุณภาพกำไร ณ งวดล่าสุด</strong><br>ไตรมาสล่าสุดที่มีข้อมูลครบ: กระแสเงินสดดำเนินงาน (OCF) มากกว่ากำไรสุทธิไหม — ถ้าใช่ = กำไรมีเงินสดหนุนจริง ไม่ใช่แค่ตัวเลขทางบัญชี (เช่น ลูกหนี้ค้างเยอะ/รับรู้รายได้ล่วงหน้า)<br><br><span style="color:var(--text2)">เช็คแค่งวดเดียว (จุดเดียว) ต่างจาก "คุณภาพกำไร OCF/NI ≥" ที่เป็นอัตราส่วนสะสม 4 ไตรมาส (TTM) — ใช้คู่กันเพื่อดูทั้งภาพรวมและจุดล่าสุด</span>' },
   { k: 'margin_qoq_streak',   label: 'มาร์จินขยายติดกัน ≥', unit: 'ไตรมาส', cmp: 'gte',
     tip: '<strong>Net margin ขยายติดต่อกัน</strong><br>จำนวนไตรมาสติดกันที่อัตรากำไรสุทธิเพิ่มจากงวดก่อน<br><br>เช่น ใส่ <b>2</b> = margin ขยาย 2 ไตรมาสติด' },
+  { k: 'margin_yoyq_delta',   label: 'Margin ขยาย YoY ≥', unit: 'จุด%', cmp: 'gte',
+    tip: '<strong>Net Margin ไตรมาสล่าสุด − ไตรมาสเดียวกันปีก่อน (จุดเปอร์เซ็นต์)</strong><br>เทียบฤดูเดียวกันจึงตัด seasonality — margin ขยาย = กำไรโตเร็วกว่ารายได้ ธุรกิจแข็งแรงขึ้นจริง<br><br>เช่น ใส่ <b>1</b> = margin เพิ่มอย่างน้อย 1 จุด% (เช่น 8% → 9%)<br><span style="color:var(--text2)">มีเวอร์ชัน TTM (4 ไตรมาสรวม vs 4 ไตรมาสก่อนหน้า) ในช่องถัดไป — เสถียรกว่าแต่ต้องรอสะสมงบครบ 8 ไตรมาส</span>' },
   { k: 'ttm_margin_delta',    label: 'TTM margin ขยาย ≥', unit: 'จุด%', cmp: 'gte',
     tip: '<strong>TTM margin ขยายตัว</strong><br>อัตรากำไรสุทธิ 4 ไตรมาสล่าสุด ลบด้วย 4 ไตรมาสก่อนหน้า (หน่วยจุด%)<br><br>เช่น ใส่ <b>1</b> = margin ขยายขึ้น ≥ 1 จุด% (บวก = กำลังขยาย)' },
   { k: 'profit_ttm_yoy',      label: 'กำไรโต TTM ≥', unit: '%', cmp: 'gte',
@@ -7654,6 +7658,10 @@ const FS_FILTERS = [
   { g: 'การเติบโตรายปี' },
   { k: 'rev_cagr',            label: 'CAGR รายได้ ≥', unit: '%', cmp: 'gte',
     tip: '<strong>CAGR รายได้ (ทบต้นต่อปี)</strong><br>อัตราเติบโตรายได้เฉลี่ยทบต้น ปีแรกสุด → ปีล่าสุด (จากงบ Yahoo)<br><br>เช่น ใส่ <b>10</b> = โตเฉลี่ย ≥ 10%/ปี<br><span style="color:var(--text2)">หุ้น US/HK นอกพอร์ตมีเฉพาะตัวที่เคย sync งบ Yahoo annual แล้ว (สมาชิกดัชนีหลักส่วนใหญ่ + ตัวที่เคยเปิดดู) ตัวอื่นยังไม่มีค่า</span>' },
+  { k: 'profit_cagr',         label: 'CAGR กำไร ≥', unit: '%', cmp: 'gte',
+    tip: '<strong>CAGR กำไรสุทธิ (ทบต้นต่อปี)</strong><br>อัตราเติบโตกำไรสุทธิเฉลี่ยทบต้น ปีแรกสุด → ปีล่าสุด (จากงบ Yahoo)<br><br>เช่น ใส่ <b>10</b> = โตเฉลี่ย ≥ 10%/ปี<br><span style="color:var(--text2)">ใช้คู่กับ "CAGR รายได้" เพื่อดูว่ากำไรโตเร็วกว่าหรือช้ากว่ารายได้ในระยะยาว · หุ้น US/HK นอกพอร์ตมีเฉพาะตัวที่เคย sync งบ Yahoo annual แล้ว</span>' },
+  { k: 'revenue_streak',      label: 'รายได้โตติดกัน ≥', unit: 'ปี', cmp: 'gte',
+    tip: '<strong>รายได้โตต่อเนื่อง (รายปี)</strong><br>จำนวนปีติดกันที่รายได้โตกว่าปีก่อน (จากงบ Yahoo)<br><br>เช่น ใส่ <b>3</b> = รายได้โต 3 ปีติด<br><span style="color:var(--text2)">ใช้คู่กับ "กำไรโตติดกัน" เพื่อยืนยันว่าทั้งรายได้และกำไรโตพร้อมกันจริง ไม่ใช่แค่กำไรโตเพราะลดต้นทุน/ตัดค่าใช้จ่าย</span>' },
   { k: 'profit_streak',       label: 'กำไรโตติดกัน ≥', unit: 'ปี', cmp: 'gte',
     tip: '<strong>กำไรโตต่อเนื่อง (รายปี)</strong><br>จำนวนปีติดกันที่กำไรสุทธิโตกว่าปีก่อน<br><br>เช่น ใส่ <b>3</b> = กำไรโต 3 ปีติด' },
   { k: 'rule_of_40',          label: 'Rule of 40 ≥', unit: '', cmp: 'gte',
@@ -7767,8 +7775,8 @@ const FS_FILTERS = [
 
 // preset: set = ค่าตัวเลขเริ่มต้น, bool = checkbox ที่เปิด, color = สีชิป
 const FS_PRESETS = [
-  { name: '🚀 CANSLIM ครบสูตร', color: '#f0883e', desc: 'กำไรเร่งตัว + RS สูง + เหนือ EMA200 + ใกล้ high (พื้นฐาน×ราคานำตลาด — หุ้นไทย)',
-    set: { profit_yoy_q: 25, rev_yoy_q: 0, profit_accel_streak: 2, rs: 80, pct_vs_ema200: 0, pct_off_high52: -15, quarters_available: 8 } },
+  { name: '🚀 CANSLIM ครบสูตร', color: '#f0883e', desc: 'รายได้+กำไรเร่งตัว + RS สูง + เหนือ EMA200 + ใกล้ high (พื้นฐาน×ราคานำตลาด — หุ้นไทย)',
+    set: { profit_yoy_q: 25, rev_yoy_q: 0, rev_accel_streak: 1, profit_accel_streak: 2, rs: 80, pct_vs_ema200: 0, pct_off_high52: -15, quarters_available: 8 } },
   { name: '🏆 CANSLIM (พื้นฐาน)', color: '#e3b341', desc: 'กำไรเร่งตัว + รายได้โต (ไม่ดูราคา — ใช้กับ US/HK ได้)',
     set: { profit_yoy_q: 25, rev_yoy_q: 0, profit_accel_streak: 2, quarters_available: 8 } },
   { name: '💎 Quality Compounder', color: '#3fb950', desc: 'ROE ≥15% ต่อเนื่อง 8 ไตรมาส + งบแกร่ง + OCF เข้าจริง',
@@ -7820,7 +7828,7 @@ const FS_MIRROR_NEVER = new Set(['growth_percentile', 'pe_sector_pctile', 'roe_s
 // ~150-230 ตัวจาก 1,000 แถวแรกมีค่าให้กรองครบทุก field กลุ่มนี้ (ไม่ใช่ศูนย์อย่างที่ comment
 // เดิมอ้างไว้ ตอนนั้นยังไม่มีงาน sync งบ Yahoo ดัชนีหลัก) — เลิกปิดช่องทิ้ง เปิดให้กรองได้
 // พร้อมเตือนสีเหลืองใต้ตาราง (เหมือน FS_PRICE_ONLY ด้านล่าง) แทน กันเข้าใจผิดว่าหุ้นหาย/บั๊ก
-const FS_YAHOO_ONLY = new Set(['rev_cagr', 'profit_streak', 'rule_of_40',
+const FS_YAHOO_ONLY = new Set(['rev_cagr', 'profit_cagr', 'revenue_streak', 'profit_streak', 'rule_of_40',
   'interest_coverage', 'cash_cycle', 'goodwill_ratio', 'ocf_neg_years', 'shares_chg_yoy',
   'net_cash_positive', 'buyback', 'dividend_coverage', 'fcf_yield', 'f_score', 'z_zone']);
 
@@ -8149,9 +8157,12 @@ const FS_COLS = [
   { k: 'f_score', label: 'F-Score', tip: 'Piotroski F-Score 0-9 — เขียว 8-9 · แดง 0-3' },
   { k: 'z_zone', label: 'Z-Score', tip: 'Altman Z-Score โซนความเสี่ยงล้มละลาย — ไม่มีค่า = กลุ่มการเงิน หรือยังไม่มีงบ Yahoo' },
   { k: 'de_ratio', label: 'D/E', tip: 'หนี้ต่อทุน — แดง >2' },
-  { k: 'profit_yoy_q', label: 'กำไรYoY%', sep: true, tip: 'กำไรไตรมาสล่าสุด เทียบไตรมาสเดียวกันปีก่อน' },
+  { k: 'rev_yoy_q', label: 'รายได้YoY%', sep: true, tip: 'รายได้ไตรมาสล่าสุด เทียบไตรมาสเดียวกันปีก่อน' },
+  { k: 'profit_yoy_q', label: 'กำไรYoY%', tip: 'กำไรไตรมาสล่าสุด เทียบไตรมาสเดียวกันปีก่อน' },
+  { k: 'rev_ttm_yoy', label: 'รายได้TTM%', tip: 'รายได้รวม 4 ไตรมาสล่าสุด เทียบปีก่อน' },
   { k: 'profit_ttm_yoy', label: 'กำไรTTM%', tip: 'กำไรรวม 4 ไตรมาสล่าสุด เทียบปีก่อน (เรียบกว่า YoY งวดเดียว)' },
-  { k: 'profit_accel_streak', label: 'เร่งตัว', tip: 'จำนวนไตรมาสติดกันที่ %YoY กำไรสูงขึ้นเรื่อยๆ (CANSLIM) — เขียว ≥2' },
+  { k: 'rev_accel_streak', label: 'รายได้เร่งตัว', tip: 'จำนวนไตรมาสติดกันที่ %YoY รายได้สูงขึ้นเรื่อยๆ' },
+  { k: 'profit_accel_streak', label: 'กำไรเร่งตัว', tip: 'จำนวนไตรมาสติดกันที่ %YoY กำไรสูงขึ้นเรื่อยๆ (CANSLIM) — เขียว ≥2' },
   { k: 'pe_value', label: 'PE', sep: true },
   { k: 'pe_percentile', label: 'PE%ile', tip: 'PE เทียบอดีตตัวเอง 0-100 — เขียว ≤25 (โซนถูก) · แดง ≥75' },
   { k: 'peg', label: 'PEG', tip: 'PE ÷ กำไรโต TTM — เขียว ≤1 (GARP)' },
@@ -8183,8 +8194,11 @@ const FS_COL_CLR = {
   ocf_ni_ratio:        v => v >= 1 ? 'var(--green)' : (v < 0 ? 'var(--red)' : (v < 0.8 ? '#e8a33d' : '')),
   f_score:             v => v >= 8 ? 'var(--green)' : (v >= 6 ? '#7ee787' : (v >= 4 ? '#d29922' : 'var(--red)')),
   de_ratio:            v => v > 2 ? 'var(--red)' : '',
+  rev_yoy_q:           _fsPosNeg,
   profit_yoy_q:        _fsPosNeg,
+  rev_ttm_yoy:         _fsPosNeg,
   profit_ttm_yoy:      _fsPosNeg,
+  rev_accel_streak:    v => v >= 2 ? 'var(--green)' : '',
   profit_accel_streak: v => v >= 2 ? 'var(--green)' : '',
   pe_percentile:       v => v <= 25 ? 'var(--green)' : (v >= 75 ? 'var(--red)' : ''),
   ps_percentile:       v => v <= 25 ? 'var(--green)' : (v >= 75 ? 'var(--red)' : ''),
@@ -8722,9 +8736,10 @@ function _fsFmt(v, key) {
   if (typeof v === 'string') return v;
   if (key === 'high_season_q') return 'Q' + v;   // ไตรมาสไฮซีซั่น
   if (key === 'f_score') return Math.round(v) + '/9';
-  if (key === 'profit_accel_streak' || key === 'quarters_available' ||
+  if (key === 'profit_accel_streak' || key === 'rev_accel_streak' || key === 'quarters_available' ||
       key === 'roe15_streak_q' || key === 'rs') return Math.round(v);
-  if (key === 'pct_off_high52' || key === 'profit_yoy_q' || key === 'profit_ttm_yoy') {
+  if (key === 'pct_off_high52' || key === 'profit_yoy_q' || key === 'profit_ttm_yoy' ||
+      key === 'rev_yoy_q' || key === 'rev_ttm_yoy') {
     const x = Math.round(v * 10) / 10;           // 1 ทศนิยมพอ + ใส่เครื่องหมาย + ให้ค่าบวก
     return (x > 0 ? '+' : '') + x;
   }
