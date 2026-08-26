@@ -223,24 +223,30 @@ def fetch_market_caps_parallel(tickers, callback=None, workers=3):
 
     def _get_fund(tick):
         time.sleep(random.uniform(0.3, 1.0))
-        info = _info_with_retry(tick, session)
-        if not info:
+        try:
+            info = _info_with_retry(tick, session)
+            if not info:
+                return tick, {}
+            mc   = info.get("marketCap")
+            pe   = info.get("trailingPE")
+            pbv  = info.get("priceToBook")
+            dy   = info.get("dividendYield")
+            # เดิมมี heuristic "ค่า < 1.0 ถือว่าเป็น decimal → คูณ 100" เพราะ
+            # yfinance รุ่นเก่าเคยคืนทศนิยม (0.0583) — ปัจจุบัน yfinance คืน
+            # เป็น % ตรงๆ แล้ว (ยืนยันแล้วว่าตรงกับ SET API เช่น DELTA=0.19
+            # หมายถึง 0.19% ไม่ใช่ 19%) heuristic เดิมเลยไปพองหุ้น yield ต่ำ
+            # จริง (growth stock, high P/E) ให้ผิดเพี้ยน ×100 — เอาออก ใช้ค่าตรงๆ
+            return tick, {
+                "mkt_cap":   int(mc)          if mc  is not None else None,
+                "pe":        round(float(pe),  2) if pe  is not None else None,
+                "pbv":       round(float(pbv), 2) if pbv is not None else None,
+                "div_yield": round(float(dy),  2) if dy  is not None else None,
+            }
+        except Exception:
+            # field รูปแบบแปลกจากหุ้นตัวเดียว (เช่น marketCap ไม่ใช่เลข) ต้องไม่ทำให้
+            # ทั้ง batch พัง (as_completed ด้านล่างจะ f.result() ทุกตัว — ตัวเดียว raise
+            # จะทำให้ผลลัพธ์ของหุ้นตัวอื่นที่ทำเสร็จไปแล้วหายไปหมด, code review 2026-08-26)
             return tick, {}
-        mc   = info.get("marketCap")
-        pe   = info.get("trailingPE")
-        pbv  = info.get("priceToBook")
-        dy   = info.get("dividendYield")
-        # เดิมมี heuristic "ค่า < 1.0 ถือว่าเป็น decimal → คูณ 100" เพราะ
-        # yfinance รุ่นเก่าเคยคืนทศนิยม (0.0583) — ปัจจุบัน yfinance คืน
-        # เป็น % ตรงๆ แล้ว (ยืนยันแล้วว่าตรงกับ SET API เช่น DELTA=0.19
-        # หมายถึง 0.19% ไม่ใช่ 19%) heuristic เดิมเลยไปพองหุ้น yield ต่ำ
-        # จริง (growth stock, high P/E) ให้ผิดเพี้ยน ×100 — เอาออก ใช้ค่าตรงๆ
-        return tick, {
-            "mkt_cap":   int(mc)          if mc  is not None else None,
-            "pe":        round(float(pe),  2) if pe  is not None else None,
-            "pbv":       round(float(pbv), 2) if pbv is not None else None,
-            "div_yield": round(float(dy),  2) if dy  is not None else None,
-        }
 
     total = len(tickers)
     done  = 0

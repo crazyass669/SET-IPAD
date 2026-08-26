@@ -33,33 +33,47 @@ def _history_path(base_dir):
 def record_run(base_dir, source, ok, message=""):
     """เรียกตอนจบการรันของกลไกอัพเดทแต่ละตัว (สำเร็จหรือล้มเหลวก็เรียก) —
     เขียนทับ "ผลล่าสุด" ของ source เดิม + append เข้าประวัติสะสม (ตัดเหลือ
-    MAX_HISTORY_PER_SOURCE รอบล่าสุด)"""
+    MAX_HISTORY_PER_SOURCE รอบล่าสุด)
+
+    ห้าม raise ออกไปหา caller เด็ดขาด — ฟังก์ชันนี้ถูกเรียกท้าย except block ของ
+    job หลายสิบตัว (Quick Update/Full Refresh/financials sync ฯลฯ) เพื่อบันทึกผล
+    ก่อน/หลัง _update(done=True,...) ถ้าเขียนไฟล์พัง (ดิสก์เต็ม/โปรแกรม backup
+    ล็อกไฟล์ชั่วคราว) ต้องไม่ทำให้โค้ดหลังจากนี้ใน except block หลุดไม่ทำงาน —
+    เจอบั๊กจริงแล้ว 1 ครั้ง (code review 2026-08-26): _run_refresh/
+    _run_financials_update_all เรียก record_run ก่อน _update(done=True,...)
+    พังกลางทางแล้วปล่อยให้ SSE ค้างสถานะ "กำลังทำงาน" ตลอดไป"""
     at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     record = {"ok": bool(ok), "at": at, "message": str(message)[:500]}
 
-    path = _log_path(base_dir)
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        data = {}
-    data[source] = record
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-    os.replace(tmp, path)
+        path = _log_path(base_dir)
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+        data[source] = record
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[run_log] เขียน update_status.json ไม่สำเร็จ ({source}): {e}")
 
-    hpath = _history_path(base_dir)
     try:
-        with open(hpath, encoding="utf-8") as f:
-            hist = json.load(f)
-    except Exception:
-        hist = {}
-    hist[source] = (hist.get(source) or [])[-(MAX_HISTORY_PER_SOURCE - 1):] + [record]
-    htmp = hpath + ".tmp"
-    with open(htmp, "w", encoding="utf-8") as f:
-        json.dump(hist, f, ensure_ascii=False)
-    os.replace(htmp, hpath)
+        hpath = _history_path(base_dir)
+        try:
+            with open(hpath, encoding="utf-8") as f:
+                hist = json.load(f)
+        except Exception:
+            hist = {}
+        hist[source] = (hist.get(source) or [])[-(MAX_HISTORY_PER_SOURCE - 1):] + [record]
+        htmp = hpath + ".tmp"
+        with open(htmp, "w", encoding="utf-8") as f:
+            json.dump(hist, f, ensure_ascii=False)
+        os.replace(htmp, hpath)
+    except Exception as e:
+        print(f"[run_log] เขียน update_history.json ไม่สำเร็จ ({source}): {e}")
 
 
 def read_status(base_dir):

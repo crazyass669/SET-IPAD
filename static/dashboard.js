@@ -4724,6 +4724,12 @@ const GROWTH_SCR_COLS = [
   { key: 'profit_qoq', label: 'กำไร QoQ', align: 'right' },
   { key: 'profit_yoy', label: 'กำไร YoY', align: 'right' },
   { key: 'npm', label: 'NPM', align: 'right' },
+  { key: 'npm_change_yoy', label: 'Δ NPM', align: 'right',
+    tip: 'มาร์จิ้นสุทธิเปลี่ยนกี่ "จุด" (percentage point) เทียบไตรมาสเดียวกันปีก่อน (ตัวเล็ก QoQ) — เขียว=มาร์จิ้นขยาย (โตแบบมีคุณภาพ) แดง=มาร์จิ้นหด (อาจตัดราคาแข่งขัน)' },
+  { key: 'profit_streak', label: 'ต่อเนื่อง', align: 'right',
+    tip: 'จำนวนไตรมาสติดต่อกัน (QoQ) ที่กำไร/รายได้เป็นบวกและโตกว่าไตรมาสก่อนหน้า — แยกหุ้นโตต่อเนื่องจริงจากโตแค่ไตรมาสเดียวแบบสุ่ม/ฤดูกาล หรือขาดทุนหดตัวลงเรื่อยๆ' },
+  { key: 'ocf_ni_pct', label: 'OCF/NI', align: 'right',
+    tip: 'เงินสดจากการดำเนินงาน (OCF) หารกำไรสุทธิ — <50% หรือติดลบ = 🚩 กำไรอาจไม่มีเงินสดหนุนจริง (ลูกหนี้ค้างเยอะ) จาก SET official cash_flow เท่าที่เคย sync สะสมไว้แล้ว (งวดเก่ากว่านั้นโชว์ "—")' },
 ];
 
 function _growthScrEsc(s) {
@@ -4829,6 +4835,9 @@ function _growthScrIsTurnaround(row, mode) {
 
 // ใช้ checkbox "ตัดฐานเทียบเล็กเกินไป" — mask เฉพาะ % ที่คำนวณได้จริง (ฐาน > 0 อยู่แล้วเพราะ backend
 // คืน null ให้ฐาน<=0 ไปแล้ว) ไม่แตะเคสพลิกกำไร (null เพราะฐานติดลบ คนละเหตุผลกับฐานจิ๋ว)
+// ครอบคลุมทั้ง 4 คอลัมน์เดิม (qoq/yoy) และ 3 คอลัมน์คุณภาพใหม่ (ต่อเนื่อง/Δ NPM/OCF-NI) — ตัวหลัง
+// ฐานเทียบคือรายได้/กำไรสุทธิของงวดปัจจุบัน (row.revenue/row.net_profit) เอง ไม่ใช่งวดก่อน เพราะ
+// เป็นตัวชี้วัด ณ จุดเดียว ไม่ใช่ % เปลี่ยนแปลง
 function _growthScrMaskedRows(stocks) {
   const minBaseOn = document.getElementById('growth-scr-min-base')?.checked;
   if (!minBaseOn) return stocks;
@@ -4841,13 +4850,21 @@ function _growthScrMaskedRows(stocks) {
     mask(row, 'revenue_yoy', 'revenue_prior');
     mask(row, 'profit_qoq', 'profit_prior_qoq');
     mask(row, 'profit_yoy', 'profit_prior');
+    if (row.revenue != null && row.revenue < GROWTH_SCR_MIN_BASE) row.revenue_streak = 0;
+    if (row.net_profit != null && row.net_profit < GROWTH_SCR_MIN_BASE) row.profit_streak = 0;
+    if (row.revenue != null && row.revenue < GROWTH_SCR_MIN_BASE) row.npm_change_qoq = null;
+    if (row.revenue_prior_qoq != null && row.revenue_prior_qoq < GROWTH_SCR_MIN_BASE) row.npm_change_qoq = null;
+    if (row.revenue != null && row.revenue < GROWTH_SCR_MIN_BASE) row.npm_change_yoy = null;
+    if (row.revenue_prior != null && row.revenue_prior < GROWTH_SCR_MIN_BASE) row.npm_change_yoy = null;
     return row;
   });
 }
 
 function _growthScrHasAnyGrowth(row) {
   return row.revenue_qoq != null || row.revenue_yoy != null || row.profit_qoq != null || row.profit_yoy != null
-    || _growthScrIsTurnaround(row, 'qoq') || _growthScrIsTurnaround(row, 'yoy');
+    || _growthScrIsTurnaround(row, 'qoq') || _growthScrIsTurnaround(row, 'yoy')
+    || row.revenue_streak >= 2 || row.profit_streak >= 2
+    || row.npm_change_yoy != null || row.npm_change_qoq != null || row.ocf_ni_pct != null;
 }
 
 // หุ้นพลิกกำไร (คอลัมน์ profit_qoq/profit_yoy เป็น null) นับเป็น "โตสุดขีด" เสมอ ให้ลอยขึ้นบนสุดตอน
@@ -4899,6 +4916,50 @@ function _growthScrProfitCell(row, key) {
   return '<span class="text2">—</span>';
 }
 
+// มาร์จิ้นเปลี่ยนกี่ 'จุด' (percentage point) เทียบ YoY (หลัก, ใช้ sort ได้) + QoQ (เสริม ตัวเล็ก
+// ใต้ตัวหลัก) — เขียว = มาร์จิ้นขยาย (การเติบโตคุณภาพดี) แดง = มาร์จิ้นหด (อาจตัดราคาแข่ง)
+function _growthScrNpmDeltaCell(r) {
+  const fmt = v => v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(1) + 'pp';
+  const clr = v => v == null ? 'text2' : v > 0 ? 'green' : v < 0 ? 'red' : 'text2';
+  const qoqLine = r.npm_change_qoq != null
+    ? `<div class="text2" style="font-size:10px">QoQ ${fmt(r.npm_change_qoq)}</div>` : '';
+  return `<span class="${clr(r.npm_change_yoy)}">${fmt(r.npm_change_yoy)}</span>${qoqLine}`;
+}
+
+// โตติดต่อกันกี่ไตรมาส (QoQ) — แยกหุ้น 'โตต่อเนื่องจริง' จาก 'โตแค่ไตรมาสเดียวแบบสุ่ม/ฤดูกาล'
+// โชว์เฉพาะ badge ที่ ≥2 ไตรมาสติด (1 ไตรมาสไม่ถือว่าเป็น streak ที่มีความหมาย)
+function _growthScrStreakCell(r) {
+  const parts = [];
+  if (r.profit_streak >= 2) parts.push(`<span class="green" title="กำไรสุทธิโตติดต่อกัน ${r.profit_streak} ไตรมาส">🔥กำไร×${r.profit_streak}</span>`);
+  if (r.revenue_streak >= 2) parts.push(`<span class="text2" title="รายได้โตติดต่อกัน ${r.revenue_streak} ไตรมาส">📈รายได้×${r.revenue_streak}</span>`);
+  return parts.length ? parts.join('<br>') : '<span class="text2">—</span>';
+}
+
+// กำไรมีเงินสดหนุนจริงไหม (OCF ÷ กำไรสุทธิ) — จาก SET official cash_flow (source set_cashflow)
+// <50% หรือ OCF ติดลบทั้งที่กำไรบวก = 🚩 สัญญาณเตือน (กำไรบัญชีอาจมาจากลูกหนี้ค้าง/รายการที่ไม่ใช่
+// เงินสด) >100% = กำไรอนุรักษ์นิยม มีเงินสดเข้าจริงมากกว่ากำไรทางบัญชี — ไม่มีข้อมูล (กลุ่มการเงิน/
+// ยังไม่ sync/นอกช่วงที่ SET sync ไว้) หรือกำไรสุทธิเล็กกว่า GROWTH_SCR_MIN_BASE (ไม่เป็นบวกหรือ
+// จิ๋วเกินจนหารแล้ว % บวมเกินจริง — กันตั้งแต่ backend แล้ว ดู get_qpl_growth_screener) โชว์ "—"
+function _growthScrOcfCell(r) {
+  if (r.ocf_ni_pct == null) return '<span class="text2">—</span>';
+  const ratio = r.ocf_ni_pct;
+  const cls = ratio < 50 ? 'red' : ratio < 100 ? 'yellow' : 'green';
+  const badge = ratio < 50 ? ' 🚩' : '';
+  return `<span class="${cls}">${ratio.toFixed(0)}%${badge}</span>`;
+}
+
+// คลิกชื่อหุ้น — ใช้ chart modal ปกติถ้ามีราคาย้อนหลังพอ (>=5 วัน ตามเงื่อนไขใน openChartModal เอง)
+// ไม่งั้น fallback ไป Tearsheet แทน (ดึงข้อมูลเองฝั่ง server ไม่ต้องพึ่ง DATA.stocks) — กันหุ้นเพิ่ง
+// IPO ที่มีข้อมูล set_qpl แล้วแต่ยังสะสมราคาไม่ถึง 5 แท่งกดแล้วเจอแค่ alert เฉยๆ
+function _growthScrOpenSymbol(symbol) {
+  const s = typeof DATA !== 'undefined' && DATA && DATA.stocks && DATA.stocks.find(x => x.symbol === symbol);
+  if (s && s.price_history && s.price_history.length >= 5) {
+    openChartModal(symbol);
+  } else {
+    openInternalHash('#ts/th/' + encodeURIComponent(symbol));
+  }
+}
+
 function renderGrowthScreener() {
   const d = _growthScrCache[_growthScrQuarter];
   const box = document.getElementById('growth-screener-table');
@@ -4909,11 +4970,15 @@ function renderGrowthScreener() {
     return;
   }
   const rows = _growthScrFilteredSorted();
-  if (countBox) countBox.textContent = `${rows.length}/${d.stocks.length} ตัว · ไตรมาส ${_growthScrQuarterLabel(d.quarter)}`;
+  if (countBox) {
+    let txt = `${rows.length}/${d.stocks.length} ตัว · ไตรมาส ${_growthScrQuarterLabel(d.quarter)}`;
+    if (d.ocf_coverage === false) txt += ' · ⚠️ ไม่มีข้อมูล OCF/NI ไตรมาสนี้ (นอกช่วงที่ SET sync ไว้)';
+    countBox.textContent = txt;
+  }
   if (!rows.length) { box.innerHTML = '<div class="empty">ไม่พบหุ้นตรงเงื่อนไข</div>'; return; }
 
   const rowsHtml = rows.map(r => `<tr>
-      <td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a>
+      <td><b class="sym-link" onclick="_growthScrOpenSymbol('${r.symbol}')">${r.symbol}</b>
         ${r.name ? `<div class="text2" style="font-size:10px">${_growthScrEsc(r.name)}</div>` : ''}</td>
       <td class="text2">${_growthScrEsc(r.sector || '')}</td>
       <td style="text-align:right">${_growthScrThb(r.revenue)}</td>
@@ -4923,10 +4988,14 @@ function renderGrowthScreener() {
       <td style="text-align:right">${_growthScrProfitCell(r, 'profit_qoq')}</td>
       <td style="text-align:right">${_growthScrProfitCell(r, 'profit_yoy')}</td>
       <td style="text-align:right">${r.npm != null ? r.npm.toFixed(1) + '%' : '<span class="text2">—</span>'}</td>
+      <td style="text-align:right">${_growthScrNpmDeltaCell(r)}</td>
+      <td style="text-align:right">${_growthScrStreakCell(r)}</td>
+      <td style="text-align:right">${_growthScrOcfCell(r)}</td>
     </tr>`).join('');
   const headHtml = GROWTH_SCR_COLS.map(c => {
     const arrow = _growthScrSort.key === c.key ? (_growthScrSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
-    return `<th style="text-align:${c.align};cursor:pointer;user-select:none;white-space:nowrap" onclick="_growthScrSetSort('${c.key}')" title="กดเรียงลำดับ">${c.label}${arrow}</th>`;
+    const title = c.tip ? `${c.tip} (กดเรียงลำดับ)` : 'กดเรียงลำดับ';
+    return `<th style="text-align:${c.align};cursor:pointer;user-select:none;white-space:nowrap" onclick="_growthScrSetSort('${c.key}')" title="${_growthScrEsc(title)}">${c.label}${arrow}</th>`;
   }).join('');
   box.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%">
     <thead><tr>${headHtml}</tr></thead>
@@ -4942,13 +5011,16 @@ function exportGrowthScreenerCsv() {
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
   const headers = ['Symbol', 'Name', 'Sector', 'Revenue', 'Revenue QoQ %', 'Revenue YoY %',
-    'Net Profit', 'Profit QoQ %', 'Profit YoY %', 'NPM %', 'Quarter'];
+    'Net Profit', 'Profit QoQ %', 'Profit YoY %', 'NPM %', 'NPM Δ YoY (pp)', 'NPM Δ QoQ (pp)',
+    'Revenue Streak (Q)', 'Profit Streak (Q)', 'OCF', 'OCF/NI %', 'Quarter'];
   const lines = [headers.map(csvEsc).join(',')];
   rows.forEach(r => {
     lines.push([
       r.symbol, r.name || '', r.sector || '',
       r.revenue ?? '', r.revenue_qoq ?? '', r.revenue_yoy ?? '',
       r.net_profit ?? '', r.profit_qoq ?? '', r.profit_yoy ?? '', r.npm ?? '',
+      r.npm_change_yoy ?? '', r.npm_change_qoq ?? '', r.revenue_streak ?? '', r.profit_streak ?? '',
+      r.ocf ?? '', r.ocf_ni_pct ?? '',
       _growthScrQuarter || '',
     ].map(csvEsc).join(','));
   });
@@ -6470,6 +6542,54 @@ const _SCR_BOOL = new Set(['above_ema50','above_ema200','above_ema20']);
 // ต่างจากคอลัมน์อื่นที่คลิกครั้งแรกเรียงมากไปน้อยเป็นค่าเริ่มต้น
 const _SCR_ASC_FIRST = new Set(['sec_rank']);
 
+// คอลัมน์เสริมที่โผล่อัตโนมัติในตารางเมื่อผู้ใช้ตั้งตัวกรองข้อนั้น (คำนวณตอนกด "ค้นหา"
+// เก็บไว้ที่ _scrExtraCols) — ครอบคลุมเฉพาะตัวกรองตัวเลข/ช่วง ไม่รวม checkbox/สัญญาณเทคนิค
+// เพราะติ๊กแล้วผลทุกแถวเป็นจริงอยู่แล้ว โชว์เป็นคอลัมน์ไม่ช่วยเรียงลำดับ · ตัวที่มีคอลัมน์
+// ตายตัวอยู่แล้วในตาราง (RS/ราคา/1D-YTD%/%HIGH/%LOW/PE/PBV/DIV%/RVOL/MKT CAP/EMA/Growth/
+// PEG/FCF Yield/Div Cover) ไม่ต้องซ้ำในรายการนี้
+let _scrExtraCols = [];
+const _scrFmtInt = v => v == null ? '<span class="text2">—</span>' : Math.round(v);
+const _scrFmtX   = v => v == null ? '<span class="text2">—</span>' : v.toFixed(2) + 'x';
+const _SCR_EXTRA_COL_DEFS = [
+  { id: 'scr-rev-streak-min',              field: 'revenue_streak',      label: 'Rev Streak(ปี)',    fmt: _scrFmtInt },
+  { id: 'scr-profit-streak-min',           field: 'profit_streak',       label: 'Profit Streak(ปี)', fmt: _scrFmtInt },
+  { id: 'scr-rev-qoq-min',                 field: 'rev_qoq',             label: 'Rev QoQ%',          fmt: pct },
+  { id: 'scr-profit-qoq-min',              field: 'profit_qoq',          label: 'Profit QoQ%',       fmt: pct },
+  { id: 'scr-rev-yoyq-min',                field: 'rev_yoy_q',           label: 'Rev YoY-Q%',        fmt: pct },
+  { id: 'scr-profit-yoyq-min',             field: 'profit_yoy_q',        label: 'Profit YoY-Q%',     fmt: pct },
+  { id: 'scr-rev-qstreak-min',             field: 'rev_qoq_streak',      label: 'Rev QStreak',       fmt: _scrFmtInt },
+  { id: 'scr-profit-qstreak-min',          field: 'profit_qoq_streak',   label: 'Profit QStreak',    fmt: _scrFmtInt },
+  { id: 'scr-margin-qstreak-min',          field: 'margin_qoq_streak',   label: 'Margin QStreak',    fmt: _scrFmtInt },
+  { id: 'scr-rev-posstreak-min',           field: 'rev_pos_streak_q',    label: 'Rev PosStreak',     fmt: _scrFmtInt },
+  { id: 'scr-profit-posstreak-min',        field: 'profit_pos_streak_q', label: 'Profit PosStreak',  fmt: _scrFmtInt },
+  { id: 'scr-ebitda-posstreak-min',        field: 'ebitda_pos_streak_q', label: 'EBITDA PosStreak',  fmt: _scrFmtInt },
+  { id: 'scr-ocf-posstreak-min',           field: 'ocf_pos_streak_q',    label: 'OCF PosStreak',     fmt: _scrFmtInt },
+  { id: 'scr-rev-accel-min',               field: 'rev_accel_streak',    label: 'Rev Accel',         fmt: _scrFmtInt },
+  { id: 'scr-profit-accel-min',            field: 'profit_accel_streak', label: 'Profit Accel',      fmt: _scrFmtInt },
+  { id: 'scr-margin-yoyq-min',             field: 'margin_yoyq_delta',   label: 'Margin ΔYoY(pt)',   fmt: pct },
+  { id: 'scr-ttm-margin-min',              field: 'ttm_margin_delta',    label: 'TTM Margin Δ(pt)',  fmt: pct },
+  { id: 'scr-gross-margin-min',            field: 'gross_margin',        label: 'Gross Margin%',     fmt: pct },
+  { id: 'scr-roe-min',                     field: 'roe',                 label: 'ROE%',              fmt: pct },
+  { id: 'scr-net-margin-min',              field: 'net_margin',          label: 'Net Margin%',       fmt: pct },
+  { id: 'scr-de-ratio-max',                field: 'de_ratio',            label: 'D/E',               fmt: _scrFmtX },
+  { id: 'scr-interest-coverage-min',       field: 'interest_coverage',   label: 'Int.Cov(x)',        fmt: _scrFmtX },
+  { id: 'scr-ps',                          field: 'ps',                  label: 'P/S',               fmt: _scrFmtX },
+  { id: 'scr-ath-dist',                    field: 'ath_pct',             label: '%ATH',              fmt: pct },
+  { id: 'scr-atr-max',                     field: 'atr14_pct',           label: 'ATR14%',            fmt: pct },
+  { id: 'scr-seas-min',                    field: 'seas_ret',            label: 'ฤดูกาล%',            fmt: pct },
+  { id: 'scr-gross-margin-trend-min',      field: '_gmTrend',  trend: 'gross_margin_trend',      label: 'GM Trend(pt)',    fmt: pct },
+  { id: 'scr-roe-trend-min',               field: '_roeTrend', trend: 'roe_trend',               label: 'ROE Trend(pt)',   fmt: pct },
+  { id: 'scr-net-margin-trend-min',        field: '_nmTrend',  trend: 'net_margin_trend',        label: 'NM Trend(pt)',    fmt: pct },
+  { id: 'scr-de-ratio-trend-min',          field: '_deTrend',  trend: 'de_ratio_trend',          label: 'D/E Trend(x)',    fmt: _scrFmtX },
+  { id: 'scr-interest-coverage-trend-min', field: '_icTrend',  trend: 'interest_coverage_trend', label: 'IntCov Trend(x)', fmt: _scrFmtX },
+];
+function _scrActiveExtraCols() {
+  return _SCR_EXTRA_COL_DEFS.filter(def => {
+    const el = document.getElementById(def.id);
+    return el && !isNaN(parseFloat(el.value));
+  });
+}
+
 function setScrSort(col) {
   if (_scrSortCol === col) _scrSortDir *= -1;
   else { _scrSortCol = col; _scrSortDir = _SCR_ASC_FIRST.has(col) ? -1 : 1; }
@@ -6486,6 +6606,10 @@ function _scrComputeSorted() {
   // และการ sort — เดิม hardcode vol_avg20 (20 วัน) เสมอ ทำให้ตัวเลขในตารางไม่ตรงกับ
   // เกณฑ์ที่ใช้กรองจริงเมื่อผู้ใช้เปลี่ยนค่า avg เป็นจำนวนวันอื่น
   const rvolDaysNow = parseInt(document.getElementById('scr-rvol-days')?.value) || 20;
+  // years-back เดียวกับที่ตัวกรอง "เทรนด์" (GM/ROE/NM/D-E/Interest coverage) ใช้จริง —
+  // คอลัมน์เสริม _gmTrend/_roeTrend/... ต้อง index array ด้วยค่าเดียวกันเป๊ะๆ ไม่งั้นตัวเลข
+  // ในตารางจะไม่ตรงกับเกณฑ์ที่ใช้กรอง
+  const yearsBackNow = parseInt(document.getElementById('scr-ratio-years-back')?.value) || 1;
   const withRange = _scrStocks.map(s => {
     const fromHigh = s.high_52w > 0 ? (s.price - s.high_52w) / s.high_52w * 100 : null;
     const fromLow  = s.low_52w  > 0 ? (s.price - s.low_52w)  / s.low_52w  * 100 : null;
@@ -6495,7 +6619,11 @@ function _scrComputeSorted() {
     // หุ้น DR ที่ symbol ชนกับหุ้นไทยจริงโดยบังเอิญ (เช่น META = Meta Platforms ฝั่ง DR
     // และหุ้น mai ไทยชื่อ META พร้อมกัน) จะได้ sec_rank ของหุ้นไทยตัวนั้นไปแปะผิดๆ
     const sr = s._isDR ? null : secRanks[s.symbol];
-    return { ...s, fromHigh, fromLow, rvol, sec_rank: sr?.rank ?? null, sec_total: sr?.total ?? null };
+    const extra = {};
+    _scrExtraCols.forEach(def => {
+      if (def.trend) extra[def.field] = s[def.trend] ? s[def.trend][yearsBackNow] : null;
+    });
+    return { ...s, fromHigh, fromLow, rvol, sec_rank: sr?.rank ?? null, sec_total: sr?.total ?? null, ...extra };
   });
   return [...withRange].sort((a, b) => {
     const col = _scrSortCol;
@@ -6568,6 +6696,7 @@ function renderScrTable() {
         <col style="width:44px"><!-- PEG -->
         <col style="width:54px"><!-- FCF Yield% -->
         <col style="width:56px"><!-- Div Cover -->
+        ${_scrExtraCols.map(() => '<col style="width:74px">').join('')}<!-- คอลัมน์เสริมจากตัวกรองที่ตั้งไว้ -->
       </colgroup>
       <thead><tr>
         ${th('rs_score','RS')}${th('sec_rank','SEC.RANK','r')}${th('symbol','SYMBOL')}${nameThHtml}${th('sector','SECTOR')}
@@ -6577,6 +6706,7 @@ function renderScrTable() {
         ${th('pe','P/E','r')}${th('pbv','P/BV','r')}${th('div_yield','DIV%','r')}
         ${th('rvol','RVOL','r')}${th('mkt_cap','MKT CAP','r')}${th('above_ema50','EMA50','r')}${th('above_ema200','EMA200','r')}
         ${th('growth_score','Growth','r')}${th('peg','PEG','r')}${th('fcf_yield','FCF Yield%','r')}${th('dividend_coverage','Div Cover','r')}
+        ${_scrExtraCols.map(def => th(def.field, def.label, 'r')).join('')}
       </tr></thead>
       <tbody>${sorted.map(s => `
         <tr>
@@ -6606,6 +6736,7 @@ function renderScrTable() {
           <td class="r text2">${s.peg != null ? s.peg.toFixed(2) : '—'}</td>
           <td class="r text2">${s.fcf_yield != null ? s.fcf_yield.toFixed(2) + '%' : '—'}</td>
           <td class="r">${s.dividend_coverage != null ? `<span class="${s.dividend_coverage < 1 ? 'red' : 'green'}">${s.dividend_coverage.toFixed(2)}x</span>` : '<span class="text2">—</span>'}</td>
+          ${_scrExtraCols.map(def => `<td class="r">${def.fmt(s[def.field])}</td>`).join('')}
         </tr>`).join('')}
       </tbody>
     </table></div>`;
@@ -7622,6 +7753,9 @@ async function runScreener() {
     _enrichTechSignals(_drData);
   }
   saveScreenerSettings();
+  // ตัวกรองไหนถูกตั้งค่าไว้ (ไม่ว่าง) ให้โผล่เป็นคอลัมน์เสริมในตารางผลลัพธ์อัตโนมัติ —
+  // สแนปช็อตตอนกด "ค้นหา" ครั้งนี้ เพื่อให้คอลัมน์ตรงกับเกณฑ์ที่ใช้กรองผลชุดนี้จริงๆ
+  _scrExtraCols = _scrActiveExtraCols();
   const rsMin     = parseFloat(document.getElementById('scr-rs-min').value);
   const ret1m     = parseFloat(document.getElementById('scr-1m').value);
   const ret3m     = parseFloat(document.getElementById('scr-3m').value);
@@ -7856,6 +7990,7 @@ async function runScreener() {
 }
 
 function resetScreener() {
+  _scrExtraCols = [];
   _SCR_FIELDS.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   _SCR_CHECKS.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
   const mk = document.getElementById('scr-market'); if (mk) mk.value = 'ALL';
@@ -8484,6 +8619,37 @@ const FS_COL_CLR = {
 };
 const FS_MKT_BADGE = { TH: '#58a6ff', US: '#3fb950', HK: '#e3b341', DR: '#3fb950' };
 
+// คอลัมน์เสริมที่โผล่อัตโนมัติในตาราง Screener+ เมื่อผู้ใช้ตั้งตัวกรองที่ "field ยังไม่มี
+// คอลัมน์ตายตัว" ใน FS_COLS อยู่แล้ว (เช่น QoQ, streak รายไตรมาส, margin trend, D/E เทรนด์
+// ฯลฯ) — คำนวณจาก conds ที่ _fsReadConds() อ่านได้ตอนกด "ค้นหา" ครั้งนั้นๆ เก็บไว้ที่
+// _fsExtraCols แล้ว renderFsTable()/exportFscreenerCSV() ต่อท้าย FS_COLS ด้วยรายการนี้
+let _fsExtraCols = [];
+const FS_COLS_KEYS = new Set(FS_COLS.map(c => c.k));
+// esg_rank เป็น threshold เลือกจาก dropdown (1-4) ใช้กรองเท่านั้น — ค่า esg_rating
+// (ตัวอักษร AAA/AA/A/BBB) ที่มีคอลัมน์ตายตัวอยู่แล้วสื่อความหมายตรงกว่า ไม่ต้องมีคอลัมน์ซ้ำ
+const FS_EXTRA_COL_SKIP = new Set(['esg_rank']);
+function _fsActiveExtraCols(conds) {
+  const seen = new Set();
+  const cols = [];
+  conds.forEach(c => {
+    if (c.cmp === 'bool' || FS_COLS_KEYS.has(c.k) || FS_EXTRA_COL_SKIP.has(c.k) || seen.has(c.k)) return;
+    seen.add(c.k);
+    const f = FS_FILTERS.find(x => x.k === c.k);
+    if (!f) return;
+    const label = f.label.replace(/\s*[≥≤]\s*$/, '') + (f.unit ? ` (${f.unit})` : '');
+    // ไม่เอา f.tip มาใส่ตรงๆ — เป็น HTML เต็ม (มี " ในตัว เช่น style="...") ออกแบบมาสำหรับ
+    // กล่อง tip ในฟอร์ม filter ไม่ใช่ attribute title="..." ตรงๆ ที่ renderFsTable ใช้
+    // (เดิมใส่ตรงๆ แล้ว " ตัดค่า title กลางคัน ทำ header ทั้งแถวเพี้ยน — เจอตอนทดสอบจริง)
+    cols.push({ k: c.k, label, sep: cols.length === 0 });
+  });
+  return cols;
+}
+// FS_COLS ต่อท้ายด้วย _fsExtraCols ของรอบนี้ — ใช้ร่วมกันทั้ง renderFsTable/exportFscreenerCSV
+// กันสองจุดเพี้ยนไม่ตรงกันถ้าแก้ logic รวมคอลัมน์แค่จุดเดียวแล้วลืมอีกจุด (code review 2026-08-26)
+function _fsAllCols() {
+  return _fsExtraCols.length ? FS_COLS.concat(_fsExtraCols) : FS_COLS;
+}
+
 // คลิก symbol ในตาราง Screener+ -> เปิด "chart-modal" ป็อปอัพเดียวกับที่ใช้ทั่วทั้งแอป
 // (กราฟราคา + เมตริก + ปุ่มงบการเงิน/Tearsheet/เทียบเพื่อนอยู่ในนั้นแล้ว) แทนที่จะเด้ง
 // ไปหน้างบการเงินตรงๆ เหมือนเดิม — เลือก modal ให้ตรงตามชนิดแถว (TH/DR/US/HK mirror)
@@ -8701,6 +8867,7 @@ function applyFsPreset(i) {
 }
 
 function resetFscreener(skipRun) {
+  _fsExtraCols = [];
   FS_FILTERS.forEach(f => {
     if (f.g) return;
     // ทุกช่องกลับเป็นค่าว่างเสมอ (รวมช่องที่มี def) — ตัวเลขแนะนำโชว์เป็น placeholder
@@ -8938,6 +9105,14 @@ function runFscreener() {
   }
   const uni = document.getElementById('fs-universe').value;
   const conds = _fsReadConds();
+  // สแนปช็อตคอลัมน์เสริมตอนกด "ค้นหา" ครั้งนี้ — ใช้ทั้ง universe หลักและ mirror US/HK
+  _fsExtraCols = _fsActiveExtraCols(conds);
+  // คอลัมน์ที่กำลังใช้เรียงอยู่ (_fsSort.key) อาจหายไปจาก _fsExtraCols รอบนี้ (สลับ universe/
+  // ล้าง filter ที่เคยสร้างคอลัมน์นั้นทิ้ง) — ถ้าไม่รีเซ็ต mirror US/HK จะส่ง sort= เป็น field ที่
+  // server ไม่มีจริง กลายเป็น no-op เงียบๆ ไม่มี indicator เตือน (code review 2026-08-26)
+  if (!FS_COLS_KEYS.has(_fsSort.key) && !_fsExtraCols.some(c => c.k === _fsSort.key)) {
+    _fsSort = { key: 'roe', dir: -1 };
+  }
   if (uni === 'us' || uni === 'hk') { _runFscreenerMirror(uni, conds); return; }
   // กลับมา universe หลัก (ทั้งหมด/ไทย/DR) — คืนข้อความ fs-meta ของ snapshot หลัก
   // เผื่อรอบก่อนหน้าอยู่ที่ US/HK แล้วค้างโชว์ meta ของ mirror อยู่
@@ -9057,14 +9232,17 @@ function renderFsTable(rows) {
     document.getElementById('fs-results').innerHTML = '<div class="empty">ไม่พบหุ้นที่ตรงเงื่อนไข ลองผ่อนเกณฑ์</div>';
     return;
   }
-  const head = FS_COLS.map(c => {
+  // ต่อท้ายด้วยคอลัมน์เสริมจากตัวกรองที่ตั้งไว้รอบนี้ (_fsExtraCols) — field ที่ยังไม่มี
+  // คอลัมน์ตายตัวใน FS_COLS จะโผล่ให้เห็น/เรียงลำดับได้โดยไม่ต้องเปิด popup รายละเอียดทีละตัว
+  const cols = _fsAllCols();
+  const head = cols.map(c => {
     const arrow = _fsSort.key === c.k ? (_fsSort.dir < 0 ? ' ▼' : ' ▲') : '';
     const tip = c.tip ? ` title="${c.tip}"` : '';
     return `<th onclick="fsSort('${c.k}')"${tip} style="cursor:pointer;white-space:nowrap;position:sticky;top:0;background:var(--bg2);z-index:2;${c.sep ? _SEP_CSS : ''}">${c.label}${arrow}</th>`;
   }).join('');
   const body = rows.map(r => {
     const name = _fsDisplayName(r).replace(/</g, '&lt;');
-    const tds = FS_COLS.map(c => {
+    const tds = cols.map(c => {
       const style = `text-align:${c.txt ? 'left' : 'right'};white-space:nowrap;${c.sep ? _SEP_CSS : ''}`;
       let v;
       if (c.k === 'symbol') {
@@ -9087,8 +9265,9 @@ function renderFsTable(rows) {
 
 function exportFscreenerCSV() {
   if (!_fsResultCache.length) return;
-  const cols = FS_COLS.map(c => c.k);
-  const header = FS_COLS.map(c => c.label).join(',');
+  const allCols = _fsAllCols();
+  const cols = allCols.map(c => c.k);
+  const header = allCols.map(c => c.label).join(',');
   const lines = _fsResultCache.map(r => cols.map(k => {
     const v = r[k]; return (v == null) ? '' : (typeof v === 'string' ? `"${v.replace(/"/g, '""')}"` : v);
   }).join(','));
@@ -13851,7 +14030,8 @@ function exportScreenerCSV() {
                   '1D%','1W%','1M%','3M%','6M%','1Y%','YTD%',
                   '% From High','% From Low','P/E','P/BV','Div Yield%','RVOL',
                   'Mkt Cap (MB)','EMA50','EMA200',
-                  'Growth','PEG','FCF Yield%','Div Cover'].map(esc).join(',');
+                  'Growth','PEG','FCF Yield%','Div Cover',
+                  ..._scrExtraCols.map(def => def.label)].map(esc).join(',');
   const rows = sorted.map(s => {
     return [
       s.symbol, s.name, s.sector || '',
@@ -13872,6 +14052,7 @@ function exportScreenerCSV() {
       s.peg?.toFixed(2) ?? '',
       s.fcf_yield?.toFixed(2) ?? '',
       s.dividend_coverage?.toFixed(2) ?? '',
+      ..._scrExtraCols.map(def => { const v = s[def.field]; return v == null ? '' : (typeof v === 'number' ? v.toFixed(2) : v); }),
     ].map(esc).join(',');
   });
   const csv = '﻿' + header + '\n' + rows.join('\n');
@@ -18765,15 +18946,16 @@ function setFinTab(tab, btn) {
   document.getElementById('fin-search-set').style.display = tab === 'set' ? '' : 'none';
   document.getElementById('fin-search-dr').style.display  = tab === 'dr'  ? '' : 'none';
   document.getElementById('fin-result').innerHTML = '';
-  // SET.or.th มีข้อมูลเฉพาะหุ้นไทย — หุ้นต่างประเทศ (DR) ปิดปุ่ม SET/สุขภาพการเงิน
+  // SET.or.th มีข้อมูลเฉพาะหุ้นไทย — หุ้นต่างประเทศ (DR) ปิดปุ่ม SET/สุขภาพการเงิน/กระแสเงินสด
   // และเด้งกลับ Finnomena
   const setSrcBtn = document.getElementById('fin-view-set-btn');
   const healthBtn = document.getElementById('fin-view-health-btn');
+  const cashflowBtn = document.getElementById('fin-view-cashflow-btn');
   if (tab === 'dr') {
-    [setSrcBtn, healthBtn].forEach(b => { b.disabled = true; b.style.opacity = '0.4'; b.style.cursor = 'not-allowed'; });
-    if (_finView === 'set' || _finView === 'health') setFinView('finnomena', document.getElementById('fin-view-finn-btn'));
+    [setSrcBtn, healthBtn, cashflowBtn].forEach(b => { b.disabled = true; b.style.opacity = '0.4'; b.style.cursor = 'not-allowed'; });
+    if (_finView === 'set' || _finView === 'health' || _finView === 'cashflow') setFinView('finnomena', document.getElementById('fin-view-finn-btn'));
   } else {
-    [setSrcBtn, healthBtn].forEach(b => { b.disabled = false; b.style.opacity = ''; b.style.cursor = ''; });
+    [setSrcBtn, healthBtn, cashflowBtn].forEach(b => { b.disabled = false; b.style.opacity = ''; b.style.cursor = ''; });
   }
   initFinPage();
 }
@@ -18795,7 +18977,7 @@ function _finSyncViewButton(source) {
 
 function setFinView(view, btn) {
   _finView = view;
-  document.querySelectorAll('#fin-view-finn-btn,#fin-view-fyear-btn,#fin-view-yyear-btn,#fin-view-yq-btn,#fin-view-set-btn,#fin-view-health-btn,#fin-view-qpl-btn,#fin-view-merged-btn,#fin-view-div-btn')
+  document.querySelectorAll('#fin-view-finn-btn,#fin-view-fyear-btn,#fin-view-yyear-btn,#fin-view-yq-btn,#fin-view-set-btn,#fin-view-health-btn,#fin-view-cashflow-btn,#fin-view-qpl-btn,#fin-view-merged-btn,#fin-view-div-btn')
     .forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('fin-result').innerHTML = '';
@@ -18858,6 +19040,14 @@ async function searchFinancials() {
     _finRecentAdd(sym, _finTab);
     history.replaceState(null, '', '#fin/' + _finTab + '/' + encodeURIComponent(sym));
     loadFinHealthView(sym, hint);
+    return;
+  }
+  // กระแสเงินสด + งบดุลย่อจาก SET official — หุ้นไทยเท่านั้น (ปุ่มถูกปิดไว้แล้วตอนอยู่แท็บ DR
+  // ใน setFinTab แต่กันไว้อีกชั้นเผื่อ state ค้าง)
+  if (_finView === 'cashflow') {
+    _finRecentAdd(sym, _finTab);
+    history.replaceState(null, '', '#fin/' + _finTab + '/' + encodeURIComponent(sym));
+    loadFinCashflowBalanceView(sym, hint);
     return;
   }
   // แปลงมุมมองที่ผู้ใช้เลือก -> source ที่ดึง (+ fallback ถ้าแหล่งนั้นไม่มีข้อมูลหุ้นตัวนี้)
@@ -19034,6 +19224,93 @@ function _renderFinHealth(d) {
       <span style="color:var(--text2)"> · แถวที่ชื่อลงท้าย * ใน SET หมายถึง ratio ที่ SET คำนวณเอง ไม่ใช่ตัวเลขจากงบตรงๆ</span>
     </div>
     ${themesHtml}`;
+}
+
+// มุมมอง "💵 กระแสเงินสด & งบดุล (SET)" — /api/financial-cashflow-balance (source set_cashflow/
+// set_balance ใน financials_store.py) OCF/CFI/CFF/CapEx + งบดุลย่อรายไตรมาส หุ้นไทยเท่านั้น
+async function loadFinCashflowBalanceView(sym, hint) {
+  hint.textContent = 'กำลังโหลด...';
+  document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูลกระแสเงินสด/งบดุล...</div>';
+  try {
+    const r = await _fetchTimeout(`/api/financial-cashflow-balance/${encodeURIComponent(sym)}`, 20000,
+      'หมดเวลารอข้อมูล (เกิน 20 วิ) — ลองใหม่อีกครั้ง');
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    hint.textContent = '';
+    _renderFinCashflowBalance(d);
+  } catch (e) {
+    hint.textContent = '';
+    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${e.message}</div>`;
+  }
+}
+
+function _finCfQuarterLabel(q) {
+  if (!q) return '—';
+  const [y, qq] = q.split('-');
+  return `Q${qq}/${parseInt(y, 10) + 543}`;
+}
+function _finCfFmt(v) {
+  if (v == null) return '<span class="text2">—</span>';
+  return (v / 1e6).toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' ลบ.';
+}
+
+// แถวรายการ — จัดกลุ่ม 2 หมวด (กระแสเงินสดจาก set_cashflow, งบดุลย่อจาก set_balance) คีย์ตรงกับ
+// field ที่ _set_cashflow_row_from_amt/_set_balance_row_from_amt คืนมา (financials_store.py)
+const _FIN_CF_ROWS = [
+  { group: 'กระแสเงินสด (จากงบที่ยื่นจริง)', key: 'ocf', label: 'เงินสดจากการดำเนินงาน (OCF)' },
+  { group: 'กระแสเงินสด (จากงบที่ยื่นจริง)', key: 'cfi', label: 'เงินสดจากการลงทุน (CFI)' },
+  { group: 'กระแสเงินสด (จากงบที่ยื่นจริง)', key: 'cff', label: 'เงินสดจากการจัดหาเงิน (CFF)' },
+  { group: 'กระแสเงินสด (จากงบที่ยื่นจริง)', key: 'capex', label: 'CapEx (ซื้อสินทรัพย์ถาวร)' },
+  { group: 'งบดุลย่อ (ณ สิ้นงวด)', key: 'cash', label: 'เงินสดและรายการเทียบเท่า' },
+  { group: 'งบดุลย่อ (ณ สิ้นงวด)', key: 'receivables', label: 'ลูกหนี้การค้า' },
+  { group: 'งบดุลย่อ (ณ สิ้นงวด)', key: 'inventory', label: 'สินค้าคงเหลือ' },
+  { group: 'งบดุลย่อ (ณ สิ้นงวด)', key: 'current_assets', label: 'สินทรัพย์หมุนเวียนรวม' },
+  { group: 'งบดุลย่อ (ณ สิ้นงวด)', key: 'current_liabilities', label: 'หนี้สินหมุนเวียนรวม' },
+  { group: 'งบดุลย่อ (ณ สิ้นงวด)', key: 'total_liabilities', label: 'หนี้สินรวม' },
+  { group: 'งบดุลย่อ (ณ สิ้นงวด)', key: 'total_equity_parent', label: 'ส่วนของผู้ถือหุ้น (บริษัทใหญ่)' },
+];
+
+function _renderFinCashflowBalance(d) {
+  const box = document.getElementById('fin-result');
+  const quarters = d.quarters || [];
+  if (!quarters.length) {
+    box.innerHTML = '<div class="empty" style="padding:24px">ไม่มีข้อมูลกระแสเงินสด/งบดุลของหุ้นนี้</div>';
+    return;
+  }
+  let curGroup = null;
+  const rowsHtml = _FIN_CF_ROWS.map(r => {
+    const groupHtml = r.group !== curGroup
+      ? `<tr><td colspan="${quarters.length + 1}" style="font-size:12px;font-weight:600;padding-top:10px">${r.group}</td></tr>` : '';
+    curGroup = r.group;
+    const cellsHtml = quarters.map(q => `<td style="text-align:right">${_finCfFmt(q[r.key])}</td>`).join('');
+    return `${groupHtml}<tr><td style="font-size:12px;padding-left:8px">${r.label}</td>${cellsHtml}</tr>`;
+  }).join('');
+
+  // Current Ratio / Net Cash คำนวณฝั่ง client จากงบดุลย่อ (ไม่ได้มาจาก SET ตรงๆ) — Current
+  // Ratio สูง = สภาพคล่องดี (สินทรัพย์หมุนเวียนพอจ่ายหนี้สินหมุนเวียน), Net Cash ติดลบ = มีหนี้
+  // สุทธิมากกว่าเงินสดที่ถือ (ใช้หนี้สินรวมเทียบ ไม่ใช่แค่หนี้ที่มีดอกเบี้ย — อนุรักษ์นิยมกว่า)
+  const currentRatioCells = quarters.map(q => {
+    const v = (q.current_assets != null && q.current_liabilities) ? q.current_assets / q.current_liabilities : null;
+    return `<td style="text-align:right">${v == null ? '<span class="text2">—</span>' : v.toFixed(2) + ' เท่า'}</td>`;
+  }).join('');
+  const netCashCells = quarters.map(q => {
+    const v = (q.cash != null && q.total_liabilities != null) ? q.cash - q.total_liabilities : null;
+    return `<td style="text-align:right">${_finCfFmt(v)}</td>`;
+  }).join('');
+
+  box.innerHTML = `
+    <div style="font-size:11px;color:var(--text2);margin-bottom:12px">
+      กระแสเงินสด+งบดุลจากงบที่บริษัทยื่นจริง (SET.or.th) — เก็บสะสม ~3-4 ไตรมาสล่าสุดต่อรอบ sync
+      (periods ของ SET มีแค่ปีปัจจุบัน+ปีก่อนหน้า) · Current Ratio/Net Cash คำนวณเองฝั่งนี้
+    </div>
+    <div style="overflow-x:auto"><table class="tbl" style="min-width:520px">
+      <thead><tr><th style="text-align:left">รายการ</th>${quarters.map(q => `<th style="text-align:right">${_finCfQuarterLabel(q.quarter)}</th>`).join('')}</tr></thead>
+      <tbody>${rowsHtml}
+        <tr><td colspan="${quarters.length + 1}" style="font-size:12px;font-weight:600;padding-top:10px">อัตราส่วนคำนวณเอง</td></tr>
+        <tr><td style="font-size:12px;padding-left:8px">Current Ratio</td>${currentRatioCells}</tr>
+        <tr><td style="font-size:12px;padding-left:8px">Net Cash (เงินสด−หนี้สินรวม)</td>${netCashCells}</tr>
+      </tbody>
+    </table></div>`;
 }
 
 // หาบัญชีตาม code ทั่วทุก theme/category ของ Financial Health Check — ใช้กับการ์ดย่อ
@@ -29304,7 +29581,12 @@ function _requestNotificationPermission() {
 /* ---------- WATCHLIST CONFLUENCE ALERT ----------
    แจ้งเตือนเมื่อหุ้นใน Watchlist ได้ score confluence ±3 (insider+short+NVDR
    ตรงกันหมด) — เช็คทุกครั้งที่ข้อมูลรีเฟรช/ทุก 5 นาทีเหมือน price alert
-   จำวันที่แจ้งแล้วต่อหุ้นไว้ใน localStorage กันแจ้งซ้ำทุกรอบที่ data ยังไม่เปลี่ยน */
+   จำ "ค่า score" ล่าสุดที่แจ้งไปแล้วต่อหุ้นไว้ใน localStorage กันแจ้งซ้ำ — เดิมจำ
+   generated_at ของชุดข้อมูลแทน ทำให้ทุกครั้งที่ Quick Update/auto-update รันแล้ว
+   invalidate cache /api/flow-signals (เกิดหลายรอบ/วัน) generated_at เปลี่ยนใหม่
+   แต่ score หุ้นตัวเดิมไม่ได้เปลี่ยนเลย ก็ยังเด้ง popup ซ้ำทุกรอบ (พบจากผู้ใช้แจ้งว่า
+   เตือนถี่เกินไป 2026-08-26) — เปลี่ยนมาเทียบค่า score ตรงๆ แจ้งใหม่เฉพาะตอน score
+   เปลี่ยนค่าจริง หรือหลุดออกจากเกณฑ์ ±3 แล้วกลับเข้ามาใหม่ (นับเป็นสัญญาณใหม่) */
 const CONFLUENCE_SEEN_KEY = "set_confluence_alert_seen";
 
 function _loadConfluenceSeen() {
@@ -29319,16 +29601,18 @@ async function checkWatchlistConfluence() {
   if (!watchlist || !watchlist.length) return;
   const d = await loadFlowSignals();
   if (!d || !d.stocks) return;
-  const genAt = d.generated_at || "";
   const seen = _loadConfluenceSeen();
   let changed = false;
 
   for (const rawSym of watchlist) {
     if (_isDRSym(rawSym) || _isUsSym(rawSym) || _isHkSym(rawSym)) continue;   // สัญญาณคำนวณเฉพาะหุ้นไทย SET ไม่ครอบคลุม DR/US/HK
     const row = d.stocks.find(r => r.symbol === rawSym);
-    if (!row || Math.abs(row.score) < 3) continue;
-    if (seen[rawSym] === genAt) continue;   // แจ้งไปแล้วสำหรับข้อมูลชุดนี้
-    seen[rawSym] = genAt;
+    if (!row || Math.abs(row.score) < 3) {
+      if (seen[rawSym] !== undefined) { delete seen[rawSym]; changed = true; }   // หลุดเกณฑ์แล้ว รอบหน้าถ้ากลับมาแตะ ±3 ใหม่ถือเป็นสัญญาณใหม่
+      continue;
+    }
+    if (seen[rawSym] === row.score) continue;   // score เดิม ยังไม่ใช่สัญญาณใหม่ แค่ data รีเฟรชแต่ค่าไม่เปลี่ยน
+    seen[rawSym] = row.score;
     changed = true;
     _alertPopupQueue.push({ type: "confluence", sym: rawSym, row });
   }

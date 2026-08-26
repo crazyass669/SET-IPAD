@@ -3325,6 +3325,8 @@
         title="งบทางการจาก SET.or.th (หุ้นไทยเท่านั้น)">🇹🇭 SET.or.th</button>
       <button class="filter-btn" id="fin-view-health-btn" onclick="setFinView('health',this)" style="min-width:170px"
         title="SET Financial Health Check — สุขภาพการเงินตามหมวดที่ SET จัดมาให้ (คุณภาพรายได้/สภาพคล่อง/หนี้สิน ฯลฯ) 5 งวด (หุ้นไทยเท่านั้น)">🩺 สุขภาพการเงิน (SET)</button>
+      <button class="filter-btn" id="fin-view-cashflow-btn" onclick="setFinView('cashflow',this)" style="min-width:190px"
+        title="กระแสเงินสด (OCF/CFI/CFF/CapEx) + งบดุลย่อ จากงบที่บริษัทยื่นจริง (SET.or.th) รายไตรมาส — หุ้นไทยเท่านั้น เก็บสะสม ~3-4 ไตรมาสล่าสุดต่อรอบ">💵 กระแสเงินสด &amp; งบดุล (SET)</button>
       <button class="filter-btn" id="fin-view-qpl-btn" onclick="setFinView('qpl',this)" style="min-width:150px"
         title="ตาราง P&L รายไตรมาสสไตล์ broker research (รายได้/ต้นทุนขาย/SG&A แยกขาย-บริหาร/กำไรดำเนินงาน/ภาษี ฯลฯ) — ผสาน Finnomena (ยาว) + Yahoo (ละเอียด)">📋 P&amp;L รายไตรมาส</button>
       <button class="filter-btn" id="fin-view-merged-btn" onclick="setFinView('merged',this)" style="min-width:150px"
@@ -4197,6 +4199,10 @@
     SET.or.th official รายไตรมาส (source <code>set_qpl</code>) — กลุ่มการเงิน/ประกันไม่มีรายการ
     "รายได้จากการขายและให้บริการ" ในผังบัญชี จึงโชว์รายได้เป็น "—" แต่กำไรสุทธิยังคำนวณได้ปกติ ·
     หุ้นที่พลิกจากขาดทุน/เท่าทุนเป็นกำไรจะโชว์ป้าย "🔄 พลิกกำไร" แทน % (หารด้วยฐานติดลบไม่มีความหมาย)
+    · เพิ่ม 3 ตัวชี้วัดคุณภาพ (hover หัวตารางอ่านคำอธิบายเต็ม): <b>Δ NPM</b> มาร์จิ้นขยาย/หดกี่จุด,
+    <b>ต่อเนื่อง</b> โตติดกันกี่ไตรมาส (ต้องเป็นบวกทุกไตรมาสด้วย ไม่ใช่แค่ขาดทุนหดตัวลง), <b>OCF/NI</b>
+    กำไรมีเงินสดหนุนจริงไหม (จาก SET official cash_flow เท่าที่เคย sync สะสมไว้แล้ว — งวดที่ยังไม่มี
+    ข้อมูลโชว์ "—")
   </div>
 
   <div class="card" style="padding:10px 16px;margin-bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
@@ -5273,6 +5279,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260826h"></script>
+<script src="static/dashboard.js?v=20260827a"></script>
 </body>
 </html>

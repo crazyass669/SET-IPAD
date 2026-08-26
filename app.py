@@ -3800,35 +3800,70 @@ def set_valuation_check(symbol):
         return jsonify({"error": str(e)}), 500
 
 
-_fin_health_cache: dict = {}
-_FIN_HEALTH_TTL = 86400   # 24 ชม. — เปลี่ยนแค่ตอนมีงบใหม่ (รายไตรมาส) ไม่ต้องดึงสดทุกครั้ง
-
-
 @app.route("/api/financial-health/<symbol>")
 def financial_health(symbol):
-    """SET Financial Health Check ของหุ้น 1 ตัว (ดู PLAN_set_api_expansion.txt
-    งาน #5) — cache ต่อ symbol 24 ชม. เพราะเปลี่ยนแค่ตอนมีงบใหม่ ใช้กับแท็บ
-    "🩺 สุขภาพการเงิน (SET)" ในเมนูงบการเงิน + การ์ดย่อใน Tearsheet"""
+    """SET Financial Health Check ของหุ้น 1 ตัว (ดู PLAN_set_api_expansion.txt งาน #5) — **DB-first
+    แล้ว** (source='set_health' ใน financials.db, ดู financials_store.get_set_health/
+    sync_set_health) แทนที่ live-fetch + cache 24 ชม. ในหน่วยความจำแบบเดิม (หายตอน restart) — ใช้
+    pattern เดียวกับ set_qpl เป๊ะ: อ่าน DB ก่อนเสมอ, ยิงสดเฉพาะตอน DB ว่างหรือ ?refresh=1
+    ใช้กับแท็บ "🩺 สุขภาพการเงิน (SET)" ในเมนูงบการเงิน + การ์ดย่อใน Tearsheet"""
     sym = symbol.upper().strip()
-    cached = _fin_health_cache.get(sym)
-    if cached and (time.time() - cached["ts"] < _FIN_HEALTH_TTL):
-        return jsonify(cached["data"])
+    refresh = request.args.get("refresh") == "1"
     try:
         import urllib.error
-        from sources.set_api import fetch_financial_health
-        data = fetch_financial_health(sym)
-        if not data.get("themes"):
+        data = None if refresh else financials_store.get_set_health(BASE_DIR, sym)
+        if not data:
+            data = financials_store.sync_set_health(BASE_DIR, sym)
+        if not data or not data.get("themes"):
             return jsonify({"error": f"ไม่มีข้อมูล Financial Health ของ {sym}"}), 404
-        _fin_health_cache[sym] = {"data": data, "ts": time.time()}
         return jsonify(data)
     except urllib.error.HTTPError as e:
         # SET.or.th คืน 404 สำหรับหุ้นกลุ่มการเงิน (ธนาคาร/เงินทุน/ประกัน) — Financial
         # Health Check ไม่ครอบกลุ่มนี้ (เหมือน Z-Score ที่ยกเว้นกลุ่มเดียวกัน สูตรไม่ valid
-        # กับงบดุลธนาคาร) ไม่ใช่ error จริง — คืน 404 พร้อมเหตุผลชัดๆ แทน 500
+        # กับงบดุลธนาคาร) ไม่ใช่ error จริง — คืน 404 พร้อมเหตุผลชัดๆ แทน 500 แต่ก่อนคืน error
+        # เช็คของสะสมเก่าใน DB ก่อน (sync ล้มเหลวรอบนี้ไม่ควรทำของเก่าที่เคยดึงได้หายไป)
         if e.code == 404:
+            cached = financials_store.get_set_health(BASE_DIR, sym)
+            if cached and cached.get("themes"):
+                return jsonify(cached)
             return jsonify({"error": f"ไม่มีข้อมูล Financial Health ของ {sym} "
                                       "(SET.or.th ไม่ครอบคลุมกลุ่มธนาคาร/เงินทุน/ประกัน)"}), 404
         return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/financial-cashflow-balance/<symbol>")
+def financial_cashflow_balance(symbol):
+    """กระแสเงินสด (OCF/CFI/CFF/CapEx) + งบดุลย่อ (เงินสด/ลูกหนี้/สต็อก/หนี้สินรวม/ส่วนผู้ถือหุ้น)
+    รายไตรมาสจาก SET official (source 'set_cashflow'/'set_balance') — DB-first เหมือน
+    /api/financial-health ด้านบน ใช้กับแท็บ "💵 กระแสเงินสด & งบดุล (SET)" ในเมนูงบการเงิน
+
+    ทั้งสอง source คีย์ (year,q) แบบเดียวกับ set_qpl (จาก endDate จริง) จึง merge เป็นแถวเดียวต่อ
+    ไตรมาสได้ตรงๆ — balance_sheet มักมีจุดข้อมูลมากกว่า cash_flow (ไม่ต้องรอคู่ subtract) ดังนั้น
+    บางไตรมาสอาจมีแค่ฝั่งงบดุลไม่มีกระแสเงินสด (โชว์ '—' ที่ frontend ไม่ใช่ error)"""
+    sym = symbol.upper().strip()
+    refresh = request.args.get("refresh") == "1"
+    try:
+        cf = None if refresh else financials_store.get_set_cashflow_series(BASE_DIR, sym)
+        if cf is None:
+            cf = financials_store.sync_set_cashflow_series(BASE_DIR, sym)
+        bs = None if refresh else financials_store.get_set_balance_series(BASE_DIR, sym)
+        if bs is None:
+            bs = financials_store.sync_set_balance_series(BASE_DIR, sym)
+        if not cf and not bs:
+            return jsonify({"error": f"ไม่มีข้อมูลกระแสเงินสด/งบดุลของ {sym} "
+                                      "(SET.or.th ไม่ครอบคลุมกลุ่มธนาคาร/เงินทุน/ประกันสำหรับบางบัญชี)"}), 404
+        # เรียงเก่า->ใหม่ (ซ้าย->ขวา) ให้ตรงกับธรรมเนียมตาราง SET Financial Health/P&L รายไตรมาส
+        # เดิมในเมนูนี้ (periods ของ fetch_financial_health ก็มาเรียงแบบนี้เหมือนกัน)
+        quarters = sorted(set(cf.keys()) | set(bs.keys()))
+        rows = []
+        for key in quarters:
+            row = {"quarter": f"{key[0]}-{key[1]}"}
+            row.update(cf.get(key, {}))
+            row.update(bs.get(key, {}))
+            rows.append(row)
+        return jsonify({"symbol": sym, "quarters": rows})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -4193,7 +4228,8 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_dat
         target = symbols if symbols else _financials_universe()
         # yahoo_q = งบรายไตรมาส (สะสมทุกรอบ sync — ใช้กรอง QoQ/YoY-Q ใน Screener)
         # finnomena_q = งบไตรมาสย้อนยาว ~20 ปี (backfill ครั้งเดียวได้ streak/เร่งตัว/TTM เต็มสูตร)
-        srcs = tuple(sources) if sources else ("yahoo", "set", "set_qpl", "yahoo_q", "finnomena_q")
+        srcs = tuple(sources) if sources else ("yahoo", "set", "set_qpl", "set_cashflow",
+                                                "set_balance", "set_health", "yahoo_q", "finnomena_q")
 
         def cb(current, total, msg):
             _update(current=current, total=total, message=msg)
@@ -4511,7 +4547,12 @@ def quarterly_growth_screener():
             except Exception:
                 pass
         parsed = financials_store._load_set_qpl_all(BASE_DIR, sector_by_symbol)
-        return {"parsed": parsed, "sector_by_symbol": sector_by_symbol, "name_by_symbol": name_by_symbol}
+        # กำไรมีเงินสดหนุนจริงไหม (OCF vs กำไรสุทธิ) — คีย์ (year,q) เดียวกับ set_qpl พอดี
+        # (ทั้งคู่ derive จาก endDate จริงแบบเดียวกัน) compose ได้ตรงๆ ไม่ต้องแปลงคีย์เพิ่ม
+        cashflow_parsed = financials_store._load_set_qpl_all(
+            BASE_DIR, sector_by_symbol, source="set_cashflow")
+        return {"parsed": parsed, "sector_by_symbol": sector_by_symbol,
+                "name_by_symbol": name_by_symbol, "cashflow_parsed": cashflow_parsed}
 
     # try/except ครอบทั้งก้อน เหมือน /api/sector-compare ด้านบน — กัน error ที่ไม่คาดคิดหลุดเป็น
     # หน้า 500 HTML ของ Flask ที่ frontend parse JSON ไม่ได้
@@ -4521,7 +4562,7 @@ def quarterly_growth_screener():
         quarter = request.args.get("quarter") or None
         result = financials_store.get_qpl_growth_screener(
             cached["parsed"], cached["sector_by_symbol"], target_quarter=quarter,
-            name_by_symbol=cached["name_by_symbol"])
+            name_by_symbol=cached["name_by_symbol"], cashflow_parsed=cached["cashflow_parsed"])
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": f"โหลดข้อมูลเติบโตรายไตรมาสล้มเหลว: {e}"}), 500
@@ -7776,7 +7817,15 @@ def _compute_data_health():
     # set_qpl เพิ่งเพิ่มเข้า bulk sync — ยิงหลาย request/หุ้น sync ทั้งตลาดใช้เวลา ~1 ชม.)
     try:
         _fin_cov_srcs = [("yahoo", "Yahoo Finance"), ("finnomena_q", "Finnomena"),
-                          ("set", "SET company-highlight"), ("set_qpl", "SET P&L รายไตรมาส")]
+                          ("set", "SET company-highlight"), ("set_qpl", "SET P&L รายไตรมาส"),
+                          ("set_cashflow", "SET กระแสเงินสด"), ("set_balance", "SET งบดุล"),
+                          ("set_health", "SET Financial Health")]
+        # set_health ไม่นับเข้า worst_pct/สถานะรวม — SET.or.th endpoint นี้ไม่ครอบกลุ่มการเงิน/
+        # ประกัน/REIT เลย (404 เป็นระบบ วัดจริง 2026-08-26: ~30-40% ของตลาด) เพดาน coverage ของ
+        # source นี้จะต่ำกว่า 100% ถาวรแม้ sync ครบทุกตัวที่ทำได้แล้วก็ตาม — ถ้านับรวมจะทำให้ item
+        # นี้ค้างสถานะแดงตลอดไปทั้งที่ไม่มีอะไรผิดปกติ (เหมือนที่ ESG กันปัญหาเดียวกันไว้ใน
+        # PLAN_set_api_expansion.txt งาน #3) ยังโชว์ตัวเลขให้เห็นตามปกติ แค่ไม่ใช้ตัดสิน status
+        _fin_cov_informational = {"set_health"}
         _fin_cov = financials_store.get_coverage(BASE_DIR, _financials_universe(),
                                                   sources=[k for k, _ in _fin_cov_srcs])
         _fin_cov_rows = []
@@ -7785,17 +7834,21 @@ def _compute_data_health():
             _c = _fin_cov.get(_k, {"covered": 0, "total": 0})
             _total = _c["total"]
             _pct = (_c["covered"] / _total * 100) if _total else 0.0
-            _fin_cov_worst_pct = min(_fin_cov_worst_pct, _pct)
+            if _k not in _fin_cov_informational:
+                _fin_cov_worst_pct = min(_fin_cov_worst_pct, _pct)
             _color = "var(--green)" if _pct >= 99.5 else ("var(--yellow)" if _pct >= 90 else "var(--red)")
+            _note_mark = ' *' if _k in _fin_cov_informational else ''
             _fin_cov_rows.append(
-                f'<tr><td style="padding:2px 10px 2px 0">{_label}</td>'
+                f'<tr><td style="padding:2px 10px 2px 0">{_label}{_note_mark}</td>'
                 f'<td style="text-align:right;color:{_color};font-weight:600">'
                 f'{_c["covered"]}/{_total} ({_pct:.1f}%)</td></tr>')
         _fin_cov_status = ("ok" if _fin_cov_worst_pct >= 99.5
                             else "warn" if _fin_cov_worst_pct >= 90 else "red")
-        _fin_cov_extra = ""
+        _fin_cov_extra = ('<div style="margin-top:6px;color:var(--text2);font-size:11px">'
+                           '* SET Financial Health ไม่ครอบกลุ่มการเงิน/ประกัน/REIT (~30-40% ของตลาด) '
+                           'เพดาน coverage ต่ำกว่า 100% ถาวรโดยไม่ใช่บั๊ก — ไม่นับรวมในสถานะข้างบน</div>')
         if _fin_cov_worst_pct < 90:
-            _fin_cov_extra = ('<div style="margin-top:6px">ยังไม่ sync ทั้งตลาด — กดปุ่ม '
+            _fin_cov_extra += ('<div style="margin-top:6px">ยังไม่ sync ทั้งตลาด — กดปุ่ม '
                                '"🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างเพื่อ sync ให้ครบ '
                                '(set_qpl ยิงหลาย request/หุ้น sync ทั้งตลาดใช้เวลานานสุด ~1 ชม.)</div>')
         items.append({
@@ -8592,7 +8645,8 @@ def mirror_yahoo_index_sync():
 
 def _run_financials_update_all():
     """เทียบเท่า `python update_financials.py` (scope=all) — เช็ค DR ใหม่ → sync งบหุ้นไทย
-    (Yahoo+SET+SET-QPL+Finnomena) → sync งบ DR (Yahoo+Finnomena) → sync งบสมาชิกดัชนีหลัก US
+    (Yahoo+SET+SET-QPL+SET-CashFlow+SET-Balance+SET-Health+Finnomena) → sync งบ DR
+    (Yahoo+Finnomena) → sync งบสมาชิกดัชนีหลัก US
     (S&P500+Dow+NDX)/HK (HSI+HSCEI+HSTECH)/JP (Nikkei 225) ผ่าน Yahoo (ข้าม ticker ที่มีงบ
     อยู่แล้วจาก DR/DRx โดยอัตโนมัติ — ดู sync_mirror_yahoo_index) → refresh งบ mirror US/HK
     ที่ค้นบ่อยใน 90 วัน → build factor snapshot ใหม่ ปุ่มที่ใช้บ่อยสุด (ทุกครั้งหลังงบไตรมาสออก)
@@ -8621,7 +8675,8 @@ def _run_financials_update_all():
             pct = 5 + (done / max(total, 1) * 45)
             _update(current=round(pct), total=100, message=f"งบหุ้นไทย: {done}/{total}")
         r_th = financials_store.sync_all(BASE_DIR, syms_th,
-                                          sources=("yahoo", "set", "set_qpl", "yahoo_q", "finnomena_q"),
+                                          sources=("yahoo", "set", "set_qpl", "set_cashflow",
+                                                   "set_balance", "set_health", "yahoo_q", "finnomena_q"),
                                           callback=_th_cb, is_dr=False,
                                           skip_up_to_date=True)
 
@@ -8698,8 +8753,10 @@ def _run_financials_update_all():
         _update(done=True, message=summary)
         run_log.record_run(BASE_DIR, "financials_sync", True, summary)
     except Exception as e:
-        run_log.record_run(BASE_DIR, "financials_sync", False, str(e))
+        # _update(done=True,...) ต้องมาก่อน record_run() เสมอ — กัน SSE ค้างสถานะ
+        # "กำลังทำงาน" ตลอดไปถ้า record_run เขียนไฟล์พังกลางทาง
         _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        run_log.record_run(BASE_DIR, "financials_sync", False, str(e))
     finally:
         _update(running=False)
 
@@ -8965,15 +9022,21 @@ def _run_refresh(period="max"):
         def cb(current, total, msg):
             _update(current=current, total=total, message=msg)
 
-        _refresh_svc.run_with_progress(cb, BASE_DIR, period=period)
+        fund_warnings = _refresh_svc.run_with_progress(cb, BASE_DIR, period=period) or []
         _market_internals_cache.clear()
         _breadth_cache.clear()
+        # set_data.json เพิ่ง rewrite ใหม่ (หุ้นเข้า/ออก/เปลี่ยนชื่อได้) — _qpl_parsed_cache เก็บ
+        # sector_by_symbol ที่ derive จากไฟล์นี้ไว้นานสุด 24h เดิม ไม่ล้างจะทำให้ Growth Screener
+        # โชว์หุ้นเก่าที่หายไปแล้วค้างอยู่จนกว่าจะมี financials sync รอบถัดไป
+        _qpl_parsed_cache.clear()
         _bump_cache_gen()
 
         # อัพเดท Indices (full history) + Capital Flow ล้มได้โดยไม่ทำให้ทั้งรอบ
         # ล้ม (ราคาหุ้น SET หลักได้ไปแล้ว) แต่ต้องโผล่ในผลลัพธ์รอบนี้ ไม่งั้น
         # run_log บันทึกว่า "สำเร็จ" ทั้งที่มีส่วนล้มเงียบๆ — ผู้ใช้ไม่มีทางรู้
-        warnings = []
+        # (fund_warnings มาจาก run_with_progress เอง — เช่น fundamentals ดึงไม่สำเร็จ
+        # ทั้ง SET API และ Yahoo แล้ว fallback ค่าเก่าแทน)
+        warnings = list(fund_warnings)
 
         _update(current=98, total=100, message="อัพเดท Indices...")
         try:
@@ -9040,7 +9103,8 @@ def _run_refresh(period="max"):
 
     except Exception as e:
         # ดึงข้อมูลใหม่ล้มเหลว — คืนค่าข้อมูลสำรอง
-        run_log.record_run(BASE_DIR, "full_refresh", False, str(e))
+        # _update(done=True,...) ต้องมาก่อน record_run() เสมอ (ไม่ใช่ทีหลัง) —
+        # กัน SSE ค้างสถานะ "กำลังทำงาน" ตลอดไปถ้า record_run เขียนไฟล์พังกลางทาง
         if has_backup and os.path.exists(BACKUP_FILE):
             try:
                 shutil.copy2(BACKUP_FILE, DATA_FILE)
@@ -9053,6 +9117,7 @@ def _run_refresh(period="max"):
         else:
             _update(done=True, error=str(e),
                     message=f"เกิดข้อผิดพลาด: {e}")
+        run_log.record_run(BASE_DIR, "full_refresh", False, str(e))
     finally:
         _update(running=False)
 

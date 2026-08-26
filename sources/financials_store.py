@@ -197,6 +197,57 @@ def _merge_set_qpl_payload(old, new):
     return {"quarters": merged_q}
 
 
+def _merge_health_periods(old_periods, new_periods):
+    """union periods list ของ set_health ตาม as_of_date — helper ของ _merge_set_health_payload"""
+    merged = {p["as_of_date"]: p for p in (old_periods or []) if p.get("as_of_date")}
+    for p in (new_periods or []):
+        if p.get("as_of_date"):
+            merged[p["as_of_date"]] = p
+    return sorted(merged.values(), key=lambda p: p["as_of_date"])
+
+
+def _merge_set_health_payload(old, new):
+    """ผสาน SET Financial Health Check (source='set_health') สะสมข้ามรอบ sync — periods endpoint
+    คืนแค่หน้าต่างจำกัด (3 ปีเต็ม + งวดครึ่งปีล่าสุด 2 งวด) พองวดเก่าเลื่อนหลุดออกจากหน้าต่างนี้
+    ค่าที่เคยดึงมาแล้วจะหายถาวรถ้าไม่สะสมไว้ (เหตุผลเดียวกับ set_qpl/set_cashflow) — merge ที่
+    ระดับ theme(name) > category(name) > account(code) > value(as_of_date) คงค่า as_of_date เก่า
+    ที่ไม่มีในรอบใหม่ไว้ ให้ค่าใหม่ทับค่า as_of_date เดียวกัน (เผื่อ SET แก้เลขย้อนหลังตอนงบ
+    ผ่านตรวจสอบ) — คงรูปทรง nested เดิมของ fetch_financial_health ไว้ทุกประการ (ไม่แปลง schema)
+    เพื่อให้ route/frontend ที่ใช้อยู่แล้วอ่านต่อได้โดยไม่ต้องแก้"""
+    if old is None:
+        return new
+    old_themes = {t["name"]: t for t in old.get("themes", [])}
+    for new_theme in new.get("themes", []):
+        old_theme = old_themes.get(new_theme["name"])
+        if not old_theme:
+            old_themes[new_theme["name"]] = new_theme
+            continue
+        old_cats = {c["name"]: c for c in old_theme.get("categories", [])}
+        for new_cat in new_theme.get("categories", []):
+            old_cat = old_cats.get(new_cat["name"])
+            if not old_cat:
+                old_cats[new_cat["name"]] = new_cat
+                continue
+            old_accs = {a["code"]: a for a in old_cat.get("accounts", [])}
+            for new_acc in new_cat.get("accounts", []):
+                old_acc = old_accs.get(new_acc["code"])
+                if not old_acc:
+                    old_accs[new_acc["code"]] = new_acc
+                    continue
+                merged_vals = {v["as_of_date"]: v for v in old_acc.get("values", []) if v.get("as_of_date")}
+                for v in new_acc.get("values", []):
+                    if v.get("as_of_date"):
+                        merged_vals[v["as_of_date"]] = v
+                old_acc["values"] = sorted(merged_vals.values(), key=lambda v: v["as_of_date"])
+                old_acc["unit"], old_acc["change_unit"] = new_acc.get("unit"), new_acc.get("change_unit")
+            old_cat["accounts"] = list(old_accs.values())
+            old_cat["description"] = new_cat.get("description") or old_cat.get("description")
+        old_theme["categories"] = list(old_cats.values())
+    return {"symbol": new.get("symbol", old.get("symbol")),
+            "periods": _merge_health_periods(old.get("periods"), new.get("periods")),
+            "themes": list(old_themes.values())}
+
+
 def upsert(base_dir, symbol, source, payload, is_dr=False):
     """เขียน payload ลง DB แบบ 'ผสานกับของเก่า' ไม่ใช่เขียนทับทั้งก้อน — สะสม
     ประวัติย้อนหลังไปเรื่อยๆ แม้ Yahoo/SET.or.th จะให้ย้อนหลังจำกัดแค่ ~4-5 ปีต่อครั้งก็ตาม
@@ -209,8 +260,10 @@ def upsert(base_dir, symbol, source, payload, is_dr=False):
         merged = _merge_yahoo_payload(old, payload)
     elif source == "set":
         merged = _merge_set_payload(old, payload)
-    elif source == "set_qpl":
+    elif source in ("set_qpl", "set_cashflow", "set_balance"):   # โครง {"quarters": {...}} เดียวกัน
         merged = _merge_set_qpl_payload(old, payload)
+    elif source == "set_health":
+        merged = _merge_set_health_payload(old, payload)
     else:
         merged = payload
     con = _connect(base_dir)
@@ -348,14 +401,20 @@ def _target_period(source, today=None):
     _payload_latest_period() ตัดสิน skip ใน sync_all(skip_up_to_date=True)
 
     ใช้ไตรมาสปฏิทินล่าสุดที่ปิดไปแล้ว (Q1=31มี.ค./Q2=30มิ.ย./Q3=30ก.ย./Q4=31ธ.ค.) เป็น
-    target ของแหล่งรายไตรมาส (set/set_qpl/yahoo_q/finnomena_q) — ไม่ต้องรอ deadline ยื่นงบ
-    45/60 วัน เพราะ target แค่บอกว่า "ควรลองอีกไหม" ไม่ใช่ "รับประกันว่ามีแน่" หุ้นที่ยังไม่ยื่น
-    จะยังไม่ผ่าน check นี้เอง (latest_period ใน DB ไม่ถึง target) เลยถูก sync ซ้ำทุกครั้งจนกว่า
-    จะยื่นจริง ไม่ต้องเดางวด/deadline ให้ผิดพลาดได้ — ต่างจาก 'yahoo' (รายปี) ที่ใช้แค่ 31 ธ.ค."""
+    target ของแหล่งรายไตรมาส (set/set_qpl/set_cashflow/set_balance/yahoo_q/finnomena_q) —
+    ไม่ต้องรอ deadline ยื่นงบ 45/60 วัน เพราะ target แค่บอกว่า "ควรลองอีกไหม" ไม่ใช่
+    "รับประกันว่ามีแน่" หุ้นที่ยังไม่ยื่นจะยังไม่ผ่าน check นี้เอง (latest_period ใน DB ไม่ถึง
+    target) เลยถูก sync ซ้ำทุกครั้งจนกว่าจะยื่นจริง ไม่ต้องเดางวด/deadline ให้ผิดพลาดได้ —
+    ต่างจาก 'yahoo' (รายปี) ที่ใช้แค่ 31 ธ.ค. และ 'set_health' (รายครึ่งปี — SET Financial
+    Health Check ให้แค่จุดข้อมูลรายปี+ครึ่งปี ไม่มี Q1/Q3 เลย ใช้ target แบบไตรมาสทั่วไปจะ
+    ไม่ match กับ as_of_date จริงช่วง เม.ย.-มิ.ย./ต.ค.-ธ.ค. ทำให้ skip_up_to_date ข้ามไม่ได้
+    เลยครึ่งปี, code review 2026-08-26) ที่ใช้แค่ 30 มิ.ย./31 ธ.ค."""
     today = today or date.today()
     y = today.year
     if source == "yahoo":
         candidates = [date(y - 1, 12, 31), date(y, 12, 31)]
+    elif source == "set_health":
+        candidates = [date(y - 1, 12, 31), date(y, 6, 30), date(y, 12, 31)]
     else:
         candidates = [date(y - 1, 12, 31), date(y, 3, 31), date(y, 6, 30),
                       date(y, 9, 30), date(y, 12, 31)]
@@ -370,7 +429,7 @@ def _payload_latest_period(source, payload):
     if not payload:
         return None
     try:
-        if source == "set_qpl":
+        if source in ("set_qpl", "set_cashflow", "set_balance"):   # โครง quarters dict เดียวกัน
             qend = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
             dates = []
             for k in (payload.get("quarters") or {}):
@@ -379,6 +438,10 @@ def _payload_latest_period(source, payload):
                 if q in qend:
                     m, d = qend[q]
                     dates.append(date(y, m, d))
+            return max(dates) if dates else None
+        if source == "set_health":
+            dates = [date.fromisoformat(p["as_of_date"]) for p in (payload.get("periods") or [])
+                     if p.get("as_of_date")]
             return max(dates) if dates else None
         if source == "set":
             dates = [date.fromisoformat(e["endDate"][:10])
@@ -1687,10 +1750,18 @@ def fetch_set_qpl_chart_series(symbol, ctx=None, hdr=None):
     return out
 
 
-def fetch_set_qpl_detail_series(symbol, ctx=None, hdr=None):
-    """{(year_ad,q): raw-row} ละเอียด (COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี) จากงบที่บริษัทยื่นจริง
-    (ดู sources/set_api.py::fetch_financial_statement) — งวดล่าสุดใช้ตรงๆ ส่วนงวดสะสม (6M/9M/YE)
-    ลบกันเองเป็นไตรมาสเดี่ยว (Q3=9M-6M, Q4=YE-9M, Q2=6M-Q1 ถ้ามี Q1 ปีเดียวกันใน periods list)
+def _fetch_set_cumulative_series(symbol, account_type, row_builder, ctx=None, hdr=None):
+    """โครงกลาง (periods loop + ลบงวดสะสม Q3=9M-6M/Q4=YE-9M/Q2=6M-Q1 + คีย์จาก endDate จริงกัน
+    mislabel หุ้นปีบัญชีไม่ตรงปฏิทิน) ที่ fetch_set_qpl_detail_series/fetch_set_cashflow_series
+    ใช้ร่วมกันเป๊ะ (เคยเป็นโค้ด copy-paste แยก 2 ชุด รวมเป็นที่เดียวหลัง code review 2026-08-26
+    กันแก้บั๊กที่เดียวแล้วลืมอีกชุด — เจอบั๊กจริงจากโครงนี้มาแล้ว 1 ครั้ง 2026-08-18: หุ้นปีบัญชี
+    ไม่ตรงปฏิทินถูก mislabel เพราะใช้ period 'year'/'type' แทน endDate จริง) ใช้กับ account_type
+    ที่รายงานเป็นยอดสะสม (income_statement/cash_flow) เท่านั้น — balance_sheet เป็นยอดคงเหลือ
+    ไม่ต้องลบงวดสะสม ใช้ fetch_set_balance_series แยกต่างหาก
+
+    row_builder(amt_dict) -> raw-row หรือ None — แปลง {accountName: amount} เป็นรูปที่ layer
+    เหนือขึ้นไปต้องการ (ต่างกันตาม account_type)
+
     ได้ประมาณ 3-4 ไตรมาสล่าสุดเท่านั้น — periods endpoint มีแค่ปีปัจจุบัน+ปีก่อนหน้า (เช็คแล้ว
     2026-08-12) ไม่ย้อนลึกหลายปี ไตรมาสเก่ากว่านั้นต้องพึ่ง Yahoo/Finnomena/chart-series แทน
 
@@ -1711,7 +1782,7 @@ def fetch_set_qpl_detail_series(symbol, ctx=None, hdr=None):
         except ValueError:
             continue
         try:
-            d = fetch_financial_statement(symbol, "income_statement", period=p, ctx=ctx, hdr=hdr)
+            d = fetch_financial_statement(symbol, account_type, period=p, ctx=ctx, hdr=hdr)
         except Exception:
             continue
         end_year, end_q = _year_quarter_from_date((d or {}).get("endDate"))
@@ -1754,9 +1825,112 @@ def fetch_set_qpl_detail_series(symbol, ctx=None, hdr=None):
 
     out = {}
     for key, amt in amt_by_qtr.items():
-        row = _set_qpl_row_from_amt(amt)
+        row = row_builder(amt)
         if row:
             out[key] = row
+    return out
+
+
+def fetch_set_qpl_detail_series(symbol, ctx=None, hdr=None):
+    """{(year_ad,q): raw-row} ละเอียด (COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี) จากงบที่บริษัทยื่นจริง
+    (ดู sources/set_api.py::fetch_financial_statement) — งวดล่าสุดใช้ตรงๆ ส่วนงวดสะสม (6M/9M/YE)
+    ลบกันเองเป็นไตรมาสเดี่ยว (ดู _fetch_set_cumulative_series สำหรับโครงเต็ม)
+
+    ctx/hdr: ส่งมาเองได้เพื่อ reuse cookie เดียวข้ามหลาย symbol ตอน bulk sync (ดู sync_all)"""
+    return _fetch_set_cumulative_series(symbol, "income_statement", _set_qpl_row_from_amt,
+                                         ctx=ctx, hdr=hdr)
+
+
+def _set_cashflow_row_from_amt(amt):
+    """แปลง {accountName: amount} (จาก fetch_financial_statement account_type='cash_flow' หรือ
+    ผลลบงวดสะสม) เป็น raw-row — field หลักคือ OCF (เงินสดจากการดำเนินงาน) ใช้เทียบกำไรสุทธิดู
+    คุณภาพกำไรว่ามีเงินสดหนุนจริงไหม (กำไรบัญชีสูงแต่ OCF ต่ำ/ติดลบ = สัญญาณเตือน เช่น ลูกหนี้
+    ค้างเยอะ/บันทึกรายได้เร็วเกินจริง) คืน None ถ้าไม่มี OCF เลย (กันแถวว่างเปล่าเข้า DB)"""
+    def g(*names):
+        for n in names:
+            v = amt.get(n)
+            if v is not None:
+                return v
+        return None
+    ocf = g("เงินสดสุทธิได้มาจาก (ใช้ไปใน) กิจกรรมดำเนินงาน")
+    if ocf is None:
+        return None
+    return {
+        "ocf": ocf,
+        "cfi": g("เงินสดสุทธิได้มาจาก (ใช้ไปใน) กิจกรรมลงทุน"),
+        "cff": g("เงินสดสุทธิได้มาจาก (ใช้ไปใน) กิจกรรมจัดหาเงิน"),
+        "capex": g("เงินสดจ่ายจากการซื้อสินทรัพย์ถาวร"),
+    }
+
+
+def fetch_set_cashflow_series(symbol, ctx=None, hdr=None):
+    """{(year_ad,q): raw-row} กระแสเงินสดรายไตรมาสเดี่ยว จากงบที่บริษัทยื่นจริง — ใช้โครงกลาง
+    เดียวกับ fetch_set_qpl_detail_series (ดู _fetch_set_cumulative_series) เปลี่ยนแค่
+    account_type='cash_flow' และ row-builder — **ไม่มี chart-layer เสริม** (company-highlight
+    ไม่มีข้อมูลกระแสเงินสด) จึงได้แค่ ~3-4 ไตรมาสล่าสุดเท่านั้น
+
+    ctx/hdr: ส่งมาเองได้เพื่อ reuse cookie เดียวข้ามหลาย symbol ตอน bulk sync (ดู sync_all)"""
+    return _fetch_set_cumulative_series(symbol, "cash_flow", _set_cashflow_row_from_amt,
+                                         ctx=ctx, hdr=hdr)
+
+
+def _set_balance_row_from_amt(amt):
+    """แปลง {accountName: amount} (จาก fetch_financial_statement account_type='balance_sheet')
+    เป็น raw-row — งบดุลเป็นยอดคงเหลือ ณ วันสิ้นงวด (ไม่ใช่ยอดสะสมแบบงบกำไรขาดทุน) ไม่ต้องลบ
+    งวดสะสม ใช้ตรงๆ ได้ทุก period ในลิสต์ คืน None ถ้าไม่มีสินทรัพย์รวมเลย"""
+    def g(*names):
+        for n in names:
+            v = amt.get(n)
+            if v is not None:
+                return v
+        return None
+    total_assets = g("รวมสินทรัพย์")
+    if total_assets is None:
+        return None
+    return {
+        "cash": g("เงินสดและรายการเทียบเท่าเงินสด"),
+        "receivables": g("ลูกหนี้การค้าและลูกหนี้หมุนเวียนอื่น - สุทธิ"),
+        "inventory": g("สินค้าคงเหลือ - สุทธิ"),
+        "current_assets": g("รวมสินทรัพย์หมุนเวียน"),
+        "total_assets": total_assets,
+        "payables": g("เจ้าหนี้การค้าและเจ้าหนี้หมุนเวียนอื่น"),
+        "current_liabilities": g("รวมหนี้สินหมุนเวียน"),
+        "total_liabilities": g("รวมหนี้สิน"),
+        "total_equity_parent": g("รวมส่วนของผู้ถือหุ้นของบริษัทใหญ่"),
+        "total_equity": g("รวมส่วนของผู้ถือหุ้น"),
+    }
+
+
+def fetch_set_balance_series(symbol, ctx=None, hdr=None):
+    """{(year_ad,q): raw-row} งบดุลรายไตรมาส จากงบที่บริษัทยื่นจริง — ต่างจาก
+    fetch_set_cashflow_series/fetch_set_qpl_detail_series ตรงที่**ไม่ต้องลบงวดสะสม** (งบดุลเป็น
+    ยอดคงเหลือ ณ วันสิ้นงวด ไม่ใช่ยอดสะสมแบบ P&L) ทุก period ในลิสต์ (Q1/6M/9M/YE) จึงเป็นจุด
+    ข้อมูลจริงใช้ได้ทันที ไม่ต้องรอคู่ subtract — ได้จุดข้อมูลมากกว่า cash_flow ต่อรอบ sync
+    คีย์จาก endDate จริงเหมือนกัน (กัน mislabel หุ้นปีบัญชีไม่ตรงปฏิทิน) — โครงต่างจากอีก 2 ตัว
+    พอที่จะไม่คุ้มรวมเป็น helper เดียวกัน (ไม่มีขั้นตอนลบงวดสะสม) แต่ใช้ _set_qpl_amt_map ร่วม
+    (normalize ชื่อบัญชีผ่าน _SET_ACCOUNT_ALIASES) เหมือนกันแทนการ build amt dict เองแบบเดิม
+
+    ctx/hdr: ส่งมาเองได้เพื่อ reuse cookie เดียวข้ามหลาย symbol ตอน bulk sync (ดู sync_all)"""
+    from sources.set_api import (fetch_financial_statement_periods, fetch_financial_statement,
+                                  _bootstrap_headers)
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    periods = fetch_financial_statement_periods(symbol, ctx=ctx, hdr=hdr)
+    if not periods:
+        return {}
+
+    out = {}
+    for p in periods:
+        try:
+            d = fetch_financial_statement(symbol, "balance_sheet", period=p, ctx=ctx, hdr=hdr)
+        except Exception:
+            continue
+        end_year, end_q = _year_quarter_from_date((d or {}).get("endDate"))
+        if not end_q:
+            continue
+        row = _set_balance_row_from_amt(_set_qpl_amt_map(d))
+        if row:
+            out[(end_year, end_q)] = row
     return out
 
 
@@ -1788,35 +1962,90 @@ def _set_qpl_payload_to_dict(payload):
     return out
 
 
-def get_set_qpl_series(base_dir, symbol):
-    """อ่าน SET official ที่เก็บสะสมไว้ใน DB ตรงๆ (source='set_qpl') ไม่ยิง SET.or.th สดเลย —
-    ใช้เป็นค่าเริ่มต้นของ endpoint (เหมือน pattern เดียวกับ Yahoo/Finnomena ที่อ่าน DB ก่อนเสมอ
-    ไม่ sync สดทุกครั้งที่มีคนเปิดหน้า) คืน None ถ้ายังไม่เคย sync หุ้นตัวนี้เลย — caller ควร
-    fallback ไป sync_set_qpl_series() ต่อ (ดึงสดครั้งแรกแล้วเก็บไว้ให้ครั้งต่อไปอ่านจากที่นี่ได้)"""
-    payload = get(base_dir, symbol, "set_qpl")
-    if not payload:
-        return None
-    return _set_qpl_payload_to_dict(payload)
+def _get_set_series(base_dir, symbol, source):
+    """อ่านข้อมูลรายไตรมาสรูปแบบ {"quarters": {...}} (source='set_qpl'/'set_cashflow'/
+    'set_balance' — โครง payload เหมือนกันเป๊ะ) ที่สะสมไว้ใน DB ตรงๆ ไม่ยิง SET.or.th สดเลย —
+    คืน None ถ้ายังไม่เคย sync หุ้นตัวนี้เลย (caller fallback ไป _sync_set_series ต่อ) — รวมจาก
+    get_set_qpl_series/get_set_cashflow_series/get_set_balance_series เดิมที่เป็น
+    byte-identical template ต่างกันแค่ชื่อ source (code review 2026-08-26)"""
+    payload = get(base_dir, symbol, source)
+    return _set_qpl_payload_to_dict(payload) if payload else None
 
 
-def sync_set_qpl_series(base_dir, symbol):
-    """ดึง SET official สดรอบใหม่ (fetch_set_qpl_series) + ผสานกับที่เก็บสะสมไว้ใน DB
-    (source='set_qpl', ดู _merge_set_qpl_payload) แล้วเขียนกลับ — คืน {(year_ad,q): row}
-    พร้อมใช้กับ compute_qpl_report
-
-    ต่างจาก get_set_qpl_series() ตรงที่ฟังก์ชันนี้ 'ยิงสดเสมอ' — ใช้เป็น fallback ตอนยังไม่เคย
-    sync หุ้นตัวนี้เลย (DB ว่าง) หรือตอนผู้ใช้ขอ refresh เอง (?refresh=1) ไม่ใช่ path ปกติที่
-    ทุกการเปิดหน้าจะยิง เพราะ SET periods endpoint มีแค่ปีปัจจุบัน+ปีก่อนหน้า พองวดเลื่อนหลุด
-    จาก periods list แล้วจะดึงซ้ำไม่ได้อีกเลย — sync ครั้งไหนที่ทำได้ก็เก็บสะสมไว้ถาวร
-    ถ้า fetch สดพังหมด (เน็ตสะดุด/SET.or.th ล่ม) ยังคืนของสะสมเดิมจาก DB แทนที่จะให้ตารางว่างเปล่า"""
+def _sync_set_series(base_dir, symbol, source, fetch_fn):
+    """ดึง SET official สดรอบใหม่ผ่าน fetch_fn(symbol) + ผสานกับที่เก็บสะสมไว้ใน DB (source,
+    ดู _merge_set_qpl_payload) แล้วเขียนกลับ — คืน {(year_ad,q): row} — รวมจาก
+    sync_set_qpl_series/sync_set_cashflow_series/sync_set_balance_series เดิม (code review
+    2026-08-26) 'ยิงสดเสมอ' ต่างจาก _get_set_series — ใช้เป็น fallback ตอนยังไม่เคย sync หุ้น
+    ตัวนี้เลย (DB ว่าง) หรือตอนผู้ใช้ขอ refresh เอง (?refresh=1) ไม่ใช่ path ปกติที่ทุกการเปิด
+    หน้าจะยิง เพราะ SET periods endpoint มีแค่ปีปัจจุบัน+ปีก่อนหน้า พองวดเลื่อนหลุดจาก periods
+    list แล้วจะดึงซ้ำไม่ได้อีกเลย — sync ครั้งไหนที่ทำได้ก็เก็บสะสมไว้ถาวร ถ้า fetch สดพังหมด
+    (เน็ตสะดุด/SET.or.th ล่ม) ยังคืนของสะสมเดิมจาก DB แทนที่จะให้ตารางว่างเปล่า"""
     try:
-        fresh = fetch_set_qpl_series(symbol)
+        fresh = fetch_fn(symbol)
     except Exception:
         fresh = {}
     if fresh:
         fresh_payload = {"quarters": {f"{y}-{q}": row for (y, q), row in fresh.items()}}
-        upsert(base_dir, symbol, "set_qpl", fresh_payload, is_dr=False)
-    return _set_qpl_payload_to_dict(get(base_dir, symbol, "set_qpl"))
+        upsert(base_dir, symbol, source, fresh_payload, is_dr=False)
+    payload = get(base_dir, symbol, source)
+    return _set_qpl_payload_to_dict(payload) if payload else {}
+
+
+def get_set_qpl_series(base_dir, symbol):
+    """อ่าน SET official (source='set_qpl') ที่สะสมไว้ใน DB ตรงๆ — ใช้เป็นค่าเริ่มต้นของ
+    endpoint (เหมือน pattern เดียวกับ Yahoo/Finnomena ที่อ่าน DB ก่อนเสมอ ไม่ sync สดทุกครั้ง
+    ที่มีคนเปิดหน้า) — ดู _get_set_series สำหรับ pattern เต็ม"""
+    return _get_set_series(base_dir, symbol, "set_qpl")
+
+
+def sync_set_qpl_series(base_dir, symbol):
+    """ดึง SET official สดรอบใหม่ + ผสาน + เขียนกลับ พร้อมใช้กับ compute_qpl_report — ดู
+    _sync_set_series สำหรับ pattern เต็ม"""
+    return _sync_set_series(base_dir, symbol, "set_qpl", fetch_set_qpl_series)
+
+
+def get_set_cashflow_series(base_dir, symbol):
+    """อ่านกระแสเงินสดรายไตรมาส (source='set_cashflow') ที่สะสมไว้ใน DB ตรงๆ — ดู
+    get_set_qpl_series/_get_set_series"""
+    return _get_set_series(base_dir, symbol, "set_cashflow")
+
+
+def sync_set_cashflow_series(base_dir, symbol):
+    """ยิงสด + ผสาน + เขียนกลับ — ดู sync_set_qpl_series/_sync_set_series (fetch_set_cashflow_series
+    ไม่มี chart-layer สำรอง ถ้าพังจะคืนของสะสมเดิมจาก DB แทน)"""
+    return _sync_set_series(base_dir, symbol, "set_cashflow", fetch_set_cashflow_series)
+
+
+def get_set_balance_series(base_dir, symbol):
+    """อ่านงบดุลรายไตรมาส (source='set_balance') ที่สะสมไว้ใน DB ตรงๆ — ดู
+    get_set_qpl_series/_get_set_series"""
+    return _get_set_series(base_dir, symbol, "set_balance")
+
+
+def sync_set_balance_series(base_dir, symbol):
+    """ยิงสด + ผสาน + เขียนกลับ — ดู sync_set_qpl_series/_sync_set_series"""
+    return _sync_set_series(base_dir, symbol, "set_balance", fetch_set_balance_series)
+
+
+def get_set_health(base_dir, symbol):
+    """อ่าน SET Financial Health Check (source='set_health') ที่สะสมไว้ใน DB ตรงๆ ไม่ยิงสด —
+    คืน None ถ้ายังไม่เคย sync หุ้นตัวนี้เลย คืนโครงเดียวกับ fetch_financial_health เป๊ะ (นำไป
+    ให้ frontend ใช้ต่อได้ทันทีไม่ต้องแปลง)"""
+    return get(base_dir, symbol, "set_health")
+
+
+def sync_set_health(base_dir, symbol):
+    """ยิงสด SET Financial Health Check รอบใหม่ + ผสานกับที่เก็บสะสมไว้ (ดู
+    _merge_set_health_payload) แล้วเขียนกลับ — **ปล่อย exception ของการ fetch ให้ caller
+    (route) จัดการเอง** ต่างจาก sync_set_qpl_series/sync_set_cashflow_series ที่ silent fallback
+    เพราะ 404 ของ endpoint นี้มีความหมายจริง (กลุ่มการเงิน/REIT ไม่มีข้อมูลแน่นอน ไม่ใช่แค่ fetch
+    พลาดชั่วคราว) route ต้องแยกข้อความ 2 แบบนี้ให้ผู้ใช้เห็น"""
+    from sources.set_api import fetch_financial_health
+    fresh = fetch_financial_health(symbol)
+    if fresh and fresh.get("themes"):
+        upsert(base_dir, symbol, "set_health", fresh, is_dr=False)
+    return get(base_dir, symbol, "set_health")
 
 
 # ============================================================
@@ -2639,16 +2868,20 @@ def get_mirror_index_coverage(base_dir, tickers_by_ex, stale_days=365):
     return mirror_index_coverage_from_have(have, tickers_by_ex, stale_days=stale_days)
 
 
-def _load_set_qpl_all(base_dir, allowed_symbols):
-    """Bulk-load source='set_qpl' ทั้งตาราง (1 query เดียว — เหมือน pattern
+def _load_set_qpl_all(base_dir, allowed_symbols, source="set_qpl"):
+    """Bulk-load source='set_qpl' (ค่าเริ่มต้น) ทั้งตาราง (1 query เดียว — เหมือน pattern
     get_mirror_index_coverage ด้านบน) แปลงเป็น {symbol: {(year_ad,q): row}} เฉพาะ symbol ที่อยู่ใน
     allowed_symbols (caller กรอง universe เอง เช่นเฉพาะ SET main board) — ใช้ร่วมกันโดย
-    get_sector_qpl_compare (snapshot ไตรมาสเดียว) และ get_market_trend (ย้อนหลังหลายไตรมาส)"""
+    get_sector_qpl_compare (snapshot ไตรมาสเดียว) และ get_market_trend (ย้อนหลังหลายไตรมาส)
+
+    source รับ 'set_cashflow' ได้ด้วย — payload โครงเดียวกัน ({"quarters": {"YYYY-Q": row}})
+    เพราะ upsert() merge ทั้งคู่ผ่าน _merge_set_qpl_payload อยู่แล้ว (ดู get_qpl_growth_screener
+    ที่โหลดทั้งสอง source มา compose เป็นแถวเดียวต่อไตรมาส)"""
     init_db(base_dir)
     con = _connect(base_dir)
     try:
         rows = con.execute(
-            "SELECT symbol, payload FROM financials WHERE source='set_qpl'").fetchall()
+            "SELECT symbol, payload FROM financials WHERE source=?", (source,)).fetchall()
     finally:
         con.close()
 
@@ -2708,6 +2941,37 @@ def _stock_pct_change(cur_val, prior_val):
     return round((cur_val / prior_val - 1) * 100, 1)
 
 
+_QPL_STREAK_MAX = 60   # กันเดินย้อนไม่มีที่สิ้นสุดถ้าข้อมูลสะสมในอนาคตยาวขึ้นเรื่อยๆ (60 ไตรมาส = 15 ปี เกินพอ)
+_GROWTH_SCR_MIN_BASE = 50_000_000   # บาท — ค่าเดียวกับ GROWTH_SCR_MIN_BASE ใน dashboard.js (ฐาน/ตัวหารเล็กกว่านี้ถือว่าเทียบไม่ได้)
+
+
+def _qpl_growth_streak(qs, target, field):
+    """นับไตรมาสติดต่อกัน (QoQ, เดินย้อนจาก target ผ่าน _prev_quarter) ที่ field (revenue/
+    net_profit) มากกว่าไตรมาสก่อนหน้าติดกันไปเรื่อยๆ — ใช้แยกหุ้น 'โตต่อเนื่องจริง' จาก 'โตแค่
+    ไตรมาสเดียวแบบสุ่ม/ฤดูกาล' คืน 0 ถ้าไตรมาส target เองก็ไม่ได้โตกว่าไตรมาสก่อนแล้ว (ฐาน
+    None/เทียบไม่ได้ก็นับว่าไม่โต ไม่ error)
+
+    ต้อง cur_v > 0 ด้วย (ไม่ใช่แค่ cur_v > prev_v) — กันเคสขาดทุนหดตัวลงเรื่อยๆ (เช่น -400 -> -300
+    -> -200 -> -100 ทุกไตรมาสยังขาดทุนอยู่) แต่ผ่านเงื่อนไข 'มากกว่าไตรมาสก่อน' ได้ ทั้งที่ไม่ใช่
+    'โตต่อเนื่องจริง' ตามความหมายที่ badge สื่อ (เทียบแนวคิดกับ prior_val<=0 guard ใน
+    _stock_pct_change ด้านบน — ที่นี่เช็คฝั่ง cur_v แทนเพราะ streak สนใจว่าตัวเลข ณ จุดนั้นเป็น
+    บวกจริงไหม ไม่ใช่แค่ % เปลี่ยนเทียบได้ไหม)"""
+    streak = 0
+    y, q = target
+    while streak < _QPL_STREAK_MAX:
+        cur_row = qs.get((y, q))
+        prev_y, prev_q = _prev_quarter(y, q)
+        prev_row = qs.get((prev_y, prev_q))
+        if not cur_row or not prev_row:
+            break
+        cur_v, prev_v = cur_row.get(field), prev_row.get(field)
+        if cur_v is None or prev_v is None or cur_v <= 0 or not (cur_v > prev_v):
+            break
+        streak += 1
+        y, q = prev_y, prev_q
+    return streak
+
+
 def _qpl_stock_growth_rows(parsed, target):
     """รายได้/กำไรสุทธิรายไตรมาส (source 'set_qpl') ต่อหุ้นแบบแบน (ไม่จัดกลุ่ม sector) เทียบไตรมาส
     ก่อนหน้า (QoQ) และไตรมาสเดียวกันปีก่อน (YoY) ของ target ที่ caller กำหนด — ใช้ร่วมกันโดย
@@ -2715,9 +2979,10 @@ def _qpl_stock_growth_rows(parsed, target):
     sort/filter ทั้งตลาดได้ทีละไตรมาสที่เลือก)
 
     คืน list ของ {symbol, revenue, net_profit, revenue_prior, profit_prior, revenue_prior_qoq,
-    profit_prior_qoq, revenue_yoy, profit_yoy, revenue_qoq, profit_qoq, gpm, npm, revenue_ttm,
-    profit_ttm} เฉพาะหุ้นที่มีข้อมูลงวด target แล้ว (revenue หรือ net_profit อย่างน้อยหนึ่งตัว) —
-    ไม่แนบ sector มาด้วย (caller แนบเอง เพราะบางจุดจัดกลุ่ม บางจุดไม่จัดกลุ่ม)"""
+    profit_prior_qoq, revenue_yoy, profit_yoy, revenue_qoq, profit_qoq, gpm, npm, npm_change_yoy,
+    npm_change_qoq, revenue_streak, profit_streak, revenue_ttm, profit_ttm} เฉพาะหุ้นที่มีข้อมูล
+    งวด target แล้ว (revenue หรือ net_profit อย่างน้อยหนึ่งตัว) — ไม่แนบ sector มาด้วย (caller
+    แนบเอง เพราะบางจุดจัดกลุ่ม บางจุดไม่จัดกลุ่ม)"""
     prior_key = (target[0] - 1, target[1])   # YoY เทียบไตรมาสเดียวกันปีก่อน ไม่ใช่ _prev_quarter (QoQ)
     prior_qoq_key = _prev_quarter(*target)   # QoQ เทียบไตรมาสก่อนหน้าติดกัน (ต่างจาก prior_key)
 
@@ -2731,6 +2996,10 @@ def _qpl_stock_growth_rows(parsed, target):
             y, q = _prev_quarter(y, q)
         return total
 
+    def _npm(row):
+        rev_, net_ = (row or {}).get("revenue"), (row or {}).get("net_profit")
+        return round(net_ / rev_ * 100, 1) if net_ is not None and rev_ else None
+
     rows = []
     for sym, qs in parsed.items():
         cur = qs.get(target)
@@ -2742,6 +3011,7 @@ def _qpl_stock_growth_rows(parsed, target):
         prev = qs.get(prior_key) or {}
         prev_qoq = qs.get(prior_qoq_key) or {}
         gross = cur.get("gross_profit")
+        npm, npm_prior, npm_prior_qoq = _npm(cur), _npm(prev), _npm(prev_qoq)
         rows.append({
             "symbol": sym, "revenue": rev, "net_profit": net,
             "revenue_prior": prev.get("revenue"), "profit_prior": prev.get("net_profit"),
@@ -2751,14 +3021,21 @@ def _qpl_stock_growth_rows(parsed, target):
             "revenue_qoq": _stock_pct_change(rev, prev_qoq.get("revenue")),
             "profit_qoq": _stock_pct_change(net, prev_qoq.get("net_profit")),
             "gpm": round(gross / rev * 100, 1) if gross is not None and rev else None,
-            "npm": round(net / rev * 100, 1) if net is not None and rev else None,
+            "npm": npm,
+            # มาร์จิ้นเปลี่ยนกี่ 'จุด' (percentage point ไม่ใช่ % เปลี่ยน) เทียบ YoY/QoQ — บอกว่า
+            # การเติบโตของรายได้/กำไรมาพร้อมมาร์จิ้นขยาย (คุณภาพดี) หรือมาร์จิ้นหด (อาจตัดราคาแข่ง)
+            "npm_change_yoy": round(npm - npm_prior, 1) if (npm is not None and npm_prior is not None) else None,
+            "npm_change_qoq": round(npm - npm_prior_qoq, 1) if (npm is not None and npm_prior_qoq is not None) else None,
+            "revenue_streak": _qpl_growth_streak(qs, target, "revenue"),
+            "profit_streak": _qpl_growth_streak(qs, target, "net_profit"),
             "revenue_ttm": _ttm_sum(qs, "revenue"),
             "profit_ttm": _ttm_sum(qs, "net_profit"),
         })
     return rows
 
 
-def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_by_symbol=None):
+def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_by_symbol=None,
+                             cashflow_parsed=None):
     """ตารางเติบโต QoQ/YoY รายหุ้นทั้งตลาดแบบแบน (ไม่จัดกลุ่ม sector ต่างจาก get_sector_qpl_compare)
     เลือกไตรมาสย้อนหลังได้ผ่าน target_quarter ("YYYY-Q" string) — ไม่ผูกกับไตรมาสล่าสุดตายตัวเหมือน
     get_sector_qpl_compare เพื่อให้กดดูไตรมาสอื่นได้ (เมนู "หุ้นโตแรงรายไตรมาส")
@@ -2768,6 +3045,13 @@ def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_
     แค่ loop ในหน่วยความจำ) ทำให้สลับไตรมาสไปมาในหน้าเว็บไม่ต้องอ่าน DB ใหม่ทุกครั้ง
 
     target_quarter ที่ parse ไม่ได้ หรือไม่มีอยู่จริงในข้อมูล -> fallback ไปไตรมาสล่าสุด (เหมือนไม่ใส่)
+
+    cashflow_parsed: ผล _load_set_qpl_all(base_dir, allowed, source='set_cashflow') (คีย์ (year,q)
+    เดียวกับ set_qpl พอดี เพราะทั้งคู่ derive จาก endDate จริงแบบเดียวกัน) ใช้แนบ ocf/ocf_ni_pct
+    (กำไรมีเงินสดหนุนจริงไหม) — ไม่ใส่ = ไม่มี field นี้ในผลลัพธ์ (เผื่อ caller ที่ไม่สนใจคุณภาพกำไร
+    ไม่ต้องโหลด set_cashflow แบบเปล่าประโยชน์) ตั้งชื่อ ocf_ni_pct ไม่ใช่ ocf_ni_ratio เพื่อไม่ชนกับ
+    field ocf_ni_ratio ของ compute_earnings_quality (อัตราส่วนดิบจาก TTM เช่น 1.2 คนละหน่วย/
+    คนละช่วงเวลากับตัวนี้ที่เป็น % จากไตรมาสเดียว เช่น 120.0)
 
     คืน {"quarter": "YYYY-Q" หรือ None, "available_quarters": [...ทั้งหมดที่มีข้อมูลจริง เรียง
     ใหม่->เก่า...], "stocks": [...]} โครง stock เหมือน _qpl_stock_growth_rows + "sector" ต่อแถว
@@ -2798,14 +3082,30 @@ def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_
         target = _target_quarter(parsed)
 
     rows = _qpl_stock_growth_rows(parsed, target)
+    has_ocf = False
     for row in rows:
         row["sector"] = sector_by_symbol.get(row["symbol"], "อื่นๆ")
         row["name"] = (name_by_symbol or {}).get(row["symbol"])
+        if cashflow_parsed is not None:
+            ocf_row = cashflow_parsed.get(row["symbol"], {}).get(target)
+            ocf = ocf_row.get("ocf") if ocf_row else None
+            net = row["net_profit"]
+            row["ocf"] = ocf
+            # % มีความหมายเฉพาะกำไรสุทธิเป็นบวกและไม่จิ๋วเกินไป (หารด้วยฐาน<=0 ได้ค่าหลอกเหมือน
+            # _stock_pct_change, หารด้วยฐานจิ๋วได้ % บวมเกินจริงแม้เครื่องหมายถูก — ใช้ GROWTH_SCR_MIN_BASE
+            # เดียวกับฝั่ง frontend ที่ mask revenue/profit qoq/yoy กันฐานเทียบเล็กเกินไป)
+            row["ocf_ni_pct"] = round(ocf / net * 100, 1) if (
+                ocf is not None and net is not None and net >= _GROWTH_SCR_MIN_BASE) else None
+            if ocf is not None:
+                has_ocf = True
 
     return {
         "quarter": f"{target[0]}-{target[1]}",
         "available_quarters": [f"{y}-{q}" for y, q in available],
         "stocks": rows,
+        # ไตรมาสที่เลือกไม่มีข้อมูล set_cashflow เข้าเลย (นอกช่วงที่ SET sync ไว้) ต่างจาก "มีข้อมูล
+        # แต่หุ้นนี้ไม่มี" — frontend ใช้เตือนผู้ใช้แยกจากคอลัมน์ OCF/NI ว่างเพราะไม่มีข้อมูลจริง
+        "ocf_coverage": has_ocf if cashflow_parsed is not None else None,
     }
 
 
@@ -3182,6 +3482,25 @@ def sync_dividends_batch(base_dir, symbols_by_market, workers=4, min_age_days=30
 # Bulk sync
 # ============================================================
 
+def _set_health_excluded_symbols(base_dir):
+    """หุ้นไทยกลุ่มที่ SET Financial Health Check (source='set_health') ไม่ครอบคลุมแน่ (คืน
+    404 เสมอ) — สถาบันการเงิน (ธนาคาร/เงินทุน/ประกัน, factor_snapshot._financial_sector_symbols
+    ตัวเดียวกับที่กัน Z-Score/market-trend) + Property Fund & REITs (งบดุลกลุ่มนี้ตีความไม่ได้
+    ด้วยสูตรบริษัททั่วไปเหมือนกัน) — ใช้กรอง task ออกจาก sync_all ตั้งแต่ต้น กันนับเป็น 'fail'
+    ทั้งที่รู้อยู่แล้วว่าไม่มีข้อมูลจริง (pattern เดียวกับ finnomena_supported ด้านล่าง,
+    code review 2026-08-26) เงียบถ้าอ่าน set_data.json ไม่ได้ (คืนแค่กลุ่มสถาบันการเงิน)"""
+    from sources import factor_snapshot
+    excluded = set(factor_snapshot._financial_sector_symbols(base_dir))
+    try:
+        with open(os.path.join(base_dir, "set_data.json"), encoding="utf-8") as f:
+            for s in json.load(f).get("stocks", []):
+                if s.get("sector") == "Property Fund & REITs":
+                    excluded.add(s["symbol"])
+    except Exception:
+        pass
+    return excluded
+
+
 def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=None,
             is_dr=False, skip_up_to_date=False, market=None):
     """ดึงงบการเงินเต็มของทุก symbol × ทุก source มา upsert เข้า DB
@@ -3210,10 +3529,13 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
     except Exception as e:
         print(f"[FinancialsSync] backup ล้มเหลว (ไม่หยุด sync): {e}")
     symbols = [s.upper().strip().replace(".BK", "") for s in symbols]
-    # ตัด symbol ที่ Finnomena ไม่รองรับออกจาก task ตั้งแต่ต้น (ETF / ตลาดนอก TH-US-HK)
-    # จะได้ไม่นับเป็น fail ทั้งที่รู้อยู่แล้วว่าไม่มีข้อมูล
+    # ตัด symbol ที่ Finnomena ไม่รองรับ + หุ้นกลุ่มที่ set_health ไม่ครอบคลุมแน่ (สถาบันการเงิน/
+    # REIT) ออกจาก task ตั้งแต่ต้น จะได้ไม่นับเป็น fail ทั้งที่รู้อยู่แล้วว่าไม่มีข้อมูล
+    _sh_excl = (_set_health_excluded_symbols(base_dir)
+                if (not is_dr) and "set_health" in sources else set())
     tasks = [(sym, src) for sym in symbols for src in sources
-             if not (src == "finnomena_q" and not finnomena_supported(sym, is_dr=is_dr))]
+             if not (src == "finnomena_q" and not finnomena_supported(sym, is_dr=is_dr))
+             and not (src == "set_health" and sym in _sh_excl)]
 
     skipped = 0
     if skip_up_to_date:
@@ -3231,7 +3553,8 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
     done = ok = fail = 0
 
     set_ctx, set_hdr = (None, None)
-    if "set" in sources or "set_qpl" in sources:
+    _SET_EXTRA_SRCS = ("set_cashflow", "set_balance", "set_health")
+    if "set" in sources or "set_qpl" in sources or any(s in sources for s in _SET_EXTRA_SRCS):
         try:
             set_ctx, set_hdr = _bootstrap_headers()
         except Exception:
@@ -3246,6 +3569,7 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
     _yahoo_gate = threading.Semaphore(3)   # จำกัด Yahoo request พร้อมกันไม่เกิน 3 (แยกจาก SET.or.th)
     _finn_gate  = threading.Semaphore(2)   # Finnomena ไม่รู้เพดาน rate-limit — ยิงสุภาพไว้ก่อน
     _set_qpl_gate = threading.Semaphore(2)   # set_qpl ยิงหลาย request/หุ้น (chart+periods+detail สูงสุด 6) หนักกว่า 'set' เฉยๆ
+    _set_extra_gate = threading.Semaphore(2)   # set_cashflow/set_balance (periods loop เหมือน set_qpl detail) + set_health (1 call) ใช้ gate เดียวกัน กันยิง SET.or.th ถี่เกินตอน sync พร้อมกันหลาย source
     _yahoo_session = _new_yahoo_session()
     _yahoo_throttle = _YahooThrottle()
 
@@ -3274,10 +3598,41 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
                     payload = {"quarters": {f"{y}-{q}": row for (y, q), row in raw.items()}}
                 finally:
                     time.sleep(0.3)  # throttle มากกว่า 'set' เพราะยิงหลาย request/หุ้น
+        elif src == "set_cashflow":
+            with _set_extra_gate:
+                try:
+                    raw = fetch_set_cashflow_series(sym, ctx=set_ctx, hdr=set_hdr)
+                    payload = {"quarters": {f"{y}-{q}": row for (y, q), row in raw.items()}}
+                finally:
+                    time.sleep(0.3)
+        elif src == "set_balance":
+            with _set_extra_gate:
+                try:
+                    raw = fetch_set_balance_series(sym, ctx=set_ctx, hdr=set_hdr)
+                    payload = {"quarters": {f"{y}-{q}": row for (y, q), row in raw.items()}}
+                finally:
+                    time.sleep(0.3)
+        elif src == "set_health":
+            with _set_extra_gate:
+                try:
+                    from sources.set_api import fetch_financial_health
+                    payload = fetch_financial_health(sym, ctx=set_ctx, hdr=set_hdr)
+                finally:
+                    time.sleep(0.2)  # เบากว่า cashflow/balance เพราะยิงแค่ 1 request/หุ้น
         else:
             payload = fetch_set_full(sym, set_ctx, set_hdr)
             time.sleep(0.15)  # throttle เบาๆ กัน SET.or.th block IP
-        upsert(base_dir, sym, src, payload, is_dr=is_dr)
+        # set_cashflow/set_balance/set_health: ถ้า fetch สำเร็จ (ไม่ raise/ไม่ 404) แต่ได้ผลว่างเปล่า
+        # ชั่วคราว (เช่น หุ้น IPO ใหม่ที่ยังไม่มีงวดพอให้ SET Financial Health คืนมา — ได้ 200 พร้อม
+        # periods/themes ว่าง ไม่ใช่ 404) ห้าม upsert แถวเปล่าทับ — coverage จะเข้าใจผิดว่า sync
+        # ผ่านแล้ว (get_coverage เช็คแค่ "แถวมีอยู่" ไม่เช็คเนื้อหา) ทั้งที่ไม่มีข้อมูลจริง และ
+        # skip_up_to_date จะไม่ retry ให้อีกเลย — เหมือน guard ที่ sync_set_cashflow_series/
+        # sync_set_balance_series/sync_set_health มีอยู่แล้ว (`if fresh: upsert(...)`) แค่ยังไม่เคยมีใน
+        # bulk sync path นี้ (code review 2026-08-26, ขยายครอบ set_health ด้วยหลัง code review ต่อ)
+        _empty = ((src in ("set_cashflow", "set_balance") and not payload.get("quarters"))
+                  or (src == "set_health" and not payload.get("themes")))
+        if not _empty:
+            upsert(base_dir, sym, src, payload, is_dr=is_dr)
         return sym, src
 
     with ThreadPoolExecutor(max_workers=workers) as ex:

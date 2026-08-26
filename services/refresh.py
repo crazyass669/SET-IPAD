@@ -124,6 +124,9 @@ def run_with_progress(callback, base_dir=None, period="max"):
     Full Refresh: ดาวน์โหลด history ทุกตัว บันทึก set_history.json + set_data.json
     period: "2y" | "5y" | "10y" | "max"
     callback(current: int, total: int, message: str)
+    คืน list ข้อความ warning (non-critical — ตอนนี้มีแค่กรณี fundamentals ดึงไม่สำเร็จ
+    ทั้งคู่แล้ว fallback ค่าเก่า) ให้ caller (app.py::_run_refresh) เอาไปต่อท้าย
+    warnings list ของตัวเอง โผล่ใน completion banner แทนที่จะเงียบหาย — list ว่างถ้าไม่มี
     """
     if base_dir is None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -216,10 +219,32 @@ def run_with_progress(callback, base_dir=None, period="max"):
         try:
             fundamentals = fetch_market_caps_parallel(cap_tickers, callback=callback)
         except Exception as e2:
-            logging.warning(f"[Fundamentals] Yahoo ก็ล้มเหลว ({e2}) — ใช้ค่า None แทน")
+            logging.warning(f"[Fundamentals] Yahoo ก็ล้มเหลว ({e2}) — คงค่าเดิมจากรอบก่อนแทน")
             fundamentals = {}
+
+    warnings = []
+    # หุ้นที่ fetch ใหม่ไม่ได้ (ทั้ง SET API และ Yahoo ล้มเหลว หรือหุ้นตัวนั้นไม่มีใน
+    # response) — fallback ไปใช้ค่าเดิมจาก set_data.json รอบก่อนแทนการปล่อย None ทั้งตัว
+    # กัน P/E-P/BV หายวับทั้งกระดานเวลา API ล่มชั่วคราวรอบเดียว (pattern เดียวกับ
+    # run_quick_update ด้านล่าง) + แจ้งเตือนกลับไปให้ caller โผล่ใน summary แทนที่จะ
+    # เงียบหาย (code review 2026-08-26: เดิมปล่อย None ทั้งตัวไม่มี fallback/ไม่มี warning)
+    existing_data_path = os.path.join(base_dir, OUT_FILE)
+    old_fund_map = {}
+    if os.path.exists(existing_data_path):
+        try:
+            with open(existing_data_path, encoding="utf-8") as f:
+                old = json.load(f)
+            old_fund_map = {s["ticker"]: {k: s.get(k) for k in ("mkt_cap","pe","pbv","div_yield")}
+                            for s in old.get("stocks", [])}
+        except Exception:
+            pass
+    if not fundamentals:
+        warnings.append(f"Fundamentals (P/E, P/BV, Market Cap, Div Yield) ดึงไม่สำเร็จทั้งหมด "
+                         f"({len(cap_tickers)} หุ้น) — ใช้ค่าเดิมจากรอบก่อนแทน")
     for s in stocks:
-        fund = fundamentals.get(s["ticker"]) or {}
+        fund = fundamentals.get(s["ticker"])
+        if fund is None:
+            fund = old_fund_map.get(s["ticker"]) or {}
         s["mkt_cap"]   = fund.get("mkt_cap")
         s["pe"]        = fund.get("pe")
         s["pbv"]       = fund.get("pbv")
@@ -251,6 +276,7 @@ def run_with_progress(callback, base_dir=None, period="max"):
     _atomic_write_json(out_path, sanitize(output))
 
     callback(total, total, f"บันทึกเสร็จ! {len(stocks)} หุ้น")
+    return warnings
 
 
 # ============================================================
