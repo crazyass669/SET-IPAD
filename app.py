@@ -10547,6 +10547,7 @@ def _run_analyst_consensus_sync():
         meta = analyst_consensus.get_meta(BASE_DIR)
         th_meta = meta.get("TH", {})
         dr_cnt = sum(meta.get(m, {}).get("count", 0) for m in ("US", "HK"))
+        dr_holders = sum(meta.get(m, {}).get("with_holders", 0) for m in ("US", "HK"))
         elapsed = (time.time() - t0) / 60
         if n_tot == 0 and dr_tot == 0:
             summary = "ข้อมูลนักวิเคราะห์เป็นปัจจุบันแล้ว (ทุกตัว sync ภายใน 7 วัน)"
@@ -10554,6 +10555,7 @@ def _run_analyst_consensus_sync():
             summary = (f"เสร็จแล้ว! sync ใหม่ หุ้นไทย {n_ok}/{n_tot} · DR underlying {dr_ok}/{dr_tot} "
                        f"· ในฐานข้อมูล: หุ้นไทยมีราคาเป้าหมาย {th_meta.get('with_target', 0)}/"
                        f"{th_meta.get('count', 0)} ตัว, DR underlying {dr_cnt} ตัว "
+                       f"(มีโครงสร้างผู้ถือหุ้น {dr_holders} ตัว) "
                        f"· ใช้เวลา {elapsed:.0f} นาที")
         _update(done=True, message=summary)
         run_log.record_run(BASE_DIR, "analyst_consensus_sync", True, summary)
@@ -10580,8 +10582,9 @@ def sync_analyst_consensus_route():
 @app.route("/api/analyst-consensus/<symbol>")
 def analyst_consensus_one(symbol):
     """ฉันทามตินักวิเคราะห์ของหุ้น 1 ตัวจาก DB (Yahoo: ราคาเป้าหมาย mean/high/low +
-    Buy/Hold/Sell + EPS/รายได้ estimate) — อ่านเร็ว ไม่ยิง Yahoo สด ใช้กับการ์ดใน
-    Tearsheet คืน 404 ถ้ายังไม่เคย sync ตัวนี้ (coverage ~40% ของหุ้นไทย เอียง cap ใหญ่)
+    Buy/Hold/Sell + EPS/รายได้ estimate + โครงสร้างผู้ถือหุ้น major/institutional/insider
+    สำหรับ underlying US/HK) — อ่านเร็ว ไม่ยิง Yahoo สด ใช้กับการ์ดใน Tearsheet
+    คืน 404 ถ้ายังไม่เคย sync ตัวนี้ (coverage ~40% ของหุ้นไทย เอียง cap ใหญ่)
 
     ?market=US|HK|JP สำหรับ underlying ของ DR (default TH)"""
     market = (request.args.get("market") or "TH").upper()

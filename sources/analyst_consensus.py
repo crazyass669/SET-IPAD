@@ -15,6 +15,7 @@ _connect() reuse financials_store._db_path, init_table() แบบ idempotent
 
 local-only เหมือน financials.db (ห้าม push ขึ้น GitHub)
 """
+import json
 import logging
 import math
 import random
@@ -31,6 +32,26 @@ TABLE = "analyst_consensus"
 # คำนวณเองจาก count ต่อระดับ เพื่อให้ค่าตรงกับ Buy/Hold/Sell ที่เราเก็บจริง (บาง
 # ticker Yahoo ไม่ส่ง recommendationMean มาแต่มี summary ครบ)
 _REC_WEIGHT = {"strong_buy": 1, "buy": 2, "hold": 3, "sell": 4, "strong_sell": 5}
+
+# คอลัมน์กลุ่ม "ผู้ถือหุ้น" (Yahoo major_holders / institutional_holders /
+# insider_purchases) — เพิ่มทีหลัง Phase 1 ผ่าน ALTER TABLE (idempotent ใน init_table)
+# ดึงเฉพาะตอน sync_dr (with_holders=True) เพราะ institutional_holders เต็มเฉพาะ
+# underlying US/HK ของ DR — หุ้นไทยแทบว่าง และมันเพิ่ม network call ต่อ ticker อีก 3 ครั้ง
+_HOLDER_COLS = {
+    "insiders_pct_held": "REAL",
+    "institutions_pct_held": "REAL",
+    "institutions_float_pct_held": "REAL",
+    "institutions_count": "INTEGER",
+    "insider_buy_6m": "INTEGER",
+    "insider_sell_6m": "INTEGER",
+    "insider_net_6m": "INTEGER",
+    "insider_total_held": "INTEGER",
+    "insider_pct_net_6m": "REAL",
+    "insider_pct_buy": "REAL",
+    "insider_pct_sell": "REAL",
+    "top_institutions": "TEXT",
+    "holders_synced_at": "TEXT",
+}
 
 
 def _connect(base_dir):
@@ -57,6 +78,10 @@ def init_table(base_dir):
               PRIMARY KEY(symbol, market)
             )
         """)
+        have = {r[1] for r in con.execute(f"PRAGMA table_info({TABLE})")}
+        for name, typ in _HOLDER_COLS.items():
+            if name not in have:
+                con.execute(f"ALTER TABLE {TABLE} ADD COLUMN {name} {typ}")
         con.commit()
     finally:
         con.close()
@@ -135,12 +160,76 @@ def _row_from_df(df, want_row):
         return {}
 
 
-def fetch_one(symbol, market, session=None):
+def _fetch_holders(t):
+    """โครงสร้างผู้ถือหุ้นจาก Yahoo — major_holders (สัดส่วนสถาบัน/insider),
+    institutional_holders (10 อันดับสถาบัน), insider_purchases (สรุปซื้อ/ขาย insider
+    6 เดือน) · คนละแหล่งกับ sec_filings.db (แบบ 59/246-2 ก.ล.ต. ไทย) · เต็มเฉพาะ
+    underlying US/HK ของ DR — ทุก field จับ exception รายก้อน คืน dict (ไม่ raise)"""
+    out = {k: None for k in _HOLDER_COLS if k not in ("top_institutions", "holders_synced_at")}
+    out["top_institutions"] = None
+
+    try:
+        mh = t.major_holders
+        if mh is not None and not mh.empty:
+            col = mh.columns[0]
+            g = lambda k: (_f(mh.loc[k, col]) if k in mh.index else None)
+            out["insiders_pct_held"] = _pct(g("insidersPercentHeld"))
+            out["institutions_pct_held"] = _pct(g("institutionsPercentHeld"))
+            out["institutions_float_pct_held"] = _pct(g("institutionsFloatPercentHeld"))
+            out["institutions_count"] = _i(g("institutionsCount"))
+    except Exception:
+        pass
+
+    try:
+        ih = t.institutional_holders
+        if ih is not None and not ih.empty:
+            rows = []
+            for _, r in ih.head(10).iterrows():
+                dt = r.get("Date Reported")
+                rows.append({
+                    "holder": str(r.get("Holder") or "")[:80],
+                    "pct": _pct(r.get("pctHeld")),
+                    "shares": _i(r.get("Shares")),
+                    "value": _f(r.get("Value")),
+                    "pct_change": _pct(r.get("pctChange")),
+                    "date": (dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else None),
+                })
+            rows = [x for x in rows if x["holder"]]
+            if rows:
+                out["top_institutions"] = json.dumps(rows, ensure_ascii=False)
+    except Exception:
+        pass
+
+    try:
+        ip = t.insider_purchases
+        if ip is not None and not ip.empty:
+            lbl_col = ip.columns[0]
+            m = {str(r[lbl_col]).strip(): r for _, r in ip.iterrows()}
+
+            def _g(label, col="Shares"):
+                r = m.get(label)
+                return None if r is None else _f(r.get(col))
+            out["insider_buy_6m"] = _i(_g("Purchases"))
+            out["insider_sell_6m"] = _i(_g("Sales"))
+            out["insider_net_6m"] = _i(_g("Net Shares Purchased (Sold)"))
+            out["insider_total_held"] = _i(_g("Total Insider Shares Held"))
+            out["insider_pct_net_6m"] = _pct(_g("% Net Shares Purchased (Sold)"))
+            out["insider_pct_buy"] = _pct(_g("% Buy Shares"))
+            out["insider_pct_sell"] = _pct(_g("% Sell Shares"))
+    except Exception:
+        pass
+
+    return out
+
+
+def fetch_one(symbol, market, session=None, with_holders=False):
     """ดึงฉันทามตินักวิเคราะห์ของหุ้น 1 ตัวจาก yfinance — คืน dict (field ที่ไม่มีเป็น
     None) หรือ raise ถ้า ticker ใช้ไม่ได้/ไม่มีข้อมูลนักวิเคราะห์เลยสักช่อง
 
     session: curl_cffi session จาก sources.yahoo._TimeoutSession ใช้ร่วมกันข้าม
-    thread เพื่อไม่ให้ crumb หมดอายุ (เหมือน fetch_market_caps_parallel)"""
+    thread เพื่อไม่ให้ crumb หมดอายุ (เหมือน fetch_market_caps_parallel)
+    with_holders: ดึงกลุ่มผู้ถือหุ้นเพิ่ม (คีย์ 'holders' ใน output) — เปิดเฉพาะ
+    sync_dr (underlying US/HK) เพราะเพิ่ม network call อีก 3 ครั้ง/ticker"""
     import yfinance as yf
 
     yft = _yf_ticker(symbol, market)
@@ -209,8 +298,14 @@ def fetch_one(symbol, market, session=None):
         "ltg_pct": _pct(ltg),
     }
 
+    holders = _fetch_holders(t) if with_holders else None
+    out["holders"] = holders
+    holders_have = bool(holders) and any(
+        v is not None for k, v in holders.items() if k != "holders_synced_at")
+
     # ไม่มีอะไรเลย (ticker เพี้ยน/หุ้นไม่มีนักวิเคราะห์ตาม) — raise ให้ caller นับเป็น miss
-    if out["target_mean"] is None and not rec_total and out["analyst_count"] is None:
+    if (out["target_mean"] is None and not rec_total
+            and out["analyst_count"] is None and not holders_have):
         raise ValueError(f"ไม่มีข้อมูลนักวิเคราะห์สำหรับ {symbol} ({yft})")
     return out
 
@@ -233,10 +328,11 @@ def _pct(v):
 # sync — batch (parallel, upsert)
 # ============================================================
 
-def sync_batch(base_dir, targets, callback=None, workers=3):
+def sync_batch(base_dir, targets, callback=None, workers=3, with_holders=False):
     """targets: list ของ (symbol, market) — ดึง parallel (workers น้อยเพราะ yfinance
     analyst endpoint หนักกว่า quote) แล้ว upsert เข้า analyst_consensus
-    (PK symbol+market เขียนทับของเดิม) คืน (n_ok, n_total)"""
+    (PK symbol+market เขียนทับของเดิม) คืน (n_ok, n_total)
+    with_holders: ดึง major/institutional/insider holders เพิ่ม (sync_dr เท่านั้น)"""
     from sources.yahoo import _TimeoutSession
 
     init_table(base_dir)
@@ -254,7 +350,8 @@ def sync_batch(base_dir, targets, callback=None, workers=3):
         sym, mkt = pair
         time.sleep(random.uniform(0.2, 0.7))
         try:
-            return sym, mkt, fetch_one(sym, mkt, session=session)
+            return sym, mkt, fetch_one(sym, mkt, session=session,
+                                       with_holders=with_holders)
         except Exception as e:
             logging.debug(f"[AnalystConsensus] {sym}/{mkt}: {e}")
             return sym, mkt, None
@@ -302,6 +399,25 @@ def sync_batch(base_dir, targets, callback=None, workers=3):
                 d["eps_growth_this_y"], d["eps_growth_next_y"], d["rev_growth_next_y"],
                 d["ltg_pct"], now,
             ))
+            h = d.get("holders")
+            if h:
+                con.execute(f"""
+                    UPDATE {TABLE} SET
+                        insiders_pct_held=?, institutions_pct_held=?,
+                        institutions_float_pct_held=?, institutions_count=?,
+                        insider_buy_6m=?, insider_sell_6m=?, insider_net_6m=?,
+                        insider_total_held=?, insider_pct_net_6m=?,
+                        insider_pct_buy=?, insider_pct_sell=?,
+                        top_institutions=?, holders_synced_at=?
+                    WHERE symbol=? AND market=?
+                """, (
+                    h["insiders_pct_held"], h["institutions_pct_held"],
+                    h["institutions_float_pct_held"], h["institutions_count"],
+                    h["insider_buy_6m"], h["insider_sell_6m"], h["insider_net_6m"],
+                    h["insider_total_held"], h["insider_pct_net_6m"],
+                    h["insider_pct_buy"], h["insider_pct_sell"],
+                    h["top_institutions"], now, sym, mkt,
+                ))
         con.commit()
     finally:
         con.close()
@@ -334,6 +450,23 @@ def _fresh_symbols(base_dir, market, max_age_days):
         except ValueError:
             pass
     return fresh
+
+
+def _missing_holders(base_dir, market):
+    """set ของ symbol (ตลาดนี้) ที่ยังไม่เคยดึง holders (holders_synced_at IS NULL) —
+    ใช้บังคับ sync_dr ให้เก็บตกตอนเพิ่งเพิ่มคอลัมน์กลุ่มผู้ถือหุ้น"""
+    if not fs.db_exists(base_dir):
+        return set()
+    con = _connect(base_dir)
+    try:
+        rows = con.execute(
+            f"SELECT symbol FROM {TABLE} WHERE market=? AND holders_synced_at IS NULL",
+            (market,)).fetchall()
+        return {r[0] for r in rows}
+    except sqlite3.OperationalError:
+        return set()
+    finally:
+        con.close()
 
 
 def sync_th(base_dir, callback=None, max_age_days=7):
@@ -371,11 +504,15 @@ def sync_dr(base_dir, callback=None, max_age_days=7):
         return 0, 0
     fresh_us = _fresh_symbols(base_dir, "US", max_age_days)
     fresh_hk = _fresh_symbols(base_dir, "HK", max_age_days)
+    # ตัวที่ยังไม่มี holders เลย (คอลัมน์เพิ่งเพิ่ม) — ต้อง sync ใหม่แม้ analyst จะสด
+    miss_us = _missing_holders(base_dir, "US")
+    miss_hk = _missing_holders(base_dir, "HK")
     pend = [(s, m) for (s, m) in targets
-            if s not in (fresh_us if m == "US" else fresh_hk)]
+            if s not in (fresh_us if m == "US" else fresh_hk)
+            or s in (miss_us if m == "US" else miss_hk)]
     if not pend:
         return 0, 0
-    return sync_batch(base_dir, pend, callback=callback)
+    return sync_batch(base_dir, pend, callback=callback, with_holders=True)
 
 
 # ============================================================
@@ -386,7 +523,7 @@ _COLS = ("symbol", "market", "price_at_fetch", "currency", "target_mean",
          "target_high", "target_low", "target_median", "rec_strong_buy", "rec_buy",
          "rec_hold", "rec_sell", "rec_strong_sell", "rec_mean", "analyst_count",
          "eps_growth_this_y", "eps_growth_next_y", "rev_growth_next_y", "ltg_pct",
-         "synced_at")
+         "synced_at") + tuple(_HOLDER_COLS)
 
 
 def _enrich(row):
@@ -399,6 +536,14 @@ def _enrich(row):
     d["rec_total"] = rec_total
     d["buy_pct"] = (round(((d.get("rec_strong_buy") or 0) + (d.get("rec_buy") or 0))
                           / rec_total * 100, 1) if rec_total else None)
+    # top_institutions เก็บเป็น JSON string ใน DB → list สำหรับ client
+    ti = d.get("top_institutions")
+    if ti:
+        try:
+            d["top_institutions"] = json.loads(ti)
+        except (ValueError, TypeError):
+            d["top_institutions"] = None
+    d["has_holders"] = bool(d.get("holders_synced_at"))
     return d
 
 
@@ -444,11 +589,13 @@ def get_meta(base_dir):
     try:
         cur = con.execute(
             f"SELECT market, COUNT(*), MAX(synced_at), "
-            f"SUM(CASE WHEN target_mean IS NOT NULL THEN 1 ELSE 0 END) "
+            f"SUM(CASE WHEN target_mean IS NOT NULL THEN 1 ELSE 0 END), "
+            f"SUM(CASE WHEN holders_synced_at IS NOT NULL THEN 1 ELSE 0 END) "
             f"FROM {TABLE} GROUP BY market")
         out = {}
-        for mkt, n, ts, n_target in cur.fetchall():
-            out[mkt] = {"count": n or 0, "with_target": n_target or 0, "updated_at": ts}
+        for mkt, n, ts, n_target, n_holders in cur.fetchall():
+            out[mkt] = {"count": n or 0, "with_target": n_target or 0,
+                        "with_holders": n_holders or 0, "updated_at": ts}
         return out
     except sqlite3.OperationalError:
         return {}

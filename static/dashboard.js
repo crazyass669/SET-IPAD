@@ -11534,6 +11534,49 @@ function _tsAnalystConsensusHtml(a, price) {
 
   const syncNote = a.synced_at ? ` · ข้อมูล ${a.synced_at.slice(0, 10)}` : '';
 
+  // ── โครงสร้างผู้ถือหุ้น (Yahoo: major_holders / institutional_holders / insider_purchases) ──
+  // เต็มเฉพาะ underlying US/HK ของ DR — หุ้นไทยแทบว่าง (sync_th ไม่ดึงกลุ่มนี้) · คนละแหล่งกับ
+  // เมนู Insider ที่ใช้ แบบ 59/246-2 ของ ก.ล.ต. ไทย
+  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const grp = n => n == null ? '—' : Math.round(n).toLocaleString();
+  // กรองรายที่ถือ ~0% ทิ้ง (Yahoo ยัด filer จิ๋วจาก US มาให้หุ้น HK เต็มไปหมด ไม่มีนัยยะ)
+  const ti = (Array.isArray(a.top_institutions) ? a.top_institutions : [])
+    .filter(x => x.pct != null && x.pct >= 0.05);
+  const netI = a.insider_net_6m, buyI = a.insider_buy_6m, sellI = a.insider_sell_6m;
+  const hasInsider = !!buyI || !!sellI || !!netI;
+  const hasHolders = a.institutions_pct_held != null || ti.length || hasInsider;
+  let holdersHtml = '';
+  if (hasHolders) {
+    const ownBits = [];
+    if (a.institutions_pct_held != null) ownBits.push(`สถาบันถือ <b>${a.institutions_pct_held.toFixed(1)}%</b>`);
+    if (a.insiders_pct_held != null) ownBits.push(`ผู้บริหาร/insider <b>${a.insiders_pct_held.toFixed(2)}%</b>`);
+    if (a.institutions_count != null) ownBits.push(`${grp(a.institutions_count)} สถาบัน`);
+
+    const shown = ti.slice(0, 5);
+    const rows = shown.map(x => {
+      const ch = x.pct_change;
+      const chTxt = ch == null || ch === 0 ? '' :
+        ` <span style="color:${ch > 0 ? 'var(--green)' : 'var(--red)'};font-size:9.5px">${ch > 0 ? '▲' : '▼'}${Math.abs(ch).toFixed(1)}%</span>`;
+      return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10.5px;padding:2px 0">
+        <span style="color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.holder)}</span>
+        <span style="white-space:nowrap">${x.pct != null ? x.pct.toFixed(2) + '%' : '—'}${chTxt}</span></div>`;
+    }).join('');
+
+    const insiderLine = hasInsider ? `
+      <div style="font-size:10.5px;color:var(--text2);margin-top:6px">Insider 6 เดือน:
+        ซื้อ ${grp(buyI)} · ขาย ${grp(sellI)}
+        ${netI != null ? `· สุทธิ <span style="color:${netI > 0 ? 'var(--green)' : netI < 0 ? 'var(--red)' : 'var(--text)'};font-weight:600">${netI > 0 ? '+' : ''}${grp(netI)}</span> หุ้น` : ''}</div>` : '';
+
+    holdersHtml = `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+      <div style="font-size:11.5px;font-weight:700;margin-bottom:3px">🏛 โครงสร้างผู้ถือหุ้น
+        <span style="font-weight:400;font-size:10px;color:var(--text2)">Yahoo${a.holders_synced_at ? ` · ${a.holders_synced_at.slice(0, 10)}` : ''}</span></div>
+      ${ownBits.length ? `<div style="font-size:10.5px;color:var(--text2)">${ownBits.join(' · ')}</div>` : ''}
+      ${rows ? `<div style="margin-top:4px">${rows}
+        <div style="font-size:9px;color:var(--text2);margin-top:2px">สถาบันถือรายใหญ่สุด ${shown.length} อันดับ${ti.length > shown.length ? ` (จาก ${ti.length})` : ''} — รายงานถือครองล่าสุด</div></div>` : ''}
+      ${insiderLine}
+    </div>`;
+  }
+
   return `<div class="card" style="padding:16px">
     <div style="font-size:13px;font-weight:700;margin-bottom:2px">🎯 ฉันทามตินักวิเคราะห์
       <span style="font-weight:400;font-size:11px;color:var(--text2)">Yahoo${a.analyst_count ? ` · ${a.analyst_count} ราย` : ''}${syncNote}</span></div>
@@ -11549,6 +11592,7 @@ function _tsAnalystConsensusHtml(a, price) {
     </div>` : '<div style="font-size:11.5px;color:var(--text2);margin-bottom:6px">ไม่มีราคาเป้าหมาย — มีเฉพาะคำแนะนำ Buy/Hold/Sell</div>'}
     ${recBar}
     ${growthBits.length ? `<div style="font-size:10.5px;color:var(--text2);margin-top:6px">ประมาณการนักวิเคราะห์: ${growthBits.join(' · ')}</div>` : ''}
+    ${holdersHtml}
     ${dcfCmp}
   </div>`;
 }
