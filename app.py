@@ -3678,7 +3678,7 @@ def get_dividends_endpoint(market, symbol):
             snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
         elif mkt == "DR":
             snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=True)}
-        elif mkt in ("US", "HK"):
+        elif mkt in ("US", "HK", "JP"):
             snap_rows = {r["symbol"]: r for r in factor_snapshot.get_mirror_snapshot(BASE_DIR, mkt)}
         else:
             snap_rows = {}
@@ -10343,12 +10343,17 @@ def _run_quick():
 
         # สะสม PE/PBV/BVPS/DivYield รายวันทางการจาก SET.or.th (งาน #4B) — endpoint ล็อค
         # ความลึก ~6 เดือน ต้องเก็บเองทุกวันถึงจะได้ประวัติยาวกว่านั้น (pattern เดียวกับ SET
-        # P&L รายไตรมาส) staleness gate อยู่ใน sync_all: วันที่ยังไม่มีแท่งใหม่/sync ไปแล้ว
-        # targets ว่าง คืนทันที ไม่ยิง network — วันที่มีแท่งใหม่ ~1-2 นาที (~900 ตัว 8 workers)
+        # P&L รายไตรมาส) · งานหลักย้ายไปทำใน run_quick_update แล้ว (tier 0 ของ
+        # _fetch_fundamentals_with_fallback — sync_all ที่นั่นทั้งสะสมประวัติ + ป้อน
+        # pe/pbv/mkt_cap/div_yield ให้ set_data.json ในนัดเดียว ตัดการยิง highlight-data
+        # ~930 req/วันซ้ำ ทั้งคู่ได้ค่าเดียวกันเป๊ะ ยืนยัน 2026-08-27) · ตรงนี้เหลือไว้เป็น
+        # safety net: idempotent (skip_up_to_date → no-op ทันทีถ้า tier 0 sync ไปแล้ว) —
+        # ครอบเคส run_quick_update early-return ("ไม่มีข้อมูลใหม่"/"เป็นปัจจุบันแล้ว") ที่
+        # เธรด fundamentals ไม่ได้เริ่ม + คืน failed_steps ให้เห็นถ้า sync ล้มจริง
         def _daily_val():
             n, total_t, rows = set_daily_val.sync_all(BASE_DIR, skip_up_to_date=True)
             if total_t:
-                print(f"[QuickUpdate] PE/PBV รายวัน (SET): สะสม {n}/{total_t} ตัว (+{rows} แถว)")
+                print(f"[QuickUpdate] PE/PBV รายวัน (SET) safety net: สะสม {n}/{total_t} ตัว (+{rows} แถว)")
         _sub_step("PE/PBV รายวัน (SET)", 99, "สะสม PE/PBV รายวันทางการ (SET.or.th)...", _daily_val)
 
         # เช็ค drift หุ้นเข้าใหม่/ถูกถอดสัปดาห์ละครั้ง (TH/US/HK/JP) — report-only, บันทึกผล

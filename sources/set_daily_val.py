@@ -112,6 +112,70 @@ def get_series(base_dir, symbol):
         con.close()
 
 
+def latest_fundamentals_map(base_dir, tickers, ref_date=None, max_staleness_days=7):
+    """{ticker: {"mkt_cap": int|None, "pe": float|None, "pbv": float|None,
+                 "div_yield": float|None}} จากแถว date ล่าสุดของแต่ละ symbol ในตาราง —
+    normalize ให้ตรงกับ set_api.fetch_fundamentals (int mkt_cap, round 2) เป๊ะ
+
+    ยืนยัน 2026-08-27 (เทียบ 29 ตัวหลังตลาดปิด): แถวล่าสุดของ historical-trading ==
+    /highlight-data ทุก field (Δ 0.00%) → ใช้ตารางนี้เป็นแหล่งหลักของ fundamentals ใน
+    Quick Update แทนการยิง highlight-data ~930 req/วันซ้ำ
+    (ดู services/refresh.py::_fetch_fundamentals_with_fallback tier 0)
+
+    tickers: list "PTT.BK" (มี/ไม่มี .BK ก็ได้) — key ผลลัพธ์ตรงกับที่ส่งเข้ามา
+    ref_date: 'YYYY-MM-DD' วันอ้างอิงความสด (ปกติ = วันราคาปิดล่าสุดในเครื่อง) —
+              ตัวเทียบจริงคือ max(ref_date, MAX(date) ในตาราง) · SET historical-trading
+              เองตามหลังวันเทรด ~1 วัน (ดู _probe_latest_available) แม้ sync_all จะทันทุกรอบ
+              ตารางก็จะช้ากว่า ref_date ~1 วันเป็นปกติ — guard เลยต้องหลวมพอ
+    max_staleness_days: ข้าม symbol ที่แถวล่าสุดเก่ากว่า ref เกินจำนวนวันนี้ (calendar) —
+              กันเอาค่าค้างของหุ้นพักเทรด/เพิกถอน หรือทั้งตารางที่ค้างจริง ๆ มาใช้
+              (ตัวที่ถูกข้ามจะตกไป tier 1 highlight-data เอง)
+    """
+    if not fs.db_exists(base_dir):
+        return {}
+    want = {}
+    for t in tickers:
+        want[t[:-3] if t.endswith(".BK") else t] = t
+    con = _connect(base_dir)
+    try:
+        table_max = _latest_date(base_dir, con)
+        rows = con.execute(f"""
+            SELECT v.symbol, v.pe, v.pbv, v.dividend_yield, v.market_cap, v.date
+            FROM {TABLE} v
+            JOIN (SELECT symbol, MAX(date) mx FROM {TABLE} GROUP BY symbol) m
+              ON m.symbol = v.symbol AND m.mx = v.date
+        """).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    finally:
+        con.close()
+
+    ref = max([x for x in (ref_date, table_max) if x], default=None)
+    cutoff = None
+    if ref:
+        from datetime import date, timedelta
+        try:
+            y, m, d = map(int, ref[:10].split("-"))
+            cutoff = (date(y, m, d) - timedelta(days=max_staleness_days)).isoformat()
+        except Exception:
+            cutoff = None
+
+    out = {}
+    for sym, pe, pbv, dy, mc, d in rows:
+        tick = want.get(sym)
+        if not tick:
+            continue
+        if cutoff and (d or "") < cutoff:
+            continue
+        out[tick] = {
+            "mkt_cap":   int(mc)             if mc  is not None else None,
+            "pe":        round(float(pe), 2)  if pe  is not None else None,
+            "pbv":       round(float(pbv), 2) if pbv is not None else None,
+            "div_yield": round(float(dy), 2)  if dy  is not None else None,
+        }
+    return out
+
+
 def get_symbol_meta(base_dir, symbol):
     """{count, date_from, date_to, synced_at} ของหุ้น 1 ตัว — None ถ้ายังไม่เคยสะสม"""
     if not fs.db_exists(base_dir):
@@ -159,10 +223,31 @@ def _latest_date(base_dir, con):
     return row[0] if row else None
 
 
-def sync_all(base_dir, callback=None, skip_up_to_date=True):
+def _probe_latest_available(default=None):
+    """วันล่าสุดที่ SET /historical-trading "มีให้ดึงจริง" — โพรบจากหุ้นอ้างอิงตัวเดียว
+    (PTT: บลูชิพ ไม่เคยพักเทรด) 1 request · endpoint นี้ตามหลังวันเทรด ~1 วัน (หลังตลาด
+    ปิด 17:00+ ยังคืนแค่เมื่อวาน — วัดจริง 2026-08-27) เดิม gate เทียบ MAX(date) ตัวเอง
+    พอทุก symbol มี MAX แล้ว targets ว่าง ไม่ advance จนกว่าจะมีหุ้นเข้าใหม่/rename มากระตุ้น
+    (เปราะ) · โพรบนี้ให้ "วันล่าสุดที่ดึงได้จริง" มาเทียบตรง ๆ — ไม่มีวันใหม่ = ไม่ยิงทิ้งเปล่า,
+    มีวันใหม่ = ดึงทั้งกระดาน · คืน default ถ้าโพรบล้ม (คง gate เดิม)"""
+    try:
+        from sources.set_api import fetch_historical_trading, _bootstrap_headers
+        ctx, hdr = _bootstrap_headers()
+        rows = fetch_historical_trading("PTT", ctx=ctx, hdr=hdr)
+        if rows and rows[-1].get("date"):
+            return rows[-1]["date"]
+    except Exception:
+        pass
+    return default
+
+
+def sync_all(base_dir, callback=None, skip_up_to_date=True, probe=True):
     """ดึง historical-trading ทั้งกระดาน (พารัลเลล ~1-2 นาที/931 ตัว) แล้ว upsert สะสม —
-    wire เข้า run_quick_update() (staleness gate: ข้ามตัวที่ date ล่าสุดใน DB = วันล่าสุด
-    ของทั้งตารางแล้ว = sync ไปวันนี้แล้ว) + ปุ่มมือในหน้า Data Health
+    wire เข้า run_quick_update() + ปุ่มมือในหน้า Data Health
+
+    staleness gate: ข้าม symbol ที่มีแถวของ "วันล่าสุดที่ SET ให้ดึงได้จริง" แล้ว
+    (โพรบจาก PTT — ดู _probe_latest_available) · probe=False → เทียบ MAX(date) ตัวเอง
+    แบบเดิม (ไม่ยิง network เพิ่ม — ใช้กับ opportunistic upsert ที่ต้องเร็ว/ไม่พึ่ง network)
 
     คืน (จำนวนหุ้นที่เขียน, จำนวนหุ้นที่พยายาม, จำนวนแถวใหม่รวม)
     raise ถ้า fetch_historical_trading_batch ได้ < 50% (ปล่อย ValueError ให้ caller)"""
@@ -175,13 +260,20 @@ def sync_all(base_dir, callback=None, skip_up_to_date=True):
         con = _connect(base_dir)
         try:
             latest = _latest_date(base_dir, con)
-            if latest:
-                have_today = {r[0] for r in con.execute(
-                    f"SELECT symbol FROM {TABLE} WHERE date=?", (latest,)).fetchall()}
-                targets = [s for s in all_syms
-                           if (s[:-3] if s.endswith(".BK") else s) not in have_today]
         finally:
             con.close()
+        if latest:
+            avail = _probe_latest_available(default=latest) if probe else latest
+            if avail < latest:          # โพรบเพี้ยน/ตอบวันเก่า — อย่าถอยหลัง
+                avail = latest
+            con = _connect(base_dir)
+            try:
+                have = {r[0] for r in con.execute(
+                    f"SELECT symbol FROM {TABLE} WHERE date=?", (avail,)).fetchall()}
+            finally:
+                con.close()
+            targets = [s for s in all_syms
+                       if (s[:-3] if s.endswith(".BK") else s) not in have]
 
     if not targets:
         if callback:

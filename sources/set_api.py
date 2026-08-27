@@ -10,6 +10,7 @@ validation gate: ถ้าผลได้ต่ำกว่าเกณฑ์ใ
 ไปแหล่งอื่นแทนที่จะรับข้อมูลไม่ครบเข้า pipeline เงียบๆ
 """
 import json
+import threading
 import time
 import urllib.parse
 import urllib.request as ur
@@ -22,19 +23,40 @@ from core.net import ssl_context
 BASE = "https://www.set.or.th"
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0"
 
+# cache cookie ต่อ referer_path — Quick Update เรียก _bootstrap_headers ~5-6 จุด
+# (fetch_quotes_batch / fetch_fundamentals / fetch_historical_trading_batch /
+# fetch_trading_calendar_tail / fetch_price_history_batch / fetch_signs_batch) เดิม
+# แต่ละจุด bootstrap คุกกี้ใหม่หมด — cache TTL 10 นาที ครอบทั้งรอบ (~2-4 นาที) ใน
+# นัดเดียว · double-checked locking กัน thundering-herd จาก ThreadPoolExecutor workers
+# · เรียก force=True (ตอน retry) เพื่อรีเฟรชคุกกี้ที่หมดอายุกลางรอบ
+_HDR_LOCK = threading.Lock()
+_HDR_CACHE: dict = {}          # referer_path -> (ts, ctx, hdr)
+_HDR_TTL = 600
 
-def _bootstrap_headers(referer_path="/th/market/product/stock/quote/PTT/price"):
-    """เปิดหน้าเว็บหนึ่งครั้งเพื่อรับ cookie — internal API ตอบ 403 ถ้าไม่มี"""
-    ctx = ssl_context()
-    req = ur.Request(BASE + referer_path, headers={"User-Agent": _UA})
-    with ur.urlopen(req, context=ctx, timeout=20) as r:
-        cookie = r.getheader("Set-Cookie", "") or ""
-    return ctx, {
-        "User-Agent": _UA,
-        "Accept": "application/json",
-        "Referer": BASE + referer_path,
-        "Cookie": cookie,
-    }
+
+def _bootstrap_headers(referer_path="/th/market/product/stock/quote/PTT/price", force=False):
+    """เปิดหน้าเว็บหนึ่งครั้งเพื่อรับ cookie — internal API ตอบ 403 ถ้าไม่มี
+    (cache ต่อ referer_path, TTL 10 นาที — force=True ข้าม cache รีเฟรชใหม่)"""
+    if not force:
+        c = _HDR_CACHE.get(referer_path)
+        if c and time.time() - c[0] < _HDR_TTL:
+            return c[1], c[2]
+    with _HDR_LOCK:
+        c = _HDR_CACHE.get(referer_path)
+        if not force and c and time.time() - c[0] < _HDR_TTL:
+            return c[1], c[2]
+        ctx = ssl_context()
+        req = ur.Request(BASE + referer_path, headers={"User-Agent": _UA})
+        with ur.urlopen(req, context=ctx, timeout=20) as r:
+            cookie = r.getheader("Set-Cookie", "") or ""
+        hdr = {
+            "User-Agent": _UA,
+            "Accept": "application/json",
+            "Referer": BASE + referer_path,
+            "Cookie": cookie,
+        }
+        _HDR_CACHE[referer_path] = (time.time(), ctx, hdr)
+        return ctx, hdr
 
 
 def _get_json(ctx, hdr, path, timeout=12):
@@ -51,7 +73,7 @@ def fetch_fundamentals(tickers, callback=None, workers=8, min_ratio=0.5):
                   "pbv": float|None, "div_yield": float|None}}
     raise ValueError ถ้าดึงสำเร็จน้อยกว่า min_ratio (ให้ caller fallback Yahoo)
     """
-    ctx, hdr = _bootstrap_headers()
+    _bootstrap_headers()   # อุ่น cache (double-checked lock กัน herd จาก workers)
     results = {}
 
     def _one(tick):
@@ -59,6 +81,7 @@ def fetch_fundamentals(tickers, callback=None, workers=8, min_ratio=0.5):
         path = f"/api/set/stock/{urllib.parse.quote(sym)}/highlight-data?lang=th"
         for attempt in range(2):
             try:
+                ctx, hdr = _bootstrap_headers(force=attempt > 0)
                 d = _get_json(ctx, hdr, path)
                 mc  = d.get("marketCap")
                 pe  = d.get("peRatio")
@@ -114,7 +137,7 @@ def fetch_quotes_batch(tickers, callback=None, workers=6, batch_size=30, min_rat
     รับสูงสุด 30 ตัว/request (เกินกว่านั้นตอบ 400)
     raise ValueError ถ้าดึงสำเร็จน้อยกว่า min_ratio (ให้ caller fallback Yahoo)
     """
-    ctx, hdr = _bootstrap_headers()
+    _bootstrap_headers()   # อุ่น cache (double-checked lock กัน herd จาก workers)
     sym_map = {(t[:-3] if t.endswith(".BK") else t): t for t in tickers}
     chunks = [tickers[i:i + batch_size] for i in range(0, len(tickers), batch_size)]
     results = {}
@@ -124,6 +147,7 @@ def fetch_quotes_batch(tickers, callback=None, workers=6, batch_size=30, min_rat
         q = urllib.parse.quote(",".join(syms))
         for attempt in range(2):
             try:
+                ctx, hdr = _bootstrap_headers(force=attempt > 0)
                 return _get_json(ctx, hdr,
                                   f"/api/set/stock-info/list-by-symbols?symbols={q}&lang=th")
             except Exception:
@@ -665,7 +689,7 @@ def fetch_historical_trading_batch(tickers, callback=None, workers=8, min_ratio=
     tickers: list ของ "PTT" (มี/ไม่มี .BK ก็ได้) คืน {ticker: [row, ...]} โดย row เหมือน
     fetch_historical_trading เป๊ะ — ตัวที่ดึงไม่สำเร็จไม่อยู่ใน dict (caller ข้ามเอง)
     raise ValueError ถ้าสำเร็จ < min_ratio (แหล่งนี้ไม่มี fallback — ข้ามรอบนี้ไปเลย)"""
-    ctx, hdr = _bootstrap_headers()
+    _bootstrap_headers()   # อุ่น cache (double-checked lock กัน herd จาก workers)
     results = {}
 
     def _one(tick):
@@ -673,6 +697,7 @@ def fetch_historical_trading_batch(tickers, callback=None, workers=8, min_ratio=
         path = f"/api/set/stock/{urllib.parse.quote(sym)}/historical-trading?lang=th"
         for attempt in range(2):
             try:
+                ctx, hdr = _bootstrap_headers(force=attempt > 0)
                 d = _get_json(ctx, hdr, path, timeout=15)
                 rows = d if isinstance(d, list) else []
                 out = [{

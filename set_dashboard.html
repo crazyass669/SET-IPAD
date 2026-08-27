@@ -4277,6 +4277,9 @@
     <b>ต่อเนื่อง</b> โตติดกันกี่ไตรมาส (ต้องเป็นบวกทุกไตรมาสด้วย ไม่ใช่แค่ขาดทุนหดตัวลง), <b>OCF/NI</b>
     กำไรมีเงินสดหนุนจริงไหม (จาก SET official cash_flow เท่าที่เคย sync สะสมไว้แล้ว — งวดที่ยังไม่มี
     ข้อมูลโชว์ "—")
+    <br><button class="filter-btn" onclick="document.getElementById('npm-delta-note-modal').classList.add('open')"
+      style="margin-top:6px;font-size:10px;padding:2px 8px"
+      title="วิธีอ่านค่า Δ NPM แบบละเอียด พร้อมตัวอย่างง่ายๆ">📖 วิธีอ่านค่า Δ NPM (+15.5pp / −14.9pp)</button>
   </div>
 
   <div class="card" style="padding:10px 16px;margin-bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
@@ -5205,6 +5208,114 @@
       <div style="color:var(--text2);font-size:11px;border-top:1px solid var(--border);padding-top:8px">
         ⚠️ universe คือหุ้น 930 ตัวจาก archive (มี delisted บางส่วนแต่อาจไม่ครบ = survivorship bias เล็กน้อย)
         และผลเป็นค่าสถิติเฉลี่ยในอดีต ไม่ใช่การันตีรายครั้ง · ข้อมูล ณ 3 ก.ค. 2026
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Δ NPM NOTE MODAL — วิธีอ่านค่าคอลัมน์ "Δ NPM" (percentage point) ในหน้า 🚀 หุ้นโตแรงรายไตรมาส
+     ปุ่มเปิดอยู่ท้าย .page-sub ของ #page-growth-screener — ตัวเลขในตัวอย่างเป็นค่าสมมติเพื่อสอนวิธีอ่าน
+     ตรรกะจริง: _growthScrNpmDeltaCell (dashboard.js) + npm_change_yoy/qoq (financials_store.py) -->
+<div class="modal-overlay" id="npm-delta-note-modal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-header">
+      <div class="modal-title">📖 วิธีอ่านค่า Δ NPM</div>
+      <div class="modal-abbr">มาร์จิ้นสุทธิเปลี่ยนกี่ "จุด" (pp) — YoY ตัวใหญ่ · QoQ ตัวเล็ก</div>
+      <button class="modal-close" onclick="document.getElementById('npm-delta-note-modal').classList.remove('open')">✕</button>
+    </div>
+    <div class="modal-body" style="font-size:12px;line-height:1.65;color:var(--text);padding:14px 20px">
+
+      <div style="font-weight:700;margin-bottom:6px">"pp" คืออะไร</div>
+      <div style="margin-bottom:6px">
+        <b>pp = percentage point = จุดเปอร์เซ็นต์</b> = เอาค่า % สองตัวมา<b>ลบกันตรงๆ</b>
+      </div>
+      <div style="color:var(--text2);margin-bottom:12px">
+        ตัวอย่างนอกเรื่องหุ้น: ดอกเบี้ยขึ้นจาก <b>2%</b> เป็น <b>3%</b> — พูดว่า "ขึ้น <b>1 จุด (pp)</b>" ก็ได้
+        หรือ "ขึ้น <b>50%</b>" ก็ไม่ผิด (เพราะ 3 มากกว่า 2 อยู่ครึ่งหนึ่ง) แต่ชวนงง · Dashboard เลยใช้ pp
+        เพราะมันคือ "ลบกันตรงๆ" อ่านง่ายกว่า
+      </div>
+
+      <div style="font-weight:700;margin-bottom:6px">NPM แบบบ้านๆ</div>
+      <div style="margin-bottom:6px"><b>NPM (Net Profit Margin)</b> = ทุกยอดขาย 100 บาท เหลือเป็น<b>กำไรสุทธิ</b>กี่บาท</div>
+      <div style="color:var(--text2);margin-bottom:6px">สมมติบริษัทหนึ่ง (ตัวเลขสมมติเพื่อสอนวิธีอ่าน):</div>
+      <table class="tbl" style="width:100%;margin-bottom:12px">
+        <thead><tr><th>งวด</th><th class="r">ขายได้</th><th class="r">เหลือกำไร</th><th class="r">NPM</th></tr></thead>
+        <tbody>
+          <tr><td>ไตรมาสนี้</td><td class="r">100</td><td class="r">20.5</td><td class="r"><b>20.5%</b></td></tr>
+          <tr><td>ปีก่อน ไตรมาสเดียวกัน</td><td class="r">100</td><td class="r">5</td><td class="r"><b>5%</b></td></tr>
+          <tr><td>ไตรมาสที่แล้ว (ติดกัน)</td><td class="r">100</td><td class="r">35.4</td><td class="r"><b>35.4%</b></td></tr>
+        </tbody>
+      </table>
+
+      <div style="font-weight:700;margin-bottom:6px">ตัวเลขในการ์ด</div>
+
+      <div style="margin-bottom:4px"><span style="color:#3fb950;font-weight:700">+15.5pp</span> — ตัวใหญ่ = เทียบปีก่อน (YoY)</div>
+      <div style="margin:0 0 4px 12px;font-family:monospace;color:var(--text2)">20.5% − 5% = +15.5pp</div>
+      <div style="margin:0 0 12px 12px">
+        ปีนี้ทุกยอดขาย 100 บาท <b>เก็บกำไรได้มากขึ้น 15.5 บาท</b> เทียบกับปีก่อน →
+        มาร์จิ้นขยายแรง กำไรโตแบบมีคุณภาพ <span style="color:#3fb950">(สีเขียว)</span>
+      </div>
+
+      <div style="margin-bottom:4px"><span style="color:#f85149;font-weight:700">−14.9pp</span> — ตัวเล็ก = เทียบไตรมาสที่แล้ว (QoQ)</div>
+      <div style="margin:0 0 4px 12px;font-family:monospace;color:var(--text2)">20.5% − 35.4% = −14.9pp</div>
+      <div style="margin:0 0 12px 12px">
+        เทียบไตรมาสที่แล้ว ทุกยอดขาย 100 บาท <b>เก็บกำไรได้น้อยลง 14.9 บาท</b> →
+        มาร์จิ้นหดจากไตรมาสก่อน <span style="color:#f85149">(สีแดง)</span>
+      </div>
+
+      <div style="color:var(--text2);margin-bottom:12px">
+        สรุปสี: <span style="color:#3fb950">เขียว = มาร์จิ้นขยาย</span> (โตแบบมีคุณภาพ) ·
+        <span style="color:#f85149">แดง = มาร์จิ้นหด</span> (อาจตัดราคาแข่ง)
+      </div>
+
+      <div style="font-weight:700;margin-bottom:6px">อ่านสองตัวรวมกันว่าอะไร</div>
+      <div style="margin-bottom:10px">
+        ปีนี้ดีกว่าปีก่อน<b>เยอะ</b> (+15.5) แต่แย่กว่าไตรมาสที่แล้ว<b>เยอะ</b> (−14.9)
+        → แปลว่า<b>ไตรมาสที่แล้วมาร์จิ้นพุ่งสูงผิดปกติ</b> (35.4% — น่าจะมีกำไรพิเศษ เช่น ขายสินทรัพย์
+        กำไรอัตราแลกเปลี่ยน) พอไตรมาสนี้ของพิเศษหมด มาร์จิ้นเลยย่อกลับมาที่ 20.5%
+        — <b>แต่ก็ยังสูงกว่าปีก่อน (5%) อยู่มาก</b> · ควรเปิดงบดูว่ากำไรก้อนใหญ่ของไตรมาสก่อนมาจาก
+        ธุรกิจปกติหรือรายการครั้งเดียว
+      </div>
+
+      <div style="font-weight:700;margin-bottom:6px">แล้ว "บวกทั้งคู่" = ดีที่สุดเลยไหม?</div>
+      <div style="margin-bottom:6px">
+        ใช่ในเชิงทิศทาง — บวกทั้ง YoY และ QoQ = มาร์จิ้นขยายทั้งเทียบปีก่อนและเทียบไตรมาสที่แล้ว
+        เป็นสัญญาณสุขภาพดีที่สุด แต่มี 3 ข้อที่ต้องเสริม ไม่งั้นตีความพลาด
+      </div>
+      <ol style="margin:0 0 12px 18px;padding:0">
+        <li style="margin-bottom:8px">
+          <b>บวกที่ดีจริง = บวกแบบไม่หวือหวา ต่อเนื่อง</b> — อยากเห็นมาร์จิ้นค่อยๆ ขยาย
+          <b>+1 ถึง +3pp ต่อเนื่องหลายไตรมาส</b> จากเหตุผลยั่งยืน (ต้นทุนลดจริง, มีอำนาจตั้งราคา,
+          ยอดขายโตจนต้นทุนคงที่ถูกเฉลี่ยบางลง, ขายสินค้า margin สูงสัดส่วนมากขึ้น)<br>
+          การกระโดด <b>+15 ถึง +20pp ในไตรมาสเดียว</b> เกือบทุกครั้งมาจากรายการครั้งเดียว
+          (ขายสินทรัพย์ / กำไรอัตราแลกเปลี่ยน / กลับรายการภาษี-ด้อยค่า) หรือ<b>ฐานปีก่อนต่ำผิดปกติ</b>
+          (ปีก่อนไตรมาสนี้ขาดทุน → พอกลับมาปกติ เลขเลยดูโตมหาศาล) — เคสแบบนี้ไตรมาสหน้ามักหดกลับ ต้องเปิดงบเช็ค
+        </li>
+        <li style="margin-bottom:8px">
+          <b>QoQ ติดลบนิดหน่อยไม่ได้แย่เสมอ</b> — หลายธุรกิจมีฤดูกาล (ค้าปลีกแรงไตรมาส 4,
+          เกษตรแรงตอนเก็บเกี่ยว) QoQ เอาผลฤดูกาลออกไม่ได้ แต่ <b>YoY เอาออกให้แล้ว</b>
+          เพราะเทียบไตรมาสเดียวกัน → <b>ให้น้ำหนัก YoY มากกว่า QoQ</b>
+          (หน้านี้ใช้ YoY เป็นตัวหลักเรียงลำดับ ส่วน QoQ เป็นแค่ตัวเช็คโมเมนตัมเสริม)
+        </li>
+        <li>
+          <b>ต้องอ่านคู่กับคอลัมน์อื่น</b> — Δ NPM ตัวเดียวบอกไม่ครบ:
+          <table class="tbl" style="width:100%;margin:6px 0 4px">
+            <thead><tr><th>ดูคู่กับ</th><th>อยากเห็น</th></tr></thead>
+            <tbody>
+              <tr><td>กำไร YoY / QoQ</td><td>โตด้วย (มาร์จิ้นขยาย + กำไรโต = ของจริง)</td></tr>
+              <tr><td><b>ต่อเนื่อง</b></td><td>≥ 2–3 ไตรมาส (ไม่ใช่พุ่งไตรมาสเดียว)</td></tr>
+              <tr><td><b>OCF/NI</b></td><td>≥ 80–100% (กำไรมีเงินสดหนุนจริง ไม่ใช่ลงบัญชีอย่างเดียว)</td></tr>
+            </tbody>
+          </table>
+          <span style="color:var(--text2)">⚠️ ระวังเคส "มาร์จิ้นขึ้นเพราะรายได้หด" — ตัดธุรกิจ margin ต่ำทิ้ง
+          (โอเค) หรือหั่นงบการตลาด/R&D เพื่อดันกำไรระยะสั้น (ไม่โอเค) ก็ทำให้ Δ NPM เขียวได้เหมือนกัน</span>
+        </li>
+      </ol>
+
+      <div style="color:var(--text2);font-size:11px;border-top:1px solid var(--border);padding-top:8px">
+        ⚠️ จะโชว์ค่าเฉพาะเมื่อรายได้ทั้งไตรมาสนี้และไตรมาสที่ใช้เทียบ ≥ 50 ล้านบาท (กัน pp หลอกจากฐานจิ๋ว)
+        — ปิดเงื่อนไขนี้ได้ที่ช่อง "ตัดฐานเทียบเล็กเกินไป" · กลุ่มการเงิน/ประกันไม่มีบรรทัดรายได้ จึงคำนวณ
+        NPM ไม่ได้ (โชว์ "—")
       </div>
     </div>
   </div>

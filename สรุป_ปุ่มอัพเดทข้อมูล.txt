@@ -3,14 +3,17 @@
 
 1) Quick Update
 -----------------
-Endpoint: /api/quick-update -> run_quick_update() (services/refresh.py)
-- โหลด set_history.json / set_prices.db ที่มีอยู่ -> หาว่าหุ้นแต่ละตัวข้อมูลถึงวันไหนแล้ว
-  -> ดึงเฉพาะ "ช่องว่าง" (gap) จากวันล่าสุดถึงวันนี้เท่านั้น (ไม่ดึงย้อนหลังทั้งหมด, ไม่ดึง fundamentals ใหม่)
-- ต่อด้วย:
-  - sync insider trades / ผู้ถือหุ้นใหญ่
-  - อัพเดท Indices (TradingView, ไม่ full history)
-  - gap-update ราคา US Index และ HK Index พร้อมคำนวณ RS/Stage/EMA/52W ใหม่
-  - อัพเดท short sales + NVDR ประจำวัน
+Endpoint: /api/quick-update -> _run_quick() (app.py) -> run_quick_update() (services/refresh.py) + sub-steps
+- โหลด set_prices.db ที่มีอยู่ -> หาว่าหุ้นแต่ละตัวข้อมูลถึงวันไหนแล้ว -> ดึงเฉพาะ "ช่องว่าง" (gap)
+  ราคาหุ้นไทย (SET API list-by-symbols fast path -> fallback Yahoo -> fallback SET chart-quotation)
+- ดึง fundamentals หุ้นไทยใหม่ทุกครั้ง (mkt_cap / P/E / P/BV / Div Yield):
+  * แหล่งหลัก = ตาราง set_daily_valuation (SET.or.th historical-trading — สะสมสำหรับ Valuation
+    Band อยู่แล้ว, แถวล่าสุด = ค่าวันนี้ ตรงกับ /highlight-data ทุก field ยืนยัน 2026-08-27)
+  * fallback = /highlight-data -> Yahoo -> ค่าเดิมจาก set_data.json รอบก่อน
+    (เดิมยิง /highlight-data ~930 req ทุกครั้ง ซ้ำกับ historical-trading ที่ยิงอยู่แล้ว — ตัดออก 2026-08-27)
+- ต่อด้วย sub-steps (91-99%): Insider/ผู้ถือหุ้นใหญ่ · Indices (TradingView ดัชนีไทย) ·
+  gap-update US/HK/JP Index + RS/Stage/EMA/52W · Short Sales · NVDR · Capital Flow ·
+  S50 Futures Flow · Bond Flow · safety-net สะสม PE/PBV รายวัน · ตรวจ drift หุ้นเข้า/ออก (สัปดาห์ละครั้ง)
 - เวลาที่ใช้: ~2-5 นาที
 - เหมาะกด: หลัง 17:30 น. (หลัง SET ปิด)
 - หลีกเลี่ยง: 14:30-17:30 น. (Yahoo กำลัง sync)

@@ -24,11 +24,23 @@ PLAN: ต่อยอด SET.or.th internal API — 7 ชุดข้อมู�
           #4B ✅ สะสม PE/PBV/BVPS/DivYield รายวันทางการลง DB — sources/set_daily_val.py
                 (ตาราง set_daily_valuation ใน financials.db, CREATE IF NOT EXISTS
                 append-only) · opportunistic upsert ใน /api/set-valuation-check
-                + bulk sync_all() wire เข้า run_quick_update() (_sub_step,
-                staleness gate: วันที่ sync แล้ว targets ว่างคืนทันที) +
-                /api/set-daily-val/sync (background thread) + Data Health item
-                'set_daily_valuation' · _loadBandSetCheck โชว์ช่วง avg/min/max
-                จากประวัติสะสมเมื่อยาวเกิน live window
+                + bulk sync_all() wire เข้า run_quick_update() (staleness gate:
+                วันที่ sync แล้ว targets ว่างคืนทันที) + /api/set-daily-val/sync
+                (background thread) + Data Health item 'set_daily_valuation' ·
+                _loadBandSetCheck โชว์ช่วง avg/min/max จากประวัติสะสมเมื่อยาวเกิน live window
+             #4B+ (2026-08-27) ✅ set_daily_valuation กลายเป็น "tier 0" ของ fundamentals ใน
+                Quick Update: services/refresh.py::_fetch_fundamentals_with_fallback(use_daily_val=True)
+                เรียก sync_all() แล้วอ่าน pe/pbv/mkt_cap/div_yield จากแถวล่าสุด
+                (set_daily_val.latest_fundamentals_map) — ตัดการยิง /highlight-data ~930 req/วัน
+                ที่ซ้ำกับ historical-trading (ยืนยัน Δ 0.00% ทุก field — แถวล่าสุด historical-trading
+                == /highlight-data, เช็ค 29 ตัวหลังตลาดปิด) ·
+                _run_quick เหลือ _sub_step "PE/PBV รายวัน (SET)" เป็น idempotent safety net
+                (ครอบเคส run_quick_update early-return)
+                · sync_all staleness gate เปลี่ยนจากเทียบ MAX(date) ตัวเอง (เปราะ — พอทุก
+                symbol มี MAX แล้วไม่ advance จนกว่าจะมี straggler) มาโพรบ
+                _probe_latest_available() (PTT historical-trading 1 req) = "วันล่าสุดที่ SET
+                ให้ดึงได้จริง" — SET endpoint นี้ตามหลังวันเทรด ~1 วัน (วัดจริง 2026-08-27)
+                เลยต้องเทียบกับวันที่ SET มีจริง ไม่ใช่วันราคาล่าสุด
 
         เอกสารด้านล่างเก็บไว้อ้างอิง methodology/coverage/endpoint ที่ใช้ไม่ได้
 ================================================================================

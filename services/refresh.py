@@ -115,26 +115,62 @@ def _update_rotation_safe(base_dir, data_as_of, sectors, industries):
         logging.warning(f"[Rotation] update state failed: {e}")
 
 
-def _fetch_fundamentals_with_fallback(tickers, base_dir, callback, log_prefix=""):
-    """ดึง fundamentals (mkt_cap/pe/pbv/div_yield): SET API ก่อน (เร็ว + ข้อมูลจาก
-    เจ้าของตลาด) -> fallback Yahoo -> fallback ค่าเดิมจาก set_data.json รอบก่อน (กัน
-    P/E-P/BV หายวับทั้งกระดานเวลา API ล่มชั่วคราวรอบเดียว) — ใช้ร่วมกันระหว่าง
-    run_with_progress/run_quick_update กันโค้ด fallback สองชุดแยกกันแล้วแก้ไม่ครบคู่
-    (code review 2026-08-27) คืนค่า (fund_map: {ticker: {...}}, warning: str|None)"""
+def _fetch_fundamentals_with_fallback(tickers, base_dir, callback, log_prefix="",
+                                      use_daily_val=False):
+    """ดึง fundamentals (mkt_cap/pe/pbv/div_yield): set_daily_valuation (tier 0, เฉพาะ
+    Quick Update) -> SET API highlight-data -> fallback Yahoo -> fallback ค่าเดิมจาก
+    set_data.json รอบก่อน (กัน P/E-P/BV หายวับทั้งกระดานเวลา API ล่มชั่วคราวรอบเดียว) —
+    ใช้ร่วมกันระหว่าง run_with_progress/run_quick_update กันโค้ด fallback สองชุดแยกกัน
+    แล้วแก้ไม่ครบคู่ (code review 2026-08-27) คืนค่า (fund_map: {ticker: {...}}, warning: str|None)
+
+    use_daily_val=True (Quick Update): sync set_daily_valuation (historical-trading —
+    ที่สะสมสำหรับ Valuation Band อยู่แล้วทุกรอบ) ก่อน แล้วอ่าน pe/pbv/mkt_cap/div_yield
+    จากแถวล่าสุด — ตรงกับ highlight-data ทุก field (ยืนยัน 2026-08-27) ตัดการยิง
+    highlight-data ~930 req/วันซ้ำ เหลือไว้เติมเฉพาะตัวที่ daily-val ยังไม่ครอบคลุม
+    """
     total = len(tickers)
     fundamentals = {}
-    try:
-        from sources.set_api import fetch_fundamentals
-        fundamentals = fetch_fundamentals(tickers, callback=callback)
-        logging.info(f"{log_prefix}[Fundamentals] SET API: {len(fundamentals)}/{total} ตัว")
-    except Exception as e:
-        logging.warning(f"{log_prefix}[Fundamentals] SET API ล้มเหลว ({e}) — fallback Yahoo...")
-        callback(0, total, f"Fundamentals fallback Yahoo ({total} หุ้น)...")
+
+    # ── tier 0: set_daily_valuation (Quick Update เท่านั้น) ──────────────
+    # ข้ามถ้าไม่มี financials.db (เช่น CI fresh checkout — financials.db เป็น local-only)
+    # ไม่งั้น sync_all จะสร้าง DB ว่างแล้วดึง historical-trading ทั้ง 931 ตัวทิ้งเปล่า
+    from sources.financials_store import db_exists as _fin_db_exists
+    if use_daily_val and _fin_db_exists(base_dir):
         try:
-            fundamentals = fetch_market_caps_parallel(tickers, callback=callback)
-        except Exception as e2:
-            logging.warning(f"{log_prefix}[Fundamentals] Yahoo ก็ล้มเหลว ({e2}) — คงค่าเดิมจากรอบก่อนแทน")
-            fundamentals = {}
+            from sources import set_daily_val
+            n, tot_t, rows = set_daily_val.sync_all(base_dir, callback=callback,
+                                                    skip_up_to_date=True)
+            logging.info(f"{log_prefix}[Fundamentals] daily-val sync: {n}/{tot_t} ตัว (+{rows} แถว)")
+        except Exception as e:
+            logging.warning(f"{log_prefix}[Fundamentals] daily-val sync ล้มเหลว ({e}) — ข้าม tier 0")
+        try:
+            from sources import set_daily_val
+            ref_date = max(get_last_dates(base_dir).values(), default=None)
+            dv_map = set_daily_val.latest_fundamentals_map(base_dir, tickers, ref_date=ref_date)
+            fundamentals.update(dv_map)
+            logging.info(f"{log_prefix}[Fundamentals] daily-val map: {len(dv_map)}/{total} ตัว "
+                         f"(ref_date={ref_date})")
+        except Exception as e:
+            logging.warning(f"{log_prefix}[Fundamentals] daily-val map อ่านไม่ได้ ({e})")
+
+    # ── tier 1: SET API highlight-data — full sweep ถ้า tier 0 คลุม < 50%
+    # (daily-val น่าจะล่ม) ไม่งั้นเติมเฉพาะตัวที่ขาด ──────────────────────
+    missing = [t for t in tickers if t not in fundamentals]
+    sweep = tickers if (total and len(fundamentals) < total * 0.5) else missing
+    if sweep:
+        try:
+            from sources.set_api import fetch_fundamentals
+            got = fetch_fundamentals(sweep, callback=callback)
+            fundamentals.update(got)
+            logging.info(f"{log_prefix}[Fundamentals] SET API highlight-data: {len(got)}/{len(sweep)} ตัว"
+                         f"{' (full sweep)' if sweep is tickers else ' (เติมส่วนขาด)'}")
+        except Exception as e:
+            logging.warning(f"{log_prefix}[Fundamentals] SET API ล้มเหลว ({e}) — fallback Yahoo...")
+            callback(0, total, f"Fundamentals fallback Yahoo ({len(sweep)} หุ้น)...")
+            try:
+                fundamentals.update(fetch_market_caps_parallel(sweep, callback=callback))
+            except Exception as e2:
+                logging.warning(f"{log_prefix}[Fundamentals] Yahoo ก็ล้มเหลว ({e2}) — คงค่าเดิมจากรอบก่อนแทน")
 
     existing_data_path = os.path.join(base_dir, OUT_FILE)
     old_fund_map = {}
@@ -386,6 +422,7 @@ def run_quick_update(callback, base_dir=None):
     # asof แล้วข้ามวันตรงกลางไปเงียบๆ ถาวร (sanity check prior ด้านล่างช่วยกันอีกชั้น แต่ไม่
     # 100% กับหุ้นที่ราคานิ่ง/ไม่มีการเทรดในช่วงที่ขาด — ต้องมีเช็ค deterministic นี้ด้วย)
     new_data = None
+    fast_signs = {}   # ticker -> sign string ดิบ ที่ fast-path เก็บมา (reuse ในเช็ค flat price ท้ายฟังก์ชัน)
     if sync_ratio >= 0.9:
         try:
             from sources.set_api import fetch_quotes_batch, fetch_trading_calendar_tail
@@ -396,7 +433,7 @@ def run_quick_update(callback, base_dir=None):
             if asof > mode_date and prev_trading_date == mode_date:
                 quote_tickers = [t for t, d in active_map.items() if d == mode_date]
                 callback(0, total, f"ดึงราคาล่าสุด {asof} ({len(quote_tickers)} หุ้น, SET API)...")
-                quotes = fetch_quotes_batch(quote_tickers, callback=callback)
+                quotes = fetch_quotes_batch(quote_tickers, callback=callback, signs_out=fast_signs)
                 stored_close = get_closes_on_date(base_dir, mode_date)
                 idx = pd.DatetimeIndex([pd.Timestamp(asof)])
                 fast_data, mismatched = {}, 0
@@ -471,11 +508,16 @@ def run_quick_update(callback, base_dir=None):
     # callback เปล่า (ไม่ผูก progress bar หลักที่ฟังก์ชันนี้คุมเอง) กันสองเธรดแย่งอัพเดท
     # progress, join() ก่อนใช้ผลด้านล่าง — daemon เผื่อ error หลังจุดนี้ไม่ให้ค้าง (code
     # review 2026-08-27)
+    # use_daily_val=True: เธรดนี้ sync set_daily_valuation (historical-trading) ในตัว
+    # แล้วอ่าน pe/pbv/mkt_cap/div_yield จากแถวล่าสุด — เดิม _run_quick มี _sub_step
+    # "PE/PBV รายวัน (SET)" แยกต่างหากยิง historical-trading ซ้ำอีกรอบท้าย ๆ + ยิง
+    # highlight-data อีก ~930 req/วัน (ทั้งคู่ได้ค่าเดียวกันเป๊ะ) — รวมเป็นจุดเดียว
     import threading
     _fund_result = {}
     def _fund_worker():
         fm, w = _fetch_fundamentals_with_fallback(
-            tickers, base_dir, lambda *a: None, log_prefix="[QuickUpdate]")
+            tickers, base_dir, lambda *a: None, log_prefix="[QuickUpdate]",
+            use_daily_val=True)
         _fund_result["fund_map"] = fm
         _fund_result["warning"]  = w
     _fund_thread = threading.Thread(target=_fund_worker, daemon=True)
@@ -615,8 +657,18 @@ def run_quick_update(callback, base_dir=None):
     try:
         flat_tickers = detect_flat_price_tickers(base_dir)
         if flat_tickers:
-            from sources.set_api import fetch_signs_batch
-            signs = fetch_signs_batch(flat_tickers)
+            # fast-path (fetch_quotes_batch signs_out=fast_signs) ยืนยันเครื่องหมายของบางตัว
+            # มาแล้ว — ตัวที่รู้แน่ว่าติด SP/NC/NP/H ไม่ต้องยิง fetch_signs_batch ซ้ำ
+            _SUSPEND = {"SP", "NC", "NP", "H"}
+            signs = {}
+            for t in flat_tickers:
+                raw = fast_signs.get(t)
+                if raw and (_SUSPEND & {c.strip() for c in raw.split(",")}):
+                    signs[t] = raw
+            recheck = [t for t in flat_tickers if t not in signs]
+            if recheck:
+                from sources.set_api import fetch_signs_batch
+                signs.update(fetch_signs_batch(recheck))
             if signs:
                 detail = ", ".join(f"{t}({signs[t]})" for t in sorted(signs))
                 logging.warning(f"[QuickUpdate] ราคาคงที่ {len(flat_tickers)} ตัว — "

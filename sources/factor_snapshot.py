@@ -278,6 +278,45 @@ def _latest_eps(payload_yahoo):
     return {"value": v, "as_of": d[:10] if isinstance(d, str) else d}
 
 
+def _yahoo_bvps(payload_yahoo):
+    """Book Value Per Share จากงบดุล Yahoo รายปีงวดล่าสุด = ส่วนของผู้ถือหุ้น ÷ จำนวนหุ้นสามัญ
+    (net of treasury) — ใช้ตอนตลาดนั้นไม่มี Finnomena 'Book Value Per Share' ให้ _last_ratio()
+    ดึง (เช่น JP) เลือกวันล่าสุดที่มีครบทั้งสองค่า (ปกติลงวันเดียวกัน) คืน None ถ้าส่วนทุนติดลบ/
+    ไม่มีข้อมูล"""
+    bs = (payload_yahoo or {}).get("balance", {})
+    eq = bs.get("Stockholders Equity") or bs.get("Common Stock Equity") or {}
+    sh = bs.get("Ordinary Shares Number") or bs.get("Share Issued") or {}
+    if not eq or not sh:
+        return None
+    d = max(set(eq) & set(sh), default=None)
+    if d is None:
+        return None
+    e, n = eq.get(d), sh.get(d)
+    if not e or not n or e <= 0 or n <= 0:
+        return None
+    return e / n
+
+
+def _fill_yahoo_pe_pbv(f, payload_yahoo, price):
+    """เติม f['pe_value']/f['pbv_value']/f['bvps'] จากงบ Yahoo รายปีงวดล่าสุด + ราคาปัจจุบัน
+    — สำหรับ mirror ตลาดที่ไม่มี Finnomena (JP): _factors_for() เรียก
+    compute_valuation_percentile(None) ซึ่งคืน None ทุกช่อง ทำให้ PE/PBV หายทั้ง Peer Compare/
+    Tearsheet/Valuation Snapshot เขียนทับเฉพาะช่องที่ยังว่าง (กันเคสอนาคตมี series จริง)
+    percentile/median/mean/n ยังเป็น None (ไม่มีอดีตให้เทียบ) · EPS <= 0 (ขาดทุน) หรือ
+    BVPS <= 0 (ส่วนทุนติดลบ) -> ไม่เซ็ต เพราะ PE/PBV ติดลบไม่มีความหมาย (สอดคล้องกับ
+    compute_valuation_percentile ที่เก็บเฉพาะ v > 0)"""
+    eps = f.get("eps_latest")
+    if f.get("pe_value") is None and eps and eps > 0:
+        f["pe_value"] = round(price / eps, 2)
+    bvps = f.get("bvps")
+    if bvps is None:
+        bvps = _yahoo_bvps(payload_yahoo)
+        if bvps is not None:
+            f["bvps"] = bvps
+    if f.get("pbv_value") is None and bvps and bvps > 0:
+        f["pbv_value"] = round(price / bvps, 2)
+
+
 def build_snapshot(base_dir, callback=None):
     """คำนวณ factor snapshot ของทั้ง universe (หุ้นไทย + DR ที่มีงบ Yahoo) เก็บลงตาราง
     คืน {"set": n, "dr": n, "total": n} — set/dr = จำนวนแถวที่เขียนสำเร็จ
@@ -634,10 +673,14 @@ def build_mirror_snapshot_yahoo_only(base_dir, market, tickers, price_by_ticker=
         f = _factors_for(base_dir, key, is_dr=False, z_variant="Z")
         if f is None:
             continue
+        price = price_by_ticker.get(ticker)
         if f.get("z_score") is None and not f.get("z_excluded_reason"):
-            price = price_by_ticker.get(ticker)
             if price and f.get("shares_out"):
                 f.update(fs.compute_zscore(y, price * f["shares_out"], variant="Z"))
+        # PE/PBV — ตลาดนี้ไม่มี valuation percentile series (Finnomena) ให้ _factors_for
+        # คำนวณ เติมค่า point งวดล่าสุดจากงบ Yahoo รายปี + ราคาปัจจุบันแทน
+        if price:
+            _fill_yahoo_pe_pbv(f, y, price)
         f["div_cagr_5y"] = _div_cagr_5y(base_dir, ticker, market)
         recs.append((ticker, market, f))
 
