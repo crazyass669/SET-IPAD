@@ -116,7 +116,7 @@ def _update_rotation_safe(base_dir, data_as_of, sectors, industries):
 
 
 def _fetch_fundamentals_with_fallback(tickers, base_dir, callback, log_prefix="",
-                                      use_daily_val=False):
+                                      use_daily_val=False, ref_date=None):
     """ดึง fundamentals (mkt_cap/pe/pbv/div_yield): set_daily_valuation (tier 0, เฉพาะ
     Quick Update) -> SET API highlight-data -> fallback Yahoo -> fallback ค่าเดิมจาก
     set_data.json รอบก่อน (กัน P/E-P/BV หายวับทั้งกระดานเวลา API ล่มชั่วคราวรอบเดียว) —
@@ -127,25 +127,34 @@ def _fetch_fundamentals_with_fallback(tickers, base_dir, callback, log_prefix=""
     ที่สะสมสำหรับ Valuation Band อยู่แล้วทุกรอบ) ก่อน แล้วอ่าน pe/pbv/mkt_cap/div_yield
     จากแถวล่าสุด — ตรงกับ highlight-data ทุก field (ยืนยัน 2026-08-27) ตัดการยิง
     highlight-data ~930 req/วันซ้ำ เหลือไว้เติมเฉพาะตัวที่ daily-val ยังไม่ครอบคลุม
+
+    ref_date: 'YYYY-MM-DD' ส่งจาก caller ถ้ามี (เช่น max_last ที่ run_quick_update คำนวณ
+    ไว้อยู่แล้วก่อนเรียกฟังก์ชันนี้) — กันเรียก get_last_dates(base_dir) (full scan
+    set_prices.db) ซ้ำ และกันอ่านค่าไม่นิ่งเวลาเธรดนี้รันคู่ขนานกับ save_history() เขียน
+    แท่งราคาวันใหม่ของรอบเดียวกัน (code review 2026-08-27) — ไม่ส่งมาก็ยัง fallback
+    คำนวณเองได้เหมือนเดิม (เช่นตอนเรียกจาก run_with_progress)
     """
     total = len(tickers)
     fundamentals = {}
 
     # ── tier 0: set_daily_valuation (Quick Update เท่านั้น) ──────────────
-    # ข้ามถ้าไม่มี financials.db (เช่น CI fresh checkout — financials.db เป็น local-only)
-    # ไม่งั้น sync_all จะสร้าง DB ว่างแล้วดึง historical-trading ทั้ง 931 ตัวทิ้งเปล่า
-    from sources.financials_store import db_exists as _fin_db_exists
-    if use_daily_val and _fin_db_exists(base_dir):
+    # sync_all เองมี guard ไม่สร้าง financials.db ว่างๆ (เช่น CI fresh checkout — เป็น
+    # local-only) และมี lock กันชนกับปุ่มมือ/safety-net อื่นที่เรียก sync_all ตัวเดียวกัน
+    # (ดู sources/set_daily_val.py — code review 2026-08-27)
+    if use_daily_val:
+        # 2 try/except แยกกันตั้งใจ (ไม่รวมเป็นก้อนเดียว) — sync_all() ล้ม (เช่น network
+        # ล่มชั่วคราว) ต้องไม่ทำให้ข้ามการอ่าน latest_fundamentals_map ไปด้วย เพราะตาราง
+        # ยังมีข้อมูลสะสมจากรอบก่อนๆ อยู่ ยังอ่านมาใช้ได้แม้ sync รอบนี้จะไม่สำเร็จ
+        from sources import set_daily_val
         try:
-            from sources import set_daily_val
             n, tot_t, rows = set_daily_val.sync_all(base_dir, callback=callback,
                                                     skip_up_to_date=True)
             logging.info(f"{log_prefix}[Fundamentals] daily-val sync: {n}/{tot_t} ตัว (+{rows} แถว)")
         except Exception as e:
             logging.warning(f"{log_prefix}[Fundamentals] daily-val sync ล้มเหลว ({e}) — ข้าม tier 0")
         try:
-            from sources import set_daily_val
-            ref_date = max(get_last_dates(base_dir).values(), default=None)
+            if ref_date is None:
+                ref_date = max(get_last_dates(base_dir).values(), default=None)
             dv_map = set_daily_val.latest_fundamentals_map(base_dir, tickers, ref_date=ref_date)
             fundamentals.update(dv_map)
             logging.info(f"{log_prefix}[Fundamentals] daily-val map: {len(dv_map)}/{total} ตัว "
@@ -156,21 +165,32 @@ def _fetch_fundamentals_with_fallback(tickers, base_dir, callback, log_prefix=""
     # ── tier 1: SET API highlight-data — full sweep ถ้า tier 0 คลุม < 50%
     # (daily-val น่าจะล่ม) ไม่งั้นเติมเฉพาะตัวที่ขาด ──────────────────────
     missing = [t for t in tickers if t not in fundamentals]
-    sweep = tickers if (total and len(fundamentals) < total * 0.5) else missing
+    is_full_sweep = bool(total) and len(fundamentals) < total * 0.5
+    sweep = tickers if is_full_sweep else missing
+    live_failed = False   # tier 1 (SET API) และ tier 1b (Yahoo) ล้มเหลวทั้งคู่สำหรับ sweep นี้
     if sweep:
         try:
             from sources.set_api import fetch_fundamentals
             got = fetch_fundamentals(sweep, callback=callback)
             fundamentals.update(got)
             logging.info(f"{log_prefix}[Fundamentals] SET API highlight-data: {len(got)}/{len(sweep)} ตัว"
-                         f"{' (full sweep)' if sweep is tickers else ' (เติมส่วนขาด)'}")
+                         f"{' (full sweep)' if is_full_sweep else ' (เติมส่วนขาด)'}")
         except Exception as e:
             logging.warning(f"{log_prefix}[Fundamentals] SET API ล้มเหลว ({e}) — fallback Yahoo...")
             callback(0, total, f"Fundamentals fallback Yahoo ({len(sweep)} หุ้น)...")
             try:
-                fundamentals.update(fetch_market_caps_parallel(sweep, callback=callback))
+                yahoo_map = fetch_market_caps_parallel(sweep, callback=callback)
+                # yahoo.py ใส่ {} ให้ทุกตัวที่ดึงไม่สำเร็จเสมอ (ไม่ omit key เหมือน
+                # fetch_fundamentals) — กรอง {} ทิ้งก่อน merge ไม่งั้นจะทับค่าที่ tier 0
+                # ได้มาแล้วสำเร็จด้วยค่าว่างเงียบๆ ตอน full sweep + tier 1 ล้มพร้อมกัน
+                # (code review 2026-08-27)
+                got_yahoo = {t: v for t, v in yahoo_map.items() if v}
+                fundamentals.update(got_yahoo)
+                if not got_yahoo:
+                    live_failed = True
             except Exception as e2:
                 logging.warning(f"{log_prefix}[Fundamentals] Yahoo ก็ล้มเหลว ({e2}) — คงค่าเดิมจากรอบก่อนแทน")
+                live_failed = True
 
     existing_data_path = os.path.join(base_dir, OUT_FILE)
     old_fund_map = {}
@@ -184,14 +204,19 @@ def _fetch_fundamentals_with_fallback(tickers, base_dir, callback, log_prefix=""
             logging.warning(f"{log_prefix}[Fundamentals] อ่าน {OUT_FILE} รอบก่อนไม่สำเร็จ ({e}) "
                              f"— ไม่มีค่าเดิมให้ fallback")
 
+    # เดิมเช็คแค่ "not fundamentals" (ทั้งหมดว่างเปล่า) — พอมี tier 0 แล้ว fundamentals
+    # แทบไม่มีทางว่างเปล่าสนิทอีกต่อไป (มีข้อมูลค้างจาก daily-val ให้เสมอถ้าเคย sync มา
+    # ก่อน) ทำให้เงื่อนไขนี้ไม่มีวันจริงอีกเลย แม้ SET API + Yahoo (tier 1/1b) จะล่มทั้งคู่
+    # จริงๆ — เปลี่ยนมาเช็คจาก live_failed ตรงๆ แทน (code review 2026-08-27)
     warning = None
-    if not fundamentals and total > 0:
+    if live_failed:
         if old_fund_map:
-            warning = (f"Fundamentals (P/E, P/BV, Market Cap, Div Yield) ดึงไม่สำเร็จทั้งหมด "
-                       f"({total} หุ้น) — ใช้ค่าเดิมจากรอบก่อนแทน")
+            warning = (f"Fundamentals (P/E, P/BV, Market Cap, Div Yield): SET API + Yahoo "
+                       f"ดึงสดไม่สำเร็จทั้งคู่ ({len(sweep)} หุ้น) — ใช้ค่าเดิมจากรอบก่อน"
+                       f"{'/tier 0' if fundamentals else ''}แทน")
         else:
-            warning = (f"Fundamentals (P/E, P/BV, Market Cap, Div Yield) ดึงไม่สำเร็จทั้งหมด "
-                       f"({total} หุ้น) และไม่มีค่าเดิมให้ fallback — ค่าจะว่างทั้งหมด")
+            warning = (f"Fundamentals (P/E, P/BV, Market Cap, Div Yield): SET API + Yahoo "
+                       f"ดึงสดไม่สำเร็จทั้งคู่ ({len(sweep)} หุ้น) และไม่มีค่าเดิมให้ fallback")
 
     fund_map = {}
     for t in tickers:
@@ -514,10 +539,14 @@ def run_quick_update(callback, base_dir=None):
     # highlight-data อีก ~930 req/วัน (ทั้งคู่ได้ค่าเดียวกันเป๊ะ) — รวมเป็นจุดเดียว
     import threading
     _fund_result = {}
+    _max_last_str = max_last.strftime("%Y-%m-%d")   # คำนวณไว้แล้วด้านบน — ส่งเป็น ref_date
+    # ตรงๆ กัน _fetch_fundamentals_with_fallback ต้อง get_last_dates(base_dir) (full scan
+    # set_prices.db) ซ้ำเองในเธรดพื้นหลัง ซึ่งจะแข่งกับ save_history() ของเธรดหลักด้านล่าง
+    # ที่กำลังเขียนแท่งราคาวันใหม่ของรอบนี้อยู่พอดี (code review 2026-08-27)
     def _fund_worker():
         fm, w = _fetch_fundamentals_with_fallback(
             tickers, base_dir, lambda *a: None, log_prefix="[QuickUpdate]",
-            use_daily_val=True)
+            use_daily_val=True, ref_date=_max_last_str)
         _fund_result["fund_map"] = fm
         _fund_result["warning"]  = w
     _fund_thread = threading.Thread(target=_fund_worker, daemon=True)
@@ -658,12 +687,14 @@ def run_quick_update(callback, base_dir=None):
         flat_tickers = detect_flat_price_tickers(base_dir)
         if flat_tickers:
             # fast-path (fetch_quotes_batch signs_out=fast_signs) ยืนยันเครื่องหมายของบางตัว
-            # มาแล้ว — ตัวที่รู้แน่ว่าติด SP/NC/NP/H ไม่ต้องยิง fetch_signs_batch ซ้ำ
-            _SUSPEND = {"SP", "NC", "NP", "H"}
+            # มาแล้ว — ตัวที่รู้แน่ว่าติด SP/NC/NP/H ไม่ต้องยิง fetch_signs_batch ซ้ำ · reuse
+            # _SUSPEND_SIGNS ของ set_api ตรงๆ (เดิมประกาศ set ซ้ำในไฟล์นี้ เสี่ยง drift ถ้า
+            # SET เพิ่มเครื่องหมายใหม่แล้วแก้แค่จุดเดียว — code review 2026-08-27)
+            from sources.set_api import _SUSPEND_SIGNS
             signs = {}
             for t in flat_tickers:
                 raw = fast_signs.get(t)
-                if raw and (_SUSPEND & {c.strip() for c in raw.split(",")}):
+                if raw and (_SUSPEND_SIGNS & {c.strip() for c in raw.split(",") if c.strip()}):
                     signs[t] = raw
             recheck = [t for t in flat_tickers if t not in signs]
             if recheck:

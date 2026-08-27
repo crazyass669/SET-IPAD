@@ -603,7 +603,14 @@ function startBuildMirrorNames() {
 async function startSetDailyValSync() {
   if (!confirm('สะสม PE/PBV รายวันทางการจาก SET.or.th ทั้งกระดานตอนนี้?\n\nปกติ Quick Update ยิงให้อัตโนมัติทุกวันอยู่แล้ว — กดเฉพาะตอนอยากบังคับรอบเต็ม\n\nรันพื้นหลัง ~1-2 นาที ดูผลที่ item "PE/PBV รายวันทางการ" ในหน้านี้รอบถัดไป')) return;
   try {
-    const r = await _fetchTimeout('/api/set-daily-val/sync', 15000, undefined, { method: 'POST' });
+    // ต้องส่ง force:true จริง — เดิมไม่มี body เลย ฝั่ง backend อ่าน request.get_json()
+    // ได้ None เสมอเลยไม่เคย force จริง (ปุ่มนี้ทำงานเหมือนรอ staleness gate อัตโนมัติ
+    // เฉยๆ ทั้งที่ข้อความบอกว่า "บังคับรอบเต็ม" — code review 2026-08-27)
+    const r = await _fetchTimeout('/api/set-daily-val/sync', 15000, undefined, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: true }),
+    });
     const d = await r.json();
     alert(d.ok ? '✓ เริ่มสะสมแล้ว — รีเฟรชหน้านี้อีกครั้งใน ~2 นาทีเพื่อดูผล'
                : `⚠ ${d.error || 'ไม่สำเร็จ'}`);

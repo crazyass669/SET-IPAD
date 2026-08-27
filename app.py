@@ -3794,8 +3794,11 @@ def set_valuation_check(symbol):
         # การเขียนทำให้ response พัง — เป็นแค่ผลพลอยได้
         try:
             set_daily_val.upsert_rows(BASE_DIR, sym, rows)
-        except Exception:
-            pass
+        except Exception as e:
+            # log ไว้ (ไม่ใช่ pass เงียบ) — ถ้าเขียนล้มเหลว acc ด้านล่างจะยังเป็นชุดเก่าที่
+            # ไม่รวมวันนี้ ทั้งที่ date_to ของ response ยังอิง rows (ชุดสด) อยู่ดี ถ้าไม่ log
+            # ไว้จะไม่มีร่องรอยว่าทำไม avg/min/max ถึงไม่ขยับตามที่คาด (code review 2026-08-27)
+            logging.warning(f"[set-valuation-check] upsert_rows {sym} ล้มเหลว ({e}) — สถิติรอบนี้ใช้ชุดเก่า")
         acc = set_daily_val.get_series(BASE_DIR, sym)
         # ใช้ชุดสะสมถ้ายาวกว่าชุดสด (ปกติจะยาวกว่าเสมอหลัง sync ไปหลายรอบ) — fallback ชุดสด
         stat_rows = acc if len(acc) >= len(rows) else rows
@@ -3822,6 +3825,13 @@ def set_valuation_check(symbol):
 
 
 _set_daily_val_sync_running = {"on": False}
+# ล็อกคุม _set_daily_val_sync_running แบบเดียวกับ _dr_refresh_lock — เดิมเช็ค flag แบบ
+# ไม่ล็อกในเธรด request แล้วค่อยตั้ง True *ข้างใน* เธรดที่ spawn ไปแล้ว (TOCTOU: 2 คลิกรัว
+# ๆ ผ่าน guard ได้ทั้งคู่ก่อนเธรดไหนทันตั้ง flag) ตั้ง flag ให้ atomic ใต้ lock นี้ในเธรด
+# request เองก่อน spawn เสมอ (code review 2026-08-27) — ชั้นป้องกันจริงที่กันข้อมูลพัง
+# คือ _sync_lock ใน sources/set_daily_val.py::sync_all() เอง lock นี้แค่ให้ตอบ 409 ที่
+# ตรงไปตรงมาแทนการ silent no-op
+_set_daily_val_sync_lock = threading.Lock()
 
 
 @app.route("/api/set-daily-val/sync", methods=["POST"])
@@ -3832,12 +3842,17 @@ def set_daily_val_sync():
 
     รันใน background thread (ทั้งกระดาน ~1-2 นาที) แล้วคืนทันที — ดูผลที่ item
     'PE/PBV รายวันทางการ' ในหน้านี้รอบถัดไป (บันทึกลง run_log ด้วย)"""
-    if _set_daily_val_sync_running["on"]:
-        return jsonify({"ok": False, "error": "กำลัง sync อยู่แล้ว — รอรอบนี้เสร็จก่อน"}), 409
-    force = (request.get_json(silent=True) or {}).get("force")
+    with _set_daily_val_sync_lock:
+        if _set_daily_val_sync_running["on"]:
+            return jsonify({"ok": False, "error": "กำลัง sync อยู่แล้ว — รอรอบนี้เสร็จก่อน"}), 409
+        _set_daily_val_sync_running["on"] = True
+    # force=True: ปุ่มมือ "บังคับ sync รอบเต็ม" ใน Data Health ต้องส่ง {force:true} มาจริง
+    # (dashboard.js::startSetDailyValSync) — เดิมฝั่ง JS ไม่ส่ง body เลย ทำให้ force เป็น
+    # None เสมอ ปุ่มที่ข้อความบอกว่า "บังคับรอบเต็ม" จริงๆ แล้วไม่ต่างจากรอ staleness gate
+    # อัตโนมัติเลย (code review 2026-08-27)
+    force = bool((request.get_json(silent=True) or {}).get("force"))
 
     def _job():
-        _set_daily_val_sync_running["on"] = True
         try:
             n, total, rows = set_daily_val.sync_all(BASE_DIR, skip_up_to_date=not force)
             run_log.record_run(BASE_DIR, "set_daily_val_sync", True,
@@ -3845,7 +3860,8 @@ def set_daily_val_sync():
         except Exception as e:
             run_log.record_run(BASE_DIR, "set_daily_val_sync", False, str(e)[:200])
         finally:
-            _set_daily_val_sync_running["on"] = False
+            with _set_daily_val_sync_lock:
+                _set_daily_val_sync_running["on"] = False
 
     threading.Thread(target=_job, daemon=True).start()
     return jsonify({"ok": True, "started": True})
@@ -10351,7 +10367,14 @@ def _run_quick():
         # ครอบเคส run_quick_update early-return ("ไม่มีข้อมูลใหม่"/"เป็นปัจจุบันแล้ว") ที่
         # เธรด fundamentals ไม่ได้เริ่ม + คืน failed_steps ให้เห็นถ้า sync ล้มจริง
         def _daily_val():
-            n, total_t, rows = set_daily_val.sync_all(BASE_DIR, skip_up_to_date=True)
+            # ต้องมี callback ผูกกับ _update — เดิมไม่มีเลย ทำให้ตอนที่ safety-net นี้เป็น
+            # จุดเดียวที่ต้องรันจริง (run_quick_update early-return ก่อนเริ่ม tier-0 thread)
+            # _state['message']/['current'] ค้างเฉยๆ ตลอดที่ sync_all ทำงาน (อาจนานถึงหลัก
+            # สิบนาทีถ้า SET.or.th ช้า) เสี่ยงชน SSE stall-timeout 20 นาที (progress_stream)
+            # ทั้งที่งานจริงยังทำอยู่ (code review 2026-08-27)
+            def _dv_cb(current, total, msg):
+                _update(current=99, total=100, message=msg)
+            n, total_t, rows = set_daily_val.sync_all(BASE_DIR, skip_up_to_date=True, callback=_dv_cb)
             if total_t:
                 print(f"[QuickUpdate] PE/PBV รายวัน (SET) safety net: สะสม {n}/{total_t} ตัว (+{rows} แถว)")
         _sub_step("PE/PBV รายวัน (SET)", 99, "สะสม PE/PBV รายวันทางการ (SET.or.th)...", _daily_val)

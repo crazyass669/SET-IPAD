@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>กลยุทธ์หาหุ้น — Top-Down & Bottom-Up | SET Dashboard</title>
+<style>
+  :root {
+    --bg: #f6f8fa;
+    --bg2: #ffffff;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text2: #656d76;
+    --green: #1a7f37;
+    --green-bg: #dafbe1;
+    --red: #cf222e;
+    --red-bg: #ffebe9;
+    --yellow: #9a6700;
+    --yellow-bg: #fff8c5;
+    --blue: #0969da;
+    --blue-bg: #ddf4ff;
+    --purple: #6e40c9;
+    --purple-bg: #fbefff;
+    --accent: #0969da;
+    --sidebar-w: 260px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 1.7; }
+
+  /* SIDEBAR */
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: var(--sidebar-w);
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    z-index: 100;
+    padding: 0 0 32px 0;
+  }
+  .sidebar-header {
+    padding: 20px 20px 12px;
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; background: var(--bg2);
+  }
+  .sidebar-header h2 { font-size: 15px; font-weight: 700; color: var(--text); }
+  .sidebar-header p { font-size: 11px; color: var(--text2); margin-top: 2px; }
+  .sidebar-header a.back-link { display: inline-block; margin-top: 8px; font-size: 11px; color: var(--accent); text-decoration: none; }
+  .sidebar-header a.back-link:hover { text-decoration: underline; }
+  .sidebar-section { padding: 12px 12px 4px; font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; }
+  .sidebar a {
+    display: block; padding: 6px 20px; font-size: 13px; color: var(--text2);
+    text-decoration: none; border-radius: 6px; margin: 1px 8px;
+    transition: all .15s;
+  }
+  .sidebar a:hover { background: var(--bg); color: var(--text); }
+  .sidebar a.active { background: #e8f0fe; color: var(--accent); font-weight: 600; }
+
+  /* MAIN */
+  .main { margin-left: var(--sidebar-w); padding: 40px 48px; max-width: calc(var(--sidebar-w) + 900px); }
+
+  /* SECTIONS */
+  .section { margin-bottom: 56px; scroll-margin-top: 24px; }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+  h2 { font-size: 20px; font-weight: 700; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid var(--border); }
+  h3 { font-size: 15px; font-weight: 700; margin: 24px 0 8px; color: var(--accent); }
+  h4 { font-size: 13px; font-weight: 700; margin: 16px 0 6px; }
+  p { margin-bottom: 12px; color: var(--text); }
+
+  /* PAGE BADGE */
+  .page-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--blue-bg); color: var(--blue);
+    border: 1px solid #b6d4f5; border-radius: 6px;
+    padding: 4px 12px; font-size: 12px; font-weight: 700;
+    margin-bottom: 16px; letter-spacing: .03em;
+  }
+
+  /* CALLOUT */
+  .callout {
+    border-radius: 8px; padding: 14px 18px; margin: 16px 0;
+    font-size: 13px; border-left: 4px solid;
+  }
+  .callout.tip    { background: var(--green-bg);  border-color: var(--green);  color: #1a3a1a; }
+  .callout.note   { background: var(--blue-bg);   border-color: var(--blue);   color: #0a2a4a; }
+  .callout.warn   { background: var(--yellow-bg); border-color: var(--yellow); color: #3a2a00; }
+  .callout.info   { background: var(--purple-bg); border-color: var(--purple); color: #2a1a4a; }
+  .callout strong { font-weight: 700; }
+
+  /* TABLE */
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+  th { background: var(--bg); padding: 10px 14px; text-align: left; font-weight: 700; font-size: 12px; border: 1px solid var(--border); color: var(--text2); }
+  td { padding: 9px 14px; border: 1px solid var(--border); vertical-align: top; }
+  tr:nth-child(even) td { background: #fafbfc; }
+
+  /* COLOR CHIPS */
+  .chip {
+    display: inline-block; padding: 2px 9px; border-radius: 4px;
+    font-size: 12px; font-weight: 700; white-space: nowrap;
+  }
+  .chip-green  { background: var(--green-bg);  color: var(--green); }
+  .chip-red    { background: var(--red-bg);    color: var(--red); }
+  .chip-yellow { background: var(--yellow-bg); color: var(--yellow); }
+  .chip-blue   { background: var(--blue-bg);   color: var(--blue); }
+  .chip-gray   { background: var(--bg);        color: var(--text2); }
+
+  /* STEP */
+  .steps { counter-reset: step; }
+  .step { display: flex; gap: 16px; margin-bottom: 20px; }
+  .step-num {
+    counter-increment: step;
+    min-width: 32px; height: 32px;
+    background: var(--accent); color: #fff;
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px; flex-shrink: 0; margin-top: 2px;
+  }
+  .step-body h4 { margin-top: 0; margin-bottom: 4px; }
+  .step-body p { margin-bottom: 6px; font-size: 13px; color: var(--text2); }
+
+  /* PHASE LABEL — คั่นกลุ่ม step ภายใน .steps เดียวกัน โดยไม่กิน counter */
+  .phase-label {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: #0d1117; color: #58a6ff;
+    border-radius: 20px; padding: 5px 16px; font-size: 12px; font-weight: 700;
+    margin: 28px 0 16px; letter-spacing: .02em;
+  }
+  .steps > .phase-label:first-child { margin-top: 4px; }
+
+  /* DIVIDER */
+  hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+
+  /* HERO */
+  .hero {
+    background: linear-gradient(135deg, #0d1117 0%, #1b2131 100%);
+    color: #e6edf3; border-radius: 12px; padding: 32px 36px;
+    margin-bottom: 40px;
+  }
+  .hero h1 { color: #fff; font-size: 26px; margin-bottom: 8px; }
+  .hero p { color: #8b949e; margin: 0; }
+  .hero .tags { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+  .hero .tag {
+    background: rgba(88,166,255,.15); color: #58a6ff;
+    border: 1px solid rgba(88,166,255,.3);
+    border-radius: 20px; padding: 4px 12px; font-size: 12px;
+  }
+  .hero a.back-link { color: #58a6ff; font-size: 12px; text-decoration: none; }
+  .hero a.back-link:hover { text-decoration: underline; }
+
+  /* MENU PILL — อ้างอิงชื่อเมนูให้ตรงกับปุ่มจริงในแดชบอร์ด */
+  .menu-pill {
+    display: inline-block; background: #eef2f6; border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 7px; font-weight: 700; font-size: 12.5px; color: var(--text);
+  }
+
+  /* RESPONSIVE */
+  @media (max-width: 768px) {
+    .sidebar { display: none; }
+    .main { margin-left: 0; padding: 24px 20px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h2>🎯 กลยุทธ์หาหุ้น</h2>
+    <p>Top-Down &amp; Bottom-Up ด้วยทุกเมนูของ SET Dashboard</p>
+    <a class="back-link" href="คู่มือการใช้งาน.html">← กลับไปคู่มือการใช้งานหลัก</a>
+  </div>
+
+  <div class="sidebar-section">เริ่มต้น</div>
+  <a href="#intro">Top-Down vs Bottom-Up คืออะไร</a>
+
+  <div class="sidebar-section">กลยุทธ์คลาสสิก (มือใหม่)</div>
+  <a href="#strategy-onset">0 — หา Sector ต้นรอบ</a>
+  <a href="#strategy-breakout">1 — Breakout แบบ Top-Down</a>
+  <a href="#strategy-yield">2 — ปันผลสูง + RS ดี</a>
+  <a href="#strategy-value">3 — Value ที่เริ่มกลับตัว</a>
+  <a href="#strategy-rotation">4 — Sector Rotation ตามเงิน</a>
+  <a href="#screener-examples">ตัวอย่าง Screener Recipes</a>
+
+  <div class="sidebar-section">เส้นทางเต็ม — ใช้ทุกเมนู</div>
+  <a href="#topdown">🔽 Top-Down (ตลาด→กลุ่ม→หุ้น)</a>
+  <a href="#bottomup">🔼 Bottom-Up (หุ้น→กลุ่ม→ตลาด)</a>
+  <a href="#menu-map">ตารางสรุป: เมนูไหนตอบคำถามอะไร</a>
+</nav>
+
+<!-- MAIN -->
+<main class="main">
+
+  <!-- HERO -->
+  <div class="hero">
+    <h1>🎯 กลยุทธ์หาหุ้น — Top-Down &amp; Bottom-Up</h1>
+    <p>รวมกลยุทธ์คลาสสิก 0–4 จากคู่มือหลัก เข้ากับเส้นทางแบบครบทุกเมนูของ SET Dashboard (Screener+, Tearsheet, DCF Screener, Fair Value P/B·P/E, หุ้นโตแรงรายไตรมาส, Peer Compare, สัญญาณรวม, Hedge Holdings ฯลฯ) — เรียงเป็นขั้นตอนกดตามได้จริง</p>
+    <div class="tags">
+      <span class="tag">Top-Down</span>
+      <span class="tag">Bottom-Up</span>
+      <span class="tag">Sector Rotation</span>
+      <span class="tag">Screener+</span>
+      <span class="tag">DCF Screener</span>
+      <span class="tag">Fair Value P/B·P/E</span>
+      <span class="tag">หุ้นโตแรงรายไตรมาส</span>
+      <span class="tag">Peer Compare</span>
+      <span class="tag">Tearsheet</span>
+      <span class="tag">สัญญาณรวม</span>
+      <span class="tag">Insider &amp; Short</span>
+      <span class="tag">Hedge Holdings (13F)</span>
+      <span class="tag">Valuation Band</span>
+      <span class="tag">Market Regime</span>
+    </div>
+    <p style="margin-top:16px"><a class="back-link" href="คู่มือการใช้งาน.html">← กลับไปคู่มือการใช้งานหลัก (คำศัพท์ / ติดตั้ง / รายละเอียดแต่ละหน้า)</a></p>
+  </div>
+
+  <!-- ===== INTRO ===== -->
+  <div class="section" id="intro">
+    <h2>Top-Down vs Bottom-Up คืออะไร</h2>
+    <table>
+      <tr><th></th><th>🔽 Top-Down (บนลงล่าง)</th><th>🔼 Bottom-Up (ล่างขึ้นบน)</th></tr>
+      <tr><td><strong>เริ่มจาก</strong></td><td>ตลาด → กลุ่ม (sector) → หุ้น</td><td>สกรีนพื้นฐานทั้งตลาด → หุ้นรายตัว → แล้วค่อยเช็คกลุ่ม/ตลาด</td></tr>
+      <tr><td><strong>เหมาะกับ</strong></td><td>เล่นตามรอบ/โมเมนตัม จับ sector rotation</td><td>เน้นพื้นฐาน/มูลค่า ถือยาว</td></tr>
+      <tr><td><strong>หัวใจ</strong></td><td>ซื้อหุ้นแข็งสุด ในกลุ่มแข็งสุด ในตลาดขาขึ้น</td><td>ซื้อธุรกิจดีในราคาสมเหตุผล แล้วรอตลาด/กลุ่มมาหนุน</td></tr>
+    </table>
+    <div class="callout note">
+      <strong>ก่อนเริ่มทั้งสองเส้นทาง</strong> — เปิดเมนู <span class="menu-pill">🩺 Data Health</span> เช็คว่าข้อมูลสด (เขียวหมด) ก่อนเสมอ ถ้าราคายังไม่อัปเดตกด <strong>⚡ Quick Update</strong>, ถ้างบการเงินค้างให้ไปหน้า <span class="menu-pill">งบการเงิน</span> กด <strong>🔄 อัพเดทงบการเงินทั้งหมด</strong>
+    </div>
+    <p>ด้านล่างมี 2 ชุดเนื้อหา: <strong>กลยุทธ์คลาสสิก 0–4</strong> (สูตรสั้น เจาะจงเป้าหมายเดียว เหมาะมือใหม่เริ่มอ่าน) และ <strong>เส้นทางเต็มแบบ Top-Down / Bottom-Up</strong> ที่ไล่ใช้ทุกเมนูในโปรแกรมตามลำดับ (เหมาะเมื่อคุ้นมือแล้วและอยากได้ checklist ครบวงจร)</p>
+  </div>
+
+  <hr>
+
+  <!-- ===== STRATEGY ONSET (กลยุทธ์ที่ 0) ===== -->
+  <div class="section" id="strategy-onset">
+    <h2>🔄 กลยุทธ์ที่ 0: หา Sector ต้นรอบ (กลับตัว)</h2>
+    <p>กลยุทธ์นี้เหมาะสำหรับ <strong>มือใหม่</strong> ที่ต้องการหาหุ้นที่กำลังเริ่มต้นรอบใหม่ โดยเริ่มจาก Sector ก่อน แล้วค่อยลงมาหาหุ้นเดี่ยว</p>
+
+    <h3>ขั้นตอนที่ 1 — เปิดหน้า ดัชนีกลุ่มอุตสาหกรรม</h3>
+    <p>กดเมนู <strong>ดัชนีกลุ่ม</strong> ในแถบด้านบน → กดปุ่ม <strong>Momentum</strong> เพื่อเรียงจากมากไปน้อย</p>
+    <div class="callout tip">
+      <strong>สัญญาณที่ต้องการ (ครบทั้ง 4 ข้อ):</strong><br>
+      ✅ Momentum เป็น<strong>บวก</strong> (1M ขึ้นเร็วกว่า 6M ÷ 6) → momentum กำลังเร่ง<br>
+      ✅ RS Trend แสดง <strong>↑</strong> → RS กำลังดีขึ้นในช่วง 4 สัปดาห์<br>
+      ✅ มี badge <strong>🔄 กลับตัว</strong> → ผ่านเกณฑ์ 3 ข้อพร้อมกัน<br>
+      ✅ 1M% เป็น<strong>บวก</strong> แต่ 6M% ยัง<strong>ไม่สูงมาก</strong> (ยังไม่ overextended)
+    </div>
+
+    <h3>ขั้นตอนที่ 2 — กรอง Sector ต้นรอบ</h3>
+    <p>กดปุ่ม <strong>🔄 กลับตัว</strong> ที่ด้านบนเพื่อกรองเหลือเฉพาะ Sector ที่ผ่านเกณฑ์สัญญาณกลับตัว</p>
+
+    <h3>ขั้นตอนที่ 3 — ดูหุ้นในกลุ่ม</h3>
+    <p>คลิกการ์ด Sector ที่ผ่านเกณฑ์ → กดแท็บ <strong>📋 หุ้นในกลุ่ม</strong> → จะเห็นรายชื่อหุ้นเรียงตาม RS Score</p>
+    <p>หุ้นที่น่าสนใจ: RS Score สูง + ราคาอยู่เหนือ EMA50</p>
+
+    <h3>ขั้นตอนที่ 4 — ยืนยันด้วย Screener</h3>
+    <p>ไปที่หน้า <strong>Stock Screener</strong> → กดปุ่ม <strong>🔄 ต้นรอบ</strong> → เลือก Industry Group ตาม Sector ที่เจอในขั้น 3</p>
+
+    <div class="callout note">
+      <strong>ทำไมต้อง Sector ก่อน?</strong> หุ้นที่ดีในกลุ่มที่อ่อนแอมักขึ้นได้ยาก เพราะ Fund Manager หมุนเงินออกจากกลุ่มนั้น แต่หุ้นธรรมดาในกลุ่มที่แข็งแกร่งกลับขึ้นได้เพราะกระแสเงินไหลเข้า
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ===== STRATEGY BREAKOUT (กลยุทธ์ที่ 1) ===== -->
+  <div class="section" id="strategy-breakout">
+    <h2>🎯 กลยุทธ์ที่ 1: หาหุ้น Breakout แบบ Top-Down</h2>
+    <p>กลยุทธ์นี้เน้นหาหุ้นที่ <strong>กำลังแข็งแกร่งที่สุดในตลาด</strong> โดยเริ่มจากภาพใหญ่ลงมาหาหุ้นเดี่ยว</p>
+
+    <div class="callout info">
+      <strong>หลักการ:</strong> ซื้อหุ้นที่แข็งแกร่งที่สุด ในกลุ่มที่แข็งแกร่งที่สุด ในตลาดที่อยู่ในขาขึ้น
+    </div>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4>เปิดหน้า Overview — ตรวจสภาพตลาด</h4>
+          <p>ดู <strong>Market Breadth % Above EMA50</strong> ถ้า <span class="chip chip-green">&gt; 60%</span> = ตลาดดี เหมาะจะหาหุ้นขาขึ้น<br>
+          ถ้า <span class="chip chip-red">&lt; 40%</span> = ตลาดอ่อน ยังไม่ควรรีบซื้อ</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4>เปิดหน้า Sectors — หากลุ่มนำตลาด</h4>
+          <p>เรียงคอลัมน์ <strong>Avg RS</strong> จากมากไปน้อย ดูกลุ่ม Top 3 ที่มี RS สูงสุด<br>
+          ตรวจ <strong>New High</strong> ด้วย — กลุ่มที่มีหุ้น New High เยอะ = เงินกำลังไหลเข้า</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4>เปิดหน้า Breakout — กรองหุ้นในกลุ่มที่เลือก</h4>
+          <p>คลิก Sector ที่ได้ในขั้นตอน 2 เพื่อกรองเฉพาะกลุ่มนั้น แล้วดูหุ้นที่:<br>
+          • <strong>RS สูง</strong> (ควร ≥ 70)<br>
+          • <strong>Sec.Rank ดี</strong> (เช่น 1/15, 2/15)<br>
+          • <strong>อยู่เหนือ EMA50 และ EMA200</strong> ทั้งคู่<br>
+          • <strong>ห่างจาก 52W High ไม่เกิน 10%</strong></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4>เพิ่มใน Watchlist — รอจังหวะ</h4>
+          <p>เพิ่มหุ้นที่ผ่านขั้นตอน 3 ใน Watchlist ก่อน แล้วรอดู Volume และ Price Action ก่อนตัดสินใจซื้อ</p>
+        </div>
+      </div>
+    </div>
+
+    <h3>ตัวอย่าง Setup ที่ดี</h3>
+    <div style="background:#f0fff4;border:1px solid #bcf0c4;border-radius:8px;padding:16px;font-size:13px;">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;text-align:center;">
+        <div><div style="font-size:11px;color:#656d76;margin-bottom:4px">RS Score</div><div style="font-size:22px;font-weight:700;color:#1a7f37">85</div></div>
+        <div><div style="font-size:11px;color:#656d76;margin-bottom:4px">Sec.Rank</div><div style="font-size:22px;font-weight:700;color:#1a7f37">2/18</div></div>
+        <div><div style="font-size:11px;color:#656d76;margin-bottom:4px">FromHigh%</div><div style="font-size:22px;font-weight:700;color:#1a7f37">-4%</div></div>
+        <div><div style="font-size:11px;color:#656d76;margin-bottom:4px">EMA50/200</div><div style="font-size:22px;font-weight:700;color:#1a7f37">✓ ✓</div></div>
+      </div>
+      <div style="margin-top:12px;color:#1a7f37;font-weight:600;text-align:center">→ Setup แบบนี้คือ Breakout ที่น่าสนใจมาก</div>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ===== STRATEGY YIELD (กลยุทธ์ที่ 2) ===== -->
+  <div class="section" id="strategy-yield">
+    <h2>💰 กลยุทธ์ที่ 2: หาหุ้นปันผลสูง + RS ดี</h2>
+    <p>เหมาะสำหรับนักลงทุนที่ต้องการ <strong>กระแสเงินสดสม่ำเสมอ</strong> พร้อมกับหุ้นที่มีแนวโน้มราคาดีด้วย</p>
+
+    <div class="callout note">
+      <strong>หลักการ:</strong> หุ้นปันผลสูงที่ RS ดีด้วย = ได้ทั้ง Passive Income และ Capital Gain — ดีกว่าเลือกแค่ปันผลสูงอย่างเดียวซึ่งอาจเป็นหุ้นที่ราคาตกนาน
+    </div>
+
+    <h3>วิธีใช้ Screener</h3>
+    <p>กดปุ่ม <strong>"High Yield + RS"</strong> ในหน้า Screener หรือตั้งค่าเองดังนี้:</p>
+    <table>
+      <tr><th>Filter</th><th>ค่าที่แนะนำ</th><th>เหตุผล</th></tr>
+      <tr><td>RS Score ≥</td><td>60</td><td>หุ้นที่แข็งแกร่งกว่าครึ่งตลาด</td></tr>
+      <tr><td>Div Yield ≥</td><td>3</td><td>ปันผลอย่างน้อย 3% ต่อปี</td></tr>
+      <tr><td>P/BV ≤ (เสริม)</td><td>2</td><td>ไม่แพงเกินไปเมื่อเทียบกับสินทรัพย์</td></tr>
+      <tr><td>Above EMA50 (เสริม)</td><td>ติ๊กถูก</td><td>ราคายังอยู่ในแนวโน้มขาขึ้น</td></tr>
+    </table>
+
+    <h3>ตรวจ Sector เพิ่มเติม</h3>
+    <p>หลังได้ผลลัพธ์แล้ว ดูคอลัมน์ <strong>Sector</strong> — ถ้าหุ้นอยู่ในกลุ่มที่ Sectors page แสดง Avg RS สูงด้วย = ดีมากเพราะทั้งหุ้นและกลุ่มแข็งแกร่ง</p>
+
+    <div class="callout warn">
+      <strong>ระวัง Yield Trap:</strong> บางหุ้น Div Yield สูงเพราะราคาตกลงมามาก ไม่ใช่เพราะปันผลเยอะขึ้น ดูด้วยว่า RS Score ดีด้วยหรือเปล่า ถ้า RS ต่ำมาก (&lt; 30) ควรระวัง
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ===== STRATEGY VALUE (กลยุทธ์ที่ 3) ===== -->
+  <div class="section" id="strategy-value">
+    <h2>📦 กลยุทธ์ที่ 3: หาหุ้น Value ที่เริ่มกลับตัว</h2>
+    <p>เหมาะสำหรับนักลงทุนที่ต้องการ <strong>ซื้อหุ้นถูก</strong> แต่รอให้มีสัญญาณ Momentum กลับมาก่อน ไม่ใช่แค่ถูก แต่ต้องเริ่มขึ้นด้วย</p>
+
+    <h3>วิธีใช้ Screener</h3>
+    <p>กดปุ่ม <strong>"Low PBV + กลับตัว"</strong> หรือตั้งค่าเองดังนี้:</p>
+    <table>
+      <tr><th>Filter</th><th>ค่าที่แนะนำ</th><th>เหตุผล</th></tr>
+      <tr><td>P/BV ≤</td><td>1.5</td><td>ราคาไม่ห่างจากมูลค่าทางบัญชีมาก</td></tr>
+      <tr><td>P/E ≤ (เสริม)</td><td>15</td><td>กำไรยังดีอยู่ในราคาไม่แพง</td></tr>
+      <tr><td>RS Score ≥</td><td>45</td><td>เริ่มแข็งแกร่งขึ้น ไม่ใช่ขาลงสุดๆ</td></tr>
+      <tr><td>1M% ≥</td><td>0</td><td>อย่างน้อยราคาไม่ลงในเดือนนี้</td></tr>
+    </table>
+
+    <h3>ใช้ 52W Low Watch ช่วยกรองด้วย</h3>
+    <p>เปิดหน้า <strong>52W Low</strong> กรอง "ห่างจาก Low ≤ 20%" แล้วดูว่าหุ้นตัวไหนที่:</p>
+    <ul style="margin: 12px 0 12px 24px; color: var(--text2);">
+      <li>1D% หรือ 1W% เป็นบวก (เริ่มมีแรงซื้อ)</li>
+      <li>P/BV ต่ำ (ในหน้า Screener)</li>
+      <li>RS ไม่ต่ำเกินไป (≥ 40)</li>
+    </ul>
+    <div class="callout warn">
+      <strong>ความเสี่ยง:</strong> หุ้น Value บางตัวที่ราคาต่ำ ต่ำเพราะมีปัญหาจริงๆ ควรดูงบการเงินนอก Dashboard ก่อนตัดสินใจด้วย
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ===== STRATEGY ROTATION (กลยุทธ์ที่ 4) ===== -->
+  <div class="section" id="strategy-rotation">
+    <h2>🔄 กลยุทธ์ที่ 4: Sector Rotation — ตามเงิน</h2>
+    <p>กลยุทธ์นี้เน้น <strong>อยู่ในกลุ่มที่เงินกำลังไหลเข้า</strong> และออกจากกลุ่มที่เงินเริ่มไหลออก</p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4>ดู Rotation Chart</h4>
+          <p>กลุ่มที่อยู่ <strong>บนขวา (Leading)</strong> คือกลุ่มที่เงินกำลังไหลเข้าอยู่<br>
+          กลุ่มที่กำลัง <strong>เคลื่อนจาก Lagging → Improving</strong> คืออาจกำลังกลับตัว</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4>ยืนยันด้วยหน้า Sectors</h4>
+          <p>กลุ่ม Leading ใน Rotation ควรมี <strong>Avg RS สูง</strong> และ <strong>% &gt;EMA50 สูง</strong> ด้วย ถ้าทั้งสองสอดคล้องกัน = ยืนยันแนวโน้ม</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4>ดู New High Count</h4>
+          <p>กลุ่มที่มีหุ้น New High เยอะ = กลุ่มที่เงินยังคงไหลเข้าต่อเนื่อง คลิกตัวเลข New High เพื่อดูว่าเป็นหุ้นอะไร</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4>หาหุ้นที่ดีที่สุดในกลุ่มนำ</h4>
+          <p>ใช้ Screener กรอง Sector + RS ≥ 70 + Above EMA50 เพื่อหาหุ้นที่แข็งแกร่งที่สุดในกลุ่มนั้น</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ===== SCREENER EXAMPLES ===== -->
+  <div class="section" id="screener-examples">
+    <h2>📝 ตัวอย่าง Screener Recipes</h2>
+    <p>รวม Setup การกรองหุ้นสำหรับเป้าหมายต่างๆ — กรอกค่าในหน้า Screener ได้เลย</p>
+
+    <h3>Recipe 1: หุ้น Momentum แรง</h3>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;font-size:13px;">
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">RS Score ≥</div>
+          <div style="font-size:20px;font-weight:700;color:var(--accent)">80</div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">1M% ≥</div>
+          <div style="font-size:20px;font-weight:700;color:var(--accent)">5</div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">Above EMA50</div>
+          <div style="font-size:20px;font-weight:700;color:#1a7f37">✓</div>
+        </div>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--text2)">เป้าหมาย: หาหุ้นที่ Momentum แรงทั้งระยะสั้นและยาว เหมาะสำหรับการซื้อตาม Trend</div>
+    </div>
+
+    <h3>Recipe 2: หุ้น Defensive (ตลาดผันผวน)</h3>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;font-size:13px;">
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">Div Yield ≥</div>
+          <div style="font-size:20px;font-weight:700;color:var(--accent)">4%</div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">P/E ≤</div>
+          <div style="font-size:20px;font-weight:700;color:var(--accent)">15x</div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">Above EMA200</div>
+          <div style="font-size:20px;font-weight:700;color:#1a7f37">✓</div>
+        </div>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--text2)">เป้าหมาย: หุ้น Defensive ปันผลดี ราคาไม่แพง ยังอยู่ในขาขึ้นระยะยาว</div>
+    </div>
+
+    <h3>Recipe 3: หาหุ้น Small/Mid Cap แฝง</h3>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:13px;">
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">RS Score ≥</div>
+          <div style="font-size:20px;font-weight:700;color:var(--accent)">75</div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">Mkt Cap ≤</div>
+          <div style="font-size:20px;font-weight:700;color:var(--accent)">5B</div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">ห่าง High ≤</div>
+          <div style="font-size:20px;font-weight:700;color:var(--accent)">15%</div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">Above EMA50</div>
+          <div style="font-size:20px;font-weight:700;color:#1a7f37">✓</div>
+        </div>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--text2)">เป้าหมาย: หา Small Cap ที่ RS ดีแต่ยังไม่ใหญ่ — อาจมี Upside สูงกว่าหุ้นใหญ่</div>
+    </div>
+
+    <h3>Recipe 4: หุ้นใกล้ Breakout New High</h3>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:13px;">
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">RS Score ≥</div>
+          <div style="font-size:20px;font-weight:700;color:var(--accent)">70</div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">ห่าง High ≤</div>
+          <div style="font-size:20px;font-weight:700;color:var(--accent)">5%</div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">Above EMA50</div>
+          <div style="font-size:20px;font-weight:700;color:#1a7f37">✓</div>
+        </div>
+        <div style="background:var(--bg);border-radius:6px;padding:10px;text-align:center">
+          <div style="color:var(--text2);font-size:11px;margin-bottom:4px">Above EMA200</div>
+          <div style="font-size:20px;font-weight:700;color:#1a7f37">✓</div>
+        </div>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--text2)">เป้าหมาย: หาหุ้นที่ "กำลังเข้าใกล้" จุดสูงสุดใหม่ รอดู Volume เพิ่มแล้วอาจ Breakout</div>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ===== TOP-DOWN เต็ม — ใช้ทุกเมนู ===== -->
+  <div class="section" id="topdown">
+    <h2>🔽 เส้นทาง Top-Down — ใช้ทุกเมนูของ Dashboard</h2>
+    <p>ต่อยอดจากกลยุทธ์ 0/1/4 ด้านบน ให้ครบทุกเมนูในโปรแกรม — เหมาะเมื่ออยากได้ checklist ที่ไม่มีขั้นตอนตกหล่น เรียงจากภาพใหญ่สุดลงไปหาหุ้นตัวเดียวแล้ววนกลับมาติดตาม</p>
+
+    <div class="steps">
+      <div class="phase-label">ระยะ 1 — อ่านสภาพตลาด (เอื้อให้ซื้อไหม)</div>
+
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">Overview</span></h4>
+          <p>ดู <strong>Market Breadth — % Above EMA50</strong>: <span class="chip chip-green">&gt;60%</span> = ตลาดดี เป็นฝ่ายซื้อ / <span class="chip chip-red">&lt;40%</span> = อ่อน ชะลอ<br>
+          ดู <strong>Market Regime Light</strong> (มุมขวาบนของทุกหน้า 🟢/🟡/🔴 = % หุ้นเหนือ EMA200) และ <strong>Fear &amp; Greed</strong>, <strong>RS Distribution</strong>, <strong>52W New High/Low daily count</strong> (NH เพิ่ม = สุขภาพดี, ดัชนีขึ้นแต่ NH ลด = สัญญาณเตือน)</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">📈 แนวโน้มตลาด</span></h4>
+          <p>เช็ครอบพื้นฐานหนุนหรือสวนทาง: รายได้/กำไรรวมทั้งตลาด YoY กำลังโตหรือหด, ROE ตลาด, <strong>Cash Quality</strong> (CFO/NP), Market Breadth เชิงกำไร — ถ้าเส้น Aggregate กับ Median แยกทางกันมาก แปลว่าการเติบโตกระจุกในหุ้นใหญ่ไม่กี่ตัว</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">Valuation</span></h4>
+          <p>P/E, P/BV zone ของตลาด SET เทียบอดีต ใช้กำหนดขนาดพอร์ต (แพง = ระมัดระวัง/คัดเข้มขึ้น) มีปุ่มเสริม: 🚧 เช็คหุ้นหยุดพักเทรด, 🌏 ห้องต่างชาติใกล้เต็ม, 🔍 หุ้นเพิกถอนใหม่</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">Capital Flow</span></h4>
+          <p>เงินกลุ่มไหนไหลเข้า (สถาบัน/ต่างชาติ/รายย่อย) ใน SET / S50 Futures / Thai Bond สะสม 20 วันล่าสุด</p>
+        </div>
+      </div>
+
+      <div class="phase-label">ระยะ 2 — เลือกกลุ่มนำ (Sector)</div>
+
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">Rotation</span></h4>
+          <p>แท็บ <strong>Sector</strong> → ดูกลุ่มมุม <strong>Leading (ขวาบน)</strong> และ <strong>Improving (ซ้ายบน = กำลังกลับตัว)</strong> อ่าน <strong>Quadrant change alerts</strong> (ยืนยันเมื่ออยู่ quadrant ใหม่ครบ 3 วัน), <strong>Momentum Playbook</strong>, แท็บ <strong>Top RVOL</strong></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">ดัชนีกลุ่ม</span></h4>
+          <p>กด <strong>🔄 กลับตัว</strong> (กรอง 1M%&gt;0, 6M%&lt;15, Momentum&gt;1) → กด <strong>Momentum</strong> เรียงจากมาก กลุ่มที่ต้องการ: Momentum score &gt;3 + <strong>RS Trend ↑</strong> + badge 🔄 กลับตัว → คลิกการ์ด → แท็บ <strong>📋 หุ้นในกลุ่ม</strong> เรียงตาม RS</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">🚀 หุ้นโตแรงรายไตรมาส</span></h4>
+          <p>เลือกไตรมาสล่าสุด → ใช้ dropdown <strong>Sector</strong> เลือกกลุ่มจากขั้นก่อนหน้า → ยืนยันว่ามีหุ้นในกลุ่มที่รายได้/กำไร QoQ+YoY เป็นบวก, <strong>ต่อเนื่อง</strong> หลายไตรมาส, <strong>Δ NPM</strong> บวก, <strong>OCF/NI</strong> ≥1 (หรือดูการ์ด "Top 10 Sector เติบโตเด่น" ในหน้า 📈 แนวโน้มตลาด)</p>
+        </div>
+      </div>
+
+      <div class="phase-label">ระยะ 3 — คัดหุ้นในกลุ่มนำ</div>
+
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">Screener</span></h4>
+          <p>เลือก preset: <strong>🔄 ต้นรอบ</strong> / <strong>⚡ Strong Momentum</strong> / <strong>📈 Breakout</strong> / <strong>💥 Breakout มีของจริง</strong> (แชมป์ backtest: NewHigh + RVOL≥2 + กำไรโต YoY≥25%) ปรับเพิ่ม: Industry Group = กลุ่มที่เลือกไว้, RS Score ≥ 70, ติ๊ก Above EMA50 + EMA200 — อ่าน <strong>📊 ผลวิจัย backtest</strong> ในหน้านี้ประกอบ</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">หุ้นทั้งหมด</span></h4>
+          <p>ไล่ดู view: <strong>RS 80+ / 🌱 Emerging / Stage 2 ✅ / 📈 52W High-Low / ⚡ Momentum / เหนือ EMA200</strong> — เปิด sector mode ดู <strong>Sec.Rank</strong> (เอา Top 25% ของกลุ่ม), sparkline, badge Insider/ข่าว</p>
+        </div>
+      </div>
+
+      <div class="phase-label">ระยะ 4 — ตรวจสอบหุ้น candidate เชิงลึก (2–4 ตัว)</div>
+
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">🆚 เทียบเพื่อน</span></h4>
+          <p>พิมพ์ชื่อหุ้น → preset <strong>💰 Valuation / 🩺 คุณภาพ / 📈 Growth / 🌱 ESG-CG</strong> — มุมมอง <strong>📊 Scatter PE×ROE</strong> (อยู่ใต้เส้นค่ากลาง = ถูกกว่าเพื่อนเมื่อเทียบ ROE) และ <strong>🏭 Sector Workspace</strong></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">📋 Tearsheet</span></h4>
+          <p>หุ้น 1 ตัวครบจอเดียว: Header + Valuation snapshot + งบย่อ + <strong>ฉันทามตินักวิเคราะห์</strong> (target/upside/rec) + ESG badge + ฤดูกาล + ข่าว + เอกสารทางการ</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">🎯 DCF Screener</span> + <span class="menu-pill">⚖️ Fair Value P/B·P/E</span></h4>
+          <p>DCF สำหรับหุ้นทั่วไป (ไม่รวมกลุ่มการเงิน), Fair Value P/B·P/E สำหรับธนาคาร/เงินทุน/ประกัน — ค้นหุ้นในตาราง ดู <strong>Upside%</strong> เว้นช่องสมมติฐานว่าง = ใช้ค่าจริงของหุ้น</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">Val. Band</span></h4>
+          <p>PE Band + PBV Band (mrlikestock) + กำไรสุทธิรายไตรมาส (9hoon) + SET check — โซนล่างของ band = ถูกเทียบอดีตตัวเอง</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">Insider</span> → <span class="menu-pill">Short</span> → <span class="menu-pill">🎯 สัญญาณรวม</span></h4>
+          <p><strong>Insider</strong>: แบบ 59 (ผู้บริหารซื้อสุทธิ), แบบ 246-2 (ผู้ถือหุ้นใหญ่ ≥5%) · <strong>Short</strong>: Pos% สูงไหม, <strong>Squeeze Radar</strong> (short สูง + insider ซื้อ = เชื้อไฟขาขึ้น) · <strong>🎯 สัญญาณรวม</strong>: กรอง <strong>⭐ ครบ 3 สัญญาณ</strong> (score +3 = หนักแน่นสุด)</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">งบการเงิน</span></h4>
+          <p>เลือกแหล่ง: Finnomena 16 ปี / Yahoo รายไตรมาส / 🇹🇭 SET.or.th / 🩺 สุขภาพการเงิน (SET) / 📋 P&amp;L รายไตรมาส / 🧩 งบรวมทุกแหล่ง — ใช้ <strong>⚖️ เทียบหุ้น 2 ตัว</strong> เทียบคู่แข่งในกลุ่ม, <strong>🔍 ตรวจสอบความครบถ้วน</strong> + <strong>🗓️ เช็คงวดล่าสุด</strong></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">📑 รายงานทางการ</span> + <span class="menu-pill">📰 ข่าวหุ้น</span></h4>
+          <p>อ่าน 56-1 One Report / prompt วิเคราะห์ 13 ข้อ + ข่าว SET/Yahoo/Google รวมที่เดียว</p>
+        </div>
+      </div>
+
+      <div class="phase-label">ระยะ 5 — เข้าซื้อ / ติดตาม</div>
+
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">📅 ปฏิทิน</span></h4>
+          <p>เช็ควันประกาศงบ / XD-จ่ายปันผล ก่อนเข้า (scope: ⭐ Watchlist)</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">⭐ Watchlist</span></h4>
+          <p>เพิ่มหุ้นที่ผ่านทุกด่าน → กดคอลัมน์ 🔔 ตั้งราคาแจ้งเตือน (จุด breakout/จุดเข้า) → กด ⚡ ราคาล่าสุด ติดตามระหว่างวัน</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4>รอบทวน (ถือแล้ว)</h4>
+          <p>กลับมาดู <strong>Overview / Regime Light</strong> + <strong>Rotation</strong> quadrant alert เป็นระยะ — ถ้ากลุ่มหลุดจาก Leading → Weakening หรือ Regime เป็น 🔴 ให้พิจารณาลดน้ำหนัก</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ===== BOTTOM-UP เต็ม — ใช้ทุกเมนู ===== -->
+  <div class="section" id="bottomup">
+    <h2>🔼 เส้นทาง Bottom-Up — ใช้ทุกเมนูของ Dashboard</h2>
+    <p>เริ่มจากพื้นฐาน/มูลค่าของหุ้นรายตัวก่อน แล้วค่อยเช็คว่ากลุ่มและตลาดเอื้อให้ราคาสะท้อนมูลค่าหรือยัง — เหมาะกับสายถือยาว/VI</p>
+
+    <div class="steps">
+      <div class="phase-label">ระยะ 1 — สกรีนพื้นฐานทั้งตลาด</div>
+
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">🔬 Screener+</span> — จุดเริ่มหลัก</h4>
+          <p>เลือก preset ตามสไตล์: <strong>💎 Quality Compounder</strong> (ROE≥15% ต่อเนื่อง 8 ไตรมาส + งบแกร่ง + OCF เข้าจริง) / <strong>🚀 CANSLIM ครบสูตร</strong> / <strong>💰 Value ในอดีตตัวเอง</strong> (PE ถูกกว่า 75% ของประวัติตัวเอง) / <strong>⚖️ GARP (PEG≤1)</strong> / <strong>💵 Dividend Safety</strong> / <strong>📈 Dividend Growth</strong> / <strong>🔄 Turnaround</strong> / <strong>🏦 Net Cash งบแกร่ง</strong> / <strong>🔍 คุณภาพกำไร</strong> — ปรับตัวเลขทุกช่องเองได้ สลับ universe TH / DR / US / HK</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">🚀 หุ้นโตแรงรายไตรมาส</span></h4>
+          <p>ทั้งตลาด SET+mai กดหัวตารางเรียงกำไร YoY / QoQ, กรอง <strong>ตัดฐานเทียบเล็กเกินไป</strong>, ดู <strong>ต่อเนื่อง</strong>, <strong>Δ NPM</strong>, <strong>OCF/NI</strong>, ป้าย 🔄 พลิกกำไร</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">⚖️ Fair Value P/B·P/E</span> + <span class="menu-pill">🎯 DCF Screener</span></h4>
+          <p>กด ⟳ คำนวณใหม่ → sort <strong>Upside%</strong> จากมาก → ได้ shortlist หุ้นราคาต่ำกว่ามูลค่าประเมิน</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">Screener</span> (เทคนิค) — ใช้ preset fundamental เสริม cross-check</h4>
+          <p><strong>💵 High Yield ≥3%</strong> / <strong>📉 P/BV &lt;1</strong> / <strong>📊 P/E &lt;15</strong> / <strong>✅ มีข้อมูลครบ</strong></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout tip" style="margin-top:20px">
+      รวม shortlist จาก 4 เมนูข้างต้นให้เหลือ <strong>5–10 ตัว</strong> ที่สนใจ ก่อนไปเจาะรายตัวในระยะ 2
+    </div>
+
+    <div class="steps">
+      <div class="phase-label">ระยะ 2 — เจาะรายตัว</div>
+
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">📋 Tearsheet</span></h4>
+          <p>ภาพรวมหุ้นแต่ละตัว: valuation, งบย่อ, ฉันทามตินักวิเคราะห์, ESG, ฤดูกาล, ข่าว — เปิดทีละตัวเทียบกัน</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">งบการเงิน</span></h4>
+          <p>งบเต็มทุกแหล่ง + 📋 P&amp;L รายไตรมาส + 🩺 สุขภาพการเงิน (SET) + ⚖️ เทียบ 2 ตัว + ตรวจความครบ/เช็คงวดล่าสุด</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">Val. Band</span></h4>
+          <p>PE/PBV band + กำไรสุทธิรายไตรมาส (9hoon) — ยืนยันว่าถูกเทียบอดีตตัวเอง ไม่ใช่ value trap</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">🆚 เทียบเพื่อน</span></h4>
+          <p>หุ้นเราดีกว่าเพื่อนร่วมกลุ่มจริงไหม (preset คุณภาพ/Growth/Valuation, Scatter PE×ROE, Sector Workspace)</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">Insider</span> + ผู้ถือหุ้นใหญ่ (246-2) + <span class="menu-pill">Short</span> + <span class="menu-pill">🎯 สัญญาณรวม</span></h4>
+          <p>คนในและผู้ถือใหญ่กำลังสะสมหรือทิ้งหุ้น — ยืนยันด้วยข้อมูลทางการจาก ก.ล.ต./SET</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">🐋 Hedge Holdings</span></h4>
+          <p>(ถ้าเป็น DR / หุ้นต่างประเทศ) กองใหญ่ระดับ superinvestor ถือซ้ำกันไหม (13F consensus/overlap จาก Dataroma)</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">📑 รายงานทางการ</span> + <span class="menu-pill">📰 ข่าวหุ้น</span></h4>
+          <p>อ่าน 56-1 One Report / 10-K ใช้ prompt วิเคราะห์ 13 ข้อ เช็คข่าวลบล่าสุดที่อาจกระทบธุรกิจ</p>
+        </div>
+      </div>
+
+      <div class="phase-label">ระยะ 3 — เช็คบริบทกลุ่ม &amp; ตลาด (ก่อนกดซื้อ)</div>
+
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">หุ้นทั้งหมด</span></h4>
+          <p>พิมพ์หาหุ้นตัวนั้น ดู RS Score, Stage, Sec.Rank — พื้นฐานดีแต่ Stage 4 ขาลง = รอจังหวะก่อน</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">ดัชนีกลุ่ม</span> + <span class="menu-pill">Rotation</span></h4>
+          <p>sector ของหุ้นอยู่ขาขึ้น/Leading หรือ Lagging</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">Overview</span> + Regime Light + <span class="menu-pill">Valuation</span> + <span class="menu-pill">Capital Flow</span></h4>
+          <p>ตลาดโดยรวมเอื้อไหม แพงไหม เงินไหลเข้า/ออก — ใช้กำหนดขนาดไม้และจังหวะเข้า</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">🇺🇸 หุ้น US</span> / <span class="menu-pill">🇭🇰 หุ้น HK</span> / <span class="menu-pill">🇯🇵 หุ้น JP</span> / <span class="menu-pill">DR/DRx</span></h4>
+          <p>ถ้าเป็นหุ้นต่างประเทศ ดู RS/Stage/Momentum ในชุดเดียวกัน และเช็ค Premium/Discount ของ DR เทียบ underlying</p>
+        </div>
+      </div>
+
+      <div class="phase-label">ระยะ 4 — เข้า / ติดตาม</div>
+
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">📅 ปฏิทิน</span> → <span class="menu-pill">⭐ Watchlist</span> + 🔔 แจ้งเตือน</h4>
+          <p>เช็ค event ข้างหน้าก่อนเข้า แล้วเพิ่มเข้า Watchlist ตั้งราคาแจ้งเตือน</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">Heatmap</span> / <span class="menu-pill">🔄 Stock Rotation</span></h4>
+          <p>ใช้ดูภาพรวมพอร์ตและ RRG รายหุ้นระหว่างถือ</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h4><span class="menu-pill">🏦 ETF ไทย</span></h4>
+          <p>ถ้าไม่อยากเลือกหุ้นรายตัว เล่นกลุ่ม/ธีมผ่าน ETF ได้เลย (ดู Premium-Discount ต่อ NAV, RS)</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ===== MENU MAP ===== -->
+  <div class="section" id="menu-map">
+    <h2>📖 ตารางสรุป: เมนูไหนตอบคำถามอะไร</h2>
+    <p>ใช้เป็น index เร็วๆ เวลาลืมว่าจะไปเปิดหน้าไหนดี</p>
+    <table>
+      <tr><th>คำถาม</th><th>เมนู</th></tr>
+      <tr><td>ตลาดตอนนี้ควรซื้อไหม</td><td>Overview, Regime Light, 📈 แนวโน้มตลาด, Valuation</td></tr>
+      <tr><td>เงินไหลเข้ากลุ่มไหน</td><td>Capital Flow, Rotation, ดัชนีกลุ่ม</td></tr>
+      <tr><td>กลุ่มไหนกำไรโตจริง</td><td>🚀 หุ้นโตแรงรายไตรมาส, 📈 แนวโน้มตลาด</td></tr>
+      <tr><td>หาหุ้นเทคนิคแข็ง</td><td>Screener, หุ้นทั้งหมด</td></tr>
+      <tr><td>หาหุ้นพื้นฐานดี/ถูก</td><td>🔬 Screener+, ⚖️ Fair Value P/B·P/E, 🎯 DCF Screener</td></tr>
+      <tr><td>หุ้นตัวนี้ถูก/แพง</td><td>Val. Band, 🆚 เทียบเพื่อน, Tearsheet</td></tr>
+      <tr><td>งบดีจริงไหม</td><td>งบการเงิน, 🆚 เทียบเพื่อน</td></tr>
+      <tr><td>เงินฉลาดหนุนไหม</td><td>Insider, Short, 🎯 สัญญาณรวม, 🐋 Hedge Holdings</td></tr>
+      <tr><td>มี event อะไรข้างหน้า</td><td>📅 ปฏิทิน, 📰 ข่าวหุ้น, 📑 รายงานทางการ</td></tr>
+      <tr><td>ติดตามหลังซื้อ</td><td>⭐ Watchlist + 🔔, Heatmap, 🔄 Stock Rotation</td></tr>
+      <tr><td>ข้อมูลสดหรือยัง</td><td>🩺 Data Health</td></tr>
+    </table>
+
+    <div class="callout note">
+      หน้านี้ครอบคลุมเมนูใหม่ที่ยังไม่มีในคู่มือหลัก (Screener+, Tearsheet, DCF/Fair Value Screener, หุ้นโตแรงรายไตรมาส, สัญญาณรวม, แนวโน้มตลาด, Hedge Holdings) — ดูรายละเอียดคำศัพท์/วิธีติดตั้ง/รายละเอียดแต่ละหน้าคลาสสิกได้ที่
+      <a href="คู่มือการใช้งาน.html" style="color:var(--blue);font-weight:700">คู่มือการใช้งาน.html</a>
+    </div>
+  </div>
+
+</main>
+</body>
+</html>

@@ -13,7 +13,9 @@ set_company_master (ข้อมูลบริษัท ไม่ใช่ร�
 PRIMARY KEY(symbol, date) → upsert รอบใหม่ทับค่าเดิมของวันเดียวกัน (SET แก้ย้อนหลังได้
 เช่นตอนประกาศงบใหม่ EPS เปลี่ยน PE ทั้งชุดขยับ) แต่ไม่แตะแถววันอื่น
 """
+import logging
 import sqlite3
+import threading
 from datetime import datetime, timezone
 
 from sources import financials_store as fs
@@ -22,12 +24,23 @@ TABLE = "set_daily_valuation"
 
 _COLS = ("close", "pe", "pbv", "book_value_per_share", "dividend_yield", "market_cap")
 
+# กัน sync_all() หลายจุดเรียกพร้อมกัน (tier 0 อัตโนมัติใน run_quick_update, ปุ่มมือ
+# /api/set-daily-val/sync, safety-net ใน _run_quick) — ทั้ง 3 จุดเขียนตารางเดียวกันใน
+# financials.db ด้วย transaction เดียวยาวทั้งลูป มีแค่ busy_timeout=5000ms กันไม่พอถ้าชนกัน
+# จริง (code review 2026-08-27)
+_sync_lock = threading.Lock()
+
 
 def _connect(base_dir):
-    con = sqlite3.connect(fs._db_path(base_dir))
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA busy_timeout=5000")
-    return con
+    """reuse pragma เดียวกับ financials_store._connect ตรงๆ (คนละไฟล์เดิมเขียนซ้ำ — เสี่ยง
+    WAL/busy_timeout สองโมดูลนี้ค่อยๆ เพี้ยนต่างกันถ้าแก้จุดเดียวไม่ครบ)"""
+    return fs._connect(base_dir)
+
+
+def _bare(symbol):
+    """ตัด .BK ออกถ้ามี — เก็บในตารางนี้แบบ bare symbol เสมอ (ใช้ซ้ำแทนการเขียน
+    `symbol[:-3] if symbol.endswith(".BK") else symbol` ซ้ำ 4 จุดในไฟล์นี้)"""
+    return symbol[:-3] if symbol.endswith(".BK") else symbol
 
 
 def init_table(base_dir):
@@ -48,9 +61,10 @@ def init_table(base_dir):
 
 
 def _th_symbols(base_dir):
-    """หุ้นสามัญไทยทั้งหมด (SET+mai) — แหล่งเดียวกับ set_company._th_symbols"""
-    from set_data_fetcher import load_set_symbols
-    return [s["symbol"] for s in load_set_symbols(base_dir)]
+    """หุ้นสามัญไทยทั้งหมด (SET+mai) — reuse set_company._th_symbols ตรงๆ (เดิมเขียนซ้ำ
+    ทั้งที่ comment บอกว่า "แหล่งเดียวกัน" อยู่แล้ว — code review 2026-08-27)"""
+    from sources.set_company import _th_symbols as _sc_th_symbols
+    return _sc_th_symbols(base_dir)
 
 
 def upsert_rows(base_dir, symbol, rows, con=None):
@@ -60,7 +74,7 @@ def upsert_rows(base_dir, symbol, rows, con=None):
     con: reuse connection เดิมได้ (bulk sync วนหลายร้อยตัว)"""
     if not rows:
         return 0
-    sym = symbol[:-3] if symbol.endswith(".BK") else symbol
+    sym = _bare(symbol)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     owns = con is None
     if con is None:
@@ -98,7 +112,7 @@ def get_series(base_dir, symbol):
     ยังไม่เคยสะสม คืนโครง row เดียวกับ set_api.fetch_historical_trading (nำไปใช้ต่อได้ทันที)"""
     if not fs.db_exists(base_dir):
         return []
-    sym = symbol[:-3] if symbol.endswith(".BK") else symbol
+    sym = _bare(symbol)
     con = _connect(base_dir)
     try:
         cur = con.execute(f"""SELECT date, close, pe, pbv, book_value_per_share,
@@ -135,7 +149,7 @@ def latest_fundamentals_map(base_dir, tickers, ref_date=None, max_staleness_days
         return {}
     want = {}
     for t in tickers:
-        want[t[:-3] if t.endswith(".BK") else t] = t
+        want[_bare(t)] = t
     con = _connect(base_dir)
     try:
         table_max = _latest_date(base_dir, con)
@@ -180,7 +194,7 @@ def get_symbol_meta(base_dir, symbol):
     """{count, date_from, date_to, synced_at} ของหุ้น 1 ตัว — None ถ้ายังไม่เคยสะสม"""
     if not fs.db_exists(base_dir):
         return None
-    sym = symbol[:-3] if symbol.endswith(".BK") else symbol
+    sym = _bare(symbol)
     con = _connect(base_dir)
     try:
         row = con.execute(f"""SELECT COUNT(*), MIN(date), MAX(date), MAX(synced_at)
@@ -236,8 +250,12 @@ def _probe_latest_available(default=None):
         rows = fetch_historical_trading("PTT", ctx=ctx, hdr=hdr)
         if rows and rows[-1].get("date"):
             return rows[-1]["date"]
-    except Exception:
-        pass
+    except Exception as e:
+        # เดิมกลืน exception เงียบสนิท (ต่างจาก except-block อื่นในไฟล์นี้ที่ log เตือน
+        # ทุกจุด) — ถ้า endpoint เปลี่ยน schema/PTT ถูกพักเทรดถาวร โพรบจะล้มไปเรื่อยๆ โดย
+        # ไม่มีร่องรอยใน log เลยว่าทำไม gate ถึงกลับไปใช้ MAX(date) ตัวเอง (code review
+        # 2026-08-27)
+        logging.warning(f"[set_daily_val] probe PTT ล้มเหลว ({e}) — fallback default={default}")
     return default
 
 
@@ -250,47 +268,70 @@ def sync_all(base_dir, callback=None, skip_up_to_date=True, probe=True):
     แบบเดิม (ไม่ยิง network เพิ่ม — ใช้กับ opportunistic upsert ที่ต้องเร็ว/ไม่พึ่ง network)
 
     คืน (จำนวนหุ้นที่เขียน, จำนวนหุ้นที่พยายาม, จำนวนแถวใหม่รวม)
-    raise ถ้า fetch_historical_trading_batch ได้ < 50% (ปล่อย ValueError ให้ caller)"""
-    from sources.set_api import fetch_historical_trading_batch
-    init_table(base_dir)
-    all_syms = _th_symbols(base_dir)
+    raise ถ้า fetch_historical_trading_batch ได้ < 50% (ปล่อย ValueError ให้ caller)
 
-    targets = all_syms
-    if skip_up_to_date and fs.db_exists(base_dir):
-        con = _connect(base_dir)
-        try:
-            latest = _latest_date(base_dir, con)
-        finally:
-            con.close()
-        if latest:
-            avail = _probe_latest_available(default=latest) if probe else latest
-            if avail < latest:          # โพรบเพี้ยน/ตอบวันเก่า — อย่าถอยหลัง
-                avail = latest
-            con = _connect(base_dir)
-            try:
-                have = {r[0] for r in con.execute(
-                    f"SELECT symbol FROM {TABLE} WHERE date=?", (avail,)).fetchall()}
-            finally:
-                con.close()
-            targets = [s for s in all_syms
-                       if (s[:-3] if s.endswith(".BK") else s) not in have]
-
-    if not targets:
+    Guard 2 ชั้น (code review 2026-08-27 — มี 3 จุดเรียกฟังก์ชันนี้: tier 0 อัตโนมัติใน
+    run_quick_update, ปุ่มมือ /api/set-daily-val/sync, safety-net ใน _run_quick):
+      1) ไม่มี financials.db เลย (เช่น CI fresh checkout — เป็น local-only ไม่ commit ขึ้น
+         GitHub) → ข้าม ไม่สร้าง DB ว่างๆ ขึ้นมาแค่เพื่อยิง sweep เต็ม ~931 ตัวทิ้งเปล่า —
+         ต้องเช็คก่อน init_table() เสมอ ไม่งั้น init_table เองก็สร้างไฟล์ขึ้นมาก่อนแล้ว
+         เช็คซ้ำทีหลังจะเจอว่า "มีไฟล์แล้ว" เสมอ (self-defeating)
+      2) มีอีกจุดกำลัง sync_all() อยู่แล้ว (_sync_lock ไม่ว่าง) → ข้ามรอบนี้แทนที่จะรอ/ชนกัน
+         (ทั้ง sync_all แต่ละรอบเป็น transaction เดียวยาวทั้งลูป เสี่ยง "database is locked"
+         หรือยิง SET.or.th ซ้ำ ~931 ตัวสองรอบพร้อมกันถ้าไม่กัน) — รอบถัดไปจะ sync เอง
+    """
+    if not fs.db_exists(base_dir):
         if callback:
-            callback(1, 1, "PE/PBV รายวัน: สะสมครบวันล่าสุดแล้ว ไม่มีอะไรต้องดึง")
+            callback(1, 1, "PE/PBV รายวัน: ยังไม่มี financials.db — ข้าม (Full Refresh/sync งบก่อน)")
+        return 0, 0, 0
+    if not _sync_lock.acquire(blocking=False):
+        logging.info("[set_daily_val] sync_all: มีอีกจุดกำลัง sync อยู่แล้ว — ข้ามรอบนี้")
+        if callback:
+            callback(1, 1, "PE/PBV รายวัน: มี sync อีกจุดกำลังรันอยู่ — ข้ามรอบนี้")
         return 0, 0, 0
 
-    data = fetch_historical_trading_batch(targets, callback=callback)
-    now_syms = written = rows_written = 0
-    con = _connect(base_dir)
     try:
-        for sym, rows in data.items():
-            rows_written += upsert_rows(base_dir, sym, rows, con=con)
-            written += 1
-        con.commit()
+        from sources.set_api import fetch_historical_trading_batch
+        init_table(base_dir)
+        all_syms = _th_symbols(base_dir)
+
+        targets = all_syms
+        if skip_up_to_date:
+            con = _connect(base_dir)
+            try:
+                latest = _latest_date(base_dir, con)
+            finally:
+                con.close()
+            if latest:
+                avail = _probe_latest_available(default=latest) if probe else latest
+                if avail < latest:          # โพรบเพี้ยน/ตอบวันเก่า — อย่าถอยหลัง
+                    avail = latest
+                con = _connect(base_dir)
+                try:
+                    have = {r[0] for r in con.execute(
+                        f"SELECT symbol FROM {TABLE} WHERE date=?", (avail,)).fetchall()}
+                finally:
+                    con.close()
+                targets = [s for s in all_syms if _bare(s) not in have]
+
+        if not targets:
+            if callback:
+                callback(1, 1, "PE/PBV รายวัน: สะสมครบวันล่าสุดแล้ว ไม่มีอะไรต้องดึง")
+            return 0, 0, 0
+
+        data = fetch_historical_trading_batch(targets, callback=callback)
+        now_syms = written = rows_written = 0
+        con = _connect(base_dir)
+        try:
+            for sym, rows in data.items():
+                rows_written += upsert_rows(base_dir, sym, rows, con=con)
+                written += 1
+            con.commit()
+        finally:
+            con.close()
+        now_syms = written
+        if callback:
+            callback(1, 1, f"PE/PBV รายวัน: สะสม {now_syms}/{len(targets)} ตัว (+{rows_written} แถว)")
+        return now_syms, len(targets), rows_written
     finally:
-        con.close()
-    now_syms = written
-    if callback:
-        callback(1, 1, f"PE/PBV รายวัน: สะสม {now_syms}/{len(targets)} ตัว (+{rows_written} แถว)")
-    return now_syms, len(targets), rows_written
+        _sync_lock.release()
