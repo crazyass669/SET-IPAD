@@ -657,6 +657,57 @@ def fetch_historical_trading(symbol, ctx=None, hdr=None):
     return out
 
 
+def fetch_historical_trading_batch(tickers, callback=None, workers=8, min_ratio=0.5):
+    """ดึง PE/PBV/BVPS/DivYield รายวัน (~6 เดือนล่าสุด) ทั้งกระดานแบบพารัลเลล — ใช้กับ
+    งาน #4B ใน PLAN_set_api_expansion.txt: สะสมประวัติทางการเองให้ยาวกว่า 6 เดือนที่ SET
+    ยอมให้ย้อนหลัง (pattern เดียวกับ SET P&L รายไตรมาสที่ดึงสดได้แค่ ~2 ปี)
+
+    tickers: list ของ "PTT" (มี/ไม่มี .BK ก็ได้) คืน {ticker: [row, ...]} โดย row เหมือน
+    fetch_historical_trading เป๊ะ — ตัวที่ดึงไม่สำเร็จไม่อยู่ใน dict (caller ข้ามเอง)
+    raise ValueError ถ้าสำเร็จ < min_ratio (แหล่งนี้ไม่มี fallback — ข้ามรอบนี้ไปเลย)"""
+    ctx, hdr = _bootstrap_headers()
+    results = {}
+
+    def _one(tick):
+        sym = tick[:-3] if tick.endswith(".BK") else tick
+        path = f"/api/set/stock/{urllib.parse.quote(sym)}/historical-trading?lang=th"
+        for attempt in range(2):
+            try:
+                d = _get_json(ctx, hdr, path, timeout=15)
+                rows = d if isinstance(d, list) else []
+                out = [{
+                    "date": (r.get("date") or "")[:10], "close": r.get("close"),
+                    "pe": r.get("pe"), "pbv": r.get("pbv"),
+                    "book_value_per_share": r.get("bookValuePerShare"),
+                    "dividend_yield": r.get("dividendYield"), "market_cap": r.get("marketCap"),
+                } for r in rows]
+                out = [r for r in out if r["date"]]
+                out.sort(key=lambda r: r["date"])
+                return tick, out
+            except Exception:
+                if attempt == 0:
+                    time.sleep(0.5)
+        return tick, None
+
+    total = len(tickers)
+    done = ok = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(_one, t) for t in tickers]
+        for f in as_completed(futures):
+            tick, data = f.result()
+            done += 1
+            if data:
+                results[tick] = data
+                ok += 1
+            if callback and done % 100 == 0:
+                callback(done, total, f"PE/PBV รายวัน (SET API) {done}/{total}...")
+
+    if total > 0 and ok < total * min_ratio:
+        raise ValueError(f"SET API historical-trading ได้แค่ {ok}/{total} "
+                         f"(<{int(min_ratio*100)}%) — ลองใหม่รอบหน้า")
+    return results
+
+
 _TH_MONTHS = {
     "ม.ค.": 1, "ก.พ.": 2, "มี.ค.": 3, "เม.ย.": 4, "พ.ค.": 5, "มิ.ย.": 6,
     "ก.ค.": 7, "ส.ค.": 8, "ก.ย.": 9, "ต.ค.": 10, "พ.ย.": 11, "ธ.ค.": 12,

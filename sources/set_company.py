@@ -327,6 +327,35 @@ def get_ownership(base_dir, symbol):
         con.close()
 
 
+def get_esg(base_dir, symbol):
+    """CG/ESG rating ของหุ้น 1 ตัวจาก DB (อ่านเร็ว ไม่ยิง SET สด) — ใช้กับ badge หัว Tearsheet
+    (ดู PLAN_set_api_expansion.txt งาน #3B) คืน None ถ้ายังไม่เคย sync ESG หรือหุ้นตัวนี้ไม่มี
+    เรตติ้ง (SET ครอบแค่ ~38% ของกระดาน — ไม่มีค่า ≠ คะแนนแย่ ผู้เรียกต้องไม่โชว์ badge เลย)"""
+    if not fs.db_exists(base_dir):
+        return None
+    con = _connect(base_dir)
+    try:
+        row = con.execute(f"""SELECT cg_score, esg_rating, esg_rank, esg_as_of,
+            setesg_index, djsi_index, esgbook_score, refinitiv_score, morningstar_risk
+            FROM {TABLE} WHERE symbol=?""", (symbol,)).fetchone()
+        if not row:
+            return None
+        cg, esg_r, esg_rk, esg_as, seti, djsi, esgb, refi, morn = row
+        # ไม่มี rating เลยและไม่อยู่ดัชนีไหน = หุ้นไม่ได้เข้าร่วมประเมิน — คืน None ให้ frontend
+        # ซ่อน badge (ห้ามโชว์ "—" จะดูเหมือนคะแนนแย่ — ดู PLAN งาน #3B)
+        if esg_r is None and cg is None and not seti and not djsi:
+            return None
+        return {
+            "cg_score": cg, "esg_rating": esg_r, "esg_rank": esg_rk, "esg_as_of": esg_as,
+            "setesg_index": bool(seti), "djsi_index": bool(djsi),
+            "esgbook_score": esgb, "refinitiv_score": refi, "morningstar_risk": morn,
+        }
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        con.close()
+
+
 def get_foreign_room_ranking(base_dir):
     """คืน list ของหุ้นที่มี foreign_room เรียงตาม "% ที่ใช้ไปแล้ว" มากสุดก่อน — ใช้กับ
     ปุ่ม "เช็คห้องต่างชาติใกล้เต็ม" ในหน้า Valuation (ดู PLAN_set_api_expansion.txt

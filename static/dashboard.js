@@ -597,6 +597,21 @@ function startBuildMirrorNames() {
   _startJob("/api/build-mirror-names", "build-mirror-names-btn", "🏷️ ดึงชื่อหุ้น mirror ใหม่", null, checkDataHealthBadge);
 }
 
+// สะสม PE/PBV/BVPS/DivYield รายวันทางการจาก SET.or.th ทั้งกระดาน (งาน #4B) — endpoint รันใน
+// background thread (~1-2 นาที) แล้วคืนทันที ดูผลที่ item 'PE/PBV รายวันทางการ' ในหน้านี้
+// รอบถัดไป · ปกติ Quick Update ยิงให้อัตโนมัติอยู่แล้ว ปุ่มนี้ไว้บังคับรอบเต็ม
+async function startSetDailyValSync() {
+  if (!confirm('สะสม PE/PBV รายวันทางการจาก SET.or.th ทั้งกระดานตอนนี้?\n\nปกติ Quick Update ยิงให้อัตโนมัติทุกวันอยู่แล้ว — กดเฉพาะตอนอยากบังคับรอบเต็ม\n\nรันพื้นหลัง ~1-2 นาที ดูผลที่ item "PE/PBV รายวันทางการ" ในหน้านี้รอบถัดไป')) return;
+  try {
+    const r = await _fetchTimeout('/api/set-daily-val/sync', 15000, undefined, { method: 'POST' });
+    const d = await r.json();
+    alert(d.ok ? '✓ เริ่มสะสมแล้ว — รีเฟรชหน้านี้อีกครั้งใน ~2 นาทีเพื่อดูผล'
+               : `⚠ ${d.error || 'ไม่สำเร็จ'}`);
+  } catch (e) {
+    alert(`⚠ ไม่สำเร็จ: ${e.message}`);
+  }
+}
+
 function startStaticBake() {
   if (!confirm('รัน python run_static_update.py ในเครื่องนี้ (Quick/Full Refresh ราคา + bake ไฟล์ data/*.json ทั้งหมดที่เว็บ static ใช้)?\n\nปกติไม่ต้องกดเอง — GitHub Actions รันให้อัตโนมัติแล้ว กดเฉพาะตอนอยากได้ไฟล์สดทันทีในเครื่อง\n\nอาจใช้เวลานาน (ไม่กี่นาที ถึง ~ชั่วโมง ถ้ายังไม่มี set_prices.db) — ปิดแท็บ/ปิดคอมได้ระหว่างรัน')) return;
   _startJob("/api/run-static-bake", "static-bake-btn", "🧱 Bake ไฟล์ static ทั้งหมด", null, checkDataHealthBadge);
@@ -4139,6 +4154,7 @@ function showPage(id, btn) {
   if (id === "data-health")    loadDataHealth();
   if (id === "hedge")          loadHedgePage();
   if (id === "dcf-screener")   loadDcfScreenerPage();
+  if (id === "pbv-pe-screener") loadPbvPeScreenerPage();
   if (id === "growth-screener") loadGrowthScreenerPage();
   if (id === "overview")       { setTimeout(() => { if (!_nhLoaded) loadNewHighChart(); }, 100); }
 }
@@ -4700,6 +4716,245 @@ function exportDcfScreenerCsv() {
   const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   a.href = url;
   a.download = `dcf_screener_${ts}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// FAIR VALUE P/B·P/E SCREENER — Justified P/B (ROE-based) + Justified P/E รันวนทุกหุ้นไทย
+// ดู sources/pbv_pe_screener.py + routes /api/pbv-pe-screener* ใน app.py — สูตร Justified P/B
+// mirror ของ _altJustifiedPb() ด้านบน (Tearsheet) พอร์ตไป Python คนละชุดโค้ดกัน · หน้านี้แค่
+// fetch ผลลัพธ์ที่ cache ไว้แล้วมาแสดง/กรอง/เรียงเท่านั้น (ไม่คำนวณฝั่ง client)
+// ============================================================
+let _pbvPeScreenerData = null;
+// เรียงตาม Upside P/B มาก->น้อยเป็นค่าเริ่มต้น (Justified P/B = เป้าหมายหลักของหน้านี้ ตาม memory
+// pbv-pe-screener-plan) — กดหัวตารางเปลี่ยนได้ (asc/desc สลับทุกครั้งที่กดคอลัมน์เดิมซ้ำ)
+let _pbvPeScrSort = { key: 'jpb_upside_pct', dir: 'desc' };
+const PBV_PE_SCR_COLS = [
+  { key: 'symbol', label: 'หุ้น', align: 'left' },
+  { key: 'name', label: 'ชื่อ', align: 'left' },
+  { key: 'price', label: 'ราคา', align: 'right' },
+  { key: 'jpb_fair', label: 'Fair (P/B)', align: 'right' },
+  { key: 'jpb_upside_pct', label: 'Upside P/B', align: 'right' },
+  { key: 'jpe_fair', label: 'Fair (P/E)', align: 'right' },
+  { key: 'jpe_upside_pct', label: 'Upside P/E', align: 'right' },
+  { key: 'roe_pct', label: 'ROE', align: 'right' },
+  { key: 'coe_pct', label: 'r (CoE)', align: 'right' },
+];
+
+function _pbvPeScrEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function loadPbvPeScreenerPage() {
+  if (_pbvPeScreenerData) { renderPbvPeScreener(); return; }
+  fetchPbvPeScreener();
+}
+
+// field ที่ override ทั้งตลาดได้ (เว้นว่าง = ใช้ค่าจริงของหุ้นนั้น) — id ช่อง input คู่กับ key ที่
+// ส่งให้ /api/pbv-pe-screener/rebuild (ต้องตรงกับ resolve_assumptions() ใน sources/pbv_pe_screener.py)
+const PBV_PE_SCR_OPTIONAL_FIELDS = [
+  ['pbvpe-screener-coe', 'coe_pct'], ['pbvpe-screener-roe', 'roe_pct'],
+];
+
+function fetchPbvPeScreener() {
+  const box = document.getElementById('pbvpe-screener-table');
+  if (box) box.innerHTML = '<div class="empty">กำลังโหลด...</div>';
+  return fetch('/api/pbv-pe-screener').then(r => r.json()).then(d => {
+    _pbvPeScreenerData = d;
+    const a = d.meta && d.meta.assumptions;
+    if (a) {
+      const setv = (id, v) => {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el && v != null) el.value = v;
+      };
+      const setvOpt = (id, v) => {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el) el.value = (v == null ? '' : v);
+      };
+      setv('pbvpe-screener-g', a.g_pct);
+      setv('pbvpe-screener-rf', a.rf_pct);
+      setv('pbvpe-screener-beta', a.beta);
+      setv('pbvpe-screener-erp', a.erp_pct);
+      PBV_PE_SCR_OPTIONAL_FIELDS.forEach(([id, key]) => setvOpt(id, a[key]));
+    }
+    renderPbvPeScreener();
+  }).catch(() => {
+    if (box) box.innerHTML = '<div class="empty">โหลดข้อมูลไม่สำเร็จ</div>';
+  });
+}
+
+// ค่าเริ่มต้นเดียวกับ LONG_TERM_GROWTH_PCT/RISK_FREE_PCT/BETA/ERP_PCT ใน sources/pbv_pe_screener.py
+// — ต้องแก้คู่กันถ้าเปลี่ยนค่าเริ่มต้นฝั่งใดฝั่งหนึ่ง
+const PBV_PE_SCR_DEFAULTS = { g_pct: 3.0, rf_pct: 2.5, beta: 1.00, erp_pct: 5.5 };
+
+function resetPbvPeScreenerAssumptions() {
+  const el = id => document.getElementById(id);
+  el('pbvpe-screener-g').value = PBV_PE_SCR_DEFAULTS.g_pct;
+  el('pbvpe-screener-rf').value = PBV_PE_SCR_DEFAULTS.rf_pct;
+  el('pbvpe-screener-beta').value = PBV_PE_SCR_DEFAULTS.beta.toFixed(2);
+  el('pbvpe-screener-erp').value = PBV_PE_SCR_DEFAULTS.erp_pct;
+  PBV_PE_SCR_OPTIONAL_FIELDS.forEach(([id]) => { const e = el(id); if (e) e.value = ''; });
+  // แค่รีเซ็ตช่องกรอก ยังไม่คำนวณใหม่ — ให้ผู้ใช้ตรวจค่าก่อนกด ⟳ เอง
+}
+
+function startPbvPeScreenerRebuild() {
+  const btn = document.getElementById('pbvpe-screener-rebuild-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ กำลังคำนวณ...'; }
+  const numVal = (id, dflt) => {
+    const v = parseFloat(document.getElementById(id)?.value);
+    return Number.isFinite(v) ? v : dflt;
+  };
+  const optVal = id => {
+    const raw = document.getElementById(id)?.value;
+    if (raw == null || String(raw).trim() === '') return null;
+    const v = parseFloat(raw);
+    return Number.isFinite(v) ? v : null;
+  };
+  const body = {
+    g_pct: numVal('pbvpe-screener-g', 3.0),
+    rf_pct: numVal('pbvpe-screener-rf', 2.5),
+    beta: numVal('pbvpe-screener-beta', 1.0),
+    erp_pct: numVal('pbvpe-screener-erp', 5.5),
+  };
+  PBV_PE_SCR_OPTIONAL_FIELDS.forEach(([id, key]) => { body[key] = optVal(id); });
+  fetch('/api/pbv-pe-screener/rebuild', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }).then(r => r.json())
+    .then(() => fetchPbvPeScreener())
+    .catch(() => {
+      const meta = document.getElementById('pbvpe-screener-meta');
+      if (meta) meta.textContent = 'คำนวณไม่สำเร็จ ลองใหม่อีกครั้ง';
+    })
+    .finally(() => {
+      if (btn) { btn.disabled = false; btn.textContent = '⟳ คำนวณใหม่ทั้งตลาด'; }
+    });
+}
+
+function _pbvPeScrSetSort(key) {
+  if (_pbvPeScrSort.key === key) {
+    _pbvPeScrSort.dir = _pbvPeScrSort.dir === 'desc' ? 'asc' : 'desc';
+  } else {
+    _pbvPeScrSort.key = key;
+    _pbvPeScrSort.dir = (key === 'symbol' || key === 'name') ? 'asc' : 'desc';
+  }
+  renderPbvPeScreener();
+}
+
+// ใช้ร่วมกันทั้งตอน render ตารางและตอน export CSV — export เอาแถวที่กรอง/เรียงตามที่เห็นบนจอ
+function _pbvPeScrFilteredSorted() {
+  const d = _pbvPeScreenerData;
+  if (!d || !d.rows) return [];
+  const q = (document.getElementById('pbvpe-screener-search')?.value || '').toUpperCase().trim();
+  const hideErr = document.getElementById('pbvpe-screener-hide-na')?.checked;
+  const finOnly = document.getElementById('pbvpe-screener-fin-only')?.checked;
+  let rows = d.rows.filter(r => !q || r.symbol.includes(q) || (r.name || '').toUpperCase().includes(q));
+  if (hideErr) rows = rows.filter(r => !r.error);
+  if (finOnly) rows = rows.filter(r => r.is_financial);
+  const key = _pbvPeScrSort.key, dir = _pbvPeScrSort.dir === 'asc' ? 1 : -1;
+  rows = rows.slice().sort((a, b) => {
+    const av = a[key], bv = b[key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'string') return dir * av.localeCompare(bv);
+    return dir * (av - bv);
+  });
+  return rows;
+}
+
+function _pbvPeScrUpCell(up) {
+  if (up == null) return '<td style="text-align:right">—</td>';
+  const color = up > 0 ? 'var(--green)' : 'var(--red)';
+  const extreme = Math.abs(up) > 300;
+  return `<td style="text-align:right;font-weight:700;color:${color}">${(up > 0 ? '+' : '') + up.toFixed(1)}%${extreme ? ' ⚠️' : ''}</td>`;
+}
+
+function renderPbvPeScreener() {
+  const d = _pbvPeScreenerData;
+  const box = document.getElementById('pbvpe-screener-table');
+  const metaBox = document.getElementById('pbvpe-screener-meta');
+  const countBox = document.getElementById('pbvpe-screener-count');
+  if (!box) return;
+  if (!d || !d.rows || !d.rows.length) {
+    if (metaBox) metaBox.textContent = 'ยังไม่เคยคำนวณ';
+    box.innerHTML = '<div class="empty">ยังไม่มีข้อมูล กดปุ่ม "⟳ คำนวณใหม่ทั้งตลาด" ด้านบนก่อน</div>';
+    return;
+  }
+  if (metaBox) {
+    const a = d.meta.assumptions || {};
+    const ov = [];
+    if (a.coe_pct != null) ov.push('r');
+    if (a.roe_pct != null) ov.push('ROE');
+    metaBox.textContent = `คำนวณล่าสุด ${d.meta.computed_at || '—'} · คำนวณได้ ${d.meta.ok_count}/${d.meta.count} ตัว`
+      + (a.g_pct != null ? ` · g ${a.g_pct}%` : '')
+      + (a.coe_pct != null ? ` · r ${a.coe_pct}% (กรอกตรง)` : ` · r = Rf ${a.rf_pct}% + β ${a.beta}·ERP ${a.erp_pct}%`)
+      + (ov.length ? ` · กำหนดเองทั้งตลาด: ${ov.join(', ')}` : '');
+  }
+  const rows = _pbvPeScrFilteredSorted();
+  if (countBox) countBox.textContent = `${rows.length} ตัว`;
+  if (!rows.length) { box.innerHTML = '<div class="empty">ไม่พบหุ้นตรงเงื่อนไข</div>'; return; }
+
+  const fin = r => r.is_financial ? ' <span title="กลุ่มการเงิน — Justified P/B เหมาะกับกลุ่มนี้เป็นพิเศษ">🏦</span>' : '';
+  const rowsHtml = rows.map(r => {
+    const symCell = `<td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a>${fin(r)}</td>`;
+    if (r.error) {
+      return `<tr style="opacity:.55">${symCell}
+        <td>${_pbvPeScrEsc(r.name || '')}</td>
+        <td colspan="7" style="color:var(--text2)">— ${_pbvPeScrEsc(r.error)}</td></tr>`;
+    }
+    return `<tr>${symCell}
+      <td>${_pbvPeScrEsc(r.name || '')}</td>
+      <td style="text-align:right">${r.price != null ? r.price.toFixed(2) : '—'}</td>
+      <td style="text-align:right">${r.jpb_fair != null ? r.jpb_fair.toFixed(2) : '—'}</td>
+      ${_pbvPeScrUpCell(r.jpb_upside_pct)}
+      <td style="text-align:right">${r.jpe_fair != null ? r.jpe_fair.toFixed(2) : '—'}</td>
+      ${_pbvPeScrUpCell(r.jpe_upside_pct)}
+      <td style="text-align:right">${r.roe_pct != null ? r.roe_pct.toFixed(1) + '%' : '—'}</td>
+      <td style="text-align:right">${r.coe_pct != null ? r.coe_pct.toFixed(2) + '%' : '—'}</td>
+    </tr>`;
+  }).join('');
+  const headHtml = PBV_PE_SCR_COLS.map(c => {
+    const arrow = _pbvPeScrSort.key === c.key ? (_pbvPeScrSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
+    return `<th style="text-align:${c.align};cursor:pointer;user-select:none;white-space:nowrap" onclick="_pbvPeScrSetSort('${c.key}')" title="กดเรียงลำดับ">${c.label}${arrow}</th>`;
+  }).join('');
+  box.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%">
+    <thead><tr>${headHtml}</tr></thead>
+    <tbody>${rowsHtml}</tbody></table></div>
+    <div style="font-size:10.5px;color:var(--text2);margin-top:6px">🏦 = กลุ่มการเงิน · ⚠️ = |upside| เกิน 300% (มักเกิดจากราคาต่อหุ้นเล็กมาก/BVPS เพี้ยน ไม่ใช่ signal ที่เชื่อถือได้ตรงๆ — เปิด Tearsheet ตรวจก่อน) · Justified P/E เป็นแบบ leading (ROE-based) คูณ EPS รายปีล่าสุด · กดหัวตารางเพื่อเรียงลำดับ</div>`;
+}
+
+function exportPbvPeScreenerCsv() {
+  const rows = _pbvPeScrFilteredSorted();
+  if (!rows.length) { alert('ไม่มีข้อมูลให้ export'); return; }
+  const csvEsc = v => {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const headers = ['Symbol', 'Name', 'Sector', 'Is financial', 'Price', 'BVPS', 'EPS',
+    'Justified P/B x', 'Fair (P/B)', 'Upside P/B %', 'Justified P/E x', 'Fair (P/E)', 'Upside P/E %',
+    'ROE %', 'r (CoE) %', 'g %', 'Current P/BV', 'Current P/E', 'Error'];
+  const lines = [headers.map(csvEsc).join(',')];
+  rows.forEach(r => {
+    lines.push([
+      r.symbol, r.name || '', r.sector || '', r.is_financial ? 'Y' : '',
+      r.price ?? '', r.bvps ?? '', r.eps ?? '',
+      r.jpb_x ?? '', r.jpb_fair ?? '', r.jpb_upside_pct ?? '',
+      r.jpe_x ?? '', r.jpe_fair ?? '', r.jpe_upside_pct ?? '',
+      r.roe_pct ?? '', r.coe_pct ?? '', r.g_pct ?? '', r.cur_pbv ?? '', r.cur_pe ?? '', r.error || '',
+    ].map(csvEsc).join(','));
+  });
+  const csv = '﻿' + lines.join('\r\n');   // BOM กัน Excel เปิดภาษาไทยเพี้ยน
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  a.href = url;
+  a.download = `pbv_pe_screener_${ts}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -9354,6 +9609,18 @@ const PEER_COLS = {
     { k: 'growth_score',    label: 'GrowthScore',  lowerBetter: false, tip: 'สกอร์รวมความแข็งแรงของการเติบโต (รวมหลายปัจจัยข้างต้น)' },
     { k: 'rule_of_40',      label: 'Rule of 40',   lowerBetter: false, tip: 'รายได้โต% + Net Margin% — ≥40 ดี' },
   ],
+  // ธรรมาภิบาล & ความยั่งยืน (SET.or.th ทางการ) — หุ้นไทยเท่านั้น · มีข้อมูลแค่ ~38% ของตลาด
+  // ค่าในตารางเป็นตัวเลข (esg_rank 1-4 / cg_score 1-5) ให้เรียง+ลงสี percentile ได้ แต่แสดงผล
+  // เป็นข้อความ (เรตติ้ง AAA.. / ดาว) ผ่าน render() ดู PLAN_set_api_expansion.txt งาน #3C
+  governance: [
+    { k: 'esg_rank', label: 'SETESG', lowerBetter: false,
+      tip: 'SETESG Rating ทางการของตลาดหลักทรัพย์ฯ (AAA ดีสุด → BBB) — เรียง/สีตามอันดับ · มีข้อมูล ~38% ของตลาด',
+      render: r => r.esg_rating || '<span style="color:var(--text2)">–</span>' },
+    { k: 'cg_score', label: 'CG', lowerBetter: false,
+      tip: 'คะแนนกำกับดูแลกิจการ 1-5 จาก IOD — ~85% ของบริษัทที่ประเมินได้ 5 เต็ม ใช้ตัดตัวต่ำได้ ไม่เหมาะจัดอันดับ',
+      render: r => r.cg_score != null ? '★'.repeat(Math.max(0, Math.min(5, r.cg_score)))
+                                      : '<span style="color:var(--text2)">–</span>' },
+  ],
 };
 
 let _peerMarket = 'TH';
@@ -9369,6 +9636,15 @@ function setPeerMarket(mkt, btn) {
   _peerMarket = mkt;
   document.querySelectorAll('#peer-tab-th,#peer-tab-us,#peer-tab-hk,#peer-tab-jp').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
+  // พรีเซ็ต ESG/CG มีเฉพาะหุ้นไทย (SET.or.th) — ซ่อนปุ่มในตลาดอื่น + ถ้ากำลังเลือกอยู่ให้กลับ
+  // ไปพรีเซ็ต Valuation ไม่งั้นตารางตลาด US/HK/JP จะโชว์คอลัมน์ว่างทั้งแถบ
+  const govBtn = document.getElementById('peer-preset-governance');
+  if (govBtn) {
+    govBtn.style.display = mkt === 'TH' ? '' : 'none';
+    if (mkt !== 'TH' && _peerPreset === 'governance') {
+      setPeerPreset('valuation', document.getElementById('peer-preset-valuation'));
+    }
+  }
   const inp = document.getElementById('peer-sym');
   if (inp) { inp.value = ''; inp.placeholder = mkt === 'TH' ? 'เช่น CPALL, PTT, KBANK' : mkt === 'US' ? 'เช่น AAPL, MSFT, NVDA' : mkt === 'JP' ? 'เช่น 7203.T, 6758.T' : 'เช่น 0700.HK, 9988.HK'; }
   const sel = document.getElementById('peer-sector-select');
@@ -9618,6 +9894,21 @@ function renderPeerTable() {
   const finNote = rows.some(r => r.is_financial_sector)
     ? '<div style="font-size:11px;color:var(--text2);margin-bottom:6px">ℹ กลุ่มนี้มีหุ้นสถาบันการเงิน — Z-Score/margin บางตัวตีความต่างจากกลุ่มอื่น เทียบตรง ๆ ระวัง</div>' : '';
 
+  // พรีเซ็ต "ธรรมาภิบาล & ความยั่งยืน" — ต้องบอก coverage ตรง ๆ (SET ประเมินแค่ ~38% ของตลาด)
+  // ไม่งั้นผู้ใช้เดาว่าทำไมช่องว่างเยอะ (ดู PLAN_set_api_expansion.txt งาน #3C)
+  const esgHave = _peerMeta && _peerMeta.esg_have;
+  const govNote = _peerPreset === 'governance' ? `<div style="font-size:11px;color:var(--text2);margin-bottom:6px">
+    ธรรมาภิบาล &amp; ความยั่งยืน — ข้อมูลทางการจาก SET.or.th
+    <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:280px">
+      <strong>SETESG Rating</strong> — เรตติ้งความยั่งยืนทางการของตลาดหลักทรัพย์ฯ (AAA ดีสุด → BBB ต่ำสุดที่แจก) เรียง/ไล่สีตามอันดับ<hr>
+      <strong>CG</strong> — คะแนนกำกับดูแลกิจการ (บริษัทจดทะเบียน) 1-5 จาก IOD<br>
+      <span style="color:var(--text2)">~85% ของบริษัทที่ประเมินได้ 5 เต็ม — ใช้ "ตัดตัวที่ได้ต่ำ" ได้ แต่จัดอันดับไม่ได้ (แยกไม่ออก)</span><hr>
+      <span style="color:var(--text2)">⚠ SET ประเมินแค่ ~38% ของหุ้นไทย — ช่องว่างในคอลัมน์ = บริษัทไม่ได้เข้าร่วมประเมิน ไม่ได้แปลว่าคะแนนแย่</span>
+    </div></span>
+    ${esgHave != null ? ` · ในกลุ่มนี้มีเรตติ้ง <b>${esgHave}/${rows.length}</b> ตัว` : ''}
+    ${_peerMeta && _peerMeta.esg_as_of ? ` · ณ ${_peerMeta.esg_as_of}` : ''}
+  </div>` : '';
+
   const head = `<th style="text-align:left;position:sticky;top:0;background:var(--bg2);z-index:2;cursor:pointer" onclick="peerSortBy('symbol')">หุ้น<span class="sort-ind${_peerSort&&_peerSort.key==='symbol'?' on':''}">${_peerSortArrow('symbol')}</span></th>` +
     `<th style="position:sticky;top:0;background:var(--bg2);z-index:2;cursor:pointer" onclick="peerSortBy('mktcap')">MktCap<span class="sort-ind${_peerSort&&_peerSort.key==='mktcap'?' on':''}">${_peerSortArrow('mktcap')}</span></th>` +
     cols.map(c => `<th title="${c.tip || ''}" style="position:sticky;top:0;background:var(--bg2);z-index:2;white-space:nowrap;cursor:pointer" onclick="peerSortBy('${c.k}')">${c.label}<span class="sort-ind${_peerSort&&_peerSort.key===c.k?' on':''}">${_peerSortArrow(c.k)}</span></th>`).join('');
@@ -9640,7 +9931,11 @@ function renderPeerTable() {
         bg = _peerCellColor(pct);
       }
       let display = _peerFmt(v);
-      if (c.k === 'f_score' && !isMedian && v != null) {
+      if (c.render) {
+        // คอลัมน์ที่แสดงผลเป็นข้อความ (เรตติ้ง/ดาว) แต่ค่าจริงเป็นตัวเลขไว้เรียง+ลงสี — MEDIAN
+        // ไม่มีความหมายในเชิงข้อความ โชว์ "–"
+        display = isMedian ? '<span style="color:var(--text2)">–</span>' : c.render(r);
+      } else if (c.k === 'f_score' && !isMedian && v != null) {
         display = `${display}${_fzExternalLinkIcon(r.symbol)}`;
       } else if (c.k === 'z_score' && !isMedian && v != null) {
         const zoneColor = { safe: 'var(--green,#2ea043)', grey: '#d29922', distress: 'var(--red,#da3633)' }[r.z_zone] || '';
@@ -9677,7 +9972,7 @@ function renderPeerTable() {
   }
   if (_peerMedian) bodyRows.splice(baseSym ? 1 : 0, 0, rowHtml(_peerMedian, true));
 
-  document.getElementById('peer-results').innerHTML = widenNote + finNote +
+  document.getElementById('peer-results').innerHTML = widenNote + finNote + govNote +
     `<div style="overflow:auto;max-height:70vh;border:1px solid var(--border);border-radius:8px">
        <table class="data-table" style="font-size:12px;min-width:900px">
        <thead><tr>${head}</tr></thead><tbody>${bodyRows.join('')}</tbody></table></div>`;
@@ -10887,6 +11182,48 @@ function _tsBadge(label, value, color) {
   </div>`;
 }
 
+// badge ธรรมาภิบาล/ความยั่งยืน (SET.or.th ทางการ) ในหัว Tearsheet — เฉพาะหุ้นไทยที่มีเรตติ้ง
+// (ดู PLAN_set_api_expansion.txt งาน #3B) ไม่มีข้อมูล = ไม่แสดง badge เลย (SET ครอบแค่ ~38%
+// ของกระดาน — ไม่มีค่า ≠ คะแนนแย่ · ถ้าโชว์ "—" จะดูเหมือนได้คะแนนต่ำ)
+function _tsEsgPill(text, vtip, color) {
+  return `<span data-vtip="${vtip.replace(/"/g, '&quot;')}" style="display:inline-flex;align-items:center;`
+    + `padding:2px 9px;border-radius:11px;background:var(--card2);font-size:11px;font-weight:700;`
+    + `cursor:help;white-space:nowrap;color:${color || 'var(--text)'}">${text}</span>`;
+}
+function _tsEsgBadges(esg) {
+  if (!esg) return '';
+  const asOf = esg.esg_as_of ? ` · ณ ${esg.esg_as_of}` : '';
+  const covNote = '<br><span style="color:var(--text2)">SET ประเมินแค่ ~38% ของหุ้นไทย — '
+    + 'บริษัทที่ไม่มี badge นี้คือไม่ได้เข้าร่วมประเมิน ไม่ได้แปลว่าแย่</span>';
+  const rankColor = { 4: 'var(--green)', 3: 'var(--green)', 2: 'var(--text)', 1: 'var(--red)' };
+  const out = [];
+  if (esg.esg_rating) {
+    out.push(_tsEsgPill(`ESG ${esg.esg_rating}`,
+      `<b>SETESG Rating: ${esg.esg_rating}</b><br>เรตติ้งความยั่งยืนทางการของตลาดหลักทรัพย์ฯ `
+      + `(AAA ดีสุด → BBB ต่ำสุดที่แจก)${asOf}${covNote}`,
+      rankColor[esg.esg_rank] || 'var(--text)'));
+  }
+  if (esg.cg_score != null) {
+    out.push(_tsEsgPill(`CG ${'★'.repeat(Math.max(0, Math.min(5, esg.cg_score)))}`,
+      `<b>CG Score: ${esg.cg_score}/5</b><br>คะแนนการกำกับดูแลกิจการ (บริษัทจดทะเบียน) จาก IOD`
+      + `<br><span style="color:var(--text2)">~85% ของบริษัทที่ประเมินได้ 5 เต็ม — บอกได้แค่ว่า `
+      + `"ไม่ต่ำ" แยกคุณภาพจริงไม่ได้ ให้ดู SETESG rating แทน</span>`,
+      esg.cg_score >= 4 ? 'var(--text)' : 'var(--red)'));
+  }
+  if (esg.setesg_index) {
+    out.push(_tsEsgPill('🌱 SETESG',
+      `<b>อยู่ในดัชนี SETESG</b><br>รายชื่อหุ้นยั่งยืนที่ตลาดหลักทรัพย์ฯ คัดเลือก — ผ่านเกณฑ์ ESG `
+      + `ขั้นต่ำ + สภาพคล่อง + market cap${asOf}`, 'var(--green)'));
+  }
+  if (esg.djsi_index) {
+    out.push(_tsEsgPill('🌍 DJSI',
+      `<b>อยู่ในดัชนี DJSI</b><br>Dow Jones Sustainability Indices — เกณฑ์ความยั่งยืนระดับโลก `
+      + `(S&amp;P Global) เข้มกว่า SETESG มาก${asOf}`, 'var(--green)'));
+  }
+  if (!out.length) return '';
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-left:auto">${out.join('')}</div>`;
+}
+
 function _tsValLabel(label) {
   return { cheap: ['ถูกกว่าปกติ', 'var(--green)'], normal: ['ปกติ', 'var(--text2)'],
            expensive: ['แพงกว่าปกติ', 'var(--red)'] }[label] || ['—', 'var(--text2)'];
@@ -10965,6 +11302,7 @@ function renderTearsheet(d) {
         ${_tsBadge('Momentum', h.rs_momentum ?? '—', momColor)}
         ${_tsBadge('EMA', emaBadge, '')}
         ${_tsBadge('ATR%', h.atr14_pct ?? '—', '')}
+        ${_tsEsgBadges(d.esg)}
       </div>
     </div>`;
 
@@ -23101,17 +23439,37 @@ async function _loadBandSetCheck(sym, mrPe, mrPbv) {
     };
     const rows = diffRow('PE', mrPe, d.pe?.current) + diffRow('PBV', mrPbv, d.pbv?.current);
     if (!rows) return;
+    // งาน #4B: dashboard สะสม PE/PBV รายวันทางการเองทุก Quick Update — ถ้าสะสมเกิน 6 เดือนที่
+    // SET ให้ย้อนหลัง (d.accumulated) โชว์ช่วง avg/min/max จากประวัติสะสมเป็นแถบเทียบเพิ่ม
+    const acc = d.accumulated;
+    const rangeRow = (label, s) => {
+      if (!s || s.avg == null) return '';
+      return `<div style="display:flex;gap:8px;font-size:11px;color:var(--text2)">
+        <span style="min-width:36px">${label}</span>
+        <span>เฉลี่ย <b style="color:var(--text)">${s.avg}</b></span>
+        <span>ต่ำสุด ${s.min}</span><span>สูงสุด ${s.max}</span></div>`;
+    };
+    const accBlock = acc ? `
+      <div style="border-top:1px solid var(--border);margin-top:8px;padding-top:6px">
+        <div style="font-size:11px;font-weight:600;margin-bottom:3px">📈 ช่วงจากประวัติทางการที่สะสมไว้ (${acc.count_days} วันทำการ · ${acc.date_from}–${acc.date_to})</div>
+        ${rangeRow('PE', d.pe)}${rangeRow('PBV', d.pbv)}
+      </div>` : '';
+    const depthNote = acc
+      ? `สะสมทางการแล้ว ${acc.count_days} วันทำการ (${acc.date_from} ถึง ${acc.date_to}) — โตขึ้นทุกวันผ่าน Quick Update`
+      : `SET ให้ย้อนหลังแค่ ~${d.live_count_days || d.count_days} วันทำการ (~6 เดือน) · dashboard เริ่มสะสมเองแล้ว จะยาวขึ้นเรื่อย ๆ`;
     box.innerHTML = `<div class="card" style="padding:12px 16px">
       <div style="font-size:12px;font-weight:700;margin-bottom:8px">🔍 เส้นตรวจสอบจาก SET.or.th ทางการ
-        <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:270px">
+        <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:280px">
           <strong>PE/PBV ทางการจาก SET.or.th</strong><br>
           ตัวเลขเดียวกับที่ SET เผยแพร่บนหน้าหุ้นแต่ละตัว<hr>
-          ใช้เป็น <b>เส้นตรวจสอบ</b> ไม่ใช่แทนที่ band ด้านบน เพราะ SET ให้ย้อนหลังแค่ ~${d.count_days} วันทำการ (~6 เดือน) ส่วน band ต้องใช้หลายปี<br>
-          <span style="color:var(--text2)">ถ้าต่างกันมาก (≥15%) = แหล่งใดแหล่งหนึ่งอาจเพี้ยน ควรเช็ค (เช่น mrlikestock ขูดพลาด/ค้าง)</span>
+          ใช้เป็น <b>เส้นตรวจสอบ</b> ไม่ใช่แทนที่ band ด้านบน — SET endpoint ให้ย้อนหลังสดแค่ ~6 เดือน<br>
+          dashboard เก็บสะสมเองทุก Quick Update (pattern เดียวกับ SET P&amp;L รายไตรมาส) → ประวัติทางการจะยาวขึ้นเรื่อย ๆ<br>
+          <span style="color:var(--text2)">ถ้า current ต่างกันมาก (≥15%) = แหล่งใดแหล่งหนึ่งอาจเพี้ยน ควรเช็ค (เช่น mrlikestock ขูดพลาด/ค้าง)</span>
         </div></span>
       </div>
       <div style="display:flex;flex-direction:column;gap:4px">${rows}</div>
-      <div style="font-size:10px;color:var(--text2);margin-top:6px">ข้อมูล SET.or.th ช่วง ${d.date_from} ถึง ${d.date_to} (${d.count_days} วันทำการ)</div>
+      ${accBlock}
+      <div style="font-size:10px;color:var(--text2);margin-top:6px">${depthNote}</div>
     </div>`;
   } catch (e) { /* เงียบๆ — ข้อมูลเสริม ไม่กระทบการใช้งานหลัก */ }
 }
@@ -23572,6 +23930,9 @@ const DH_SOURCE_MAP = {
   q_set_data:           { text: 'ชุดเดียวกับ "ราคา/RS/เทคนิค (หุ้นไทย)" — ⚡ Quick Update / ⟳ Full Refresh', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   q_bake_set_data:      { text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py)', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
   q_breadth:            { text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py)', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
+  ipo_not_in_universe:  { text: 'รัน ⟳ Full Refresh (ปุ่มแถบเมนูบนสุด) เพื่อดึงราคา+งบของหุ้น IPO ใหม่เข้าระบบ — Quick Update ดึงแค่รายชื่อ ไม่ backfill ราคา · ดูราคาจอง vs ปัจจุบันที่ปฏิทิน → 🆕 IPO', fn: 'startRefresh', fnLabel: '⟳ Full Refresh', gotoPage: 'calendar', gotoLabel: 'ดูปฏิทิน IPO' },
+  q_cash_cycle_crosscheck: { text: 'ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างในหน้านี้ (sync SET Financial Health + งบ Yahoo ให้ครบก่อนเทียบ)', fn: 'startFinancialsUpdateAll', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด' },
+  set_daily_valuation:  { text: 'สะสมอัตโนมัติทุก ⚡ Quick Update (staleness gate — วันที่ sync ไปแล้วข้ามเอง) · ใช้เป็นเส้นตรวจสอบในหน้า Valuation Band · กดปุ่มเพื่อบังคับ sync รอบเต็มตอนนี้', fn: 'startSetDailyValSync', fnLabel: '📈 สะสม PE/PBV รายวันตอนนี้', gotoPage: 'band', gotoLabel: 'ไปหน้า Valuation Band' },
 };
 
 // พาไปหน้าต้นทาง — หา nav-btn ที่ onclick อ้างถึง pageId นั้นแล้วสั่ง showPage ให้

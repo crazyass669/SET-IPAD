@@ -1,10 +1,36 @@
 ================================================================================
 PLAN: ต่อยอด SET.or.th internal API — 7 ชุดข้อมูลใหม่เข้าเมนูเดิม
 สร้าง: 2026-08-23
-สถานะ: ✅ ทำครบทั้ง 8 งานแล้ว + commit แล้ว (ยืนยันจากโค้ด 2026-08-27)
-        — sources/set_company.py + sources/set_api.py fetch_* ครบ + route/UI ใน
-        app.py/dashboard.js/set_dashboard.html · เอกสารด้านล่างเก็บไว้อ้างอิง
-        methodology/coverage/endpoint ที่ใช้ไม่ได้เท่านั้น
+สถานะ: ✅ ทำครบทั้ง 8 งาน + sub-part ทั้งหมดแล้ว (2026-08-27)
+        core 8 งาน — sources/set_company.py + sources/set_api.py fetch_* +
+        route/UI ใน app.py/dashboard.js/set_dashboard.html
+
+        sub-part รอบล่าสุด (2026-08-27, ทดสอบ browser headless Chrome CDP ผ่าน):
+          #3B ✅ badge ESG/CG/SETESG/DJSI หัว Tearsheet — set_company.get_esg()
+                + tearsheet route คืน field 'esg' + _tsEsgBadges/_tsEsgPill
+                (data-vtip ต่อ badge · ไม่มีข้อมูล = ไม่โชว์ badge ห้ามโชว์ "—")
+          #3C ✅ พรีเซ็ต "🌱 ESG/CG" ใน Peer Compare — peer_compare overlay
+                get_company_map (TH เท่านั้น) + PEER_COLS.governance (esg_rank/
+                cg_score เป็นตัวเลขไว้เรียง/ลงสี render() เป็นข้อความ) + govNote
+                (tip box + coverage "มีเรตติ้ง X/N ตัว") · ปุ่มซ่อนใน US/HK/JP
+          #6B ✅ Data Health item 'ipo_not_in_universe' — เทียบ
+                fetch_ipo_recently() กับ price_store.get_last_dates() (คู่ตรงข้าม
+                delisted) · SET ล่ม = na ไม่ใช่ red
+          #5C ✅ Data Health item 'q_cash_cycle_crosscheck' (อ้างอิง, ไม่ใช่
+                pass/fail) — financials_store.iter_source_payloads('set_health')
+                หา q_cash_cycle vs factor_snapshot.cash_cycle · วัดจริง ~70% ต่าง
+                ≥15 วัน (คนละสูตร ปกติ) → warn เฉพาะ Yahoo "เพี้ยนชัด" (|CC|>1000)
+                เยอะผิดปกติ = compute_cash_cycle พังจริง
+          #4B ✅ สะสม PE/PBV/BVPS/DivYield รายวันทางการลง DB — sources/set_daily_val.py
+                (ตาราง set_daily_valuation ใน financials.db, CREATE IF NOT EXISTS
+                append-only) · opportunistic upsert ใน /api/set-valuation-check
+                + bulk sync_all() wire เข้า run_quick_update() (_sub_step,
+                staleness gate: วันที่ sync แล้ว targets ว่างคืนทันที) +
+                /api/set-daily-val/sync (background thread) + Data Health item
+                'set_daily_valuation' · _loadBandSetCheck โชว์ช่วง avg/min/max
+                จากประวัติสะสมเมื่อยาวเกิน live window
+
+        เอกสารด้านล่างเก็บไว้อ้างอิง methodology/coverage/endpoint ที่ใช้ไม่ได้
 ================================================================================
 
 ที่มา: สำรวจ SET internal API รอบใหม่ (ดึง JS bundle ของ set.or.th มา grep หา

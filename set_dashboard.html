@@ -50,6 +50,7 @@
   <button class="nav-btn" onclick="showPage('stock-rotation',this)" title="Stock Rotation — RRG รายหุ้น ไทย(DR)/US/HK/JP รวมหน้าเดียว สลับตลาดด้วยแท็บ 🇹🇭🇺🇸🇭🇰🇯🇵">🔄 Stock Rotation</button>
   <button class="nav-btn" onclick="showPage('band',this)">Val. Band</button>
   <button class="nav-btn" onclick="showPage('dcf-screener',this)" title="DCF Screener — รัน DCF Model (พยากรณ์เต็มรูปแบบ) กับหุ้นไทยทุกตัวที่คำนวณได้ ด้วยสมมติฐาน WACC/Growth ค่าเริ่มต้นเดียวกันทั้งตลาด (Beta=1.00 คงที่) เรียงตาม upside% มาก→น้อย เป็นการคัดกรองเบื้องต้น ไม่ใช่คำแนะนำซื้อ/ขาย · local-only">🎯 DCF Screener</button>
+  <button class="nav-btn" onclick="showPage('pbv-pe-screener',this)" title="Fair Value P/B·P/E — Justified P/B (ROE-based) + Justified P/E ทั้งตลาดหุ้นไทย เรียงตาม upside% เป็นตัวเติมเต็ม DCF Screener สำหรับกลุ่มการเงินที่ DCF ใช้ไม่ได้ · คัดกรองเบื้องต้น ไม่ใช่คำแนะนำซื้อ/ขาย · local-only">⚖️ Fair Value P/B·P/E</button>
   <button class="nav-btn" onclick="showPage('growth-screener',this)" title="หุ้นโตแรงรายไตรมาส — รายได้/กำไรสุทธิ QoQ%/YoY% ทั้งตลาด SET+mai เลือกไตรมาสย้อนหลังได้ กดหัวตารางเรียงหาหุ้นโตแรงสุด (source: SET.or.th official รายไตรมาส) · local-only">🚀 หุ้นโตแรงรายไตรมาส</button>
   <button class="nav-btn nav-btn-highlight" onclick="showPage('watchlist',this)">⭐ Watchlist</button>
   <button class="nav-btn" onclick="showPage('dr',this)">DR/DRx</button>
@@ -3217,6 +3218,7 @@
       <button class="filter-btn active" id="peer-preset-valuation" onclick="setPeerPreset('valuation',this)" title="PE / PBV / P/S / ปันผล% / PEG">💰 Valuation</button>
       <button class="filter-btn" id="peer-preset-quality" onclick="setPeerPreset('quality',this)" title="ROE / ROA / Gross Margin / Net Margin / D-E / Interest Coverage / OCF-NI / F-Score / Z-Score">🩺 คุณภาพ</button>
       <button class="filter-btn" id="peer-preset-growth" onclick="setPeerPreset('growth',this)" title="CAGR รายได้/กำไร / TTM YoY / Revenue Streak / Growth Score / Rule of 40">📈 Growth</button>
+      <button class="filter-btn" id="peer-preset-governance" onclick="setPeerPreset('governance',this)" title="SETESG Rating (AAA→BBB) / CG Score (IOD) — ข้อมูลทางการจาก SET.or.th · หุ้นไทยเท่านั้น · มีข้อมูล ~38% ของตลาด">🌱 ESG/CG</button>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <span style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">มุมมอง</span>
@@ -4191,6 +4193,72 @@
   </div>
 
   <div id="dcf-screener-table"></div>
+</div>
+
+<!-- PAGE: FAIR VALUE P/B·P/E — Justified P/B (ROE-based) + Justified P/E รันทุกหุ้นไทย
+     เรียงตาม upside% เหมือน DCF Screener — เป็นตัวเติมเต็ม: กลุ่มการเงิน (ธนาคาร/เงินทุน/ประกัน)
+     ที่ DCF ตัดทิ้งเพราะ FCF ไม่มีความหมาย → Justified P/B อิง ROE/ส่วนของผู้ถือหุ้น ใช้ได้ดี
+     ดู sources/pbv_pe_screener.py + routes /api/pbv-pe-screener* ใน app.py — local-only, ไม่มี network call -->
+<div id="page-pbv-pe-screener" class="page">
+  <div class="page-title">⚖️ Fair Value P/B·P/E — Justified Multiples ทั้งตลาด</div>
+  <div class="page-sub">
+    หามูลค่าเหมาะสมจาก <b>Justified P/B = (ROE − g) ÷ (r − g) × BVPS</b> และ
+    <b>Justified P/E = (1 − g/ROE) ÷ (r − g) × EPS</b> (สอดคล้องกันเป๊ะ: Justified P/B = Justified P/E × ROE)
+    กับหุ้นไทยทุกตัวที่คำนวณได้ เรียงตาม upside% — <b>รวมกลุ่มการเงิน</b> (ธนาคาร/เงินทุน/ประกัน) ที่
+    🎯 DCF Screener ตัดทิ้ง เพราะสูตรกลุ่มนี้อิง ROE/ส่วนของผู้ถือหุ้น ไม่ใช่ FCF ·
+    r = Cost of Equity (CAPM: Rf + β·ERP, β=1.00 คงที่ ปรับ/กรอกตรงได้), g = อัตราโต "ถาวร"
+    ระยะยาวค่าเดียวทั้งตลาด (แนวเดียวกับ Terminal Growth ของ DCF) — เป็นการ<b>คัดกรองเบื้องต้น</b>
+    เท่านั้น ไม่ใช่คำแนะนำซื้อ/ขาย ควรเปิด 📋 Tearsheet ปรับสมมติฐานรายตัวก่อนตัดสินใจ
+  </div>
+
+  <div class="card" style="padding:12px 16px;margin-bottom:12px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">
+      <label style="font-size:11px;color:var(--text2)">อัตราโตถาวร g %
+        <input id="pbvpe-screener-g" type="number" step="0.25" value="3.0" class="scr-input" style="display:block;width:100%;margin-top:3px"></label>
+      <label style="font-size:11px;color:var(--text2)">Cost of Equity r % <span title="กรอกช่องนี้ = ข้ามการคำนวณ CAPM ทั้งหมด ใช้ตัวเลขนี้ตรงๆ กับทุกหุ้น">ℹ️</span>
+        <input id="pbvpe-screener-coe" type="number" step="0.1" placeholder="คำนวณ CAPM ให้" class="scr-input" style="display:block;width:100%;margin-top:3px"></label>
+      <label style="font-size:11px;color:var(--text2)">ROE % <span title="เว้นว่าง = ใช้ ROE จริงของหุ้นแต่ละตัว · กรอก = บังคับใช้ตัวเลขเดียวกันทั้งตลาด (ทดสอบ 'ถ้า ROE ทุกตัว normalize เท่านี้')">ℹ️</span>
+        <input id="pbvpe-screener-roe" type="number" step="0.5" placeholder="ค่าจริงของหุ้น" class="scr-input" style="display:block;width:100%;margin-top:3px"></label>
+    </div>
+    <div style="font-size:10.5px;color:var(--text2);margin-bottom:8px">
+      ต้อง <b>r &gt; g</b> และ <b>ROE &gt; g</b> เสมอ ไม่งั้นมูลค่าติดลบ/คำนวณไม่ได้ (แสดงเหตุผลในแถวจาง) ·
+      ต้องมี <b>BVPS &gt; 0</b> ถึงคำนวณ P/B ได้ · ต้องมี <b>EPS &gt; 0</b> ถึงคำนวณ P/E ได้
+    </div>
+    <details style="margin-bottom:10px">
+      <summary style="cursor:pointer;font-size:11px;color:var(--text2)">⚖ ขั้นสูง — Cost of Equity แบบ CAPM (ใช้เมื่อไม่กรอกช่อง r % ด้านบน)</summary>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px">
+        <label style="font-size:11px;color:var(--text2)">Risk-free Rate (Rf) %
+          <input id="pbvpe-screener-rf" type="number" step="0.1" value="2.5" class="scr-input" style="display:block;width:96px;margin-top:3px"></label>
+        <label style="font-size:11px;color:var(--text2)">Beta (β)
+          <input id="pbvpe-screener-beta" type="number" step="0.05" value="1.00" class="scr-input" style="display:block;width:96px;margin-top:3px"></label>
+        <label style="font-size:11px;color:var(--text2)">Equity Risk Premium %
+          <input id="pbvpe-screener-erp" type="number" step="0.1" value="5.5" class="scr-input" style="display:block;width:96px;margin-top:3px"></label>
+      </div>
+    </details>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn-primary" id="pbvpe-screener-rebuild-btn" onclick="startPbvPeScreenerRebuild()">⟳ คำนวณใหม่ทั้งตลาด</button>
+      <button class="btn" onclick="resetPbvPeScreenerAssumptions()" title="รีเซ็ตทุกช่อง — g/Rf/Beta/ERP กลับค่าเริ่มต้น, r %/ROE % กลับเป็นว่าง (=ใช้ค่าจริงของหุ้น) — ยังไม่คำนวณใหม่จนกว่าจะกด ⟳">↺ รีเซ็ตค่าเริ่มต้น</button>
+    </div>
+    <span id="pbvpe-screener-meta" style="font-size:12px;color:var(--text2);display:block;margin-top:6px">—</span>
+    <div class="btn-note" style="max-width:380px;margin-top:6px">
+      <b>⟳ คำนวณใหม่ทั้งตลาด</b><br>
+      อ่านจากงบ/factor snapshot ที่ sync ไว้แล้วในเครื่อง ไม่ดึงข้อมูลใหม่จากเน็ต — เร็ว (ไม่กี่วินาที)
+    </div>
+  </div>
+
+  <div class="card" style="padding:10px 16px;margin-bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <input id="pbvpe-screener-search" class="scr-input" style="width:200px;font-size:13px" placeholder="ค้น ticker/ชื่อ..." oninput="renderPbvPeScreener()">
+    <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:6px;cursor:pointer">
+      <input type="checkbox" id="pbvpe-screener-hide-na" checked onchange="renderPbvPeScreener()"> ซ่อนหุ้นที่คำนวณไม่ได้
+    </label>
+    <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:6px;cursor:pointer">
+      <input type="checkbox" id="pbvpe-screener-fin-only" onchange="renderPbvPeScreener()"> เฉพาะกลุ่มการเงิน 🏦
+    </label>
+    <button id="pbvpe-screener-export-btn" class="filter-btn" onclick="exportPbvPeScreenerCsv()">⬇️ Export CSV</button>
+    <span id="pbvpe-screener-count" style="font-size:11.5px;color:var(--text2)"></span>
+  </div>
+
+  <div id="pbvpe-screener-table"></div>
 </div>
 
 <!-- PAGE: QUARTERLY GROWTH SCREENER — 🚀 หุ้นโตแรงรายไตรมาส — ลิสหุ้น SET+mai ทั้งตลาดแบบแบน
@@ -5285,6 +5353,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260827d"></script>
+<script src="static/dashboard.js?v=20260827f"></script>
 </body>
 </html>

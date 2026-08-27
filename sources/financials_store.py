@@ -396,6 +396,33 @@ def get_synced_symbols(base_dir, source, is_dr=False):
     return {r[0] for r in rows if not r[0].startswith("DR:") and not r[0].startswith("FINN:")}
 
 
+def iter_source_payloads(base_dir, source, is_dr=False):
+    """yield (symbol, payload_dict) ของทุกแถว source นี้ในตาราง financials — query ครั้งเดียว
+    (ต่างจากวน get() รายตัวหลายร้อยครั้ง) ใช้ตอน caller ต้องสแกนเนื้อ payload ทั้งตลาด เช่น
+    Data Health cross-check วงจรเงินสด SET vs Yahoo (ดู PLAN_set_api_expansion.txt งาน #5C)
+    ข้าม namespace DR:/FINN: เมื่อ is_dr=False (คืนเฉพาะหุ้นไทยจริง เหมือน get_synced_symbols)
+    payload ที่ parse ไม่ได้ถูกข้ามเงียบ ๆ (ไม่ raise — เป็นการสแกนเสริม ไม่ควรล้มทั้ง caller)"""
+    if not db_exists(base_dir):
+        return
+    con = _connect(base_dir)
+    try:
+        rows = con.execute("SELECT symbol, payload FROM financials WHERE source=?", (source,)).fetchall()
+    finally:
+        con.close()
+    for sym, payload in rows:
+        if is_dr:
+            if not sym.startswith("DR:"):
+                continue
+            sym = sym[3:]
+        elif sym.startswith("DR:") or sym.startswith("FINN:"):
+            continue
+        try:
+            data = json.loads(payload)
+        except (TypeError, ValueError):
+            continue
+        yield sym, data
+
+
 def _target_period(source, today=None):
     """วันสิ้นงวดล่าสุดที่ 'ควรจะมีข้อมูลแล้ว' ของแหล่งนั้น ณ วันนี้ — ใช้เทียบกับ
     _payload_latest_period() ตัดสิน skip ใน sync_all(skip_up_to_date=True)

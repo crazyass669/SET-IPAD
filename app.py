@@ -258,8 +258,10 @@ from sources import sec_store
 from sources import financials_store
 from sources import factor_snapshot
 from sources import set_company
+from sources import set_daily_val
 from sources import analyst_consensus
 from sources import dcf_screener
+from sources import pbv_pe_screener
 from sources import dr_descriptions
 from sources import us_index_membership
 from sources import hk_index_membership
@@ -270,7 +272,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 # พอร์ตที่ server ตัวนี้ bind (ดู __main__ ท้ายไฟล์) — ยกมาเป็น module-level constant
 # ให้ /api/kill-duplicate-servers อ้างอิงพอร์ตเดียวกันได้โดยไม่ต้อง hardcode ซ้ำ 2 จุด
-SERVER_PORT  = 5001
+SERVER_PORT  = int(os.environ.get("SET_DASH_PORT", "5001"))
 DATA_FILE    = os.path.join(BASE_DIR, "set_data.json")
 BACKUP_FILE  = os.path.join(BASE_DIR, "set_data_backup.json")
 HTML_FILE    = os.path.join(BASE_DIR, "set_dashboard.html")
@@ -3772,9 +3774,13 @@ _SET_VAL_CHECK_TTL = 3600   # 1 ชม.
 
 @app.route("/api/set-valuation-check/<symbol>")
 def set_valuation_check(symbol):
-    """PE/PBV ทางการจาก SET.or.th (historical-trading, ~6 เดือนล่าสุด) ใช้เป็นเส้น
-    ตรวจสอบ Valuation Band (ดู PLAN_set_api_expansion.txt งาน #4) ไม่ใช่แทนที่
-    pipeline หลัก (mrlikestock.com ที่ให้ประวัติหลายปี) — cache ต่อ symbol 1 ชม."""
+    """PE/PBV ทางการจาก SET.or.th ใช้เป็นเส้นตรวจสอบ Valuation Band (ดู
+    PLAN_set_api_expansion.txt งาน #4) ไม่ใช่แทนที่ pipeline หลัก (mrlikestock.com ที่ให้
+    ประวัติหลายปี) — cache ต่อ symbol 1 ชม.
+
+    งาน #4B: ทุกครั้งที่ยิงสด (~6 เดือนล่าสุด) จะ upsert สะสมลง set_daily_valuation ด้วย
+    (ไม่ลบของเก่า) แล้วคำนวณสถิติ avg/min/max จาก "ประวัติสะสม" ที่อาจยาวกว่า 6 เดือน —
+    ตัว current/date_to ยังอิงชุดสดล่าสุดเสมอ"""
     sym = symbol.upper().strip()
     cached = _set_val_check_cache.get(sym)
     if cached and (time.time() - cached["ts"] < _SET_VAL_CHECK_TTL):
@@ -3784,12 +3790,26 @@ def set_valuation_check(symbol):
         rows = fetch_historical_trading(sym)
         if not rows:
             return jsonify({"error": f"ไม่มีข้อมูลราคา/PE/PBV ทางการของ {sym}"}), 404
-        pes = [r["pe"] for r in rows if r.get("pe") is not None]
-        pbvs = [r["pbv"] for r in rows if r.get("pbv") is not None]
+        # สะสมลง DB (opportunistic — โตทุกครั้งที่มีคนเปิด Band ของหุ้นตัวนี้) ไม่ให้ error
+        # การเขียนทำให้ response พัง — เป็นแค่ผลพลอยได้
+        try:
+            set_daily_val.upsert_rows(BASE_DIR, sym, rows)
+        except Exception:
+            pass
+        acc = set_daily_val.get_series(BASE_DIR, sym)
+        # ใช้ชุดสะสมถ้ายาวกว่าชุดสด (ปกติจะยาวกว่าเสมอหลัง sync ไปหลายรอบ) — fallback ชุดสด
+        stat_rows = acc if len(acc) >= len(rows) else rows
+        pes = [r["pe"] for r in stat_rows if r.get("pe") is not None]
+        pbvs = [r["pbv"] for r in stat_rows if r.get("pbv") is not None]
         latest = rows[-1]
+        accumulated = None
+        if acc and len(acc) > len(rows):
+            accumulated = {"date_from": acc[0]["date"], "date_to": acc[-1]["date"],
+                           "count_days": len(acc)}
         result = {
-            "symbol": sym, "date_from": rows[0]["date"], "date_to": rows[-1]["date"],
-            "count_days": len(rows),
+            "symbol": sym, "date_from": stat_rows[0]["date"], "date_to": rows[-1]["date"],
+            "count_days": len(stat_rows), "live_count_days": len(rows),
+            "accumulated": accumulated,
             "pe": {"current": latest.get("pe"), "avg": round(sum(pes) / len(pes), 2) if pes else None,
                    "min": round(min(pes), 2) if pes else None, "max": round(max(pes), 2) if pes else None},
             "pbv": {"current": latest.get("pbv"), "avg": round(sum(pbvs) / len(pbvs), 2) if pbvs else None,
@@ -3799,6 +3819,36 @@ def set_valuation_check(symbol):
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+_set_daily_val_sync_running = {"on": False}
+
+
+@app.route("/api/set-daily-val/sync", methods=["POST"])
+def set_daily_val_sync():
+    """สะสม PE/PBV/BVPS/DivYield รายวันทางการจาก SET.or.th ทั้งกระดานลง financials.db
+    (งาน #4B) — ปุ่มมือในหน้า Data Health · ปกติ run_quick_update() ยิงให้อัตโนมัติ
+    (staleness gate: ข้ามตัวที่สะสมถึงวันล่าสุดแล้ว) ตัวนี้บังคับ sync รอบเต็ม
+
+    รันใน background thread (ทั้งกระดาน ~1-2 นาที) แล้วคืนทันที — ดูผลที่ item
+    'PE/PBV รายวันทางการ' ในหน้านี้รอบถัดไป (บันทึกลง run_log ด้วย)"""
+    if _set_daily_val_sync_running["on"]:
+        return jsonify({"ok": False, "error": "กำลัง sync อยู่แล้ว — รอรอบนี้เสร็จก่อน"}), 409
+    force = (request.get_json(silent=True) or {}).get("force")
+
+    def _job():
+        _set_daily_val_sync_running["on"] = True
+        try:
+            n, total, rows = set_daily_val.sync_all(BASE_DIR, skip_up_to_date=not force)
+            run_log.record_run(BASE_DIR, "set_daily_val_sync", True,
+                               f"สะสม PE/PBV รายวัน {n}/{total} ตัว (+{rows} แถว)")
+        except Exception as e:
+            run_log.record_run(BASE_DIR, "set_daily_val_sync", False, str(e)[:200])
+        finally:
+            _set_daily_val_sync_running["on"] = False
+
+    threading.Thread(target=_job, daemon=True).start()
+    return jsonify({"ok": True, "started": True})
 
 
 @app.route("/api/financial-health/<symbol>")
@@ -5114,6 +5164,10 @@ def peer_compare():
     members, level, group_key, widened = _widen_sector_group(
         th_map, level, group_key, base=base, sector_q=sector_q)
 
+    # CG/ESG rating (SET.or.th ทางการ) — overlay ตอน query เฉพาะตลาดไทย (universe US/HK/JP
+    # ไม่มีแนวคิดนี้) ดู PLAN_set_api_expansion.txt งาน #3C · คืน {} ถ้ายังไม่เคย sync ESG
+    company_map = set_company.get_company_map(BASE_DIR) if mkt == "TH" else {}
+
     if mkt == "TH":
         snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
         fin_sector_syms = factor_snapshot._financial_sector_symbols(BASE_DIR)
@@ -5161,12 +5215,18 @@ def peer_compare():
             "is_financial_sector": is_fin,
             "has_financials": _mirror_sym(mkt, sym) in snap_rows,
         }
+        cm = company_map.get(sym) or {}
+        row["esg_rating"] = cm.get("esg_rating")
+        row["esg_rank"] = cm.get("esg_rank")
+        row["cg_score"] = cm.get("cg_score")
+        row["setesg_index"] = cm.get("setesg_index")
+        row["djsi_index"] = cm.get("djsi_index")
         rows.append(row)
 
     num_cols = ["mkt_cap", "pe", "pbv", "div_yield", "peg", "ps_value", "roe", "roa",
                 "gross_margin", "net_margin", "de_ratio", "interest_coverage", "ocf_ni_ratio",
                 "f_score", "z_score", "rev_cagr", "profit_cagr", "rev_ttm_yoy", "profit_ttm_yoy",
-                "revenue_streak", "growth_score", "rule_of_40"]
+                "revenue_streak", "growth_score", "rule_of_40", "esg_rank", "cg_score"]
     median = {}
     for c in num_cols:
         vals = sorted(v for v in (r.get(c) for r in rows) if isinstance(v, (int, float)))
@@ -5180,11 +5240,19 @@ def peer_compare():
     rows.sort(key=lambda r: (r.get("mkt_cap") or 0), reverse=True)
     computed_at = (factor_snapshot.snapshot_meta(BASE_DIR).get("computed_at") if mkt == "TH"
                    else factor_snapshot.mirror_snapshot_meta(BASE_DIR).get("computed_at"))
+    # coverage ESG ในกลุ่มนี้ (ดู PLAN_set_api_expansion.txt งาน #3C) — SET ประเมินแค่ ~38%
+    # ของกระดาน ต้องบอกให้เห็นว่ากี่ตัวในกลุ่มมีเรตติ้ง ไม่งั้นผู้ใช้เดาว่าทำไมช่องว่าง
+    esg_have = sum(1 for r in rows if r.get("esg_rating") or r.get("cg_score") is not None)
+    esg_meta = set_company.get_meta(BASE_DIR) if mkt == "TH" else {}
+    esg_as_of = max((v.get("esg_as_of") for v in company_map.values() if v.get("esg_as_of")),
+                    default=None)
     return jsonify({
         "rows": rows, "median": median, "count": len(rows),
         "meta": {"level": level, "group": group_key, "widened": widened,
                  "base_symbol": symbol or None, "market": mkt, "computed_at": computed_at,
-                 "ondemand_note": ondemand_note, "dr_symbol": dr_symbol},
+                 "ondemand_note": ondemand_note, "dr_symbol": dr_symbol,
+                 "esg_have": esg_have, "esg_total_board": esg_meta.get("esg_count"),
+                 "esg_as_of": esg_as_of},
     })
 
 
@@ -5881,11 +5949,17 @@ def tearsheet(market, symbol):
         "discount_rate_default": discount_rate_default, "terminal_growth_default": 2.5,
     }
 
+    # CG/ESG rating (SET.or.th ทางการ) — badge ในหัว Tearsheet เฉพาะหุ้นไทยที่มีเรตติ้ง
+    # (ดู PLAN_set_api_expansion.txt งาน #3B) None = ไม่โชว์ badge เลย (SET ครอบ ~38% ของกระดาน
+    # เท่านั้น ไม่มีค่า ≠ คะแนนแย่) · ต้องเคยกด sync ESG ในหน้า Screener+ ก่อนถึงจะมีข้อมูล
+    esg = set_company.get_esg(BASE_DIR, sym) if (mkt == "TH" and not lite) else None
+
     meta_computed_at = (factor_snapshot.snapshot_meta(BASE_DIR).get("computed_at") if mkt == "TH"
                          else factor_snapshot.mirror_snapshot_meta(BASE_DIR).get("computed_at"))
     return jsonify({
         "symbol": sym, "market": mkt, "header": header, "valuation": valuation, "quality": quality,
         "dividend": dividend, "dcf": dcf, "valuation_models": valuation_models, "dr_symbol": dr_symbol,
+        "esg": esg,
         "lite": lite, "underlying_yf": lite_yf, "yf_symbol": yf_symbol,
         "meta": {"computed_at": meta_computed_at,
                  "has_factors": bool(f) if lite else (_mirror_sym(mkt, sym) in snap_rows)},
@@ -5909,6 +5983,27 @@ def dcf_screener_rebuild():
     — resolve_assumptions() clamp/กันค่าพังให้แล้วฝั่ง dcf_screener"""
     body = request.get_json(silent=True) or {}
     result = dcf_screener.build_snapshot(BASE_DIR, assumptions=body)
+    return jsonify(result)
+
+
+@app.route("/api/pbv-pe-screener")
+def pbv_pe_screener_endpoint():
+    """⚖️ Fair Value P/B·P/E — ผล Justified P/B + Justified P/E (ROE-based) ที่คำนวณไว้แล้ว
+    ทั้งตลาดหุ้นไทย (ดู sources/pbv_pe_screener.py) อ่านจาก cache ในตาราง pbv_pe_screener ตรงๆ
+    ไม่คำนวณสด — กดปุ่ม "⟳ คำนวณใหม่ทั้งตลาด" (POST /api/pbv-pe-screener/rebuild) ก่อนถึงจะมีข้อมูล"""
+    return jsonify({"rows": pbv_pe_screener.get_snapshot(BASE_DIR),
+                    "meta": pbv_pe_screener.snapshot_meta(BASE_DIR)})
+
+
+@app.route("/api/pbv-pe-screener/rebuild", methods=["POST"])
+def pbv_pe_screener_rebuild():
+    """คำนวณ Justified P/B + Justified P/E ใหม่ทั้งตลาด — ไม่ยิง network เพิ่ม (อ่านจาก
+    factor_snapshot + set_data.json ที่มีอยู่แล้ว) จึงรันแบบ sync ในคำขอเดียวได้เลย
+
+    body (ไม่ใส่ = ใช้ค่าเริ่มต้นทั้งหมด): {g_pct, rf_pct, beta, erp_pct, coe_pct, roe_pct}
+    — resolve_assumptions() clamp/กันค่าพังให้แล้วฝั่ง pbv_pe_screener"""
+    body = request.get_json(silent=True) or {}
+    result = pbv_pe_screener.build_snapshot(BASE_DIR, assumptions=body)
     return jsonify(result)
 
 
@@ -7773,6 +7868,70 @@ def _compute_data_health():
     items.append(_dh_drift_item("HK", "ตรวจ drift ดัชนี HK (auto, เทียบ Wikipedia)", _drift_status))
     items.append(_dh_drift_item("JP", "ตรวจ drift ดัชนี JP (auto, เทียบ Wikipedia)", _drift_status))
 
+    # หุ้น IPO เพิ่งเข้าตลาดแต่ยังไม่มีในฐานราคาหุ้นไทย — คู่ตรงข้ามของ delisted ที่ระบบมีอยู่แล้ว
+    # (ดู PLAN_set_api_expansion.txt งาน #6B) เทียบ /api/set/ipo/recently (ดึงสด) กับ ticker ใน
+    # set_prices.db · หุ้น IPO จะยังไม่มีในฐานราคา/งบ จนกว่าจะรัน Full Refresh รอบถัดไป (Quick
+    # Update ดึง listedCompanies ใหม่ แต่ไม่ backfill ราคาย้อนหลังของตัวใหม่)
+    try:
+        from sources.set_api import fetch_ipo_recently
+        _ipo_recent = (_ipo_list_cache.get("result") or {}).get("recently")
+        if _ipo_recent is None:
+            # SET.or.th อาจบล็อค/ล่มชั่วคราว — ไม่ควรทำให้ item นี้แดง (ไม่ใช่ข้อมูลในเครื่องพัง)
+            try:
+                _ipo_recent = fetch_ipo_recently()
+            except Exception:
+                _ipo_recent = None
+        _th_have = {t[:-3] if t.endswith(".BK") else t
+                    for t in price_store.get_last_dates(BASE_DIR)}
+        _today_iso = _dh_dt.now().date().isoformat()
+        _ipo_missing = []
+        for _r in _ipo_recent or []:
+            _s = (_r.get("symbol") or "").upper().strip()
+            _ftd = _r.get("first_trade_date") or ""
+            # เฉพาะตัวที่เทรดแล้วจริง (firstTradeDate ผ่านมาแล้ว) — ตัวที่ยังไม่เทรดไม่ควรมีในฐานราคาอยู่แล้ว
+            if not _s or (_ftd and _ftd > _today_iso):
+                continue
+            if _s not in _th_have:
+                _ipo_missing.append((_s, _ftd, _r.get("name") or ""))
+        _ipo_tip = ('<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?'
+                    '<div class="scr-tip-box" style="width:270px">'
+                    '<strong>หุ้น IPO ยังไม่เข้าระบบ</strong><br>'
+                    'หุ้นที่เพิ่งเข้าตลาดจะยังไม่มีในฐานราคา/งบของ dashboard จนกว่าจะรัน '
+                    'Full Refresh รอบถัดไป — เมนูอื่น (Screener/Tearsheet/Valuation) จะยังหาหุ้น'
+                    'พวกนี้ไม่เจอ<hr>Quick Update ดึงรายชื่อ listedCompanies ใหม่ให้ แต่ไม่ '
+                    'backfill ราคาย้อนหลังของตัวใหม่ — ต้อง ⟳ Full Refresh</div></span>')
+        if not _ipo_recent:
+            _ipo_status = "na"
+            _ipo_note = _ipo_tip + " ดึงรายชื่อ IPO จาก SET.or.th ไม่สำเร็จ — ลองใหม่ภายหลัง"
+        elif _ipo_missing:
+            _ipo_status = "warn"
+            _ipo_rows = "".join(
+                f'<tr><td style="padding:2px 10px 2px 0"><b>{_m[0]}</b></td>'
+                f'<td style="color:var(--text2)">{(_m[2] or "")[:38]}</td>'
+                f'<td style="color:var(--text2);padding-left:8px;white-space:nowrap">เข้าตลาด {_m[1] or "?"}</td></tr>'
+                for _m in _ipo_missing[:20])
+            _ipo_note = (f'{_ipo_tip} <b>{len(_ipo_missing)}</b> ตัวเทรดแล้วแต่ยังไม่มีในฐานราคาหุ้นไทย:'
+                         f'<table style="border-collapse:collapse;margin-top:4px">{_ipo_rows}</table>'
+                         + (f'<div style="color:var(--text2);margin-top:2px">…และอีก {len(_ipo_missing) - 20} ตัว</div>'
+                            if len(_ipo_missing) > 20 else '')
+                         + '<div style="margin-top:6px;color:var(--text2);font-size:11px">'
+                           'รัน ⟳ Full Refresh เพื่อดึงราคา+งบของหุ้นใหม่เข้าระบบ · '
+                           'ดูราคาจอง vs ราคาปัจจุบันได้ที่ปฏิทิน → 🆕 IPO</div>')
+        else:
+            _ipo_status = "ok"
+            _ipo_note = (f'{_ipo_tip} หุ้น IPO ที่เพิ่งเข้าตลาด ({len(_ipo_recent)} ตัว) '
+                         f'มีในฐานราคาหุ้นไทยครบแล้ว')
+        items.append({
+            "key": "ipo_not_in_universe",
+            "label": "หุ้น IPO เข้าใหม่ยังไม่เข้าฐานราคา",
+            "category": "หุ้นเข้าใหม่/ถูกถอด",
+            "last_at": None, "age_hours": None,
+            "status": _ipo_status, "note": _ipo_note,
+        })
+    except Exception as e:
+        items.append(_dh_error_item("ipo_not_in_universe",
+                                     "หุ้น IPO เข้าใหม่ยังไม่เข้าฐานราคา", "หุ้นเข้าใหม่/ถูกถอด", str(e)[:160]))
+
     # ราคา/metrics หุ้นดัชนี US/HK/JP — auto ผ่าน Quick Update/Index Max, เกณฑ์เดียวกับ
     # ราคาหุ้นไทย (30/72 ชม.) เพราะ upsert_bars() stamp 'updated_at' รอบเดียวกัน
     from core import us_store as _us_store, hk_store as _hk_store, jp_store as _jp_store
@@ -8326,6 +8485,137 @@ def _compute_data_health():
         ("NIKKEI225",),
         {"NIKKEI225": (215, 232)}))
 
+    # cross-check วงจรเงินสด: SET ทางการ (q_cash_cycle จาก Financial Health Check ที่สะสมใน DB)
+    # vs ที่ dashboard คำนวณเองจาก Yahoo (factor_snapshot.cash_cycle) — ดู
+    # PLAN_set_api_expansion.txt งาน #5C · ทำเป็น item รวมทั้งตลาด ต่างจาก cross-check รายตัวใน
+    # การ์ด 🩺 Tearsheet (_tsLoadFinHealthMini) ที่เห็นทีละหุ้น
+    #
+    # ⚠ item นี้เป็น "ตารางอ้างอิง" ไม่ใช่ pass/fail — 2 วิธีคำนวณคนละฐาน (SET ใช้งบรายปี/
+    # ครึ่งปีที่ยื่น + สูตรของ SET เอง · เราใช้ DIO+DSO−DPO เฉลี่ย 4 ไตรมาสจาก Yahoo) วัดจริง
+    # 2026-08: ต่างกัน ≥15 วันราว 70% ของตัวเป็นเรื่องปกติเชิงโครงสร้าง จะไม่เขียวสนิท —
+    # status ขึ้น warn เฉพาะตอน
+    # ค่าฝั่ง Yahoo "เพี้ยนชัด" (|cash cycle| > 1000 วัน = รายได้/ต้นทุนใกล้ 0 หารระเบิด) เยอะ
+    # ผิดปกติ ซึ่งแปลว่า compute_cash_cycle พังจริง ไม่ใช่แค่ต่างสูตร
+    try:
+        _CC_DIFF_DAYS = 15        # เท่ากับ threshold ในการ์ด Tearsheet
+        _CC_PLAUSIBLE = 600       # |วงจรเงินสด| เกินนี้ = นอกช่วงที่เป็นไปได้ของธุรกิจจริง
+        _CC_ABSURD = 1000         # เกินนี้ = สูตรระเบิด (ตัวหารใกล้ 0) ไม่ใช่แค่ outlier
+        _cc_yahoo = {r["symbol"]: r.get("cash_cycle")
+                     for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
+
+        def _cc_latest_amount(acc):
+            for _v in reversed((acc or {}).get("values") or []):
+                if _v.get("amount") is not None:
+                    return _v["amount"]
+            return None
+
+        _cc_pairs = _cc_absurd = 0
+        _cc_plausible = []          # (sym, yahoo, set) ที่ทั้งคู่อยู่ในช่วงเป็นไปได้
+        for _sym, _pl in financials_store.iter_source_payloads(BASE_DIR, "set_health"):
+            _acc = None
+            for _th in (_pl.get("themes") or []):
+                for _cat in (_th.get("categories") or []):
+                    _acc = next((a for a in (_cat.get("accounts") or [])
+                                 if a.get("code") == "q_cash_cycle"), None)
+                    if _acc:
+                        break
+                if _acc:
+                    break
+            _set_cc = _cc_latest_amount(_acc)
+            _y_cc = _cc_yahoo.get(_sym)
+            if _set_cc is None or _y_cc is None:
+                continue
+            _cc_pairs += 1
+            if abs(_y_cc) > _CC_ABSURD:
+                _cc_absurd += 1
+            if abs(_y_cc) <= _CC_PLAUSIBLE and abs(_set_cc) <= _CC_PLAUSIBLE:
+                _cc_plausible.append((_sym, round(_y_cc, 1), round(_set_cc, 1)))
+        _cc_diverge = sorted((t for t in _cc_plausible if abs(t[1] - t[2]) >= _CC_DIFF_DAYS),
+                             key=lambda t: abs(t[1] - t[2]), reverse=True)
+        _cc_np = len(_cc_plausible)
+        _cc_dn = len(_cc_diverge)
+        _cc_dpct = (_cc_dn / _cc_np * 100) if _cc_np else 0.0
+        _cc_apct = (_cc_absurd / _cc_pairs * 100) if _cc_pairs else 0.0
+        _cc_tip = ('<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?'
+                   '<div class="scr-tip-box" style="width:280px">'
+                   '<strong>วงจรเงินสด: SET vs Yahoo</strong><br>'
+                   'SET ให้ q_cash_cycle ทางการ (สูตร SET, งบรายปี/ครึ่งปีที่บริษัทยื่น) · '
+                   'dashboard คำนวณเอง DIO+DSO−DPO เฉลี่ย 4 ไตรมาสจากงบ Yahoo<hr>'
+                   '<span style="color:var(--text2)">คนละฐาน — ต่างกันเกินครึ่งของตัวเป็นเรื่อง'
+                   'ปกติ ไม่ใช่บั๊ก · item นี้เป็นตารางอ้างอิงไว้เช็คหุ้นรายตัวว่าตัวเลขฝั่งไหน'
+                   'น่าเชื่อกว่า · warn เฉพาะตอนค่าฝั่ง Yahoo "เพี้ยนชัด" (สูตรระเบิด) เยอะ'
+                   'ผิดปกติ</span></div></span>')
+        if _cc_pairs < 20:
+            _cc_status = "na"
+            _cc_note = (f'{_cc_tip} เทียบได้ {_cc_pairs} ตัว (ยังน้อย) — sync SET Financial '
+                        f'Health + งบ Yahoo ให้ครบก่อน (ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด")')
+        else:
+            _cc_status = "warn" if (_cc_apct >= 12 or _cc_dpct >= 90) else "ok"
+            _cc_rows = "".join(
+                f'<tr><td style="padding:2px 10px 2px 0"><b>{_d[0]}</b></td>'
+                f'<td style="text-align:right;color:var(--text2)">Yahoo {_d[1]:.0f}</td>'
+                f'<td style="text-align:right;color:var(--text2);padding-left:8px">SET {_d[2]:.0f}</td>'
+                f'<td style="text-align:right;color:#e8a33d;padding-left:8px">Δ{abs(_d[1]-_d[2]):.0f} วัน</td></tr>'
+                for _d in _cc_diverge[:12])
+            _cc_note = (f'{_cc_tip} เทียบ {_cc_pairs} ตัว · ทั้งคู่อยู่ในช่วงปกติ {_cc_np} ตัว → '
+                        f'ต่างกัน ≥{_CC_DIFF_DAYS} วัน <b>{_cc_dn}</b> ({_cc_dpct:.0f}%) · '
+                        f'ค่าฝั่ง Yahoo เพี้ยนชัด (สูตรระเบิด) <b>{_cc_absurd}</b> ({_cc_apct:.0f}%)'
+                        + (f'<table style="border-collapse:collapse;margin-top:4px">{_cc_rows}</table>'
+                           if _cc_diverge else '')
+                        + (f'<div style="color:var(--text2);margin-top:2px">…และอีก {_cc_dn - 12} ตัว</div>'
+                           if _cc_dn > 12 else '')
+                        + '<div style="margin-top:6px;color:var(--text2);font-size:11px">'
+                          'ต่างกันเกินครึ่ง = ปกติ (คนละสูตร/งวด) · ถ้า "เพี้ยนชัด" พุ่งสูง = '
+                          'compute_cash_cycle (Yahoo) พังจริง ให้เช็ค financials_store.compute_cash_cycle'
+                          '</div>')
+        items.append(_dh_quality_item(
+            "q_cash_cycle_crosscheck", "วงจรเงินสด cross-check (SET vs Yahoo) — อ้างอิง",
+            _cc_status, _cc_note))
+    except Exception as e:
+        items.append(_dh_quality_item(
+            "q_cash_cycle_crosscheck", "วงจรเงินสด cross-check (SET vs Yahoo) — อ้างอิง",
+            "red", f"เช็คไม่ได้: {str(e)[:120]}"))
+
+    # สะสม PE/PBV/BVPS/DivYield รายวันทางการจาก SET.or.th (งาน #4B) — endpoint historical-trading
+    # ให้ย้อนหลังแค่ ~6 เดือน เก็บเองทุกวันผ่าน Quick Update ถึงจะได้ประวัติยาวกว่านั้น (ดู
+    # sources/set_daily_val.py) · item นี้โชว์ว่าสะสมได้กี่ตัว/ช่วงยาวสุดเท่าไหร่แล้ว
+    try:
+        _dv_meta = set_daily_val.get_meta(BASE_DIR)
+        _dv_tip = ('<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?'
+                   '<div class="scr-tip-box" style="width:270px">'
+                   '<strong>PE/PBV รายวันทางการ (สะสมเอง)</strong><br>'
+                   'SET.or.th ให้ย้อนหลังแค่ ~118 วันทำการ (~6 เดือน) ตายตัว — เก็บสะสมเองทุก '
+                   'Quick Update เพื่อได้ประวัติทางการยาวกว่านั้น (pattern เดียวกับ SET P&L '
+                   'รายไตรมาส)<hr><span style="color:var(--text2)">ใช้เป็นเส้นตรวจสอบใน Valuation '
+                   'Band · ยิ่งสะสมนาน ยิ่งเทียบย้อนหลังได้ไกล · โตอัตโนมัติ ไม่ต้องกดเอง</span>'
+                   '</div></span>')
+        _dv_ts = _dh_parse(_dv_meta.get("updated_at"))
+        _dv_age_h = _dh_age_hours(_dv_ts)
+        if not _dv_meta.get("row_count"):
+            _dv_status = "na"
+            _dv_note = (f'{_dv_tip} ยังไม่เคยสะสม — จะเริ่มเก็บเองรอบ Quick Update ถัดไป '
+                        f'(หรือกดปุ่มด้านขวา)')
+        else:
+            # ค้างเกิน ~10 วัน = Quick Update ไม่ได้รันช่วงนี้ (เหมือนเกณฑ์ analyst_consensus)
+            _dv_status = "ok" if (_dv_age_h is not None and _dv_age_h <= 24 * 10) else "warn"
+            _dv_note = (f'{_dv_tip} สะสมแล้ว <b>{_dv_meta["symbol_count"]}</b> ตัว · '
+                        f'{_dv_meta["row_count"]:,} แถว · ช่วง {_dv_meta["oldest_date"]}–'
+                        f'{_dv_meta["newest_date"]} · ประวัติยาวสุด {_dv_meta["max_span_days"]} วัน'
+                        + ('<div style="margin-top:6px;color:var(--text2);font-size:11px">'
+                           'ยังไม่เกิน ~6 เดือน (เท่าที่ SET ให้อยู่แล้ว) — สะสมต่อไปเรื่อย ๆ '
+                           'ประวัติจะยาวขึ้นเอง</div>'
+                           if _dv_meta["max_span_days"] <= 190 else
+                           '<div style="margin-top:6px;color:var(--text2);font-size:11px">'
+                           'มีประวัติทางการยาวกว่าที่ SET ให้ย้อนหลังแล้ว — ส่วนเกินนี้สร้างใหม่ไม่ได้'
+                           '</div>'))
+        items.append(_dh_quality_item(
+            "set_daily_valuation", "PE/PBV รายวันทางการ (สะสมเอง, set_daily_val)",
+            _dv_status, _dv_note, last_at=_dv_meta.get("updated_at")))
+    except Exception as e:
+        items.append(_dh_quality_item(
+            "set_daily_valuation", "PE/PBV รายวันทางการ (สะสมเอง, set_daily_val)",
+            "red", f"เช็คไม่ได้: {str(e)[:120]}"))
+
     # รูขาดข้อมูลกลางชุด (ไม่ใช่แค่ "สดแค่ไหน") — market/s50/bond flow เป็นไฟล์สะสมที่ผูกกับ
     # "วันไหนมีใครเปิดแอป/Actions รันติดพอดี" ถ้าขาดหลายวันติดกันจะไม่โผล่ในเกณฑ์ mtime ด้านบนเลย
     # (ไฟล์ยังถูกเขียนทุกวันจากวันที่มีข้อมูล แค่วันกลางๆ หาย) ดู _dh_gap_check_item
@@ -8479,6 +8769,7 @@ _UPDATE_STATUS_LABEL = {
     "offsite_backup":  "🛟 สำรองไฟล์สร้างใหม่ไม่ได้นอกเครื่อง (backup_financials_offsite.py)",
     "hedge_refresh":   "🐋 อัพเดท Hedge Holdings (Dataroma)",
     "hedge_fetch_missing": "⬇️ ดึงหุ้น Hedge Holdings ที่ยังไม่มีเข้าคลัง",
+    "set_daily_val_sync": "📈 สะสม PE/PBV รายวันทางการ (SET.or.th)",
     "static_bake": "🧱 Bake ไฟล์ static ทั้งหมด (run_static_update.py)",
     "static_indices_refresh": "📊 รีเฟรช Indices (sub-step ใน run_static_update.py)",
     "static_short_sales": "📉 รีเฟรช Short Sales (sub-step ใน run_static_update.py)",
@@ -10049,6 +10340,16 @@ def _run_quick():
         # อัพเดท Thai Bond Flow — ThaiBMA คืนประวัติเต็มทุกครั้ง (ไม่เสี่ยงข้อมูลหาย
         # แบบ S50) แต่เดิมพึ่งแค่คนเปิดหน้าเว็บ เลยมักค้างจนกว่าจะมีคนเข้าไปดู
         _sub_step("Bond Flow", 99, "อัพเดท Bond Flow...", _fetch_flow_bond_data)
+
+        # สะสม PE/PBV/BVPS/DivYield รายวันทางการจาก SET.or.th (งาน #4B) — endpoint ล็อค
+        # ความลึก ~6 เดือน ต้องเก็บเองทุกวันถึงจะได้ประวัติยาวกว่านั้น (pattern เดียวกับ SET
+        # P&L รายไตรมาส) staleness gate อยู่ใน sync_all: วันที่ยังไม่มีแท่งใหม่/sync ไปแล้ว
+        # targets ว่าง คืนทันที ไม่ยิง network — วันที่มีแท่งใหม่ ~1-2 นาที (~900 ตัว 8 workers)
+        def _daily_val():
+            n, total_t, rows = set_daily_val.sync_all(BASE_DIR, skip_up_to_date=True)
+            if total_t:
+                print(f"[QuickUpdate] PE/PBV รายวัน (SET): สะสม {n}/{total_t} ตัว (+{rows} แถว)")
+        _sub_step("PE/PBV รายวัน (SET)", 99, "สะสม PE/PBV รายวันทางการ (SET.or.th)...", _daily_val)
 
         # เช็ค drift หุ้นเข้าใหม่/ถูกถอดสัปดาห์ละครั้ง (TH/US/HK/JP) — report-only, บันทึกผล
         # ให้ Data Health อ่านต่อ (ดู _run_index_drift_checks ด้านบน + index_drift.py)
