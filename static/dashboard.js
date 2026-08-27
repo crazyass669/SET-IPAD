@@ -4526,6 +4526,8 @@ function fetchDcfScreener() {
       setv('dcf-screener-tg', a.terminal_growth_pct);
       setv('dcf-screener-years', a.years);
       DCF_SCR_OPTIONAL_FIELDS.forEach(([id, key]) => setvOpt(id, a[key]));
+      const uaEl = document.getElementById('dcf-screener-use-analyst');
+      if (uaEl && document.activeElement !== uaEl) uaEl.checked = !!a.use_analyst_growth;
     }
     renderDcfScreener();
   }).catch(() => {
@@ -4546,6 +4548,7 @@ function resetDcfScreenerAssumptions() {
   el('dcf-screener-years').value = String(DCF_SCR_DEFAULTS.years);
   // ช่อง override ทั้ง 8 กลับเป็นว่าง = ใช้ค่าจริงของหุ้นนั้น (ไม่มี "ค่าเริ่มต้น" กลางที่ใช้ได้ทุกหุ้น)
   DCF_SCR_OPTIONAL_FIELDS.forEach(([id]) => { const e = el(id); if (e) e.value = ''; });
+  const uaEl = el('dcf-screener-use-analyst'); if (uaEl) uaEl.checked = false;
   // แค่รีเซ็ตช่องกรอก ยังไม่คำนวณใหม่ — ให้ผู้ใช้ตรวจค่าก่อนกด ⟳ เอง (เหมือนปุ่ม "คืนค่าเริ่มต้น"
   // ในหน้า Tearsheet ที่ก็ไม่ auto-submit ให้)
 }
@@ -4573,6 +4576,7 @@ function startDcfScreenerRebuild() {
     years: parseInt(document.getElementById('dcf-screener-years')?.value || '5', 10),
   };
   DCF_SCR_OPTIONAL_FIELDS.forEach(([id, key]) => { body[key] = optVal(id); });
+  body.use_analyst_growth = !!document.getElementById('dcf-screener-use-analyst')?.checked;
   fetch('/api/dcf-screener/rebuild', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   }).then(r => r.json())
@@ -4632,6 +4636,7 @@ function renderDcfScreener() {
     const overrideCount = DCF_SCR_OPTIONAL_FIELDS.filter(([, key]) => a[key] != null).length;
     metaBox.textContent = `คำนวณล่าสุด ${d.meta.computed_at || '—'} · คำนวณได้ ${d.meta.ok_count}/${d.meta.count} ตัว`
       + (a.rf_pct != null ? ` · Rf ${a.rf_pct}% · β ${a.beta} · ERP ${a.erp_pct}% · TG ${a.terminal_growth_pct}% · ${a.years} ปี` : '')
+      + (a.use_analyst_growth ? ' · 🎯 Growth ปี1-3 = ประมาณการนักวิเคราะห์ (Yahoo)' : '')
       + (overrideCount > 0 ? ` · กำหนดเองทั้งตลาด ${overrideCount} ช่อง` : '');
   }
   const rows = _dcfScrFilteredSorted();
@@ -4658,7 +4663,7 @@ function renderDcfScreener() {
       <td style="text-align:right">${r.intrinsic != null ? r.intrinsic.toFixed(2) : '—'}</td>
       <td style="text-align:right;font-weight:700;color:${color}">${up != null ? (up > 0 ? '+' : '') + up.toFixed(1) + '%' : '—'}${extreme ? ' ⚠️' : ''}</td>
       <td style="text-align:right">${r.wacc_pct != null ? r.wacc_pct.toFixed(2) + '%' : '—'}</td>
-      <td style="text-align:right">${r.g13_pct != null ? r.g13_pct.toFixed(1) + '%' : '—'}</td>
+      <td style="text-align:right">${r.g13_pct != null ? r.g13_pct.toFixed(1) + '%' : '—'}${r.g_source === 'analyst' ? ' <span title="ใช้ประมาณการโตของนักวิเคราะห์ (Yahoo)" style="color:var(--blue)">🎯</span>' : ''}</td>
     </tr>`;
   }).join('');
   const headHtml = DCF_SCR_COLS.map(c => {
@@ -4679,13 +4684,13 @@ function exportDcfScreenerCsv() {
     const s = String(v);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
-  const headers = ['Symbol', 'Name', 'Sector', 'Price', 'Intrinsic', 'Upside %', 'WACC %', 'Growth ปี1-3 %', 'As of', 'Error'];
+  const headers = ['Symbol', 'Name', 'Sector', 'Price', 'Intrinsic', 'Upside %', 'WACC %', 'Growth ปี1-3 %', 'Growth source', 'As of', 'Error'];
   const lines = [headers.map(csvEsc).join(',')];
   rows.forEach(r => {
     lines.push([
       r.symbol, r.name || '', r.sector || '',
       r.price ?? '', r.intrinsic ?? '', r.upside_pct ?? '', r.wacc_pct ?? '', r.g13_pct ?? '',
-      r.as_of || '', r.error || '',
+      r.g_source || '', r.as_of || '', r.error || '',
     ].map(csvEsc).join(','));
   });
   const csv = '﻿' + lines.join('\r\n');   // BOM กัน Excel เปิดภาษาไทยเพี้ยน
@@ -6535,6 +6540,13 @@ function _drawSpopChart(d) {
 let _scrStocks  = [];
 let _scrSortCol = 'rs_score';
 let _scrSortDir = 1; // 1 = desc (มากไปน้อย), -1 = asc (น้อยไปมาก)
+// snapshot ของ scr-rvol-days/scr-ratio-years-back ณ ตอนกด "ค้นหา" ล่าสุด — ใช้แสดง/เรียง/
+// export คอลัมน์ RVOL และคอลัมน์ Trend ให้ตรงกับเกณฑ์ที่ใช้กรอง _scrStocks จริงเสมอ (เดิม
+// renderScrTable()/_scrComputeSorted() อ่านค่าสดจาก DOM ทุกครั้ง — ถ้าผู้ใช้แก้ช่องนี้แล้ว
+// กดเรียงคอลัมน์/export โดยไม่กด "ค้นหา" ซ้ำ ตัวเลขที่โชว์จะไม่ตรงกับแถวที่กรองไว้จริง
+// (code review 2026-08-27))
+let _scrActiveRvolDays  = 20;
+let _scrActiveYearsBack = 1;
 
 const _SCR_STR  = new Set(['symbol','name','sector']);
 const _SCR_BOOL = new Set(['above_ema50','above_ema200','above_ema20']);
@@ -6602,14 +6614,13 @@ function setScrSort(col) {
 // ไม่ผ่านการ sort เลย)
 function _scrComputeSorted() {
   const secRanks = computeSectorRanks();
-  // ใช้จำนวนวันเดียวกับที่ตั้งไว้ในตัวกรอง RVOL (scr-rvol-days) ทั้งคอลัมน์ตัวเลข/สี
-  // และการ sort — เดิม hardcode vol_avg20 (20 วัน) เสมอ ทำให้ตัวเลขในตารางไม่ตรงกับ
-  // เกณฑ์ที่ใช้กรองจริงเมื่อผู้ใช้เปลี่ยนค่า avg เป็นจำนวนวันอื่น
-  const rvolDaysNow = parseInt(document.getElementById('scr-rvol-days')?.value) || 20;
-  // years-back เดียวกับที่ตัวกรอง "เทรนด์" (GM/ROE/NM/D-E/Interest coverage) ใช้จริง —
-  // คอลัมน์เสริม _gmTrend/_roeTrend/... ต้อง index array ด้วยค่าเดียวกันเป๊ะๆ ไม่งั้นตัวเลข
-  // ในตารางจะไม่ตรงกับเกณฑ์ที่ใช้กรอง
-  const yearsBackNow = parseInt(document.getElementById('scr-ratio-years-back')?.value) || 1;
+  // ใช้ snapshot จากตอนกด "ค้นหา" ล่าสุด (_scrActiveRvolDays/_scrActiveYearsBack) ไม่ใช่ค่าสด
+  // จาก DOM — ต้องตรงกับเกณฑ์ที่ใช้กรอง _scrStocks จริงเป๊ะๆ เสมอ ไม่ว่าผู้ใช้จะแก้ช่อง
+  // rvol-days/years-back แล้วยังไม่กด "ค้นหา" ซ้ำก็ตาม (เดิม hardcode vol_avg20 (20 วัน)
+  // เสมอ ก่อนจะเปลี่ยนมาอ่านค่าสดจาก DOM ซึ่งกลับไปมีปัญหาเดิมในอีกรูปแบบ — เจอตอน
+  // code review 2026-08-27)
+  const rvolDaysNow  = _scrActiveRvolDays;
+  const yearsBackNow = _scrActiveYearsBack;
   const withRange = _scrStocks.map(s => {
     const fromHigh = s.high_52w > 0 ? (s.price - s.high_52w) / s.high_52w * 100 : null;
     const fromLow  = s.low_52w  > 0 ? (s.price - s.low_52w)  / s.low_52w  * 100 : null;
@@ -6641,7 +6652,8 @@ function _scrComputeSorted() {
 }
 
 function renderScrTable() {
-  const rvolDaysNow = parseInt(document.getElementById('scr-rvol-days')?.value) || 20;
+  // snapshot จากตอนกด "ค้นหา" ล่าสุด — เหตุผลเดียวกับใน _scrComputeSorted() ด้านบน
+  const rvolDaysNow = _scrActiveRvolDays;
   const sorted = _scrComputeSorted();
 
   // มือถือจอแคบ (≤480px) ย่อ Sector สุด ๆ เอาพื้นที่คืนให้คอลัมน์ตัวเลข
@@ -7808,8 +7820,12 @@ async function runScreener() {
   const deRatioTrendMax        = parseFloat(document.getElementById('scr-de-ratio-trend-min').value);
   const interestCoverageTrendMin = parseFloat(document.getElementById('scr-interest-coverage-trend-min').value);
   const ratioYearsBack      = parseInt(document.getElementById('scr-ratio-years-back').value) || 1;
+  // เก็บ snapshot ให้ renderScrTable()/_scrComputeSorted()/exportScreenerCSV() ใช้ต่อ —
+  // ต้องตรงกับค่าที่ใช้กรอง _scrStocks ชุดนี้จริงๆ ไม่ใช่ค่าที่อาจถูกแก้ในกล่องทีหลัง
+  _scrActiveYearsBack = ratioYearsBack;
   const rvolMin     = parseFloat(document.getElementById('scr-rvol').value);
   const rvolDays    = parseInt(document.getElementById('scr-rvol-days').value) || 20;
+  _scrActiveRvolDays = rvolDays;
   const atrMax      = parseFloat(document.getElementById('scr-atr-max')?.value);
   const seasMin     = parseFloat(document.getElementById('scr-seas-min')?.value);
   const ret1w     = parseFloat(document.getElementById('scr-1w').value);
@@ -8139,6 +8155,15 @@ const FS_FILTERS = [
     tip: '<strong>FCF Yield</strong><br>Free Cash Flow ÷ Market Cap × 100 — เทียบเงินสดที่บริษัทหาได้ต่อปี กับมูลค่าที่ตลาดตีราคาบริษัทไว้ทั้งหมด คล้ายอัตราดอกเบี้ยถ้า "ซื้อทั้งบริษัท" ยิ่งสูงยิ่งดี (จ่ายราคาถูกเทียบกับเงินสดที่ได้)<br><br>เช่น ใส่ <b>5</b> = FCF Yield ≥ 5% (โซนดี)<br><span style="color:var(--text2)">ต่ำกว่า 2% = แพงเทียบเงินสดที่หาได้ หรือกำลังลงทุนหนัก · สูงกว่า 10% ควรเช็คว่าไม่ใช่รายการพิเศษครั้งเดียว (เช่น ขายสินทรัพย์) · ดูคู่กับ "FCF คุ้มปันผล" ด้านล่าง</span>' },
   { k: 'dividend_coverage',   label: 'FCF คุ้มปันผล ≥', unit: 'เท่า', cmp: 'gte',
     tip: '<strong>FCF คุ้มปันผล (Dividend Coverage)</strong><br>Free Cash Flow ÷ เงินปันผลที่จ่ายทั้งปี (จาก Yahoo) — เช็คว่าปันผลมาจากเงินสดที่หาได้จริง หรือจ่ายเกินตัวต้องกู้/ถอนสำรองมาจ่าย<br><br>เช่น ใส่ <b>1.5</b> = FCF จ่ายปันผลไหวสบายๆ 1.5 เท่า (ปันผลยั่งยืน)<br><span style="color:var(--text2)">มากกว่า 1.5x = ปลอดภัย · 1.0-1.5x = พอไหวไม่มีกันชนมาก · ต่ำกว่า 1.0x = จ่ายปันผลเกินเงินสดที่หาได้จริง ควรระวัง</span>' },
+  { g: '🎯 ฉันทามตินักวิเคราะห์ (Yahoo — หุ้นไทย)' },
+  { k: 'analyst_target_upside', label: 'Upside เป้าหมายเฉลี่ย ≥', unit: '%', cmp: 'gte', nullOk: true,
+    tip: '<strong>Upside ราคาเป้าหมายเฉลี่ยนักวิเคราะห์</strong><br>ราคาเป้าหมายเฉลี่ย (mean) ที่นักวิเคราะห์ให้ เทียบกับราคาปัจจุบัน — คำนวณสด<br><br>เช่น ใส่ <b>15</b> = นักวิเคราะห์มองว่าราคาควรขึ้นอีก ≥ 15%<hr><span style="color:var(--text2)">จาก Yahoo (รวบรวมนักวิเคราะห์ที่ติดตามหุ้นตัวนี้) · coverage หุ้นไทย ~40% เอียงไป cap ใหญ่ · ไม่มีข้อมูล = ไม่ตัดทิ้ง (ใช้ "มีนักวิเคราะห์ติดตาม" ถ้าอยากเอาเฉพาะที่มี) · หุ้นไทยเท่านั้น</span>' },
+  { k: 'analyst_buy_pct',    label: '% แนะนำ "ซื้อ" ≥', unit: '%', cmp: 'gte', nullOk: true,
+    tip: '<strong>สัดส่วนนักวิเคราะห์ที่แนะนำ "ซื้อ"</strong><br>(Strong Buy + Buy) ÷ จำนวนคำแนะนำทั้งหมด<br><br>เช่น ใส่ <b>70</b> = ≥ 70% ของนักวิเคราะห์แนะนำซื้อ<hr><span style="color:var(--text2)">จาก Yahoo recommendations · ไม่มีข้อมูล = ไม่ตัดทิ้ง · หุ้นไทยเท่านั้น</span>' },
+  { k: 'analyst_rec_mean',   label: 'คะแนนคำแนะนำเฉลี่ย ≤', unit: '', cmp: 'lte', nullOk: true,
+    tip: '<strong>คะแนนคำแนะนำเฉลี่ย (1–5)</strong><br><b>1 = Strong Buy … 3 = Hold … 5 = Strong Sell</b> (ยิ่งต่ำยิ่ง bullish)<br><br>เช่น ใส่ <b>2</b> = เฉลี่ยแล้วอยู่ในโซน "ซื้อ" หรือดีกว่า<hr><span style="color:var(--text2)">คำนวณเองจากจำนวนคำแนะนำแต่ละระดับ · ไม่มีข้อมูล = ไม่ตัดทิ้ง · หุ้นไทยเท่านั้น</span>' },
+  { k: 'has_analyst_coverage', label: 'มีนักวิเคราะห์ติดตาม', cmp: 'bool',
+    tip: '<strong>มีนักวิเคราะห์ติดตาม</strong><br>เอาเฉพาะหุ้นที่มีราคาเป้าหมาย หรือคำแนะนำ Buy/Hold/Sell จากนักวิเคราะห์อย่างน้อย 1 ราย<hr><span style="color:var(--text2)">เปิดตัวนี้ = ตัดหุ้นที่ไม่มีนักวิเคราะห์ตามออก (~60% ของกระดาน) — ปิดไว้ถ้าไม่อยากตัด · หุ้นไทยเท่านั้น</span>' },
   { g: 'ฤดูกาล (Seasonality)' },
   { k: 'season_swing',        label: 'ความแรงฤดูกาล ≥', unit: '%', cmp: 'gte',
     tip: '<strong>ความแรงฤดูกาล</strong><br>ส่วนต่างไฮ-โลว์ซีซั่นของรายได้ (จุด%)<br><br>เช่น ใส่ <b>10</b> = ฤดูกาลชัด (ต่ำกว่า 8% = แทบไม่มีฤดูกาล เช่นพลังงาน)' },
@@ -8226,7 +8251,10 @@ const FS_PRESETS = [
 // เลย) ปิดถาวรจริงๆ เพราะกรองแล้วได้ศูนย์เสมอไม่ว่าหุ้นจะ sync งบ Yahoo หรือไม่ก็ตาม
 const FS_MIRROR_NEVER = new Set(['growth_percentile', 'pe_sector_pctile', 'roe_sector_pctile',
   'esg_rank', 'cg_score', 'free_float', 'total_shareholder', 'nvdr_pct_holding',
-  'foreign_room_used_pct']);   // SET.or.th CG/ESG/ผู้ถือหุ้น/ห้องต่างชาติ — หุ้นไทยเท่านั้น mirror US/HK ไม่มีทางมีค่า
+  'foreign_room_used_pct',
+  // ฉันทามตินักวิเคราะห์ overlay ใน /api/factor-screener เฉพาะ market='TH' (DB มี US/HK
+  // ด้วยแต่ผูกกับ Tearsheet ของ DR ไม่ได้ join กับ mirror snapshot) — mirror US/HK ไม่มีค่า
+  'analyst_target_upside', 'analyst_rec_mean', 'analyst_buy_pct', 'has_analyst_coverage']);   // SET.or.th CG/ESG/ผู้ถือหุ้น/ห้องต่างชาติ + นักวิเคราะห์ — หุ้นไทยเท่านั้น mirror US/HK ไม่มีทางมีค่า
 
 // filter ที่ต้องใช้งบ Yahoo annual — หุ้น mirror US/HK ที่ "เคย sync งบ Yahoo" แล้ว (สมาชิก
 // ดัชนีหลักส่วนใหญ่ + ตัวที่เคยเปิดดู/on-demand fetch) จะมีค่าจริง ยืนยันจากรีวิว 2026-08-01:
@@ -8577,6 +8605,8 @@ const FS_COLS = [
   { k: 'fcf_yield', label: 'FCFYield%', tip: 'Free Cash Flow ÷ Market Cap × 100 — เขียว ≥5% (ดี) · แดง <0% (เผาเงินสด) · กด "📘 อธิบาย FCF Yield" เหนือตารางกรองเพื่ออ่านวิธีอ่านค่าเต็มๆ' },
   { k: 'dividend_coverage', label: 'FCFคุ้มปันผล(x)', tip: 'FCF ÷ เงินปันผลที่จ่ายทั้งปี — เขียว ≥1 เท่า (FCF พอจ่ายปันผล) · แดง <1 เท่า (จ่ายเกินตัว)' },
   { k: 'ps_percentile', label: 'P/S%ile', tip: 'P/S เทียบอดีตตัวเอง — เขียว ≤25 · แดง ≥75' },
+  { k: 'analyst_target_upside', label: '🎯Upside%', sep: true, tip: 'Upside ราคาเป้าหมายเฉลี่ยนักวิเคราะห์ (Yahoo) เทียบราคาปัจจุบัน — เขียว ≥15% · แดง <0% · หุ้นไทย coverage ~40% (ว่าง = ไม่มีนักวิเคราะห์ตาม)' },
+  { k: 'analyst_rec_mean', label: '🎯คำแนะนำ', tip: 'คะแนนคำแนะนำเฉลี่ย 1=Strong Buy … 5=Strong Sell (ยิ่งต่ำยิ่ง bullish) — เขียว ≤2 · แดง ≥3.5' },
   { k: 'esg_rating', label: 'ESG', sep: true, tip: 'SETESG Rating (AAA/AA/A/BBB) — SET.or.th ประเมินปีละครั้ง มีเฉพาะ ~38% ของหุ้นทั้งหมด (ว่าง = ไม่ได้เข้าร่วมประเมิน ไม่ใช่คะแนนแย่) หุ้นไทยเท่านั้น' },
   { k: 'cg_score', label: 'CG', tip: 'CG Score 1-5 จาก IOD — ส่วนใหญ่ที่มีข้อมูลได้เต็ม 5 (~85%) ใช้กรองตัดตัวคะแนนต่ำได้ ใช้จัดอันดับไม่ได้' },
   { k: 'free_float', label: 'FreeFloat%', sep: true, tip: 'สัดส่วนหุ้นหมุนเวียนซื้อขายจริง — เขียว ≥40% · แดง <15% (สภาพคล่องต่ำ ปั่นง่าย) ต้องเคย sync ผู้ถือหุ้นก่อน' },
@@ -8616,6 +8646,9 @@ const FS_COL_CLR = {
   cg_score:            v => v <= 3 ? 'var(--red)' : (v === 5 ? 'var(--green)' : ''),
   free_float:          v => v >= 40 ? 'var(--green)' : (v < 15 ? 'var(--red)' : ''),
   foreign_room_used_pct: v => v >= 95 ? 'var(--red)' : (v >= 80 ? '#e8a33d' : ''),
+  analyst_target_upside: v => v >= 15 ? 'var(--green)' : (v < 0 ? 'var(--red)' : ''),
+  analyst_rec_mean:      v => v <= 2 ? 'var(--green)' : (v >= 3.5 ? 'var(--red)' : ''),
+  analyst_buy_pct:       v => v >= 70 ? 'var(--green)' : (v < 30 ? 'var(--red)' : ''),
 };
 const FS_MKT_BADGE = { TH: '#58a6ff', US: '#3fb950', HK: '#e3b341', DR: '#3fb950' };
 
@@ -8918,7 +8951,8 @@ async function loadFscreener() {
     _fsMainMetaText = `${m.count || _fsRows.length} หุ้น · คำนวณเมื่อ ${m.computed_at || '-'}`
       + (m.esg_count ? ` · CG/ESG ${m.esg_count} บริษัท (${m.esg_updated_at || '-'})` : '')
       + (m.shareholder_count ? ` · ผู้ถือหุ้นใหญ่ ${m.shareholder_count} ตัว (${m.shareholder_updated_at || '-'})` : '')
-      + (m.foreign_count ? ` · ห้องต่างชาติ ${m.foreign_count} ตัว (${m.foreign_updated_at || '-'})` : '');
+      + (m.foreign_count ? ` · ห้องต่างชาติ ${m.foreign_count} ตัว (${m.foreign_updated_at || '-'})` : '')
+      + (m.analyst_count ? ` · นักวิเคราะห์ ${m.analyst_with_target || 0}/${m.analyst_count} ตัว (${(m.analyst_updated_at || '-').slice(0, 10)})` : '');
     document.getElementById('fs-meta').textContent = _fsMainMetaText;
     resetFscreener(true);   // เคลียร์ค่าฟอร์มก่อน (skipRun=true: ไม่แตะผลลัพธ์/localStorage)
     loadFsSettings();       // ดึงค่าที่เคยตั้งไว้ล่าสุดกลับมา (persist เหมือนเมนู Screener ปกติ)
@@ -9184,7 +9218,7 @@ function _fsFmt(v, key) {
   if (key === 'profit_accel_streak' || key === 'rev_accel_streak' || key === 'quarters_available' ||
       key === 'roe15_streak_q' || key === 'rs') return Math.round(v);
   if (key === 'pct_off_high52' || key === 'profit_yoy_q' || key === 'profit_ttm_yoy' ||
-      key === 'rev_yoy_q' || key === 'rev_ttm_yoy') {
+      key === 'rev_yoy_q' || key === 'rev_ttm_yoy' || key === 'analyst_target_upside') {
     const x = Math.round(v * 10) / 10;           // 1 ทศนิยมพอ + ใส่เครื่องหมาย + ให้ค่าบวก
     return (x > 0 ? '+' : '') + x;
   }
@@ -10950,6 +10984,11 @@ function renderTearsheet(d) {
 
   const dcfHtml = _tsDcfHtml(d.dcf, h.price);
 
+  // การ์ด "🎯 ฉันทามตินักวิเคราะห์" (Yahoo: ราคาเป้าหมาย + Buy/Hold/Sell) — โหลด async
+  // แยกผ่าน /api/analyst-consensus (DB, ไม่ยิง Yahoo สด) · หุ้นไทย + DR underlying US/HK
+  // เท่านั้น (JP/lite ไม่มีข้อมูล sync) · ไม่มี coverage = ไม่โชว์การ์ด (เหมือน finHealthMini)
+  const analystHtml = (lite || mkt === 'JP') ? '' : `<div id="ts-analyst-consensus" style="margin-bottom:12px"></div>`;
+
   const quality = _tsQualityHtml(d.quality, h.symbol);
   const dividend = _tsDividendHtml(d.dividend, h.symbol);
 
@@ -11064,7 +11103,7 @@ function renderTearsheet(d) {
 
   const altValHtml = _tsAltValHtml(d);
 
-  document.getElementById('ts-body').innerHTML = header + liteBanner + calendarWeek + actionBar + valuation + peScenarioHtml + pbvScenarioHtml + finExtraHtml + dcfHtml + altValHtml + quality + dividend + finHealthMini + flow + ownership + seasonality + news + docs;
+  document.getElementById('ts-body').innerHTML = header + liteBanner + calendarWeek + actionBar + valuation + peScenarioHtml + pbvScenarioHtml + finExtraHtml + dcfHtml + analystHtml + altValHtml + quality + dividend + finHealthMini + flow + ownership + seasonality + news + docs;
   requestAnimationFrame(() => {
     const canvas = document.getElementById('ts-spark');
     if (canvas && h.sparkline) drawSparkline(canvas, h.sparkline, h.ret_1y);
@@ -11082,6 +11121,98 @@ function renderTearsheet(d) {
   _tsAltValRecalc();
   _tsLoadLiveValuation(d, h);
   _tsLoadFinExtras(d, h, mkt);
+  // หลัง _tsDcfRecalc() — _tsDcfBaseFairValue พร้อมให้การ์ดเอาไปเทียบกับราคาเป้าหมาย
+  if (!lite && mkt !== 'JP') _tsLoadAnalystConsensus(d, h, mkt);
+}
+
+// ---------- การ์ด 🎯 ฉันทามตินักวิเคราะห์ (Yahoo) ----------
+// ราคาเป้าหมาย mean/high/low + upside% vs ราคาปัจจุบัน, แถบ Buy/Hold/Sell, จำนวนนักวิเคราะห์,
+// ประมาณการโต EPS ปีหน้า + เทียบกับ Fair Value (DCF Base) ที่เราคำนวณเอง — ข้อมูลจาก DB
+// (sync พร้อมงบการเงิน) ไม่ยิง Yahoo สด · coverage หุ้นไทย ~40% (เอียง cap ใหญ่), DR
+// underlying US/HK เกือบ 100% · ไม่มีข้อมูล = ซ่อนการ์ด (ไม่ใช่ error)
+async function _tsLoadAnalystConsensus(d, h, mkt) {
+  const box = document.getElementById('ts-analyst-consensus');
+  if (!box) return;
+  // market + symbol ที่ตรงกับ key ใน DB: TH ตรงๆ · DR ที่ resolve เป็น US/HK แล้ว ใช้ h.symbol
+  // (HK ตัด suffix .HK ให้ backend เพราะ DB เก็บ bare — เหมือน _tsLoadFinExtras)
+  let acMkt = mkt, acSym = h.symbol;
+  if (mkt === 'HK') acSym = h.symbol.replace(/\.HK$/i, '');
+  else if (mkt !== 'TH' && mkt !== 'US') { box.innerHTML = ''; return; }
+  try {
+    const r = await _fetchTimeout(`/api/analyst-consensus/${encodeURIComponent(acSym)}?market=${acMkt}`, 8000);
+    if (_tsData?.symbol !== d.symbol) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
+    if (!r.ok) { box.innerHTML = ''; return; }  // 404 = ไม่มีนักวิเคราะห์ตาม/ยังไม่ sync → ซ่อนเงียบๆ
+    const a = await r.json();
+    if (_tsData?.symbol !== d.symbol) return;
+    box.innerHTML = _tsAnalystConsensusHtml(a, h.price);
+  } catch (e) {
+    if (_tsData?.symbol === d.symbol) box.innerHTML = '';
+  }
+}
+
+function _tsAnalystConsensusHtml(a, price) {
+  const cur = a.currency || '';
+  const fmt = v => v == null ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  // upside เทียบราคาปัจจุบันจริง (สดจากหน้า) ไม่ใช่ target_upside_pct ที่อิง price_at_fetch เก่า
+  const up = (a.target_mean != null && price) ? (a.target_mean / price - 1) * 100 : null;
+  const upClr = up == null ? 'var(--text2)' : up > 0 ? 'var(--green)' : up < 0 ? 'var(--red)' : 'var(--text)';
+  const recTotal = a.rec_total || 0;
+  const buy = (a.rec_strong_buy || 0) + (a.rec_buy || 0);
+  const hold = a.rec_hold || 0;
+  const sell = (a.rec_sell || 0) + (a.rec_strong_sell || 0);
+  const seg = (n, clr) => recTotal && n ? `<div style="width:${n / recTotal * 100}%;background:${clr}"></div>` : '';
+  const recBar = recTotal ? `
+    <div style="display:flex;height:10px;border-radius:5px;overflow:hidden;margin:6px 0 4px">
+      ${seg(buy, 'var(--green)')}${seg(hold, '#e8a33d')}${seg(sell, 'var(--red)')}
+    </div>
+    <div style="font-size:10.5px;color:var(--text2)">
+      <span style="color:var(--green)">ซื้อ ${buy}</span> ·
+      <span style="color:#e8a33d">ถือ ${hold}</span> ·
+      <span style="color:var(--red)">ขาย ${sell}</span>
+      ${a.rec_mean != null ? ` · คะแนนเฉลี่ย ${a.rec_mean.toFixed(2)} <span style="color:var(--text2)">(1=ซื้อมาก…5=ขายมาก)</span>` : ''}
+    </div>` : '<div style="font-size:10.5px;color:var(--text2)">ยังไม่มีคำแนะนำ Buy/Hold/Sell — มีเฉพาะราคาเป้าหมาย</div>';
+
+  // เทียบกับ Fair Value (DCF Base) ของเราเอง — snapshot จาก _tsDcfRecalc() ตอน render
+  let dcfCmp = '';
+  if (_tsDcfBaseFairValue != null && a.target_mean != null) {
+    const diff = (a.target_mean / _tsDcfBaseFairValue - 1) * 100;
+    const [txt, clr] = Math.abs(diff) <= 10 ? ['ใกล้เคียงกัน', 'var(--text)']
+      : diff > 0 ? ['นักวิเคราะห์มองสูงกว่า', 'var(--green)']
+      : ['นักวิเคราะห์มองต่ำกว่า', 'var(--red)'];
+    dcfCmp = `<div style="font-size:11px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+      เทียบ Fair Value (DCF ฉาก Base) ของเรา ${_tsDcfBaseFairValue.toFixed(2)} :
+      <span style="color:${clr};font-weight:600">${txt} ${diff > 0 ? '+' : ''}${diff.toFixed(0)}%</span></div>`;
+  }
+
+  const tgt = (lbl, v) => `<div style="text-align:center;min-width:70px">
+    <div style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">${lbl}</div>
+    <div style="font-size:15px;font-weight:700">${fmt(v)}</div></div>`;
+
+  const growthBits = [];
+  if (a.eps_growth_this_y != null) growthBits.push(`โต EPS ปีนี้ ${a.eps_growth_this_y > 0 ? '+' : ''}${a.eps_growth_this_y.toFixed(1)}%`);
+  if (a.eps_growth_next_y != null) growthBits.push(`ปีหน้า ${a.eps_growth_next_y > 0 ? '+' : ''}${a.eps_growth_next_y.toFixed(1)}%`);
+  if (a.rev_growth_next_y != null) growthBits.push(`รายได้ปีหน้า ${a.rev_growth_next_y > 0 ? '+' : ''}${a.rev_growth_next_y.toFixed(1)}%`);
+  if (a.ltg_pct != null) growthBits.push(`ระยะยาว ${a.ltg_pct.toFixed(1)}%`);
+
+  const syncNote = a.synced_at ? ` · ข้อมูล ${a.synced_at.slice(0, 10)}` : '';
+
+  return `<div class="card" style="padding:16px">
+    <div style="font-size:13px;font-weight:700;margin-bottom:2px">🎯 ฉันทามตินักวิเคราะห์
+      <span style="font-weight:400;font-size:11px;color:var(--text2)">Yahoo${a.analyst_count ? ` · ${a.analyst_count} ราย` : ''}${syncNote}</span></div>
+    <div style="font-size:10.5px;color:var(--text2);margin-bottom:10px">รวบรวมราคาเป้าหมาย + คำแนะนำจากนักวิเคราะห์ที่ติดตามหุ้นตัวนี้ — ไม่ใช่คำแนะนำซื้อ/ขายจากเรา</div>
+    ${a.target_mean != null ? `
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;margin-bottom:6px">
+      ${tgt('เป้าต่ำ', a.target_low)}${tgt('เป้าเฉลี่ย', a.target_mean)}${tgt('เป้าสูง', a.target_high)}
+      <div style="min-width:90px">
+        <div style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">Upside vs ราคาปัจจุบัน</div>
+        <div style="font-size:15px;font-weight:700;color:${upClr}">${up == null ? '—' : (up > 0 ? '+' : '') + up.toFixed(1) + '%'}</div>
+        <div style="font-size:9.5px;color:var(--text2)">ราคา ${price != null ? price.toFixed(2) : '—'} ${cur}</div>
+      </div>
+    </div>` : '<div style="font-size:11.5px;color:var(--text2);margin-bottom:6px">ไม่มีราคาเป้าหมาย — มีเฉพาะคำแนะนำ Buy/Hold/Sell</div>'}
+    ${recBar}
+    ${growthBits.length ? `<div style="font-size:10.5px;color:var(--text2);margin-top:6px">ประมาณการนักวิเคราะห์: ${growthBits.join(' · ')}</div>` : ''}
+    ${dcfCmp}
+  </div>`;
 }
 
 // ---------- Ratios รายไตรมาส + Earnings History รายปี + PE band (Finnomena) — reuse ฟังก์ชัน
@@ -11778,6 +11909,11 @@ function _tsDcfHtml(dcf, price) {
 // growth/WACC/forecast period ไม่ล้าง override ที่กดไว้)
 let _tsDcfModelOverrides = { revenue: {}, ebit: {}, noplat: {}, da: {}, capex: {}, nwc: {} };
 
+// Fair Value ต่อหุ้นของฉาก Base (Forward DCF) จาก _tsDcfRecalc() ล่าสุด — ให้การ์ด
+// "🎯 ฉันทามตินักวิเคราะห์" (โหลด async หลัง render) เอาไปเทียบกับราคาเป้าหมายนักวิเคราะห์
+// โดยไม่ต้องคำนวณ DCF ซ้ำเอง · null = คำนวณไม่ได้/หุ้นกลุ่มการเงิน/ข้อมูลไม่พอ
+let _tsDcfBaseFairValue = null;
+
 function _tsDcfModelCellEdit(el) {
   const t = parseInt(el.dataset.t, 10);
   const field = el.dataset.field;
@@ -12148,6 +12284,7 @@ function _dcfForwardFairValuePerShare(fcf0, r, g1_5, terminalGrowth, netCash, sh
 
 function _tsDcfRecalc() {
   const dcf = _tsData?.dcf;
+  _tsDcfBaseFairValue = null;   // reset ก่อนทุกครั้ง — เติมกลับตอนคำนวณ scenarios สำเร็จ
   const revBox = document.getElementById('ts-dcf-reverse');
   const fwdBox = document.getElementById('ts-dcf-forward');
   const sensBox = document.getElementById('ts-dcf-sens');
@@ -12201,6 +12338,7 @@ function _tsDcfRecalc() {
     const upside = fv != null ? (fv / price - 1) * 100 : null;
     return { ...sc, gPct, fv, upside };
   });
+  _tsDcfBaseFairValue = scenarios.find(s => s.key === 'base')?.fv ?? null;
   const scenRows = scenarios.map(sc => `
     <tr><td style="font-weight:600">${sc.label}</td><td style="text-align:right">${sc.gPct.toFixed(1)}%</td>
       <td style="text-align:right">${sc.fv != null ? sc.fv.toFixed(2) : '—'}</td>
@@ -23417,6 +23555,7 @@ const DH_SOURCE_MAP = {
                           fn2: 'startDRFinancialsSyncIncremental', fnLabel2: '🔄 ดึงงบ DR ที่ขาด/เก่า', gotoPage2: 'dr', gotoLabel2: 'ไปหน้า DR/DRx' },
   financials_coverage_by_source: { text: 'ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างในหน้านี้ (sync ครบ 4 แหล่งรวม set_qpl)', fn: 'startFinancialsUpdateAll', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด' },
   financials_quarter_freshness: { text: 'ปุ่ม "🗓️ เช็คงวดล่าสุด" หน้า งบการเงิน (ดูรายชื่อ+ลองดึงเฉพาะที่ขาด) หรือปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างในหน้านี้', fn: 'startFinancialsUpdateAll', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด', gotoPage: 'financials' },
+  analyst_consensus:    { text: 'ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างในหน้านี้ (รวม sync ฉันทามตินักวิเคราะห์จาก Yahoo ให้แล้ว — ข้ามตัวที่ sync <7 วัน) หรือ sync แยกในหน้า Screener+', fn: 'startFinancialsUpdateAll', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด' },
   mirror_index_coverage: { text: 'ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างในหน้านี้ (sync งบดัชนีหลัก US/HK/JP ผ่าน Yahoo ให้ตัวที่ยังไม่เคยมี — ตัวที่เก่าเกิน 1 ปีไม่ retry อัตโนมัติ ต้องเปิด Tearsheet ของตัวนั้นแล้วกด refresh เอง)', fn: 'startFinancialsUpdateAll', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด' },
   mirror:               { text: 'ปุ่ม "🌐 Sync Mirror US/HK เต็ม" ด้านบนในหน้านี้ (หรือ python mirror_finnomena.py force)', fn: 'startMirrorYahooIndexSync', fnLabel: '🌐 Sync Mirror US/HK เต็ม' },
   market_stats:         { text: 'หน้า Valuation — ปุ่ม "⟳ อัพเดทข้อมูล P/E & P/BV" (ต้องโหลด Table_PE.xls/Table_PBV.xls มาวางทับก่อน)', fn: 'refreshMarketStats', fnLabel: '⟳ อัพเดท P/E & P/BV', gotoPage: 'valuation' },

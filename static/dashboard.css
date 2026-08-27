@@ -503,6 +503,7 @@
   .scr-input:focus { border-color: var(--accent); }
   .scr-label { font-size: 10px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 5px; display: flex; align-items: center; gap: 4px; }
   .scr-group { display: flex; flex-direction: column; gap: 4px; }
+  .scr-section-header { grid-column: 1/-1; font-size: 10px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin: 10px 0 0; border-top: 1px solid var(--border); padding-top: 8px; }
   .scr-tip-icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--border); color: var(--text2); font-size: 9px; font-weight: 700; cursor: default; flex-shrink: 0; position: relative; }
   .scr-tip-icon:hover .scr-tip-box { display: block; }
   .scr-tip-icon.tt-open .scr-tip-box { display: block; } /* จอสัมผัส: ไม่มี hover -> แตะเปิดแทน */

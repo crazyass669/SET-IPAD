@@ -115,6 +115,57 @@ def _update_rotation_safe(base_dir, data_as_of, sectors, industries):
         logging.warning(f"[Rotation] update state failed: {e}")
 
 
+def _fetch_fundamentals_with_fallback(tickers, base_dir, callback, log_prefix=""):
+    """ดึง fundamentals (mkt_cap/pe/pbv/div_yield): SET API ก่อน (เร็ว + ข้อมูลจาก
+    เจ้าของตลาด) -> fallback Yahoo -> fallback ค่าเดิมจาก set_data.json รอบก่อน (กัน
+    P/E-P/BV หายวับทั้งกระดานเวลา API ล่มชั่วคราวรอบเดียว) — ใช้ร่วมกันระหว่าง
+    run_with_progress/run_quick_update กันโค้ด fallback สองชุดแยกกันแล้วแก้ไม่ครบคู่
+    (code review 2026-08-27) คืนค่า (fund_map: {ticker: {...}}, warning: str|None)"""
+    total = len(tickers)
+    fundamentals = {}
+    try:
+        from sources.set_api import fetch_fundamentals
+        fundamentals = fetch_fundamentals(tickers, callback=callback)
+        logging.info(f"{log_prefix}[Fundamentals] SET API: {len(fundamentals)}/{total} ตัว")
+    except Exception as e:
+        logging.warning(f"{log_prefix}[Fundamentals] SET API ล้มเหลว ({e}) — fallback Yahoo...")
+        callback(0, total, f"Fundamentals fallback Yahoo ({total} หุ้น)...")
+        try:
+            fundamentals = fetch_market_caps_parallel(tickers, callback=callback)
+        except Exception as e2:
+            logging.warning(f"{log_prefix}[Fundamentals] Yahoo ก็ล้มเหลว ({e2}) — คงค่าเดิมจากรอบก่อนแทน")
+            fundamentals = {}
+
+    existing_data_path = os.path.join(base_dir, OUT_FILE)
+    old_fund_map = {}
+    if os.path.exists(existing_data_path):
+        try:
+            with open(existing_data_path, encoding="utf-8") as f:
+                old = json.load(f)
+            old_fund_map = {s["ticker"]: {k: s.get(k) for k in ("mkt_cap","pe","pbv","div_yield")}
+                            for s in old.get("stocks", [])}
+        except Exception as e:
+            logging.warning(f"{log_prefix}[Fundamentals] อ่าน {OUT_FILE} รอบก่อนไม่สำเร็จ ({e}) "
+                             f"— ไม่มีค่าเดิมให้ fallback")
+
+    warning = None
+    if not fundamentals and total > 0:
+        if old_fund_map:
+            warning = (f"Fundamentals (P/E, P/BV, Market Cap, Div Yield) ดึงไม่สำเร็จทั้งหมด "
+                       f"({total} หุ้น) — ใช้ค่าเดิมจากรอบก่อนแทน")
+        else:
+            warning = (f"Fundamentals (P/E, P/BV, Market Cap, Div Yield) ดึงไม่สำเร็จทั้งหมด "
+                       f"({total} หุ้น) และไม่มีค่าเดิมให้ fallback — ค่าจะว่างทั้งหมด")
+
+    fund_map = {}
+    for t in tickers:
+        fund = fundamentals.get(t)
+        if fund is None:
+            fund = old_fund_map.get(t) or {}
+        fund_map[t] = fund
+    return fund_map, warning
+
+
 # ============================================================
 # 5. run_with_progress — API สำหรับ Flask
 # ============================================================
@@ -207,44 +258,10 @@ def run_with_progress(callback, base_dir=None, period="max"):
 
     callback(0, total, f"ดึง Fundamentals ({len(stocks)} หุ้น)...")
     cap_tickers = [s["ticker"] for s in stocks]
-    # Primary: SET API (เร็ว ~20 วิ + ข้อมูลจากเจ้าของตลาด) -> fallback: Yahoo
-    fundamentals = {}
-    try:
-        from sources.set_api import fetch_fundamentals
-        fundamentals = fetch_fundamentals(cap_tickers, callback=callback)
-        logging.info(f"[Fundamentals] SET API: {len(fundamentals)}/{len(cap_tickers)} ตัว")
-    except Exception as e:
-        logging.warning(f"[Fundamentals] SET API ล้มเหลว ({e}) — fallback Yahoo...")
-        callback(0, total, f"Fundamentals fallback Yahoo ({len(stocks)} หุ้น)...")
-        try:
-            fundamentals = fetch_market_caps_parallel(cap_tickers, callback=callback)
-        except Exception as e2:
-            logging.warning(f"[Fundamentals] Yahoo ก็ล้มเหลว ({e2}) — คงค่าเดิมจากรอบก่อนแทน")
-            fundamentals = {}
-
-    warnings = []
-    # หุ้นที่ fetch ใหม่ไม่ได้ (ทั้ง SET API และ Yahoo ล้มเหลว หรือหุ้นตัวนั้นไม่มีใน
-    # response) — fallback ไปใช้ค่าเดิมจาก set_data.json รอบก่อนแทนการปล่อย None ทั้งตัว
-    # กัน P/E-P/BV หายวับทั้งกระดานเวลา API ล่มชั่วคราวรอบเดียว (pattern เดียวกับ
-    # run_quick_update ด้านล่าง) + แจ้งเตือนกลับไปให้ caller โผล่ใน summary แทนที่จะ
-    # เงียบหาย (code review 2026-08-26: เดิมปล่อย None ทั้งตัวไม่มี fallback/ไม่มี warning)
-    existing_data_path = os.path.join(base_dir, OUT_FILE)
-    old_fund_map = {}
-    if os.path.exists(existing_data_path):
-        try:
-            with open(existing_data_path, encoding="utf-8") as f:
-                old = json.load(f)
-            old_fund_map = {s["ticker"]: {k: s.get(k) for k in ("mkt_cap","pe","pbv","div_yield")}
-                            for s in old.get("stocks", [])}
-        except Exception:
-            pass
-    if not fundamentals:
-        warnings.append(f"Fundamentals (P/E, P/BV, Market Cap, Div Yield) ดึงไม่สำเร็จทั้งหมด "
-                         f"({len(cap_tickers)} หุ้น) — ใช้ค่าเดิมจากรอบก่อนแทน")
+    fund_map, fund_warning = _fetch_fundamentals_with_fallback(cap_tickers, base_dir, callback)
+    warnings = [fund_warning] if fund_warning else []
     for s in stocks:
-        fund = fundamentals.get(s["ticker"])
-        if fund is None:
-            fund = old_fund_map.get(s["ticker"]) or {}
+        fund = fund_map.get(s["ticker"], {})
         s["mkt_cap"]   = fund.get("mkt_cap")
         s["pe"]        = fund.get("pe")
         s["pbv"]       = fund.get("pbv")
@@ -446,6 +463,24 @@ def run_quick_update(callback, base_dir=None):
         callback(100, 100, "ไม่มีข้อมูลใหม่ (อาจเป็นวันหยุด)")
         return
 
+    # เริ่มดึง fundamentals (P/E, P/BV, Div Yield, Market Cap) พื้นหลังคู่ขนานไปกับ CA
+    # detection + save + คำนวณ metrics ทั้งกระดานด้านล่าง (I/O อิสระจากกัน) กัน ~7-20 วิ
+    # ไม่ให้บวกต่อท้ายแบบ serial — เริ่มตรงนี้ (ไม่ใช่ต้นฟังก์ชัน) เพื่อ (1) ไม่ยิง SET API
+    # fundamentals (8 workers) ทับซ้อนกับ fast-path fetch_quotes_batch (6 workers) ด้านบน
+    # (2) ไม่เสียแรงดึงทิ้งเปล่าเมื่อ early-return ("ข้อมูลเป็นปัจจุบัน"/"ไม่มีข้อมูลใหม่").
+    # callback เปล่า (ไม่ผูก progress bar หลักที่ฟังก์ชันนี้คุมเอง) กันสองเธรดแย่งอัพเดท
+    # progress, join() ก่อนใช้ผลด้านล่าง — daemon เผื่อ error หลังจุดนี้ไม่ให้ค้าง (code
+    # review 2026-08-27)
+    import threading
+    _fund_result = {}
+    def _fund_worker():
+        fm, w = _fetch_fundamentals_with_fallback(
+            tickers, base_dir, lambda *a: None, log_prefix="[QuickUpdate]")
+        _fund_result["fund_map"] = fm
+        _fund_result["warning"]  = w
+    _fund_thread = threading.Thread(target=_fund_worker, daemon=True)
+    _fund_thread.start()
+
     # หุ้นค้างนานที่ถูกตัดออกจากการคำนวณ start_date (ด้านบน) แต่กลับมามีแท่งใหม่
     # ในรอบนี้ (พักเทรดจบ/กลับมาซื้อขาย) — ดึงแค่ตั้งแต่ start_date (ซึ่งอาจใหม่กว่า
     # วันสุดท้ายที่มันมีข้อมูลมาก) จะเหลือรูช่วงที่ขาดหายถาวร (ไม่มีวันไล่ตามทีหลัง
@@ -534,42 +569,18 @@ def run_quick_update(callback, base_dir=None):
             callback(done, total, f"คำนวณ {done}/{total}...")
 
     # ดึง fundamentals (P/E, P/BV, Div Yield, Market Cap) ใหม่ทุกครั้ง — เดิม Quick Update
-    # แค่ carry-forward ค่าเก่าเพื่อความเร็ว แต่ยอมรับเวลาเพิ่ม ~15-20 วิ (ทั้งกระดานผ่าน
-    # SET API, เหมือน Full Refresh ที่ services/refresh.py:207-226) เพื่อให้ตัวกรอง
-    # P/E-P/BV ใน Screener (scr-pe/scr-pe-min/scr-pbv/scr-pbv-min) สดทุกครั้งที่กด
-    callback(0, total, f"ดึง Fundamentals ({len(stocks)} หุ้น)...")
-    cap_tickers = [s["ticker"] for s in stocks]
-    fundamentals = {}
-    try:
-        from sources.set_api import fetch_fundamentals
-        fundamentals = fetch_fundamentals(cap_tickers, callback=callback)
-        logging.info(f"[QuickUpdate][Fundamentals] SET API: {len(fundamentals)}/{len(cap_tickers)} ตัว")
-    except Exception as e:
-        logging.warning(f"[QuickUpdate][Fundamentals] SET API ล้มเหลว ({e}) — fallback Yahoo...")
-        callback(0, total, f"Fundamentals fallback Yahoo ({len(stocks)} หุ้น)...")
-        try:
-            fundamentals = fetch_market_caps_parallel(cap_tickers, callback=callback)
-        except Exception as e2:
-            logging.warning(f"[QuickUpdate][Fundamentals] Yahoo ก็ล้มเหลว ({e2}) — คงค่าเดิมจากรอบก่อนแทน")
-            fundamentals = {}
-
-    # หุ้นที่ fetch ใหม่ไม่ได้ (ทั้ง SET API และ Yahoo ล้มเหลว หรือหุ้นตัวนั้นไม่มีใน
-    # response) — fallback ไปใช้ค่าเดิมจาก set_data.json รอบก่อนแทนการปล่อย None ทั้งตัว
-    # กัน P/E-P/BV หายวับทั้งกระดานเวลา API ล่มชั่วคราวรอบเดียว
-    existing_data_path = os.path.join(base_dir, OUT_FILE)
-    old_fund_map = {}
-    if os.path.exists(existing_data_path):
-        try:
-            with open(existing_data_path, encoding="utf-8") as f:
-                old = json.load(f)
-            old_fund_map = {s["ticker"]: {k: s.get(k) for k in ("mkt_cap","pe","pbv","div_yield")}
-                            for s in old.get("stocks", [])}
-        except Exception:
-            pass
+    # แค่ carry-forward ค่าเก่าเพื่อความเร็ว เปลี่ยนมาดึงสดทุกครั้งผ่าน SET API (fallback
+    # Yahoo) เพื่อให้ตัวกรอง P/E-P/BV ใน Screener (scr-pe/scr-pe-min/scr-pbv/scr-pbv-min)
+    # สดทุกครั้งที่กด — เธรดดึงข้อมูลเริ่มไปแล้วหลังบันทึกราคา (คู่ขนานกับ CA detection +
+    # save + คำนวณ metrics ด้านบน) ตรงนี้แค่รอผล กันเวลาที่เพิ่มจริงเหลือแค่ส่วนต่าง
+    # (ถ้า fetch เสร็จก่อนแล้ว join() คืนทันที)
+    callback(total, total, f"รอผล Fundamentals ({len(stocks)} หุ้น)...")
+    _fund_thread.join()
+    fund_map     = _fund_result.get("fund_map", {})
+    fund_warning = _fund_result.get("warning")
+    warnings = [fund_warning] if fund_warning else []
     for s in stocks:
-        fund = fundamentals.get(s["ticker"])
-        if fund is None:
-            fund = old_fund_map.get(s["ticker"]) or {}
+        fund = fund_map.get(s["ticker"], {})
         s["mkt_cap"]   = fund.get("mkt_cap")
         s["pe"]        = fund.get("pe")
         s["pbv"]       = fund.get("pbv")
@@ -621,5 +632,6 @@ def run_quick_update(callback, base_dir=None):
     callback(total, total,
              f"Quick Update เสร็จ! {len(stocks)} หุ้น (ดาวน์โหลดใหม่ {len(new_data)} หุ้น)"
              + flat_note)
+    return warnings
 
 

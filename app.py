@@ -258,6 +258,7 @@ from sources import sec_store
 from sources import financials_store
 from sources import factor_snapshot
 from sources import set_company
+from sources import analyst_consensus
 from sources import dcf_screener
 from sources import dr_descriptions
 from sources import us_index_membership
@@ -4893,6 +4894,11 @@ def factor_screener():
     # งาน #1/#2/#3) coverage ต่างกันตามชุด (ESG ~38%, free float/foreign room สูงกว่า
     # มาก) — ไม่ raise ถ้ายังไม่เคย sync (get_company_map คืน {} เฉยๆ)
     company_map = set_company.get_company_map(BASE_DIR)
+    # ฉันทามตินักวิเคราะห์ (Yahoo: ราคาเป้าหมาย + Buy/Hold/Sell) — market='TH' เท่านั้น
+    # (DR/mirror ไม่ overlay ที่นี่ ดูการ์ดในหน้า Tearsheet แทน) · coverage ~40% เอียง
+    # cap ใหญ่ — ทุก filter ต้อง "ไม่มีข้อมูล = ไม่กรองทิ้ง" ยกเว้น has_analyst_coverage
+    # ที่ตั้งใจให้ opt-in · คืน {} เฉยๆ ถ้ายังไม่เคย sync
+    analyst_map = analyst_consensus.get_map(BASE_DIR, "TH")
 
     # overlay ค่าที่อิงราคาปัจจุบัน — หุ้นไทยจาก set_data.json, DR จาก dr_cache.json
     # รวม technical (RS / %เหนือ EMA200 / %จาก high 52wk / RVOL) สำหรับ screen
@@ -4926,6 +4932,16 @@ def factor_screener():
             r["pct_off_high52"] = _pct_vs(s.get("price"), s.get("high_52w"))
             va = s.get("vol_avg20")
             r["rvol"] = round(s["vol_today"] / va, 4) if (s.get("vol_today") is not None and va) else None
+            # ราคาเป้าหมายนักวิเคราะห์ — upside คำนวณสดเทียบราคาปัจจุบัน (ไม่ใช่
+            # target_upside_pct ที่อิง price_at_fetch เก่าตอน sync) ให้ตรงกับคอลัมน์ราคาอื่น
+            ac = analyst_map.get(r["symbol"]) or {}
+            _tm, _px = ac.get("target_mean"), s.get("price")
+            r["analyst_target_upside"] = (round((_tm / _px - 1) * 100, 2)
+                                          if (_tm and _px and _px > 0) else None)
+            r["analyst_rec_mean"] = ac.get("rec_mean")
+            r["analyst_buy_pct"] = ac.get("buy_pct")
+            r["has_analyst_coverage"] = bool(ac.get("target_mean") is not None
+                                             or (ac.get("rec_total") or 0) > 0)
         else:
             e = dr_map.get(r["symbol"]) or {}
             r["rs"] = e.get("rs_score")   # RS จัดอันดับภายใน universe DR ด้วยกัน
@@ -4940,6 +4956,12 @@ def factor_screener():
             mc = e.get("mkt_cap")
             r["mkt_cap"] = mc
             r["fcf_yield"] = (r["fcf"] / mc * 100) if (r.get("fcf") is not None and mc) else None
+            # ฉันทามตินักวิเคราะห์ overlay เฉพาะ market='TH' — DR ให้เป็น None/False ชัดเจน
+            # (shape JSON สม่ำเสมอทุกแถว) ดูข้อมูลนักวิเคราะห์ของ DR ได้ในการ์ดหน้า Tearsheet
+            r["analyst_target_upside"] = None
+            r["analyst_rec_mean"] = None
+            r["analyst_buy_pct"] = None
+            r["has_analyst_coverage"] = False
 
     # percentile ภายใน sector (หุ้นไทย — sector จาก set_data.json): PE ต่ำ=ถูกกว่าเพื่อน
     # ในกลุ่ม, ROE สูง=เด่นกว่ากลุ่ม — แก้จุดอ่อน "PE/ROE เทียบข้ามอุตสาหกรรมไม่ได้"
@@ -4959,6 +4981,11 @@ def factor_screener():
             r["roe_sector_pctile"] = roe_pct.get(r["symbol"])
     meta = factor_snapshot.snapshot_meta(BASE_DIR)
     meta.update(set_company.get_meta(BASE_DIR))   # esg_*/shareholder_*/foreign_* count+updated_at
+    _ac_th_meta = analyst_consensus.get_meta(BASE_DIR).get("TH", {})
+    if _ac_th_meta.get("count"):
+        meta["analyst_count"] = _ac_th_meta["count"]
+        meta["analyst_with_target"] = _ac_th_meta.get("with_target", 0)
+        meta["analyst_updated_at"] = _ac_th_meta.get("updated_at")
     return jsonify({"rows": rows, "meta": meta})
 
 
@@ -7912,6 +7939,43 @@ def _compute_data_health():
         items.append(_dh_error_item("financials_quarter_freshness",
                                      "งบการเงิน — เช็คงวดล่าสุด (financials.db)", "งบการเงิน", str(e)[:160]))
 
+    # ฉันทามตินักวิเคราะห์ (Yahoo: ราคาเป้าหมาย/Buy-Hold-Sell) — coverage หุ้นไทยต่ำ
+    # โดยธรรมชาติ (~40% เอียงไป cap ใหญ่) เหมือน SET Financial Health/ESG → ใช้ "ความสด"
+    # ตัดสิน status ไม่ใช่ coverage (หุ้นเล็กไม่มีนักวิเคราะห์ตาม ไม่ใช่บั๊ก)
+    try:
+        from datetime import timezone as _tz
+        _ac_meta = analyst_consensus.get_meta(BASE_DIR)
+        _ac_th = _ac_meta.get("TH", {})
+        _ac_count = _ac_th.get("count", 0)
+        _ac_target = _ac_th.get("with_target", 0)
+        _ac_dr = sum(_ac_meta.get(m, {}).get("count", 0) for m in ("US", "HK"))
+        _ac_ts = _ac_th.get("updated_at")   # UTC naive string จาก sources/analyst_consensus
+        _ac_age_h = None
+        _ac_parsed = _dh_parse(_ac_ts)
+        if _ac_parsed:
+            _ac_age_h = (_dh_dt.now(_tz.utc).replace(tzinfo=None) - _ac_parsed).total_seconds() / 3600
+        if not _ac_count:
+            _ac_status = "warn"
+            _ac_note = ('ยังไม่เคย sync — กดปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" (รวม sync '
+                        'นักวิเคราะห์ให้แล้ว รอบแรก ~10 นาที) หรือ sync แยกในหน้า Screener+')
+        else:
+            # sync อยู่ใน financials-update-all (7 วัน/รอบ) — เกิน ~10 วันถือว่าค้าง
+            _ac_status = "ok" if (_ac_age_h is not None and _ac_age_h <= 24 * 10) else "warn"
+            _ac_note = (f'หุ้นไทย {_ac_count} ตัว (มีราคาเป้าหมาย {_ac_target}) '
+                        f'+ DR underlying US/HK {_ac_dr} ตัว '
+                        f'· sync พร้อมงบการเงิน (skip ตัวที่ &lt;7 วัน) '
+                        f'· coverage หุ้นไทยต่ำเป็นปกติ — หุ้นเล็กไม่มีนักวิเคราะห์ตาม')
+        items.append({
+            "key": "analyst_consensus",
+            "label": "ฉันทามตินักวิเคราะห์ (Yahoo)",
+            "category": "งบการเงิน",
+            "last_at": _ac_ts, "age_hours": round(_ac_age_h, 1) if _ac_age_h is not None else None,
+            "status": _ac_status, "note": _ac_note,
+        })
+    except Exception as e:
+        items.append(_dh_error_item("analyst_consensus",
+                                     "ฉันทามตินักวิเคราะห์ (Yahoo)", "งบการเงิน", str(e)[:160]))
+
     # coverage ของ mirror งบดัชนีหลัก US/HK/JP (source 'yahoo' namespace FINN:/DR:) — แยก
     # "ไม่เคย sync จริง" ออกจาก "เก่าเกิน 1 ปี" ให้เห็นในแอปเลย ไม่ต้องไล่เช็คมือแบบ 2026-08-15
     # (วันนั้นเจอ 104 ตัวที่เข้าใจผิดว่า 'ไม่เคย sync' ทั้งที่จริงมีอยู่แล้วใต้ namespace 'DR:' —
@@ -8725,6 +8789,22 @@ def _run_financials_update_all():
                 except Exception:
                     pass
                 time.sleep(0.3)   # throttle กัน Finnomena บล็อก
+
+        # ฉันทามตินักวิเคราะห์ (Yahoo: ราคาเป้าหมาย/Buy-Hold-Sell/EPS estimate) — ข้าม
+        # ตัวที่ sync ภายใน 7 วัน (รอบแรกที่ตารางว่างจะช้า ~10 นาที, รอบถัดไปเกือบ 0)
+        # non-fatal: ล้มก็ปล่อย ไม่ให้กระทบ factor snapshot / งบที่ sync สำเร็จแล้ว
+        try:
+            def _ac_cb(done, total, msg):
+                _update(current=92, total=100, message=f"ฉันทามตินักวิเคราะห์: {done}/{total}")
+            ac_ok, ac_tot = analyst_consensus.sync_th(BASE_DIR, callback=_ac_cb, max_age_days=7)
+            # underlying ต่างประเทศของ DR (region US/HK) — coverage Yahoo เกือบ 100% ใช้ในการ์ด
+            # Tearsheet ของหุ้น DR (~250 ตัว, รอบแรก ~1-2 นาที, รอบถัดไปข้ามเกือบหมด)
+            dr_ok, dr_tot = analyst_consensus.sync_dr(BASE_DIR, callback=_ac_cb, max_age_days=7)
+            if ac_tot or dr_tot:
+                print(f"[FinancialsUpdateAll] analyst consensus: TH {ac_ok}/{ac_tot} · "
+                      f"DR underlying {dr_ok}/{dr_tot} sync ใหม่")
+        except Exception as e:
+            print(f"[FinancialsUpdateAll] analyst consensus sync error (ข้าม): {e}")
 
         _update(current=93, total=100, message="กำลังคำนวณ factor snapshot ใหม่...")
         factor_snapshot.build_snapshot(BASE_DIR)
@@ -9886,7 +9966,14 @@ def _run_quick():
             pct = (current / total * 90) if total > 0 else 0
             _update(current=round(pct), total=100, message=msg)
 
-        _refresh_svc.run_quick_update(cb, BASE_DIR)
+        fund_warnings = _refresh_svc.run_quick_update(cb, BASE_DIR) or []
+        if fund_warnings:
+            # fund_warnings มาจาก run_quick_update เอง — fundamentals (P/E, P/BV, Market Cap,
+            # Div Yield) ดึงไม่สำเร็จทั้งหมด (SET API + Yahoo ล้มเหลวทั้งคู่) ต้องโผล่ใน
+            # failed_steps เหมือนขั้นตอนเสริมอื่นๆ ไม่งั้นเงียบหาย (code review 2026-08-27:
+            # เดิม run_quick_update ไม่มี warnings/return เลย ต่างจาก run_with_progress)
+            print(f"[QuickUpdate] Fundamentals warning: {'; '.join(fund_warnings)}")
+            failed_steps.append("Fundamentals")
         _market_internals_cache.clear()
         _breadth_cache.clear()
         _bump_cache_gen()
@@ -10138,6 +10225,65 @@ def sync_foreign_room_route():
                         "updated_at": meta["foreign_updated_at"]})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def _run_analyst_consensus_sync():
+    """sync ฉันทามตินักวิเคราะห์จาก Yahoo — หุ้นไทยทั้งกระดาน + underlying US/HK ของ DR
+    งานพื้นหลังยาว (รอบแรก ~10-12 นาที เพราะยิง yfinance ทีละตัว 3 เธรด, รอบถัดไปข้าม
+    ตัวที่ sync <7 วันเกือบหมด)"""
+    t0 = time.time()
+    try:
+        def _cb(done, total, msg):
+            pct = (done / max(total, 1)) * 98
+            _update(current=round(pct), total=100, message=msg)
+        n_ok, n_tot = analyst_consensus.sync_th(BASE_DIR, callback=_cb, max_age_days=7)
+        dr_ok, dr_tot = analyst_consensus.sync_dr(BASE_DIR, callback=_cb, max_age_days=7)
+        meta = analyst_consensus.get_meta(BASE_DIR)
+        th_meta = meta.get("TH", {})
+        dr_cnt = sum(meta.get(m, {}).get("count", 0) for m in ("US", "HK"))
+        elapsed = (time.time() - t0) / 60
+        if n_tot == 0 and dr_tot == 0:
+            summary = "ข้อมูลนักวิเคราะห์เป็นปัจจุบันแล้ว (ทุกตัว sync ภายใน 7 วัน)"
+        else:
+            summary = (f"เสร็จแล้ว! sync ใหม่ หุ้นไทย {n_ok}/{n_tot} · DR underlying {dr_ok}/{dr_tot} "
+                       f"· ในฐานข้อมูล: หุ้นไทยมีราคาเป้าหมาย {th_meta.get('with_target', 0)}/"
+                       f"{th_meta.get('count', 0)} ตัว, DR underlying {dr_cnt} ตัว "
+                       f"· ใช้เวลา {elapsed:.0f} นาที")
+        _update(done=True, message=summary)
+        run_log.record_run(BASE_DIR, "analyst_consensus_sync", True, summary)
+    except Exception as e:
+        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
+        run_log.record_run(BASE_DIR, "analyst_consensus_sync", False, str(e))
+    finally:
+        _update(running=False)
+
+
+@app.route("/api/sync-analyst-consensus", methods=["POST"])
+def sync_analyst_consensus_route():
+    """ปุ่ม 'sync ฉันทามตินักวิเคราะห์' (หน้า Screener+ / Data Health) — งานพื้นหลังยาว
+    เหมือน financials-update-all ใช้ SSE /api/progress ติดตาม"""
+    with _lock:
+        if _state["running"]:
+            return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        _state.update(running=True, done=False, error=None, current=0, total=100,
+                      message="กำลังเริ่ม sync ฉันทามตินักวิเคราะห์...")
+    threading.Thread(target=_run_analyst_consensus_sync, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/analyst-consensus/<symbol>")
+def analyst_consensus_one(symbol):
+    """ฉันทามตินักวิเคราะห์ของหุ้น 1 ตัวจาก DB (Yahoo: ราคาเป้าหมาย mean/high/low +
+    Buy/Hold/Sell + EPS/รายได้ estimate) — อ่านเร็ว ไม่ยิง Yahoo สด ใช้กับการ์ดใน
+    Tearsheet คืน 404 ถ้ายังไม่เคย sync ตัวนี้ (coverage ~40% ของหุ้นไทย เอียง cap ใหญ่)
+
+    ?market=US|HK|JP สำหรับ underlying ของ DR (default TH)"""
+    market = (request.args.get("market") or "TH").upper()
+    d = analyst_consensus.get_one(BASE_DIR, symbol, market)
+    if not d:
+        return jsonify({"error": f"ยังไม่มีข้อมูลนักวิเคราะห์ของ {symbol} — "
+                                  f"อาจไม่มีนักวิเคราะห์ตาม หรือยังไม่ได้ sync"}), 404
+    return jsonify(d)
 
 
 @app.route("/api/company-ownership/<symbol>")

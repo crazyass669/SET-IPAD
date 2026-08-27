@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """sources/yahoo.py — Yahoo Finance batch downloader"""
+import logging
 import time
 
 import yfinance as yf
@@ -242,10 +243,12 @@ def fetch_market_caps_parallel(tickers, callback=None, workers=3):
                 "pbv":       round(float(pbv), 2) if pbv is not None else None,
                 "div_yield": round(float(dy),  2) if dy  is not None else None,
             }
-        except Exception:
+        except Exception as e:
             # field รูปแบบแปลกจากหุ้นตัวเดียว (เช่น marketCap ไม่ใช่เลข) ต้องไม่ทำให้
             # ทั้ง batch พัง (as_completed ด้านล่างจะ f.result() ทุกตัว — ตัวเดียว raise
             # จะทำให้ผลลัพธ์ของหุ้นตัวอื่นที่ทำเสร็จไปแล้วหายไปหมด, code review 2026-08-26)
+            # — log ไว้ (code review 2026-08-27: เดิมเงียบสนิท ถ้าพังยกแผงหาสาเหตุไม่ได้เลย)
+            logging.debug(f"[YahooFund] {tick}: fetch fundamentals failed ({e})")
             return tick, {}
 
     total = len(tickers)

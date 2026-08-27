@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260822a">
+<link rel="stylesheet" href="static/dashboard.css?v=20260827a">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -1094,7 +1094,7 @@
   </div>
   <div class="card" style="margin-bottom:16px">
     <div class="scr-row">
-      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">📊 โมเมนตัม & ผลตอบแทนราคา</div>
+      <div class="scr-section-header">📊 โมเมนตัม & ผลตอบแทนราคา</div>
       <div class="scr-group">
         <div class="scr-label">RS Score ≥
           <span class="scr-tip-icon">?<div class="scr-tip-box">
@@ -1184,7 +1184,7 @@
         </div>
         <input class="scr-input" id="scr-1y" type="number" placeholder="เช่น 30">
       </div>
-      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">💵 ราคา & มูลค่าตลาด</div>
+      <div class="scr-section-header">💵 ราคา & มูลค่าตลาด</div>
       <div class="scr-group">
         <div class="scr-label">MKT CAP ≥ (B)
           <span class="scr-tip-icon">?<div class="scr-tip-box">
@@ -1250,7 +1250,7 @@
         </div>
         <input class="scr-input" id="scr-from-low" type="number" placeholder="เช่น 10" min="0">
       </div>
-      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">💰 มูลค่าหุ้น (Valuation)</div>
+      <div class="scr-section-header">💰 มูลค่าหุ้น (Valuation)</div>
       <div class="scr-group">
         <div class="scr-label">P/E ≥
           <span class="scr-tip-icon">?<div class="scr-tip-box">
@@ -1358,7 +1358,7 @@
         </div>
         <input class="scr-input" id="scr-div-cover-min" type="number" placeholder="เช่น 1.5">
       </div>
-      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">📈 การเติบโต (รายปี)</div>
+      <div class="scr-section-header">📈 การเติบโต (รายปี)</div>
       <div class="scr-group">
         <div class="scr-label">Growth Score ≥
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
@@ -1400,7 +1400,7 @@
         </div>
         <input class="scr-input" id="scr-profit-streak-min" type="number" placeholder="เช่น 3" min="0">
       </div>
-      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">🗓️ การเติบโตรายไตรมาส (งบ Yahoo รายไตรมาส — ต้องอัพเดทงบการเงินก่อน)</div>
+      <div class="scr-section-header">🗓️ การเติบโตรายไตรมาส (งบ Yahoo รายไตรมาส — ต้องอัพเดทงบการเงินก่อน)</div>
       <div class="scr-group">
         <div class="scr-label">รายได้โต QoQ ≥ (%) *
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
@@ -1565,7 +1565,7 @@
         </div>
         <input class="scr-input" id="scr-ttm-margin-min" type="number" placeholder="เช่น 0.5" step="0.5">
       </div>
-      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">🩺 ความสามารถทำกำไร (ปีล่าสุด)</div>
+      <div class="scr-section-header">🩺 ความสามารถทำกำไร (ปีล่าสุด)</div>
       <div class="scr-group">
         <div class="scr-label">Gross Margin ≥ (%)
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
@@ -1599,7 +1599,7 @@
         </div>
         <input class="scr-input" id="scr-net-margin-min" type="number" placeholder="เช่น 10">
       </div>
-      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">📐 เทรนด์เทียบย้อนหลัง N ปี</div>
+      <div class="scr-section-header">📐 เทรนด์เทียบย้อนหลัง N ปี</div>
       <div class="scr-group">
         <div class="scr-label">เทียบย้อนหลัง (ปี)
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
@@ -1673,7 +1673,7 @@
       <div class="scr-group" style="align-self:flex-end;padding-bottom:8px">
         <span style="color:var(--text2);font-size:12px">* ใช้ร่วมกับ dropdown "เทียบย้อนหลัง (ปี)" ด้านบน</span>
       </div>
-      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">🏦 งบดุล / ความเสี่ยง</div>
+      <div class="scr-section-header">🏦 งบดุล / ความเสี่ยง</div>
       <div class="scr-group">
         <div class="scr-label">D/E Ratio ≤ (เท่า)
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
@@ -1697,7 +1697,7 @@
         </div>
         <input class="scr-input" id="scr-interest-coverage-min" type="number" placeholder="เช่น 5">
       </div>
-      <div style="grid-column:1/-1;font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 0;border-top:1px solid var(--border);padding-top:8px">⚡ เทคนิค & ความผันผวน</div>
+      <div class="scr-section-header">⚡ เทคนิค & ความผันผวน</div>
       <div class="scr-group">
         <div class="scr-label">RVOL ≥ (เท่า)
           <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px">
@@ -4152,6 +4152,12 @@
           <option value="3">3 ปี</option><option value="5" selected>5 ปี</option><option value="10">10 ปี</option>
         </select></label>
     </div>
+    <label style="font-size:11.5px;color:var(--fg);display:flex;align-items:center;gap:7px;cursor:pointer;margin-bottom:10px">
+      <input type="checkbox" id="dcf-screener-use-analyst">
+      <span>ใช้ประมาณการโตของนักวิเคราะห์ (Yahoo) แทน CAGR อดีต สำหรับ Growth ปี1-3
+        <span title="เฉพาะหุ้นที่มีนักวิเคราะห์ตาม (~40% ของตลาด เอียง cap ใหญ่) — ใช้ Long-term growth ก่อน ถ้าไม่มี (Yahoo แทบไม่ส่ง) ใช้ประมาณการโต EPS ปีหน้าแทน · หุ้นที่ไม่มีนักวิเคราะห์ตกกลับไปใช้ CAGR รายได้อดีตตามเดิม · ช่อง Rev Growth ปี1-3 ที่กรอกเองด้านบนยังชนะเสมอ · ต้อง sync ฉันทามตินักวิเคราะห์ก่อน (อยู่ในปุ่ม 🔄 อัพเดทงบการเงินทั้งหมด)">ℹ️</span>
+      </span>
+    </label>
     <details style="margin-bottom:10px">
       <summary style="cursor:pointer;font-size:11px;color:var(--text2)">⚖ ขั้นสูง — WACC แบบ CAPM (ใช้เมื่อไม่กรอกช่อง WACC % ด้านบน)</summary>
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px">
@@ -5279,6 +5285,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260827a"></script>
+<script src="static/dashboard.js?v=20260827d"></script>
 </body>
 </html>

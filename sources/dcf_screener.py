@@ -21,6 +21,7 @@ from datetime import datetime
 
 from sources import financials_store as fs
 from sources import factor_snapshot
+from sources import analyst_consensus
 
 TABLE = "dcf_screener"
 
@@ -68,9 +69,29 @@ def _load_set_data_map(base_dir):
     return out
 
 
-def compute_dcf_for_symbol(sym, entry, y_payload, snap_factors, is_financial, assumptions=None):
+def _analyst_growth_pct(ac):
+    """ประมาณการอัตราโตจากนักวิเคราะห์ (Yahoo) สำหรับใช้เป็น g ปี1-3 แทน CAGR อดีต —
+    เลือก long-term growth (LTG) ก่อนเพราะเหมาะกับ DCF หลายปีที่สุด แต่ coverage แทบ
+    เป็นศูนย์ (Yahoo แทบไม่ส่ง) → fallback ประมาณการโต EPS ปีหน้า · clamp [-50,200]
+    เท่าขอบเขต g13 override · คืน None ถ้าไม่มีข้อมูลนักวิเคราะห์เลย"""
+    if not ac:
+        return None
+    g = ac.get("ltg_pct")
+    if g is None:
+        g = ac.get("eps_growth_next_y")
+    if g is None:
+        return None
+    return max(-50.0, min(200.0, float(g)))
+
+
+def compute_dcf_for_symbol(sym, entry, y_payload, snap_factors, is_financial,
+                           assumptions=None, analyst_growth=None):
     """คำนวณ DCF Model เต็มรูปแบบ 1 ตัว — คืน (result_dict, error_reason)
     error_reason ไม่ None แปลว่าคำนวณไม่ได้ (result_dict มีแค่ symbol/name/sector ให้ UI แสดง)
+
+    analyst_growth: อัตราโต %/ปี จากนักวิเคราะห์ (ดู _analyst_growth_pct) — ใช้แทน rev_cagr
+    สำหรับ g ปี1-3 เฉพาะเมื่อ assumptions['use_analyst_growth'] เป็น True และช่อง g13
+    ไม่ได้ override · None = หุ้นตัวนี้ไม่มีนักวิเคราะห์ตาม (ตกกลับไป rev_cagr/default ตามเดิม)
 
     assumptions: dict จาก resolve_assumptions() เสมอ — แบ่ง 2 กลุ่ม:
     - rf_pct/beta/erp_pct/terminal_growth_pct/years: มีค่าเริ่มต้นเสมอ (ไม่มี "ค่าจริงของหุ้น"
@@ -114,7 +135,15 @@ def compute_dcf_for_symbol(sym, entry, y_payload, snap_factors, is_financial, as
 
     snap_factors = snap_factors or {}
     rev_cagr = snap_factors.get("rev_cagr")
-    g13_pct_used = ov_g13 if ov_g13 is not None else (rev_cagr if rev_cagr is not None else DEFAULT_G13_PCT)
+    use_analyst = bool(a.get("use_analyst_growth"))
+    if ov_g13 is not None:
+        g13_pct_used, g_source = ov_g13, "override"
+    elif use_analyst and analyst_growth is not None:
+        g13_pct_used, g_source = analyst_growth, "analyst"
+    elif rev_cagr is not None:
+        g13_pct_used, g_source = rev_cagr, "rev_cagr"
+    else:
+        g13_pct_used, g_source = DEFAULT_G13_PCT, "default"
     g45_pct_used = ov_g45 if ov_g45 is not None else g13_pct_used * 0.6
     g13 = g13_pct_used / 100
     g45 = g45_pct_used / 100
@@ -174,7 +203,7 @@ def compute_dcf_for_symbol(sym, entry, y_payload, snap_factors, is_financial, as
     base.update({
         "price": price, "intrinsic": round(intrinsic, 2), "upside_pct": round(upside, 2),
         "wacc_pct": round(wacc * 100, 2), "g13_pct": round(g13 * 100, 2),
-        "as_of": forecast.get("as_of"),
+        "g_source": g_source, "as_of": forecast.get("as_of"),
     })
     return base, None
 
@@ -222,6 +251,10 @@ def resolve_assumptions(raw):
         "erp_pct": _f("erp_pct", 0, 20, ERP_PCT),
         "terminal_growth_pct": _f("terminal_growth_pct", -5, 10, TERMINAL_GROWTH_PCT),
         "years": years,
+        # ใช้ประมาณการโตของนักวิเคราะห์ (Yahoo) แทน CAGR อดีต สำหรับ g ปี1-3 — เฉพาะหุ้น
+        # ที่มีนักวิเคราะห์ตาม (~40%) ตัวอื่นตกกลับไป rev_cagr/default ตามเดิม · ช่อง g13
+        # ที่กรอกเอง (override ทั้งตลาด) ยังชนะเสมอ
+        "use_analyst_growth": bool(raw.get("use_analyst_growth")),
         # override ทั้งตลาด — None = ใช้ค่าจริงของหุ้นนั้น
         "g13_pct": _opt_f("g13_pct", -50, 200),
         "g45_pct": _opt_f("g45_pct", -50, 200),
@@ -243,6 +276,9 @@ def build_snapshot(base_dir, callback=None, assumptions=None):
     set_map = _load_set_data_map(base_dir)
     financial_syms = factor_snapshot._financial_sector_symbols(base_dir)
     snap_map = {r["symbol"]: r for r in factor_snapshot.get_snapshot(base_dir, is_dr=False)}
+    # ประมาณการโตนักวิเคราะห์ — โหลดครั้งเดียวเฉพาะเมื่อเปิดใช้ (อ่านจาก analyst_consensus
+    # ในตาราง financials.db ที่ sync ไว้แล้ว ไม่ยิง network) · {} ถ้ายังไม่เคย sync
+    ac_map = analyst_consensus.get_map(base_dir, "TH") if assumptions.get("use_analyst_growth") else {}
 
     syms = sorted(set_map.keys())
     total = len(syms)
@@ -253,7 +289,8 @@ def build_snapshot(base_dir, callback=None, assumptions=None):
             entry = set_map.get(sym)
             y_payload = fs.get(base_dir, sym, "yahoo", is_dr=False, con=con) if con else None
             result, error = compute_dcf_for_symbol(
-                sym, entry, y_payload, snap_map.get(sym), sym in financial_syms, assumptions)
+                sym, entry, y_payload, snap_map.get(sym), sym in financial_syms, assumptions,
+                analyst_growth=_analyst_growth_pct(ac_map.get(sym)))
             rows.append((sym, 0 if error else 1,
                          json.dumps({**result, "error": error}, ensure_ascii=False)))
             if callback and (i + 1) % 100 == 0:
