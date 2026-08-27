@@ -147,7 +147,8 @@ def compute_fair_value_for_symbol(sym, entry, snap, is_financial, assumptions=No
     roe_pct = a["roe_pct"] if a.get("roe_pct") is not None else snap.get("roe")
 
     base.update({"price": price, "coe_pct": round(r_pct, 2), "g_pct": round(g_pct, 2),
-                 "cur_pbv": snap.get("pbv_value"), "cur_pe": snap.get("pe_value")})
+                 "cur_pbv": snap.get("pbv_value"), "cur_pe": snap.get("pe_value"),
+                 "cur_ps": snap.get("ps_value")})
 
     if roe_pct is None:
         return base, "ไม่มี ROE ในงบ"

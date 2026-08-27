@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260827a">
+<link rel="stylesheet" href="static/dashboard.css?v=20260827b">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -50,8 +50,8 @@
   <button class="nav-btn" onclick="showPage('stock-rotation',this)" title="Stock Rotation — RRG รายหุ้น ไทย(DR)/US/HK/JP รวมหน้าเดียว สลับตลาดด้วยแท็บ 🇹🇭🇺🇸🇭🇰🇯🇵">🔄 Stock Rotation</button>
   <button class="nav-btn" onclick="showPage('band',this)">Val. Band</button>
   <button class="nav-btn" onclick="showPage('dcf-screener',this)" title="DCF Screener — รัน DCF Model (พยากรณ์เต็มรูปแบบ) กับหุ้นไทยทุกตัวที่คำนวณได้ ด้วยสมมติฐาน WACC/Growth ค่าเริ่มต้นเดียวกันทั้งตลาด (Beta=1.00 คงที่) เรียงตาม upside% มาก→น้อย เป็นการคัดกรองเบื้องต้น ไม่ใช่คำแนะนำซื้อ/ขาย · local-only">🎯 DCF Screener</button>
-  <button class="nav-btn" onclick="showPage('pbv-pe-screener',this)" title="Fair Value P/B·P/E — Justified P/B (ROE-based) + Justified P/E ทั้งตลาดหุ้นไทย เรียงตาม upside% เป็นตัวเติมเต็ม DCF Screener สำหรับกลุ่มการเงินที่ DCF ใช้ไม่ได้ · คัดกรองเบื้องต้น ไม่ใช่คำแนะนำซื้อ/ขาย · local-only">⚖️ Fair Value P/B·P/E</button>
-  <button class="nav-btn" onclick="showPage('growth-screener',this)" title="หุ้นโตแรงรายไตรมาส — รายได้/กำไรสุทธิ QoQ%/YoY% ทั้งตลาด SET+mai เลือกไตรมาสย้อนหลังได้ กดหัวตารางเรียงหาหุ้นโตแรงสุด (source: SET.or.th official รายไตรมาส) · local-only">🚀 หุ้นโตแรงรายไตรมาส</button>
+  <button id="nav-pbv-pe-screener-btn" class="nav-btn" onclick="showPage('pbv-pe-screener',this)" title="Fair Value P/B·P/E — Justified P/B (ROE-based) + Justified P/E ทั้งตลาดหุ้นไทย เรียงตาม upside% เป็นตัวเติมเต็ม DCF Screener สำหรับกลุ่มการเงินที่ DCF ใช้ไม่ได้ · คัดกรองเบื้องต้น ไม่ใช่คำแนะนำซื้อ/ขาย · local-only">⚖️ Fair Value P/B·P/E</button>
+  <button id="nav-growth-screener-btn" class="nav-btn" onclick="showPage('growth-screener',this)" title="หุ้นโตแรงรายไตรมาส — รายได้/กำไรสุทธิ QoQ%/YoY% ทั้งตลาด SET+mai เลือกไตรมาสย้อนหลังได้ กดหัวตารางเรียงหาหุ้นโตแรงสุด (source: SET.or.th official รายไตรมาส) · local-only">🚀 หุ้นโตแรงรายไตรมาส</button>
   <button class="nav-btn nav-btn-highlight" onclick="showPage('watchlist',this)">⭐ Watchlist</button>
   <button class="nav-btn" onclick="showPage('dr',this)">DR/DRx</button>
   <button class="nav-btn" onclick="showPage('etf',this)" title="ETF ไทย — ราคา/NAV/Premium-Discount/RS ของ ETF ที่จดทะเบียนบน SET โดยตรง (ดัชนีในประเทศ/ต่างประเทศ/ตราสารหนี้/สินค้าโภคภัณฑ์/Leveraged-Inverse)">🏦 ETF ไทย<span id="etf-new-badge" class="etf-new-badge" style="display:none"></span></button>
@@ -4280,6 +4280,9 @@
     <br><button class="filter-btn" onclick="document.getElementById('npm-delta-note-modal').classList.add('open')"
       style="margin-top:6px;font-size:10px;padding:2px 8px"
       title="วิธีอ่านค่า Δ NPM แบบละเอียด พร้อมตัวอย่างง่ายๆ">📖 วิธีอ่านค่า Δ NPM (+15.5pp / −14.9pp)</button>
+    <button class="filter-btn" onclick="document.getElementById('ps-note-modal').classList.add('open')"
+      style="margin-top:6px;font-size:10px;padding:2px 8px"
+      title="P/S คืออะไร เท่าไหร่ถึงถูก/แพง มีประโยชน์ยังไง">📖 วิธีอ่านค่า P/S</button>
   </div>
 
   <div class="card" style="padding:10px 16px;margin-bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
@@ -5321,6 +5324,93 @@
   </div>
 </div>
 
+<!-- P/S NOTE MODAL — วิธีอ่านค่าคอลัมน์ "P/S" ในหน้า 🚀 หุ้นโตแรงรายไตรมาส · ปุ่มเปิดอยู่ท้าย
+     .page-sub ของ #page-growth-screener คู่กับปุ่ม Δ NPM — ตรรกะจริง: get_qpl_growth_screener
+     (financials_store.py, field "ps" = mkt_cap ปัจจุบัน ÷ revenue_ttm) -->
+<div class="modal-overlay" id="ps-note-modal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-header">
+      <div class="modal-title">📖 วิธีอ่านค่า P/S</div>
+      <div class="modal-abbr">Price-to-Sales — มูลค่าตลาด ÷ รายได้ TTM</div>
+      <button class="modal-close" onclick="document.getElementById('ps-note-modal').classList.remove('open')">✕</button>
+    </div>
+    <div class="modal-body" style="font-size:12px;line-height:1.65;color:var(--text);padding:14px 20px">
+
+      <div style="font-weight:700;margin-bottom:6px">P/S แบบบ้านๆ</div>
+      <div style="margin-bottom:6px">
+        <b>P/S (Price-to-Sales) = มูลค่าตลาดทั้งบริษัท ÷ รายได้ 4 ไตรมาสล่าสุด (TTM)</b>
+        แปลว่า "จ่าย <b>กี่บาท</b> เพื่อซื้อยอดขาย <b>1 บาท</b>" ของบริษัทนี้
+      </div>
+      <div style="color:var(--text2);margin-bottom:12px">
+        เช่น มูลค่าตลาด 20,000 ล้าน ÷ รายได้ TTM 10,000 ล้าน = P/S <b>2.0 เท่า</b> → จ่าย 2 บาท
+        ต่อยอดขาย 1 บาทที่บริษัทนี้ทำได้ในรอบปีล่าสุด
+      </div>
+
+      <div style="font-weight:700;margin-bottom:6px">เท่าไหร่ถึงถูก/แพง</div>
+      <div style="margin-bottom:8px">
+        ไม่มีเลขตายตัวที่ใช้ได้ทุกธุรกิจ — แต่พอเป็น<b>แนวคร่าวๆ</b>ได้ดังนี้:
+      </div>
+      <table class="tbl" style="width:100%;margin-bottom:10px">
+        <thead><tr><th>P/S</th><th>ความหมายคร่าวๆ</th></tr></thead>
+        <tbody>
+          <tr><td class="green" style="font-weight:700">&lt; 1 เท่า</td><td>ถูก — แต่ต้องเช็คก่อนว่า "ถูกเพราะตลาดมองข้าม" หรือ "ถูกเพราะเป็นธุรกิจ margin ต่ำโดยธรรมชาติ" (ดูหัวข้อถัดไป)</td></tr>
+          <tr><td style="font-weight:700">1–2 เท่า</td><td>กลางๆ — ปกติของหุ้นทั่วไปที่ไม่ได้มี margin สูงหรือต่ำผิดปกติ</td></tr>
+          <tr><td style="font-weight:700">2–4 เท่า</td><td>เริ่มมีพรีเมียม — ตลาดคาดหวังการเติบโตต่อเนื่อง</td></tr>
+          <tr><td class="yellow" style="font-weight:700">4–8 เท่า</td><td>แพง — ต้องโตแรงจริงต่อเนื่องหลายปีถึงจะ "คุ้ม" กับราคาที่จ่าย</td></tr>
+          <tr><td class="red" style="font-weight:700">&gt; 8–10 เท่า</td><td>เก็งกำไรจัด — ตลาดฝากความหวังไว้สูงมาก พลาดนิดเดียว (โตช้าลง/มาร์จิ้นหด) ราคาร่วงแรงได้</td></tr>
+        </tbody>
+      </table>
+      <div style="color:var(--text2);margin-bottom:12px">
+        ⚠️ <b>เทียบข้ามอุตสาหกรรมตรงๆ ไม่ได้</b> — ธุรกิจ margin ต่ำโดยธรรมชาติ (ค้าส่ง/เทรดดิ้งน้ำมัน/
+        ตัวแทนจำหน่าย) จะมี P/S ต่ำติดดินตลอดแม้ราคาแพงเกินพื้นฐานแล้วก็ตาม ส่วนธุรกิจ margin สูง
+        (ซอฟต์แวร์/ยา/แบรนด์แข็งแรง) มักเทรดที่ P/S สูงกว่าตารางนี้ทั้งกระดานเป็นเรื่องปกติ —
+        <b>ควรเทียบกับคู่แข่งใน sector เดียวกัน หรือค่าเฉลี่ยในอดีตของหุ้นตัวเดียวกันเอง</b> ดีกว่าเทียบ
+        กับเลขลอยๆ ในตารางนี้
+      </div>
+
+      <div style="font-weight:700;margin-bottom:6px">มี P/E อยู่แล้ว ทำไมต้องดู P/S ด้วย</div>
+      <ol style="margin:0 0 12px 18px;padding:0">
+        <li style="margin-bottom:8px">
+          <b>ใช้ได้แม้บริษัทขาดทุน</b> — P/E คำนวณไม่ได้เมื่อกำไรติดลบ (หรือได้ค่าไร้ความหมาย)
+          แต่รายได้แทบไม่มีทางติดลบ P/S เลยยังบอกได้ว่าตลาดให้มูลค่าธุรกิจนี้แพง/ถูกแค่ไหน
+          — มีประโยชน์มากกับหุ้นที่เพิ่งพลิกขาดทุน/ลงทุนขยายกิจการหนักจนกำไรบาง
+        </li>
+        <li style="margin-bottom:8px">
+          <b>รายได้ตกแต่งบัญชียากกว่ากำไรสุทธิ</b> — กำไรโดนกระทบง่ายจากรายการที่ไม่ใช่ธุรกิจหลัก
+          (ขายสินทรัพย์ กำไร/ขาดทุนอัตราแลกเปลี่ยน ค่าเผื่อหนี้สูญ กลับรายการภาษี ฯลฯ ดู
+          ตัวอย่างในโมดัล "วิธีอ่านค่า Δ NPM") ส่วนรายได้จากการขายสินค้า/บริการจริงเห็นภาพตรงกว่า
+        </li>
+        <li>
+          <b>จับหุ้น "โตแรงแต่กำไรยังไม่โตตาม" ได้</b> — บริษัทที่กำลังขยายสาขา/ลงทุนหนักมักมีมาร์จิ้น
+          บีบชั่วคราว P/E จะดูแพงหรือคำนวณไม่ได้ แต่ P/S ยังสะท้อนว่าตลาดให้ราคาเทียบกับยอดขายจริง
+          เท่าไหร่ — เห็นภาพว่า "ธุรกิจหลัก" ถูก/แพง แยกจากผลกระทบชั่วคราวที่มาร์จิ้น
+        </li>
+      </ol>
+
+      <div style="font-weight:700;margin-bottom:6px">ใช้คู่กับคอลัมน์อื่นในหน้านี้ยังไง</div>
+      <table class="tbl" style="width:100%;margin-bottom:6px">
+        <thead><tr><th>ดูคู่กับ</th><th>อยากเห็น</th></tr></thead>
+        <tbody>
+          <tr><td>รายได้ YoY / QoQ</td><td>โตต่อเนื่อง ไม่ใช่ยอดขายเยอะเฉยๆ แบบทรงตัว</td></tr>
+          <tr><td>NPM</td><td>เช็คว่า P/S ต่ำเพราะธุรกิจ margin ต่ำโดยธรรมชาติ (ปกติ) หรือเพราะตลาดมองข้าม (โอกาส)</td></tr>
+          <tr><td>Δ NPM</td><td>มาร์จิ้นกำลังขยายไหม — ถ้าขยาย + P/S ยังต่ำเทียบ sector ตัวเอง = น่าสนใจ (ตลาดอาจยังตามไม่ทัน)</td></tr>
+          <tr><td>ต่อเนื่อง</td><td>โตจริงหลายไตรมาสติด ไม่ใช่พุ่งไตรมาสเดียวแล้วโรย</td></tr>
+        </tbody>
+      </table>
+      <div style="color:var(--text2);margin-bottom:4px">
+        รูปแบบที่น่าสนใจที่สุด: <b>รายได้โตต่อเนื่อง + NPM ขยาย (Δ NPM เขียว) + P/S ยังต่ำเทียบคู่แข่ง
+        กลุ่มเดียวกัน</b> — แปลว่าธุรกิจกำลังดีขึ้นจริง แต่ตลาดยังไม่ได้ปรับราคาตามการเติบโตเต็มที่
+      </div>
+
+      <div style="color:var(--text2);font-size:11px;border-top:1px solid var(--border);padding-top:8px">
+        ⚠️ ตัวเศษ (มูลค่าตลาด) เป็นราคา<b>ปัจจุบัน</b>เสมอ แม้กดปุ่ม ◀▶ เลื่อนไปดูไตรมาสเก่า — ต่างจาก
+        รายได้/กำไร/Δ NPM ในตารางเดียวกันที่เป็นข้อมูล ณ ไตรมาสนั้นล้วนๆ ดังนั้น P/S ที่เห็นตอนเลื่อนดู
+        ไตรมาสเก่าคือ "เอาราคาวันนี้ หารรายได้ย้อนหลัง" ไม่ใช่ P/S จริง ณ ตอนนั้น
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- MONTHLY REMINDER: อัปเดต P/E & P/BV (Table_PE.xls / Table_PBV.xls) -->
 <div class="modal-overlay" id="pe-reminder-modal" onclick="if(event.target===this)dismissPeReminder()">
   <div class="modal" style="max-width:420px">
@@ -5464,6 +5554,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260827h"></script>
+<script src="static/dashboard.js?v=20260827j"></script>
 </body>
 </html>

@@ -4749,6 +4749,8 @@ const PBV_PE_SCR_COLS = [
   { key: 'jpe_upside_pct', label: 'Upside P/E', align: 'right' },
   { key: 'roe_pct', label: 'ROE', align: 'right' },
   { key: 'coe_pct', label: 'r (CoE)', align: 'right' },
+  { key: 'cur_ps', label: 'P/S', align: 'right',
+    tip: 'Price-to-Sales ปัจจุบัน (มูลค่าตลาด ÷ รายได้ TTM) — ข้อมูลอ้างอิงเสริมเท่านั้น ไม่มี "Justified P/S"/Fair Value คำนวณคู่ให้ (สูตร Justified ของหน้านี้อิง ROE ซึ่งผูกกับ P/B และ P/E เท่านั้น)' },
 ];
 
 function _pbvPeScrEsc(s) {
@@ -4911,7 +4913,7 @@ function renderPbvPeScreener() {
     if (r.error) {
       return `<tr style="opacity:.55">${symCell}
         <td>${_pbvPeScrEsc(r.name || '')}</td>
-        <td colspan="7" style="color:var(--text2)">— ${_pbvPeScrEsc(r.error)}</td></tr>`;
+        <td colspan="8" style="color:var(--text2)">— ${_pbvPeScrEsc(r.error)}</td></tr>`;
     }
     return `<tr>${symCell}
       <td>${_pbvPeScrEsc(r.name || '')}</td>
@@ -4922,11 +4924,13 @@ function renderPbvPeScreener() {
       ${_pbvPeScrUpCell(r.jpe_upside_pct)}
       <td style="text-align:right">${r.roe_pct != null ? r.roe_pct.toFixed(1) + '%' : '—'}</td>
       <td style="text-align:right">${r.coe_pct != null ? r.coe_pct.toFixed(2) + '%' : '—'}</td>
+      <td style="text-align:right">${_scrFmtX(r.cur_ps)}</td>
     </tr>`;
   }).join('');
   const headHtml = PBV_PE_SCR_COLS.map(c => {
     const arrow = _pbvPeScrSort.key === c.key ? (_pbvPeScrSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
-    return `<th style="text-align:${c.align};cursor:pointer;user-select:none;white-space:nowrap" onclick="_pbvPeScrSetSort('${c.key}')" title="กดเรียงลำดับ">${c.label}${arrow}</th>`;
+    const title = c.tip ? `${c.tip} (กดเรียงลำดับ)` : 'กดเรียงลำดับ';
+    return `<th style="text-align:${c.align};cursor:pointer;user-select:none;white-space:nowrap" onclick="_pbvPeScrSetSort('${c.key}')" title="${_pbvPeScrEsc(title)}">${c.label}${arrow}</th>`;
   }).join('');
   box.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%">
     <thead><tr>${headHtml}</tr></thead>
@@ -4944,7 +4948,7 @@ function exportPbvPeScreenerCsv() {
   };
   const headers = ['Symbol', 'Name', 'Sector', 'Is financial', 'Price', 'BVPS', 'EPS',
     'Justified P/B x', 'Fair (P/B)', 'Upside P/B %', 'Justified P/E x', 'Fair (P/E)', 'Upside P/E %',
-    'ROE %', 'r (CoE) %', 'g %', 'Current P/BV', 'Current P/E', 'Error'];
+    'ROE %', 'r (CoE) %', 'g %', 'Current P/BV', 'Current P/E', 'Current P/S', 'Error'];
   const lines = [headers.map(csvEsc).join(',')];
   rows.forEach(r => {
     lines.push([
@@ -4952,7 +4956,8 @@ function exportPbvPeScreenerCsv() {
       r.price ?? '', r.bvps ?? '', r.eps ?? '',
       r.jpb_x ?? '', r.jpb_fair ?? '', r.jpb_upside_pct ?? '',
       r.jpe_x ?? '', r.jpe_fair ?? '', r.jpe_upside_pct ?? '',
-      r.roe_pct ?? '', r.coe_pct ?? '', r.g_pct ?? '', r.cur_pbv ?? '', r.cur_pe ?? '', r.error || '',
+      r.roe_pct ?? '', r.coe_pct ?? '', r.g_pct ?? '', r.cur_pbv ?? '', r.cur_pe ?? '', r.cur_ps ?? '',
+      r.error || '',
     ].map(csvEsc).join(','));
   });
   const csv = '﻿' + lines.join('\r\n');   // BOM กัน Excel เปิดภาษาไทยเพี้ยน
@@ -4997,6 +5002,8 @@ const GROWTH_SCR_COLS = [
     tip: 'จำนวนไตรมาสติดต่อกัน (QoQ) ที่กำไร/รายได้เป็นบวกและโตกว่าไตรมาสก่อนหน้า — แยกหุ้นโตต่อเนื่องจริงจากโตแค่ไตรมาสเดียวแบบสุ่ม/ฤดูกาล หรือขาดทุนหดตัวลงเรื่อยๆ' },
   { key: 'ocf_ni_pct', label: 'OCF/NI', align: 'right',
     tip: 'เงินสดจากการดำเนินงาน (OCF) หารกำไรสุทธิ — <50% หรือติดลบ = 🚩 กำไรอาจไม่มีเงินสดหนุนจริง (ลูกหนี้ค้างเยอะ) จาก SET official cash_flow เท่าที่เคย sync สะสมไว้แล้ว (งวดเก่ากว่านั้นโชว์ "—")' },
+  { key: 'ps', label: 'P/S', align: 'right',
+    tip: 'Price-to-Sales = มูลค่าตลาด (ราคาปัจจุบัน) ÷ รายได้ TTM ของไตรมาสที่กำลังดู — ใช้ได้แม้หุ้นขาดทุน (ต่างจาก PE) แต่ถ้าเลื่อนไปดูไตรมาสเก่า ตัวเศษยังเป็นราคา ณ ปัจจุบันเสมอ ไม่ใช่ราคา ณ ตอนนั้น' },
 ];
 
 function _growthScrEsc(s) {
@@ -5258,6 +5265,7 @@ function renderGrowthScreener() {
       <td style="text-align:right">${_growthScrNpmDeltaCell(r)}</td>
       <td style="text-align:right">${_growthScrStreakCell(r)}</td>
       <td style="text-align:right">${_growthScrOcfCell(r)}</td>
+      <td style="text-align:right">${_scrFmtX(r.ps)}</td>
     </tr>`).join('');
   const headHtml = GROWTH_SCR_COLS.map(c => {
     const arrow = _growthScrSort.key === c.key ? (_growthScrSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
@@ -5279,7 +5287,7 @@ function exportGrowthScreenerCsv() {
   };
   const headers = ['Symbol', 'Name', 'Sector', 'Revenue', 'Revenue QoQ %', 'Revenue YoY %',
     'Net Profit', 'Profit QoQ %', 'Profit YoY %', 'NPM %', 'NPM Δ YoY (pp)', 'NPM Δ QoQ (pp)',
-    'Revenue Streak (Q)', 'Profit Streak (Q)', 'OCF', 'OCF/NI %', 'Quarter'];
+    'Revenue Streak (Q)', 'Profit Streak (Q)', 'OCF', 'OCF/NI %', 'P/S', 'Quarter'];
   const lines = [headers.map(csvEsc).join(',')];
   rows.forEach(r => {
     lines.push([
@@ -5287,7 +5295,7 @@ function exportGrowthScreenerCsv() {
       r.revenue ?? '', r.revenue_qoq ?? '', r.revenue_yoy ?? '',
       r.net_profit ?? '', r.profit_qoq ?? '', r.profit_yoy ?? '', r.npm ?? '',
       r.npm_change_yoy ?? '', r.npm_change_qoq ?? '', r.revenue_streak ?? '', r.profit_streak ?? '',
-      r.ocf ?? '', r.ocf_ni_pct ?? '',
+      r.ocf ?? '', r.ocf_ni_pct ?? '', r.ps ?? '',
       _growthScrQuarter || '',
     ].map(csvEsc).join(','));
   });

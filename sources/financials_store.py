@@ -3062,7 +3062,7 @@ def _qpl_stock_growth_rows(parsed, target):
 
 
 def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_by_symbol=None,
-                             cashflow_parsed=None):
+                             cashflow_parsed=None, mktcap_by_symbol=None):
     """ตารางเติบโต QoQ/YoY รายหุ้นทั้งตลาดแบบแบน (ไม่จัดกลุ่ม sector ต่างจาก get_sector_qpl_compare)
     เลือกไตรมาสย้อนหลังได้ผ่าน target_quarter ("YYYY-Q" string) — ไม่ผูกกับไตรมาสล่าสุดตายตัวเหมือน
     get_sector_qpl_compare เพื่อให้กดดูไตรมาสอื่นได้ (เมนู "หุ้นโตแรงรายไตรมาส")
@@ -3080,9 +3080,15 @@ def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_
     field ocf_ni_ratio ของ compute_earnings_quality (อัตราส่วนดิบจาก TTM เช่น 1.2 คนละหน่วย/
     คนละช่วงเวลากับตัวนี้ที่เป็น % จากไตรมาสเดียว เช่น 120.0)
 
+    mktcap_by_symbol: {symbol: mkt_cap} จาก set_data.json (ราคาสด ณ วันที่ sync ล่าสุด — ไม่ใช่
+    ราคา ณ วันปิดงวด target_quarter) ใช้แนบ "ps" = mkt_cap ÷ revenue_ttm (คนละที่มากับ compute_ps
+    ที่ผูก market cap รายวันกับ TTM ตามช่วงเวลาจริง — ตัวนี้ง่ายกว่าเพราะไม่มี market cap ย้อนหลัง
+    ให้ใช้ในหน้านี้ จึงเป็น "P/S ราคาปัจจุบัน" เทียบ TTM ของไตรมาสที่เลือกดูเสมอ แม้เลื่อนไปดูไตรมาส
+    เก่า — ไม่ใส่ = ไม่มี field นี้ในผลลัพธ์
+
     คืน {"quarter": "YYYY-Q" หรือ None, "available_quarters": [...ทั้งหมดที่มีข้อมูลจริง เรียง
     ใหม่->เก่า...], "stocks": [...]} โครง stock เหมือน _qpl_stock_growth_rows + "sector" ต่อแถว
-    (ไม่มี sector ใน sector_by_symbol -> "อื่นๆ")
+    (ไม่มี sector ใน sector_by_symbol -> "อื่นๆ") + "ps" ถ้าส่ง mktcap_by_symbol มา
 
     กรอง key ไตรมาสที่ "วันสิ้นงวดยังไม่ถึงวันนี้" ทิ้งจาก available_quarters เสมอ — พบจริงว่าหุ้น
     ปีบัญชีไม่ตรงปฏิทิน (BTS/VGI/STANLY/TIF1 ฯลฯ ดู qpl-quarterly-report-view memory) บางตัวยังมี
@@ -3125,6 +3131,10 @@ def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_
                 ocf is not None and net is not None and net >= _GROWTH_SCR_MIN_BASE) else None
             if ocf is not None:
                 has_ocf = True
+        if mktcap_by_symbol is not None:
+            mc = mktcap_by_symbol.get(row["symbol"])
+            rev_ttm = row.get("revenue_ttm")
+            row["ps"] = round(mc / rev_ttm, 2) if (mc and rev_ttm and rev_ttm > 0) else None
 
     return {
         "quarter": f"{target[0]}-{target[1]}",

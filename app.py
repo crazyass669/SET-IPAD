@@ -4603,6 +4603,7 @@ def quarterly_growth_screener():
     def _compute_parsed():
         sector_by_symbol = {}
         name_by_symbol = {}
+        mktcap_by_symbol = {}
         if os.path.exists(DATA_FILE):
             try:
                 with open(DATA_FILE, encoding="utf-8") as f:
@@ -4611,6 +4612,8 @@ def quarterly_growth_screener():
                             sector_by_symbol[s["symbol"]] = s["sector"]
                         if s.get("name"):
                             name_by_symbol[s["symbol"]] = s["name"]
+                        if s.get("mkt_cap") is not None:
+                            mktcap_by_symbol[s["symbol"]] = s["mkt_cap"]
             except Exception:
                 pass
         parsed = financials_store._load_set_qpl_all(BASE_DIR, sector_by_symbol)
@@ -4619,7 +4622,8 @@ def quarterly_growth_screener():
         cashflow_parsed = financials_store._load_set_qpl_all(
             BASE_DIR, sector_by_symbol, source="set_cashflow")
         return {"parsed": parsed, "sector_by_symbol": sector_by_symbol,
-                "name_by_symbol": name_by_symbol, "cashflow_parsed": cashflow_parsed}
+                "name_by_symbol": name_by_symbol, "cashflow_parsed": cashflow_parsed,
+                "mktcap_by_symbol": mktcap_by_symbol}
 
     # try/except ครอบทั้งก้อน เหมือน /api/sector-compare ด้านบน — กัน error ที่ไม่คาดคิดหลุดเป็น
     # หน้า 500 HTML ของ Flask ที่ frontend parse JSON ไม่ได้
@@ -4629,7 +4633,8 @@ def quarterly_growth_screener():
         quarter = request.args.get("quarter") or None
         result = financials_store.get_qpl_growth_screener(
             cached["parsed"], cached["sector_by_symbol"], target_quarter=quarter,
-            name_by_symbol=cached["name_by_symbol"], cashflow_parsed=cached["cashflow_parsed"])
+            name_by_symbol=cached["name_by_symbol"], cashflow_parsed=cached["cashflow_parsed"],
+            mktcap_by_symbol=cached["mktcap_by_symbol"])
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": f"โหลดข้อมูลเติบโตรายไตรมาสล้มเหลว: {e}"}), 500
@@ -7051,6 +7056,13 @@ def _fetch_indices_tv(existing: dict, full_refresh: bool = False) -> dict:
 
     failed = len(failed_syms)
     stats = {"fetched": fetched, "failed": failed, "total": len(all_syms)}
+
+    # ลบดัชนีที่ถูกถอดออกจาก INDEX_INFO แล้ว (เช่น ^MINE.BK ที่หุ้นตัวสุดท้ายใน sector
+    # เพิกถอนไปหมด) — เดิม result เริ่มจาก dict(existing) แล้ว fetch loop ข้างบนวิ่งตาม
+    # INDEX_INFO ปัจจุบันเท่านั้น ทำให้ตัวที่ถอดออกไม่เคยถูกอัปเดต "และ" ไม่เคยถูกลบออก
+    # ค้างเป็นค่าเก่าแช่แข็งถาวรในไฟล์ (พบ ^MINE.BK ค้างตั้งแต่ 2026-08-01 บนเว็บมือถือ/ไอแพด)
+    for stale_sym in [s for s in result if s not in INDEX_INFO]:
+        del result[stale_sym]
 
     # ดึงไม่ได้เลยสักตัว (TV ล่ม) → ไม่เขียนไฟล์/ไม่ประทับเวลาใหม่
     # เพื่อไม่ให้ข้อมูลเก่าดูเหมือนเพิ่งอัปเดต
