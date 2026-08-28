@@ -7096,7 +7096,8 @@ function _rsi(arr, period=14) {
 
 // ============================================================
 // MONTHLY REMINDER — เตือนอัปเดต P/E & P/BV (Table_PE.xls/Table_PBV.xls)
-// ตั้งแต่วันที่ 10 ของเดือน จนกว่าจะกดอัปเดตจริง (เช็คจาก mtime ของ set_market_stats.json)
+// ตั้งแต่วันที่ 10 ของเดือน จนกว่าเดือนล่าสุดใน set_market_stats.json จะตามทันเดือนก่อนหน้า
+// (เผื่อ lag การเผยแพร่ของ SET ~1 เดือนเป็นปกติ ไม่ใช่เทียบกับเดือนปัจจุบันตรงๆ)
 // เตือนสูงสุดวันละครั้งต่อ browser (ปิดแล้วเงียบจนถึงพรุ่งนี้)
 // ============================================================
 function _todayStr() {
@@ -7116,9 +7117,13 @@ async function checkPeReminder() {
   try {
     const r = await fetch('/api/market-stats-meta');
     const d = await r.json();
-    const curYM = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    // SET เผยแพร่ P/E-P/BV รายเดือนช้ากว่าเดือนจริงเสมอ ~1 เดือน (เช่น ก.ย. เพิ่งจะมี
+    // ข้อมูลของ ส.ค. ให้โหลด) เดือนล่าสุดที่ "ควรจะมี" คือเดือนก่อนหน้าปัจจุบัน ไม่ใช่
+    // เดือนปัจจุบัน — เทียบกับเดือนปัจจุบันตรงๆ จะเตือนผิดทุกเดือนทั้งที่ข้อมูลสดอยู่แล้ว
+    const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const expectedYM = `${prevMonth.getFullYear()}-${String(prevMonth.getMonth()+1).padStart(2,'0')}`;
     const updatedYM = d.updated_at ? d.updated_at.slice(0, 7) : null;
-    if (updatedYM === curYM) return; // อัปเดตเดือนนี้ไปแล้ว
+    if (updatedYM && updatedYM >= expectedYM) return; // มีข้อมูลของเดือนก่อนหน้าแล้ว (หรือใหม่กว่า)
     document.getElementById('pe-reminder-modal').classList.add('open');
   } catch (e) { /* เงียบ — ไม่ใช่ฟีเจอร์หลัก */ }
 }
