@@ -4430,7 +4430,7 @@ function _mtRenderStockGrowthTable(containerId, field) {
     <thead><tr><th></th><th>หุ้น</th><th>Sector</th><th class="r">โต</th></tr></thead>
     <tbody>${rows.map((s, i) => `<tr>
       <td>${_mtMedal(i)}</td>
-      <td><b class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</b></td>
+      <td><b class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</b>${tvLink(s.symbol)}</td>
       <td class="text2">${s.sector}</td>
       <td class="r">${pct(s[field], 1)}</td>
     </tr>`).join('')}</tbody></table>`;
@@ -4464,7 +4464,7 @@ function _mtRenderTurnaroundTable(containerId, mode) {
     <thead><tr><th></th><th>หุ้น</th><th>Sector</th><th class="r">ไตรมาสก่อน</th><th class="r">ไตรมาสนี้</th></tr></thead>
     <tbody>${rows.map((s, i) => `<tr>
       <td>${_mtMedal(i)}</td>
-      <td><b class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</b></td>
+      <td><b class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</b>${tvLink(s.symbol)}</td>
       <td class="text2">${s.sector}</td>
       <td class="r red">${thbFmt(s.prior)}</td>
       <td class="r green">${thbFmt(s.net_profit)}</td>
@@ -4669,7 +4669,7 @@ function renderDcfScreener() {
   const rowsHtml = rows.map(r => {
     if (r.error) {
       return `<tr style="opacity:.55">
-        <td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a></td>
+        <td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a>${tvLink(r.symbol)}</td>
         <td>${_dcfScrEsc(r.name || '')}</td>
         <td colspan="5" style="color:var(--text2)">— ${_dcfScrEsc(r.error)}</td>
       </tr>`;
@@ -4680,7 +4680,7 @@ function renderDcfScreener() {
     // เตือนแทนการซ่อน (ยังอยากให้เห็นแถวไว้เผื่ออยากตรวจสอบเอง)
     const extreme = Math.abs(up) > 300;
     return `<tr>
-      <td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a></td>
+      <td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a>${tvLink(r.symbol)}</td>
       <td>${_dcfScrEsc(r.name || '')}</td>
       <td style="text-align:right">${r.price != null ? r.price.toFixed(2) : '—'}</td>
       <td style="text-align:right">${r.intrinsic != null ? r.intrinsic.toFixed(2) : '—'}</td>
@@ -4909,7 +4909,7 @@ function renderPbvPeScreener() {
 
   const fin = r => r.is_financial ? ' <span title="กลุ่มการเงิน — Justified P/B เหมาะกับกลุ่มนี้เป็นพิเศษ">🏦</span>' : '';
   const rowsHtml = rows.map(r => {
-    const symCell = `<td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a>${fin(r)}</td>`;
+    const symCell = `<td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a>${tvLink(r.symbol)}${fin(r)}</td>`;
     if (r.error) {
       return `<tr style="opacity:.55">${symCell}
         <td>${_pbvPeScrEsc(r.name || '')}</td>
@@ -5277,7 +5277,7 @@ function renderGrowthScreener() {
   if (!rows.length) { box.innerHTML = '<div class="empty">ไม่พบหุ้นตรงเงื่อนไข</div>'; return; }
 
   const rowsHtml = rows.map(r => `<tr>
-      <td><b class="sym-link" onclick="_growthScrOpenSymbol('${r.symbol}')">${r.symbol}</b>
+      <td><b class="sym-link" onclick="_growthScrOpenSymbol('${r.symbol}')">${r.symbol}</b>${tvLink(r.symbol)}
         ${r.name ? `<div class="text2" style="font-size:10px">${_growthScrEsc(r.name)}</div>` : ''}</td>
       <td class="text2">${_growthScrEsc(r.sector || '')}</td>
       <td style="text-align:right">${_growthScrThb(r.revenue)}</td>
@@ -5490,7 +5490,7 @@ function setHedgeTab(tab, btn) {
   document.getElementById('hedge-view-overlap').style.display  = tab === 'overlap'  ? '' : 'none';
   document.getElementById('hedge-view-heatmap').style.display  = tab === 'heatmap'  ? '' : 'none';
   document.getElementById('hedge-view-soldout').style.display  = tab === 'soldout'  ? '' : 'none';
-  document.getElementById('hedge-detail').style.display = 'none';
+  closeHedgeDetailModal();
   renderHedgeActiveTab();
 }
 
@@ -5568,7 +5568,7 @@ function renderHedgeSoldOut() {
       : `<span style="color:#d1242f">ไม่มีใครในกลุ่มที่เลือกถืออยู่แล้ว</span>`;
     return `<tr>
       <td style="text-align:center;color:var(--text2)">${i + 1}</td>
-      <td><a onclick="hedgeShowStock('${_hedgeEsc(e.sym)}')" style="cursor:pointer;color:var(--blue);font-weight:700">${_hedgeEsc(e.sym)}</a>
+      <td><a onclick="hedgeShowStock('${_hedgeEsc(e.sym)}')" style="cursor:pointer;color:var(--blue);font-weight:700">${_hedgeEsc(e.sym)}</a>${_usTvLink(e.sym)}
           <div style="font-size:10.5px;color:var(--text2)">${_hedgeEsc(e.name)}</div></td>
       <td style="text-align:center"><b style="font-size:15px;color:#d1242f">${e.funds.length}</b></td>
       <td style="font-size:11px">${still}</td>
@@ -5862,7 +5862,7 @@ function renderHedgeOverlap() {
       ? ' <span title="ยังไม่มีในคลัง — กดปุ่มดึงเข้าคลังเพื่อเปิด Tearsheet/เทียบเพื่อนได้" style="color:var(--yellow);font-size:10px">❓</span>' : '';
     return `<tr>
       <td style="text-align:center;color:var(--text2)">${i + 1}</td>
-      <td><a onclick="hedgeShowStock('${_hedgeEsc(e.sym)}')" style="cursor:pointer;color:var(--blue);font-weight:700">${_hedgeEsc(e.sym)}</a>${miss}
+      <td><a onclick="hedgeShowStock('${_hedgeEsc(e.sym)}')" style="cursor:pointer;color:var(--blue);font-weight:700">${_hedgeEsc(e.sym)}</a>${_usTvLink(e.sym)}${miss}
           <div style="font-size:10.5px;color:var(--text2)">${_hedgeEsc(e.name)}</div></td>
       <td style="text-align:center"><b style="font-size:15px">${e.funds.length}</b></td>
       <td style="text-align:center">${e.nBuy ? `<span style="color:#2ea043">▲ ${e.nBuy}</span>` : '<span style="color:var(--text2)">—</span>'}</td>
@@ -5934,7 +5934,7 @@ function hedgeShowManager(code) {
       const am = _hedgeActMeta(h.activity);
       const col = am.cls === 'green' ? '#2ea043' : am.cls === 'red' ? '#d1242f' : 'var(--text2)';
       return `<tr>
-        <td><a onclick="hedgeShowStock('${_hedgeEsc(h.sym)}')" style="cursor:pointer;color:var(--blue);font-weight:600">${_hedgeEsc(h.sym)}</a>
+        <td><a onclick="hedgeShowStock('${_hedgeEsc(h.sym)}')" style="cursor:pointer;color:var(--blue);font-weight:600">${_hedgeEsc(h.sym)}</a>${_usTvLink(h.sym)}
             <span style="color:var(--text2);font-size:11px"> ${_hedgeEsc(h.name)}</span></td>
         <td style="text-align:right">${h.pct != null ? h.pct.toFixed(2) + '%' : '—'}</td>
         <td style="text-align:right;color:${col}">${_hedgeEsc(h.activity || '—')}</td>
@@ -6063,14 +6063,16 @@ function hedgeOpenDetail(sym) {
 }
 
 function _hedgeRenderDetail(html) {
-  const d = document.getElementById('hedge-detail');
-  if (!d) return;
-  d.style.display = '';
-  d.innerHTML = `<div class="card" style="padding:14px 16px;margin-top:4px;border:1px solid var(--blue)">
-    <div style="text-align:right"><span onclick="document.getElementById('hedge-detail').style.display='none'"
-      style="cursor:pointer;color:var(--text2);font-size:12px">✕ ปิด</span></div>
-    ${html}</div>`;
-  d.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  const body = document.getElementById('hedge-detail-body');
+  if (!body) return;
+  body.innerHTML = html;
+  document.getElementById('hedge-detail-modal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeHedgeDetailModal() {
+  document.getElementById('hedge-detail-modal').classList.remove('open');
+  document.body.style.overflow = '';
 }
 
 function startHedgeRefresh(btnId = 'hedge-refresh-btn') {
@@ -6589,7 +6591,7 @@ function closeModal() {
   document.body.style.overflow = "";
 }
 
-document.addEventListener("keydown", e => { if(e.key==="Escape") { closeModal(); closeChartModal(); closeStockPopup(); } });
+document.addEventListener("keydown", e => { if(e.key==="Escape") { closeModal(); closeChartModal(); closeStockPopup(); closeHedgeDetailModal(); } });
 
 // ============================================================
 // STOCK QUICK POPUP
@@ -9578,10 +9580,32 @@ function _fsColHtml(r, c) {
   return v;
 }
 
+// TradingView arrow ต่อแถว Screener+ — ขึ้นกับ universe ที่เลือก: us/hk/jp (mirror) ใช้ raw
+// ticker ตรงๆ ผ่าน helper ตลาดนั้น, DR จริง (uni='dr' หรือ 'all'+is_dr) ต้อง map ผ่าน _drData
+// (r.symbol ที่นี่คือ 'sym' ของ DR universe ซึ่งเป็นคนละค่ากับ 'yf' เสมอสำหรับหุ้น HK/EU เช่น
+// sym='GIGA' แต่ yf='3986.HK' — ต้อง lookup หา yf ก่อนค่อยแปลงเป็น TradingView symbol) ถ้ายังไม่
+// เคยโหลด _drData (ยังไม่เคยเปิดหน้า DR ในเซสชันนี้) โหลด background แล้ว re-render ทับให้เอง
+function _fsSymTvLink(r, uni) {
+  if (uni === 'us') return _usTvLink(r.symbol);
+  if (uni === 'hk') return _hkTvLink(r.symbol);
+  if (uni === 'jp') return _jpTvLink(r.symbol);
+  if (r.is_dr) {
+    const d = (_drData || []).find(x => x.sym === r.symbol);
+    return d ? `<a class="tv-link" href="https://www.tradingview.com/chart/?symbol=${yfToTVSym(d.yf)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="ดูใน TradingView">↗</a>` : '';
+  }
+  return tvLink(r.symbol);   // หุ้นไทย (uni='th' หรือ 'all' ไม่ใช่ DR)
+}
+
 function renderFsTable(rows) {
   if (!rows.length) {
     document.getElementById('fs-results').innerHTML = '<div class="empty">ไม่พบหุ้นที่ตรงเงื่อนไข ลองผ่อนเกณฑ์</div>';
     return;
+  }
+  const uni = document.getElementById('fs-universe')?.value;
+  if (!_drData && (uni === 'dr' || uni === 'all') && rows.some(r => r.is_dr)) {
+    _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000).then(r => r.json())
+      .then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; renderFsTable(rows); } })
+      .catch(() => {});
   }
   // ต่อท้ายด้วยคอลัมน์เสริมจากตัวกรองที่ตั้งไว้รอบนี้ (_fsExtraCols) — field ที่ยังไม่มี
   // คอลัมน์ตายตัวใน FS_COLS จะโผล่ให้เห็น/เรียงลำดับได้โดยไม่ต้องเปิด popup รายละเอียดทีละตัว
@@ -9599,7 +9623,7 @@ function renderFsTable(rows) {
       if (c.k === 'symbol') {
         const sub = name ? `<div style="font-size:10px;color:var(--text2);font-weight:400;max-width:150px;overflow:hidden;text-overflow:ellipsis">${name}</div>` : '';
         v = `<a href="#" onclick="fsOpenDetail('${r.symbol}', ${r.is_dr ? 'true' : 'false'}); return false"
-               style="color:var(--blue);font-weight:700;text-decoration:none" title="ดูรายละเอียด ${r.symbol}">${r.symbol}</a>${sub}`;
+               style="color:var(--blue);font-weight:700;text-decoration:none" title="ดูรายละเอียด ${r.symbol}">${r.symbol}</a>${_fsSymTvLink(r, uni)}${sub}`;
       } else {
         v = _fsColHtml(r, c);
       }
@@ -9984,7 +10008,7 @@ function renderPeerTable() {
       : (highlight ? 'background:rgba(88,166,255,0.12);font-weight:700' : (dim ? 'opacity:0.55' : ''));
     const symCell = isMedian
       ? '<td style="text-align:left">MEDIAN</td>'
-      : `<td style="text-align:left"><strong class="sym-link" onclick="closePeerAndOpenChart('${r.symbol}')">${r.symbol}</strong>${dim ? ' <span title="ข้อมูลงบยังไม่ครบพอ (น้อยกว่า 4 ไตรมาส) — ตัวเลขอาจไม่นิ่ง" style="cursor:help">⚠</span>' : ''}</td>`;
+      : `<td style="text-align:left"><strong class="sym-link" onclick="closePeerAndOpenChart('${r.symbol}')">${r.symbol}</strong>${tvLink(r.symbol)}${dim ? ' <span title="ข้อมูลงบยังไม่ครบพอ (น้อยกว่า 4 ไตรมาส) — ตัวเลขอาจไม่นิ่ง" style="cursor:help">⚠</span>' : ''}</td>`;
     const mcCell = `<td>${isMedian ? '—' : fmtCap(r.mkt_cap)}</td>`;
     const tds = cols.map(c => {
       const v = r[c.k];
@@ -26872,7 +26896,7 @@ async function openValSectorModal(secName) {
         const r1dCol = r1d > 0 ? 'color:#3ab464' : r1d < 0 ? 'color:#dc503c' : '';
         const r1mCol = r1m > 0 ? 'color:#3ab464' : r1m < 0 ? 'color:#dc503c' : '';
         return `<tr>
-          <td><strong class="sym-link" onclick="closeModal();openChartModal('${s.symbol}')">${s.symbol}</strong></td>
+          <td><strong class="sym-link" onclick="closeModal();openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}</td>
           <td style="font-size:11px;color:var(--text2);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name||''}</td>
           ${valCell(s.pe, s.pe_z_sec)}
           ${valCell(s.pbv, s.pbv_z_sec)}
@@ -28456,7 +28480,7 @@ function _renderConfluenceTable() {
     const retStr = stock ? pct(stock.ret_1d) : '—';
     const sectorStr = stock?.sector || '—';
     return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer" onclick="openChartModal('${r.symbol}')">
-      <td style="padding:6px 8px;font-weight:600;color:#58a6ff">${r.symbol}${star}</td>
+      <td style="padding:6px 8px;font-weight:600;color:#58a6ff">${r.symbol}${star}${tvLink(r.symbol)}</td>
       <td style="padding:6px 8px;font-size:11px;color:#8899aa;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${sectorStr}</td>
       <td style="padding:6px 8px;text-align:right;font-size:11px">${priceStr}</td>
       <td style="padding:6px 8px;text-align:right;font-size:11px">${retStr}</td>

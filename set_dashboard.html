@@ -4106,8 +4106,19 @@
     <div id="hedge-soldout-result"></div>
   </div>
 
-  <!-- DETAIL PANEL (กอง / หุ้น) — โผล่เมื่อคลิก -->
-  <div id="hedge-detail" style="display:none"></div>
+</div>
+
+<!-- HEDGE DETAIL MODAL (กอง / หุ้น) — เดิมเป็น panel ท้ายหน้าที่ต้อง scrollIntoView ลงไปดู
+     แล้วผู้ใช้ต้อง scroll กลับขึ้นเองทุกครั้ง เปลี่ยนเป็น modal popup กลางจอแทน (ตาม
+     pattern .modal-overlay เดียวกับ sector-modal/chart-modal) -->
+<div class="modal-overlay" id="hedge-detail-modal" onclick="if(event.target===this)closeHedgeDetailModal()">
+  <div class="modal" style="max-width:900px">
+    <div class="modal-header">
+      <div class="modal-title" style="font-size:13px;font-weight:400">🐋 รายละเอียด</div>
+      <button class="modal-close" onclick="closeHedgeDetailModal()">✕</button>
+    </div>
+    <div class="modal-body" id="hedge-detail-body" style="padding:14px 20px"></div>
+  </div>
 </div>
 
 <!-- PAGE: DCF SCREENER — รัน DCF Model (พยากรณ์เต็มรูปแบบ) ทุกหุ้นไทยที่คำนวณได้ ด้วยสมมติฐาน
@@ -5561,6 +5572,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260828d"></script>
+<script src="static/dashboard.js?v=20260829b"></script>
 </body>
 </html>
