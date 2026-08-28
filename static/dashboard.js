@@ -5141,6 +5141,27 @@ function _growthScrHasAnyGrowth(row) {
     || row.npm_change_yoy != null || row.npm_change_qoq != null || row.ocf_ni_pct != null;
 }
 
+// ติ๊กบ๊อกซ์ "🚀 โตแรงจริง" — ต้องผ่านทั้ง 3 เงื่อนไขพร้อมกัน: รายได้บวกทั้ง QoQ/YoY, กำไรสุทธิบวกทั้ง
+// QoQ/YoY, และมาร์จิ้นขยาย (Δ NPM > 0) ทั้ง QoQ/YoY — ใช้ npm_change_* (จุด pp ที่มาร์จิ้นเปลี่ยน) แทน
+// npm ดิบ เพราะถ้ารายได้+กำไรบวกแล้ว NPM งวดปัจจุบันย่อมบวกอยู่แล้วเป็นปกติ (ไม่ discriminate อะไร) —
+// Δ NPM บวกคือสัญญาณเพิ่มว่าโตแบบมาร์จิ้นขยายจริง ไม่ใช่แค่โตแต่ตัดราคาแข่งจนมาร์จิ้นหด · หุ้นพลิกกำไร
+// (profit_qoq/yoy เป็น null เพราะฐานติดลบ) ไม่ผ่านเงื่อนไขนี้โดยตั้งใจ (ยังไม่มี "QoQ และ YoY" ครบสองงวด
+// เป็นบวกจริงให้เทียบ) ใช้กับแถวหลัง mask ฐานเทียบเล็กแล้ว (_growthScrMaskedRows) เหมือน hideNoGrowth
+function _growthScrIsStrictGrowth(row) {
+  return row.revenue_qoq != null && row.revenue_qoq > 0
+    && row.revenue_yoy != null && row.revenue_yoy > 0
+    && row.profit_qoq != null && row.profit_qoq > 0
+    && row.profit_yoy != null && row.profit_yoy > 0
+    && row.npm_change_qoq != null && row.npm_change_qoq > 0
+    && row.npm_change_yoy != null && row.npm_change_yoy > 0;
+}
+
+// ติ๊กบ๊อกซ์ "OCF/NI เป็นบวก" — กำไรมีเงินสดหนุนจริง (ไม่ใช่แค่กำไรทางบัญชีจากลูกหนี้ค้าง) หุ้นที่ไม่มี
+// ข้อมูล ocf_ni_pct เลย (กลุ่มการเงิน/ยังไม่ sync set_cashflow ไตรมาสนี้) ถูกตัดออกไปด้วยเพราะเทียบไม่ได้
+function _growthScrIsOcfPositive(row) {
+  return row.ocf_ni_pct != null && row.ocf_ni_pct > 0;
+}
+
 // หุ้นพลิกกำไร (คอลัมน์ profit_qoq/profit_yoy เป็น null) นับเป็น "โตสุดขีด" เสมอ ให้ลอยขึ้นบนสุดตอน
 // เรียงมาก->น้อย (ลอยไปล่างสุดตอนเรียงน้อย->มาก โดยธรรมชาติของ comparator ด้านล่าง ไม่ต้องเขียนพิเศษ)
 function _growthScrSortVal(row, key) {
@@ -5158,10 +5179,14 @@ function _growthScrFilteredSorted() {
   const q = (document.getElementById('growth-scr-search')?.value || '').toUpperCase().trim();
   const sector = document.getElementById('growth-scr-sector')?.value || '';
   const hideNoGrowth = document.getElementById('growth-scr-hide-na')?.checked;
+  const strictGrowth = document.getElementById('growth-scr-strict')?.checked;
+  const ocfPositive = document.getElementById('growth-scr-ocf-positive')?.checked;
   let rows = _growthScrMaskedRows(d.stocks);
   if (q) rows = rows.filter(r => r.symbol.includes(q) || (r.name || '').toUpperCase().includes(q));
   if (sector) rows = rows.filter(r => r.sector === sector);
   if (hideNoGrowth) rows = rows.filter(_growthScrHasAnyGrowth);
+  if (strictGrowth) rows = rows.filter(_growthScrIsStrictGrowth);
+  if (ocfPositive) rows = rows.filter(_growthScrIsOcfPositive);
   const key = _growthScrSort.key, dir = _growthScrSort.dir === 'asc' ? 1 : -1;
   rows = rows.slice().sort((a, b) => {
     const av = _growthScrSortVal(a, key), bv = _growthScrSortVal(b, key);
@@ -8542,8 +8567,9 @@ const FS_PRICE_ONLY = new Set(['rs', 'pct_vs_ema200', 'pct_off_high52', 'rvol'])
 
 function _fsApplyUniverseUI() {
   const uni = document.getElementById('fs-universe')?.value;
-  const offNever = (uni === 'us' || uni === 'hk');
-  const offPrice = (uni === 'hk');   // US มี overlay ราคาแล้ว (เฉพาะตัวในดัชนีหลัก) — เปิดไว้
+  const offNever = (uni === 'us' || uni === 'hk' || uni === 'jp');
+  const offPrice = (uni === 'hk');   // US/JP มี overlay ราคาแล้ว (JP ครบทุกตัวเพราะทั้ง universe
+                                      // คือสมาชิกดัชนีหลัก 225 ตัวอยู่แล้ว) — เปิดไว้ ปิดเฉพาะ HK
   FS_FILTERS.forEach(f => {
     if (f.g) return;
     const isNever = FS_MIRROR_NEVER.has(f.k), isPrice = FS_PRICE_ONLY.has(f.k);
@@ -8920,7 +8946,7 @@ const FS_COL_CLR = {
   analyst_rec_mean:      v => v <= 2 ? 'var(--green)' : (v >= 3.5 ? 'var(--red)' : ''),
   analyst_buy_pct:       v => v >= 70 ? 'var(--green)' : (v < 30 ? 'var(--red)' : ''),
 };
-const FS_MKT_BADGE = { TH: '#58a6ff', US: '#3fb950', HK: '#e3b341', DR: '#3fb950' };
+const FS_MKT_BADGE = { TH: '#58a6ff', US: '#3fb950', HK: '#e3b341', JP: '#f778ba', DR: '#3fb950' };
 
 // คอลัมน์เสริมที่โผล่อัตโนมัติในตาราง Screener+ เมื่อผู้ใช้ตั้งตัวกรองที่ "field ยังไม่มี
 // คอลัมน์ตายตัว" ใน FS_COLS อยู่แล้ว (เช่น QoQ, streak รายไตรมาส, margin trend, D/E เทรนด์
@@ -8962,25 +8988,33 @@ function _fsAllCols() {
 // universe=us/hk (mirror table) เซ็ต is_dr=true ให้ทุกแถวเสมอ (backend เขียนไว้แบบนั้นตั้งแต่ต้น
 // ไม่เกี่ยวกับ DR จริง) ต้องเช็ค dropdown universe ก่อน ไม่ใช่ isDr param ตรงๆ ไม่งั้นหุ้น mirror
 // US/HK จะหลุดไปเปิด openDRChartModal ผิด (หา symbol ใน _drData ~279 ตัวไม่เจอ -> เงียบไม่มีอะไรเกิดขึ้น)
+// map universe -> {dataVar getter/setter, endpoint, suffix ที่ต้องต่อก่อน lookup, ฟังก์ชันเปิด
+// chart modal} — JP เหมือน HK ทุกอย่าง (225/225 อยู่ในดัชนีหลักหมด ต่างจาก US/HK มิเรอร์ที่ส่วน
+// ใหญ่อยู่นอกดัชนี) เลย found แทบจะเป็น true เสมอสำหรับ JP
+const _FS_MIRROR_IDX = {
+  us: { get: () => _usData, set: v => { _usData = v; }, endpoint: '/api/us-index-metrics', suffix: '', open: openUsChartModal },
+  hk: { get: () => _hkData, set: v => { _hkData = v; }, endpoint: '/api/hk-index-metrics', suffix: '.HK', open: openHkChartModal },
+  jp: { get: () => _jpData, set: v => { _jpData = v; }, endpoint: '/api/jp-index-metrics', suffix: '.T', open: openJpChartModal },
+};
+
 async function fsOpenDetail(sym, isDr) {
   const uni = document.getElementById('fs-universe')?.value;
-  if (uni === 'us' || uni === 'hk') {
-    const isUS = uni === 'us';
-    if (isUS ? !_usData : !_hkData) {
-      try {
-        const d = await (await fetch(isUS ? '/api/us-index-metrics' : '/api/hk-index-metrics')).json();
-        if (isUS) _usData = d; else _hkData = d;
-      } catch (e) { /* เช็ค found ด้านล่างจะเป็น false แล้วตกไป fallback เอง */ }
+  if (_FS_MIRROR_IDX[uni]) {
+    const idx = _FS_MIRROR_IDX[uni];
+    if (!idx.get()) {
+      try { idx.set(await (await fetch(idx.endpoint)).json()); }
+      catch (e) { /* เช็ค found ด้านล่างจะเป็น false แล้วตกไป fallback เอง */ }
     }
-    // hk_index_metrics.json เก็บ symbol แบบมี suffix '.HK' (เช่น "0700.HK") แต่แถวใน
-    // mirror snapshot เป็นรหัสดิบไม่มี suffix (เช่น "0700") — ต่อให้ตรงก่อน lookup
-    const lookupSym = isUS ? sym : (sym.endsWith('.HK') ? sym : `${sym}.HK`);
-    const found = ((isUS ? _usData : _hkData)?.stocks || []).some(s => s.symbol === lookupSym);
-    if (found) { (isUS ? openUsChartModal : openHkChartModal)(lookupSym); return; }
-    // หุ้น mirror ส่วนใหญ่ (~4,500 จาก ~5,108 ตัว) อยู่นอกดัชนีหลัก (S&P500/Dow/NDX หรือ
-    // HSI/HSCEI/HSTECH) ไม่มีราคารายวันเก็บไว้ในเครื่องเลย เปิดกราฟไม่ได้จริงๆ (ต่างจาก DR
-    // ที่ดึงราคาสดจาก yfinance เองได้เสมอ) — พาไปหน้างบการเงินแทนเด้ง alert บอกให้กด
-    // 'Index Max' ซึ่งช่วยไม่ได้เพราะตัวนอกดัชนีจะไม่มีวันถูกดึงราคาเก็บไว้อยู่ดี
+    // hk/jp_index_metrics.json เก็บ symbol แบบมี suffix '.HK'/'.T' (เช่น "0700.HK"/"7203.T")
+    // แต่แถวใน mirror snapshot เป็นรหัสดิบไม่มี suffix (เช่น "0700"/"7203") — ต่อให้ตรงก่อน lookup
+    const lookupSym = idx.suffix && !sym.endsWith(idx.suffix) ? `${sym}${idx.suffix}` : sym;
+    const found = (idx.get()?.stocks || []).some(s => s.symbol === lookupSym);
+    if (found) { idx.open(lookupSym); return; }
+    // หุ้น mirror ส่วนใหญ่ (~4,500 จาก ~5,108 ตัว ของ US/HK) อยู่นอกดัชนีหลัก (S&P500/Dow/NDX
+    // หรือ HSI/HSCEI/HSTECH) ไม่มีราคารายวันเก็บไว้ในเครื่องเลย เปิดกราฟไม่ได้จริงๆ (ต่างจาก DR
+    // ที่ดึงราคาสดจาก yfinance เองได้เสมอ, JP ไม่ควรเข้า branch นี้เลยเพราะทั้ง universe
+    // อยู่ในดัชนีหลักหมด — ถ้าเข้ามาจริงคือ jp-index-metrics.json โหลดไม่สำเร็จ) — พาไปหน้า
+    // งบการเงินแทนเด้ง alert บอกให้กด 'Index Max' ซึ่งช่วยไม่ได้ถ้าเป็นตัวนอกดัชนีจริง
     fsOpenFin(sym, true);
     return;
   }
@@ -9288,7 +9322,7 @@ async function syncOwnershipData(kind, btn) {
 function _fsReadConds() {
   const conds = [];
   const uni = document.getElementById('fs-universe')?.value;
-  const skipNever = (uni === 'us' || uni === 'hk');
+  const skipNever = (uni === 'us' || uni === 'hk' || uni === 'jp');
   FS_FILTERS.forEach(f => {
     if (f.g) return;
     if (skipNever && FS_MIRROR_NEVER.has(f.k)) return;   // server ไม่คำนวณให้ mirror เลย — ข้าม
@@ -9324,7 +9358,8 @@ function _fsReadConds() {
 async function _runFscreenerMirror(uni, conds) {
   const myReqId = ++_fsMirrorReqId;
   const box = document.getElementById('fs-results');
-  box.innerHTML = '<div class="empty" style="padding:24px">กำลังค้นหุ้น ' + uni.toUpperCase() + ' (Finnomena)...</div>';
+  box.innerHTML = '<div class="empty" style="padding:24px">กำลังค้นหุ้น ' + uni.toUpperCase()
+    + (uni === 'jp' ? ' (Nikkei 225)' : ' (Finnomena)') + '...</div>';
   const dir = _fsSort.dir < 0 ? 'desc' : 'asc';
   const url = `/api/factor-screener?universe=${uni}&filters=${encodeURIComponent(JSON.stringify(conds))}&sort=${_fsSort.key}&dir=${dir}&limit=500`;
   try {
@@ -9350,21 +9385,33 @@ async function _runFscreenerMirror(uni, conds) {
     renderFsTable(rows);
     const note = document.createElement('div');
     note.style.cssText = 'font-size:11px;color:var(--text2);margin:4px 0 8px';
-    note.innerHTML = 'ℹ หุ้น US/HK ชุดนี้ใช้งบ <b>Finnomena ล้วน</b> เป็นหลัก — เฉพาะหุ้นที่เคย sync งบ <b>Yahoo annual</b> แล้ว (สมาชิกดัชนีหลักส่วนใหญ่ + ตัวที่เคยเปิดดู/on-demand fetch) จะมีค่ากลุ่ม net cash / cash cycle / goodwill / buyback / CAGR รายปี / interest coverage / dilution / F-Score / Z-Score / FCF Yield / FCF คุ้มปันผล ครบ — ตัวที่ยังไม่เคย sync จะไม่มีค่ากลุ่มนี้ (ไม่ใช่บั๊ก)'
-      + ' · FCF Yield% ต้องมี market cap สดด้วย เลยมีเฉพาะหุ้นในดัชนีหลักที่ sync Yahoo แล้ว, FCF คุ้มปันผลต้องเคยจ่ายปันผลด้วย'
-      + (uni === 'us'
-        ? ' · ค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) มีเฉพาะหุ้นใน S&P500/Dow/Nasdaq 100'
-        : ' · ค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) มีเฉพาะหุ้นใน HSI/HSCEI/HSTECH');
+    // JP: คนละสถานการณ์กับ US/HK ทั้งหมด — ไม่มี Finnomena เลย (225 ตัวคือทั้ง universe ไม่ใช่
+    // "สมาชิกดัชนีหลักส่วนหนึ่งของก้อนใหญ่"), coverage PE/PBV/ROE/F-Score/Z-Score/CAGR สูง
+    // (>90%) เพราะ sync Yahoo annual ครบทุกตัวไปแล้ว แต่ field ที่ต้องใช้งบรายไตรมาส (P/S/PEG/
+    // %YoY-QoQ/div_yield) เป็น None ถาวรเสมอ (ไม่ใช่ "ยังไม่เคย sync" แบบ US/HK)
+    if (uni === 'jp') {
+      note.innerHTML = 'ℹ หุ้น JP ชุดนี้คือสมาชิก <b>Nikkei 225 ทั้งหมด</b> (225 ตัว ไม่ใช่มิเรอร์ทั้งตลาดแบบ US/HK เพราะ Finnomena ไม่มีข้อมูลตลาดนี้เลย) — ตัวเลขจาก <b>Yahoo annual</b> ล้วน: PE/PBV/ROE/margin/F-Score/Z-Score/CAGR รายปีมีครบเกิน 90% ของตัว, ราคาสด (RS/EMA200/high 52wk/RVOL) มีครบทุกตัวเพราะทั้ง universe อยู่ในดัชนีหลักอยู่แล้ว'
+        + ' · <b>P/S, PEG, รายได้/กำไร %YoY-QoQ รายไตรมาส, ปันผล%</b> เป็นค่าว่างถาวร (ต้องใช้งบรายไตรมาสที่ Finnomena ไม่มีให้ตลาดนี้ — ไม่ใช่บั๊ก)';
+    } else {
+      note.innerHTML = 'ℹ หุ้น US/HK ชุดนี้ใช้งบ <b>Finnomena ล้วน</b> เป็นหลัก — เฉพาะหุ้นที่เคย sync งบ <b>Yahoo annual</b> แล้ว (สมาชิกดัชนีหลักส่วนใหญ่ + ตัวที่เคยเปิดดู/on-demand fetch) จะมีค่ากลุ่ม net cash / cash cycle / goodwill / buyback / CAGR รายปี / interest coverage / dilution / F-Score / Z-Score / FCF Yield / FCF คุ้มปันผล ครบ — ตัวที่ยังไม่เคย sync จะไม่มีค่ากลุ่มนี้ (ไม่ใช่บั๊ก)'
+        + ' · FCF Yield% ต้องมี market cap สดด้วย เลยมีเฉพาะหุ้นในดัชนีหลักที่ sync Yahoo แล้ว, FCF คุ้มปันผลต้องเคยจ่ายปันผลด้วย'
+        + (uni === 'us'
+          ? ' · ค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) มีเฉพาะหุ้นใน S&P500/Dow/Nasdaq 100'
+          : ' · ค่าสดจากราคา (RS, EMA200, high 52wk, RVOL) มีเฉพาะหุ้นใน HSI/HSCEI/HSTECH');
+    }
     // เตือนสีเหลืองถ้าเปิด filter ที่ "มีค่าเฉพาะบางตัว" (ราคา หรืองบ Yahoo) — หุ้นที่ไม่เข้า
     // เงื่อนไข (นอกดัชนีหลัก / ยังไม่เคย sync Yahoo) จะถูกตัดออกจากผลทั้งหมดโดยปริยาย เตือนชัดๆ
-    // กันเข้าใจผิดว่าหุ้นหาย/บั๊ก (รวม 2 คำเตือนเข้าด้วยกันถ้าเปิดทั้งคู่พร้อมกัน)
+    // กันเข้าใจผิดว่าหุ้นหาย/บั๊ก (รวม 2 คำเตือนเข้าด้วยกันถ้าเปิดทั้งคู่พร้อมกัน) — ข้าม filter
+    // ราคาสำหรับ JP เพราะครบทุกตัวอยู่แล้ว ไม่มี "นอกดัชนี" ให้เตือน
     const warnParts = [];
-    if (conds.some(c => FS_PRICE_ONLY.has(c.k))) {
+    if (uni !== 'jp' && conds.some(c => FS_PRICE_ONLY.has(c.k))) {
       const idxLabel = uni === 'us' ? 'S&P500 / Dow / Nasdaq 100' : 'HSI / HSCEI / HSTECH';
       warnParts.push(`ฟิลเตอร์ราคา (RS / EMA200 / high 52wk / RVOL) มีค่าเฉพาะหุ้นใน ${idxLabel} — หุ้น ${uni.toUpperCase()} นอกดัชนีถูกตัดออกจากผลทั้งหมด`);
     }
     if (conds.some(c => FS_YAHOO_ONLY.has(c.k))) {
-      warnParts.push('ฟิลเตอร์งบ Yahoo (CAGR/F-Score/Z-Score/FCF ฯลฯ) มีค่าเฉพาะหุ้นที่เคย sync งบ Yahoo annual แล้ว — ตัวที่ยังไม่เคย sync ถูกตัดออกจากผลทั้งหมด');
+      warnParts.push(uni === 'jp'
+        ? 'ฟิลเตอร์งบ Yahoo (CAGR/F-Score/Z-Score/FCF ฯลฯ) — ~10% ของหุ้น JP ไม่มีค่า (เช่น ขาดทุน/EPS ติดลบ) ถูกตัดออกจากผลทั้งหมด'
+        : 'ฟิลเตอร์งบ Yahoo (CAGR/F-Score/Z-Score/FCF ฯลฯ) มีค่าเฉพาะหุ้นที่เคย sync งบ Yahoo annual แล้ว — ตัวที่ยังไม่เคย sync ถูกตัดออกจากผลทั้งหมด');
     }
     if (warnParts.length) {
       note.innerHTML = `<span style="color:#e3b341">⚠ ${warnParts.join(' · ')}</span><br>` + note.innerHTML;
@@ -9417,7 +9464,7 @@ function runFscreener() {
   if (!FS_COLS_KEYS.has(_fsSort.key) && !_fsExtraCols.some(c => c.k === _fsSort.key)) {
     _fsSort = { key: 'roe', dir: -1 };
   }
-  if (uni === 'us' || uni === 'hk') { _runFscreenerMirror(uni, conds); return; }
+  if (uni === 'us' || uni === 'hk' || uni === 'jp') { _runFscreenerMirror(uni, conds); return; }
   // กลับมา universe หลัก (ทั้งหมด/ไทย/DR) — คืนข้อความ fs-meta ของ snapshot หลัก
   // เผื่อรอบก่อนหน้าอยู่ที่ US/HK แล้วค้างโชว์ meta ของ mirror อยู่
   const metaEl = document.getElementById('fs-meta');
@@ -9582,7 +9629,8 @@ function exportFscreenerCSV() {
   // universe US/HK กรองฝั่ง server แล้วส่งกลับสูงสุด 500 แถวแรกเสมอ (ดู _runFscreenerMirror) —
   // ใส่ไว้ในชื่อไฟล์กันเข้าใจผิดว่า export ได้ทุกตัวที่ตรงเงื่อนไข
   const uni = document.getElementById('fs-universe')?.value || 'all';
-  const suffix = (uni === 'us' || uni === 'hk') ? `_${uni}_top500` : `_${uni}`;
+  const suffix = (uni === 'us' || uni === 'hk') ? `_${uni}_top500` : `_${uni}`;   // jp ไม่ต้อง
+  // เติม "_top500" เหมือน us/hk เพราะฝั่ง server ไม่ตัดที่ limit=500 จริง (225 < 500 อยู่แล้ว)
   a.download = `fundamental_screener${suffix}_${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
 }
@@ -18829,6 +18877,11 @@ function setFinCmpPeriod(period) {
   _finCmpPeriod = period;
   document.getElementById('fin-cmp-period-q')?.classList.toggle('active', period === 'q');
   document.getElementById('fin-cmp-period-y')?.classList.toggle('active', period === 'y');
+  // แค่ตั้งค่าไว้ ไม่ re-render ตารางที่แสดงอยู่เอง (ต้องกด "เทียบ" ใหม่) — เตือนตอนนี้เฉพาะกรณีมี
+  // ผลลัพธ์ค้างอยู่แล้วเท่านั้น กันผู้ใช้เข้าใจผิดว่าเป็น toggle แบบเปลี่ยนผลทันที
+  const out = document.getElementById('fin-cmp-result');
+  const hint = document.getElementById('fin-cmp-hint');
+  if (hint && out && out.innerHTML.trim()) hint.textContent = 'เปลี่ยนช่วงเวลาแล้ว — กด "⚖️ เทียบ" อีกครั้งเพื่ออัพเดทตาราง';
 }
 
 function _finCmpIsDr(side) {

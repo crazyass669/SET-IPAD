@@ -3161,6 +3161,7 @@
           <option value="dr">DR (หุ้นต่างประเทศในพอร์ต)</option>
           <option value="us">🇺🇸 หุ้น US ทั้งหมด (Finnomena)</option>
           <option value="hk">🇭🇰 หุ้น HK ทั้งหมด (Finnomena)</option>
+          <option value="jp">🇯🇵 หุ้น JP (Nikkei 225, Yahoo annual)</option>
         </select>
         <span id="fs-meta" style="font-size:11px;color:var(--text2);margin-left:auto"></span>
       </div>
@@ -3406,8 +3407,8 @@
       <div style="display:flex;flex-direction:column;gap:4px">
         <span style="font-size:10px;color:var(--text2)">ช่วงเวลา</span>
         <div class="filter-row" style="gap:0;margin:0">
-          <button class="filter-btn active" id="fin-cmp-period-q" onclick="setFinCmpPeriod('q')" style="font-size:10px;padding:2px 8px;border-radius:5px 0 0 5px">รายไตรมาส</button>
-          <button class="filter-btn" id="fin-cmp-period-y" onclick="setFinCmpPeriod('y')" style="font-size:10px;padding:2px 8px;border-radius:0 5px 5px 0" title="ใช้งบรายปีจาก Finnomena ทั้งสองฝั่งเสมอ (แม้ฝั่งไทยปกติจะใช้ SET.or.th รายไตรมาสก็ตาม)">รายปี</button>
+          <button class="filter-btn active" id="fin-cmp-period-q" onclick="setFinCmpPeriod('q')" style="font-size:10px;padding:2px 8px;border-radius:5px 0 0 5px" title="เปลี่ยนตัวเลือกนี้แล้วต้องกด &quot;⚖️ เทียบ&quot; ใหม่ถึงจะมีผลกับตารางที่แสดงอยู่">รายไตรมาส</button>
+          <button class="filter-btn" id="fin-cmp-period-y" onclick="setFinCmpPeriod('y')" style="font-size:10px;padding:2px 8px;border-radius:0 5px 5px 0" title="ใช้งบรายปีจาก Finnomena ทั้งสองฝั่งเสมอ (แม้ฝั่งไทยปกติจะใช้ SET.or.th รายไตรมาสก็ตาม) — เปลี่ยนตัวเลือกนี้แล้วต้องกด &quot;⚖️ เทียบ&quot; ใหม่ถึงจะมีผลกับตารางที่แสดงอยู่">รายปี</button>
         </div>
       </div>
       <button class="btn-primary" onclick="runFinCompare()">⚖️ เทียบ</button>
@@ -4300,6 +4301,12 @@
     </label>
     <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:6px;cursor:pointer" title="ตัดหุ้นที่ฐานเทียบ (งวดก่อน) เล็กกว่า 50 ล้านบาท กันโต % หลอกจากฐานจิ๋ว">
       <input type="checkbox" id="growth-scr-min-base" checked onchange="renderGrowthScreener()"> ตัดฐานเทียบเล็กเกินไป
+    </label>
+    <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:6px;cursor:pointer" title="กรองเฉพาะหุ้นที่รายได้ กำไรสุทธิ และมาร์จิ้นสุทธิ (Δ NPM) เป็นบวกพร้อมกันทั้ง QoQ และ YoY — โตแรงจริงต่อเนื่อง ไม่ใช่แค่ไตรมาสเดียวหรือฐานเทียบเล็กจนบวมเกินจริง">
+      <input type="checkbox" id="growth-scr-strict" onchange="renderGrowthScreener()"> 🚀 โตแรงจริง (รายได้+กำไร+NPM บวกทั้ง QoQ/YoY)
+    </label>
+    <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:6px;cursor:pointer" title="กรองเฉพาะหุ้นที่ OCF/NI เป็นบวก (กำไรมีเงินสดหนุนจริง) — หุ้นที่ไม่มีข้อมูล OCF (กลุ่มการเงิน/นอกช่วง SET sync) จะถูกตัดออกไปด้วยเพราะเทียบไม่ได้">
+      <input type="checkbox" id="growth-scr-ocf-positive" onchange="renderGrowthScreener()"> OCF/NI เป็นบวก
     </label>
     <button id="growth-scr-export-btn" class="filter-btn" onclick="exportGrowthScreenerCsv()">⬇️ Export CSV</button>
     <span id="growth-scr-count" style="font-size:11.5px;color:var(--text2);margin-left:auto"></span>
@@ -5554,6 +5561,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260827j"></script>
+<script src="static/dashboard.js?v=20260828d"></script>
 </body>
 </html>

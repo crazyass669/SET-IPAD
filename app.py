@@ -4769,11 +4769,12 @@ def _screener_mirror_cache_key(uni):
             return os.path.getmtime(p)
         except OSError:
             return None
-    metrics_file = "us_index_metrics.json" if uni == "us" else "hk_index_metrics.json"
-    # factor_mirror_at เปลี่ยนทุกครั้งที่ build_mirror_snapshot รัน (ทั้ง US+HK ใช้ meta key
-    # เดียวกัน — rebuild ตลาดหนึ่งจะ bust cache ของอีกตลาดไปด้วย ไม่เป็นไร แค่ recompute เกิน
-    # ความจำเป็นนานๆ ครั้ง ไม่ใช่ทุก request) + mtime ของ index metrics json (overlay technical
-    # เปลี่ยนตาม Index Sync/Quick Update ที่ไม่ได้ผูกกับ build_mirror_snapshot)
+    metrics_file = {"us": "us_index_metrics.json", "hk": "hk_index_metrics.json",
+                     "jp": "jp_index_metrics.json"}[uni]
+    # factor_mirror_at เปลี่ยนทุกครั้งที่ build_mirror_snapshot()/build_mirror_snapshot_yahoo_only()
+    # รัน (US+HK+JP ใช้ meta key เดียวกัน — rebuild ตลาดหนึ่งจะ bust cache ของตลาดอื่นไปด้วย ไม่เป็น
+    # ไร แค่ recompute เกินความจำเป็นนานๆ ครั้ง ไม่ใช่ทุก request) + mtime ของ index metrics json
+    # (overlay technical เปลี่ยนตาม Index Sync/Quick Update ที่ไม่ได้ผูกกับ build_mirror_snapshot)
     return (financials_store._get_meta(BASE_DIR, "factor_mirror_at"),
             _m(os.path.join(BASE_DIR, "data", metrics_file)))
 
@@ -4860,6 +4861,39 @@ def _build_screener_mirror_rows(uni):
             if s and s.get("sector") in factor_snapshot.FINANCIAL_SECTOR_NAMES:
                 r["z_score"], r["z_zone"] = None, None
                 r["z_excluded_reason"] = "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"
+    elif uni == "jp":
+        from sources import jp_index_metrics
+        # rows ทั้งหมดเป็นสมาชิก Nikkei225 อยู่แล้ว (build_mirror_snapshot_yahoo_only รับ
+        # เฉพาะ universe ที่ curate มาแล้ว ไม่ใช่ raw universe หมื่นตัวแบบ US/HK) เลย overlay
+        # ราคา/technical ได้ครบ 225/225 ไม่มีตัวนอกดัชนีเหมือน US/HK ที่ทำได้แค่บางส่วน ·
+        # symbol ในชุด mirror เป็นรหัสดิบ (เช่น "7203") ส่วน jp_index_metrics ใช้รูปแบบ
+        # yfinance "7203.T" — ต่อ ".T" ก่อน lookup (เหมือน pattern .HK ด้านบน)
+        _jp_by_sym = {s["symbol"]: s for s in jp_index_metrics.load_local(BASE_DIR).get("stocks", [])}
+        for r in rows:
+            s = _jp_by_sym.get(f"{r['symbol']}.T")
+            # ชื่อบริษัทจาก mirror snapshot เป็นแค่ตัวเลขรหัส (ไม่มี mirror_names.json ให้ JP
+            # เหมือน US/HK เพราะ Finnomena ไม่มีข้อมูลตลาดนี้) — ใช้ชื่อจาก jp_index_metrics
+            # ที่มีอยู่แล้วแทน (ดึงจาก ja.wikipedia/Yahoo ตอน build)
+            if s and s.get("name"):
+                r["name"] = s["name"]
+            r["rs"] = s.get("rs_score") if s else None
+            r["pct_vs_ema200"] = (round((s["price"] / s["ema200"] - 1) * 100, 2)
+                                   if s and s.get("price") and s.get("ema200") else None)
+            r["pct_off_high52"] = (round((s["price"] / s["high_52w"] - 1) * 100, 2)
+                                    if s and s.get("price") and s.get("high_52w") else None)
+            r["rvol"] = (round(s["vol_today"] / s["vol_avg20"], 4)
+                         if s and s.get("vol_today") and s.get("vol_avg20") else None)
+            r["stage"] = s.get("stage") if s else None
+            mc = s.get("mkt_cap") if s else None
+            if mc is None and s and s.get("price") and r.get("shares_out"):
+                mc = s["price"] * r["shares_out"]
+            r["fcf_yield"] = (r["fcf"] / mc * 100) if (r.get("fcf") is not None and mc) else None
+            # ซ่อน Z-Score ของกลุ่มการเงิน — เหตุผลเดียวกับ US/HK ด้านบน (ja.wikipedia sector
+            # ภาษาญี่ปุ่น 4 กลุ่ม 銀行/証券/保険/その他金融 ถูกแปลรวมเป็น "Financial Services"
+            # ตรงกับ FINANCIAL_SECTOR_NAMES อยู่แล้ว ดู sources/jp_index_membership.py)
+            if s and s.get("sector") in factor_snapshot.FINANCIAL_SECTOR_NAMES:
+                r["z_score"], r["z_zone"] = None, None
+                r["z_excluded_reason"] = "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"
     return rows
 
 
@@ -4871,10 +4905,18 @@ def factor_screener():
 
     ?universe=us / hk : คืนหุ้น mirror ทั้งตลาด (นอก universe หลัก, งบ Finnomena ล้วน)
     แทนชุดหลัก (ไทย+DR) — โหลดแยก เพราะชุดใหญ่ (US ~11k, HK ~2k) rows หลัง overlay cache ไว้
-    (ดู _get_screener_mirror_rows) filter/sort/limit ด้านล่างคำนวณสดทุกครั้งเพราะเบามาก"""
+    (ดู _get_screener_mirror_rows) filter/sort/limit ด้านล่างคำนวณสดทุกครั้งเพราะเบามาก
+
+    ?universe=jp : ต่างจาก us/hk ตรงที่ไม่มี Finnomena รองรับตลาดนี้เลย — ชุด mirror ของ JP
+    เลยมีแค่ 225 ตัว (สมาชิก Nikkei225 เท่าที่มีใน jp_index_metrics.json ไม่ใช่ทั้งตลาดจริง
+    หลักพัน/หมื่นตัวแบบ US/HK) แต่ตัวเลข PE/PBV/ROE/margin/F-Score/Z-Score/CAGR มาจาก
+    build_mirror_snapshot_yahoo_only() (Yahoo annual ล้วน) เก็บใน factor_snapshot_mirror
+    table เดียวกัน ครบเกิน 90% แล้ว (เช็ค 2026-08-28) — field ที่ต้องใช้ finnomena_q รายไตรมาส
+    (P/S, PEG, %YoY/QoQ รายไตรมาส, div_yield) ยังเป็น None ถาวรเพราะไม่มีต้นทาง"""
     uni = (request.args.get("universe") or "").lower()
-    if uni in ("us", "hk"):
-        # ชุด mirror ใหญ่มาก (US ~17k) — กรองฝั่ง server ส่งเฉพาะผลลัพธ์ (≤ limit)
+    if uni in ("us", "hk", "jp"):
+        # ชุด mirror ใหญ่มาก (US ~17k) — กรองฝั่ง server ส่งเฉพาะผลลัพธ์ (≤ limit) — JP เล็กกว่า
+        # มาก (225 ตัว) แต่ใช้ path เดียวกันเพราะ shape ข้อมูลเหมือนกันทุกอย่าง
         rows = _get_screener_mirror_rows(uni)
 
         try:
@@ -5091,14 +5133,19 @@ def peer_compare():
     ?sector=...&level=...  : เลือกกลุ่มตรง ๆ ไม่ต้องมีหุ้นตั้งต้น
     ?level=sector|industry : ชั้นการจัดกลุ่ม (default sector) — auto ขยับเป็น industry เอง
                               ถ้ากลุ่ม sector มีสมาชิก < 4 ตัว (percentile ไม่มีนัยยะ)
-    ?market=TH|US|HK|DR    : default TH · US/HK สมาชิกดัชนีหลัก (us/hk_index_metrics.json
-                              ~623 ตัว) ใช้ sector ที่มีอยู่แล้ว · ถ้า symbol ที่ระบุเป็นหุ้น
+    ?market=TH|US|HK|JP|DR : default TH · US/HK/JP สมาชิกดัชนีหลัก (us/hk/jp_index_metrics.json
+                              ~848 ตัว) ใช้ sector ที่มีอยู่แล้ว · ถ้า symbol ที่ระบุเป็นหุ้น
                               mirror นอกดัชนีหลัก ดึง sector แบบ on-demand ให้ตัวนั้นแล้ว pin
                               เข้ากลุ่ม sector เดียวกัน (peer ที่เห็นยังจำกัดแค่สมาชิกดัชนีหลัก
-                              เท่านั้น — ยังไม่มี sector ของหุ้นอื่นนอกดัชนีแบบ bulk) · DR:
-                              resolve symbol เป็น underlying US/HK ผ่าน dr_universe ก่อน
+                              เท่านั้น — ยังไม่มี sector ของหุ้นอื่นนอกดัชนีแบบ bulk, JP ไม่มี
+                              on-demand เลยเพราะ Finnomena ไม่มีข้อมูลตลาดญี่ปุ่น) · DR:
+                              resolve symbol เป็น underlying US/HK/JP ผ่าน dr_universe ก่อน
                               (ต้องระบุ symbol เสมอ, ไม่รองรับ sector โดยตรง — region อื่นที่ไม่ใช่
-                              US/HK ยัง 501)
+                              US/HK/JP ยัง 501) · ตัวเลข factor ของ JP มาจาก
+                              build_mirror_snapshot_yahoo_only() (Yahoo annual ล้วน ไม่มี
+                              finnomena_q) — PE/PBV/ROE/margin/F-Score/Z-Score/CAGR มีจริง
+                              (เช็ค 2026-08-28: >90% coverage) แต่ P/S, PEG, %YoY/QoQ รายไตรมาส,
+                              div_yield เป็น None ถาวร (ต้องใช้งบรายไตรมาสที่ JP ไม่มีต้นทาง)
                               level เป็น 'sector' อย่างเดียวเสมอ (index metrics มีแค่ชั้นเดียว
                               ไม่มี industry ย่อยแบบ set_data.json)
 
@@ -5123,10 +5170,10 @@ def peer_compare():
             return jsonify({"rows": [], "median": None, "count": 0,
                             "meta": {"note": f"ไม่พบหุ้น DR {symbol}"}})
         region = entry.get("region")
-        if region not in ("US", "HK"):
+        if region not in ("US", "HK", "JP"):
             return jsonify({"rows": [], "median": None, "count": 0,
                             "meta": {"note": f"หุ้น DR {symbol} (underlying ตลาด {region or '?'})"
-                                             f" ยังไม่รองรับ — รองรับเฉพาะ underlying ตลาด US/HK"}}), 501
+                                             f" ยังไม่รองรับ — รองรับเฉพาะ underlying ตลาด US/HK/JP"}}), 501
         dr_symbol = symbol
         mkt = region
         symbol = entry["yf"].upper()

@@ -1,0 +1,168 @@
+================================================================================
+PLAN: งานค้าง 3 หัวข้อ ณ 2026-08-28 — สำหรับ session ใหม่
+สร้าง: 2026-08-28
+สถานะ: ⬜ ยังไม่เริ่ม (นี่คือ TODO list ไม่ใช่ implement — commit/push ของ feature
+        ที่เกี่ยวข้องทำเสร็จหมดแล้ว เหลือแค่ QA/gap 3 อย่างด้านล่าง)
+
+ก่อนเริ่ม: อ่าน memory ที่เกี่ยวข้องก่อนเสมอ (auto-load จาก MEMORY.md อยู่แล้วตอนเปิด
+session ใหม่) — โดยเฉพาะ pbv-pe-screener-plan.md, jp-index-price-pipeline.md,
+qpl-quarterly-report-view.md, fincompare-set-source-switch.md
+memory ล่าสุดมีข้อมูล gotcha/บั๊กที่เคยเจอแล้วละเอียดมาก อ่านก่อนแตะโค้ดเสมอ
+อย่าไล่ debug ซ้ำสิ่งที่เคยแก้ไปแล้ว
+================================================================================
+
+
+## หัวข้อ 1 — ทดสอบ browser จริง: คอลัมน์ P/S (2 หน้า) — ✅ เสร็จแล้ว (2026-08-28)
+
+ทดสอบผ่าน Playwright จริงแล้ว ทั้ง 2 หน้า 0 console error ตามเกณฑ์ทุกข้อด้านล่าง
+(colspan=8 ยืนยันจริงตอน uncheck hide-N/A, ปุ่ม ◀ เลื่อนไตรมาสเช็ค point-in-time
+trade-off แล้วไม่ crash, modal #ps-note-modal เปิด/ปิดถูก, CSV ทั้ง 2 หน้ามี P/S)
+รายละเอียดเต็มอยู่ใน memory pbv-pe-screener-plan.md — ข้ามหัวข้อนี้ได้แล้ว
+
+โค้ดถูก commit+push ไปแล้ว (ยืนยัน 2026-08-28) ทดสอบผ่านแค่ curl/test_client
+ยังไม่เคยเปิดเบราว์เซอร์เช็คจริง
+
+ไฟล์เกี่ยวข้อง:
+- sources/pbv_pe_screener.py (compute_fair_value_for_symbol → cur_ps field)
+- sources/financials_store.py (get_qpl_growth_screener → P/S = mkt_cap ÷ revenue_ttm)
+- static/dashboard.js (PBV_PE_SCR_COLS คอลัมน์ที่ 10, renderPbvPeScreener,
+  #ps-note-modal, _scrFmtX formatter)
+- set_dashboard.html (#ps-note-modal, ปุ่ม "📖 วิธีอ่านค่า P/S")
+
+ขั้นตอน:
+1. restart waitress/Flask server ให้แน่ใจว่าโหลด dashboard.js?v=20260827j /
+   dashboard.css?v=20260827b ล่าสุด (bump แล้วตอนแก้ แต่ต้อง restart server ถึงจะ
+   serve ไฟล์ใหม่ — ดู memory cache-busting-version-bump)
+2. เปิดหน้า "⚖️ Fair Value P/B·P/E" — เช็คว่าคอลัมน์ cur_ps (คอลัมน์ที่ 10 ท้ายตาราง)
+   ขึ้นค่าถูกต้อง format เป็น "x เท่า" เหมือนคอลัมน์อื่นของ Screener+ · เช็ค error-row
+   colspan ไม่พัง (ขยับ 7→8 ตอนแก้) · เช็ค header tooltip (c.tip) ใหม่ที่เพิ่มเข้ามา
+3. เปิดหน้า "🚀 หุ้นโตแรงรายไตรมาส" — เช็คคอลัมน์ P/S โชว์ในตารางจริง (ไม่ใช่แค่ CSV)
+   · กดปุ่ม "📖 วิธีอ่านค่า P/S" เช็คโมดัล #ps-note-modal เปิด/ปิดถูกต้อง เนื้อหาตรง
+   (benchmark <1x ถูก ... >8-10x เก็งกำไรจัด + คำเตือน point-in-time)
+4. export CSV ทั้ง 2 หน้า เช็คว่า cur_ps อยู่ในไฟล์ครบ
+5. เปิด DevTools console เช็ค 0 error ตลอด
+
+ระวัง (จาก memory): P/S ของหน้า "หุ้นโตแรงรายไตรมาส" คำนวณจาก mkt_cap **ปัจจุบัน**
+หารด้วย revenue_ttm ของไตรมาสที่กำลังดู (ปุ่ม ◀▶ เลื่อนย้อนหลังได้) — ถ้าเลื่อนไป
+ไตรมาสเก่า ตัวเลข P/S จะไม่ point-in-time จริง (ตั้งใจ trade-off ไว้แล้ว ไม่ใช่บั๊ก)
+ตรวจแค่ว่าเลขสมเหตุสมผล ไม่ต้องแปลกใจถ้าไตรมาสเก่า ๆ P/S ดูไม่ sync กับราคาย้อนหลัง
+
+เสร็จเมื่อ: ทดสอบ 2 หน้าผ่าน browser จริงครบตามข้างบน, 0 console error, ปิด TODO นี้ใน
+memory pbv-pe-screener-plan.md (ลบบรรทัด "ยังไม่ได้ทดสอบ browser จริง")
+
+
+## หัวข้อ 2 — ปิด gap หุ้น JP (2 จุด) — ✅ เสร็จครบทั้งคู่ (2026-08-28)
+
+**บทเรียนสำคัญระหว่างสืบโค้ด (เจอผิดเอง 1 รอบ ต้องแก้ความเข้าใจก่อนจะเจอของจริง):**
+เช็คแรกสุดพบว่า `data/jp_index_metrics.json` ไม่เก็บ `pe`/`pbv`/`div_yield`/`mkt_cap`
+เลย (0/225 เป็น None หมด — เหมือน us/hk_index_metrics.json ทุกตัว เพราะ
+[index_metrics_common.py](sources/index_metrics_common.py) ไม่เคยคำนวณฟิลด์พวกนี้)
+ทำให้เข้าใจผิดว่า JP ไม่มีข้อมูล PE/PBV/ROE ให้ Screener+/Peer Compare ใช้เลย —
+**ผิด** ของจริงอยู่คนละไฟล์: ตาราง `factor_snapshot_mirror` (DB) มี market='JP'
+225 แถวอยู่แล้วจริง (build ผ่าน `build_mirror_snapshot_yahoo_only()` เรียกจาก
+`/api/jp-index-sync`, [sources/factor_snapshot.py:648](sources/factor_snapshot.py#L648)
+— คนละฟังก์ชันกับ `build_mirror_snapshot(exchanges=("US","HK"))` ที่ใช้กับ US/HK)
+เช็ค DB ตรงจริงแล้ว: **pe_value 212/225, pbv_value 225/225, roe 225/225,
+f_score 225/225, z_score 205/225, rev_cagr 225/225** — coverage สูงมาก เทียบเท่า
+US/HK ได้เลย ขาดจริงแค่ `div_yield`/`ps_value`/`mkt_cap` (0/225 — ของจริง ไม่มี
+ต้นทาง) และฟิลด์รายไตรมาส (`rev_yoy_q`/`profit_yoy_q`/`peg` ฯลฯ ต้องใช้
+finnomena_q ที่ JP ไม่มี) — **บทเรียน: ก่อนสรุปว่า "ไม่มีข้อมูล" ต้อง query DB
+ตรงๆ ก่อนเสมอ อย่าเชื่อแค่ grep หา call site เดียว** (mirror JP ใช้คนละ build
+function จาก US/HK เลยหลุดจาก grep แรกไปได้)
+
+### 2A. JP เข้า Screener+ แล้ว (`?universe=jp`)
+เพิ่ม `elif uni == "jp":` ใน `_build_screener_mirror_rows` (app.py ~4839) —
+pattern เดียวกับ US/HK เป๊ะ: `factor_snapshot.get_mirror_snapshot(BASE_DIR,"JP")`
+เป็น base rows (มีข้อมูลจริงแล้ว) + overlay technical (RS/EMA200/52w/RVOL/stage)
+จาก `jp_index_metrics.load_local()` ต่อ ".T" ก่อน lookup + คำนวณ mkt_cap สดจาก
+price×shares_out สำหรับ fcf_yield + เติม `r["name"]` จาก jp_index_metrics (mirror
+snapshot ไม่มีชื่อบริษัท เพราะไม่มี mirror_names.json ให้ JP) + ซ่อน Z-Score กลุ่ม
+การเงินเหมือน US/HK · เพิ่ม `"jp"` เข้า `if uni in (...)` gate ที่ route +
+`_screener_mirror_cache_key` (jp_index_metrics.json mtime)
+
+Frontend (dashboard.js): เพิ่ม `|| uni === 'jp'` ที่ทุกจุดเช็ค `uni==='us'||uni==='hk'`
+(offNever/skipNever/dispatch ใน runFscreener, ข้อความ note ใน `_runFscreenerMirror`
+แยกเขียนใหม่เฉพาะ JP เพราะสถานการณ์ต่างจาก US/HK ทั้งหมด) + `fsOpenDetail` เปลี่ยน
+เป็น map `_FS_MIRROR_IDX` (us/hk/jp) แทน if-else เดิม เปิด `openJpChartModal` (มี
+อยู่แล้ว) + เพิ่ม option ใน `#fs-universe` (set_dashboard.html) + `JP` ใน
+`FS_MKT_BADGE` · bump `dashboard.js?v=20260828c`
+
+**ทดสอบแล้ว:** test_client (`/api/factor-screener?universe=jp` คืน 225 แถว, ROE/PE/
+PBV/F-Score/Z-Score จริง) + Playwright headless browser จริง (เลือก universe=jp
+ในหน้า Screener+ เห็นตาราง 225 แถว render ถูกต้อง คลิกเปิดรายละเอียดหุ้นได้ 0
+console error) + regression US/HK ไม่กระทบ (3883/1173 เท่าเดิม)
+
+### 2B. Peer Compare — DR underlying=JP ไม่ 501 แล้ว
+เช็คแล้ว DR ที่ region=JP มี 31 ตัว (23 ตัวทับสมาชิก Nikkei225 เช่น TOYOTA/SONY/
+NINTENDO/MUFG/SOFTBANK/TEL — ดู [dr_universe.py](sources/dr_universe.py)) — แก้
+region check ที่ [app.py:5173](app.py#L5173) จาก `region not in ("US", "HK")`
+เป็นรวม `"JP"` + อัปเดต docstring (โค้ดจุดอื่น `_mirror_sym`/`_tearsheet_universe_map`
+รองรับ JP มาตั้งแต่ Phase 2 อยู่แล้ว ไม่ต้องแตะเพิ่ม)
+
+**ทดสอบแล้ว:** `/api/peer-compare?market=DR&symbol=TEL` (Tokyo Electron, ทับ
+Nikkei225) → กลุ่ม "Electric Appliances" 32 ตัว มี PE/PBV/ROE/Z-Score จริงครบ
+(Kioxia PE 52/ROE 40%, Sony PBV 2.8/ROE -4% ฯลฯ) · `?market=DR&symbol=SANRIO`
+(ไม่ทับ Nikkei225 — ETF/นอกดัชนี) → "ไม่พบหุ้น 8136.T ในตลาด JP" (200, ไม่ crash
+เหมือนพฤติกรรม US/HK ตัวนอกดัชนีเดิม) · regression DR=US/HK ไม่กระทบ
+
+เสร็จแล้ว: universe=jp โผล่ใน Screener+ ด้วยข้อมูลจริงมีความหมาย + peer-compare DR
+underlying=JP ไม่ 501 แล้ว — commit/push ยังไม่ทำ (รอผู้ใช้สั่ง) · อัปเดต memory
+jp-index-price-pipeline.md (Phase 5) แล้ว
+
+
+## หัวข้อ 3 — ทดสอบ browser จริง: QPL รายไตรมาส + แท็บเทียบหุ้น 2 ตัว
+
+สองฟีเจอร์นี้ทำมาตั้งแต่ 2026-08-12/13 (แก้ต่อเนื่องหลายรอบ) ผ่านแค่ Flask
+test_client + py_compile/node --check ตลอด — ไม่เคยยืนยัน browser จริงสักครั้ง
+(memory เก่าสุด ~15+ วันแล้ว) แต่หน้าตาทั้งสองน่าจะถูกใช้งานจริงในแอปมาสักพักแล้ว
+โดยไม่มีรายงานปัญหาจากผู้ใช้ — **ก่อนไล่ทดสอบใหม่ทั้งหมด ให้ถามผู้ใช้ก่อนว่าเคย
+เห็น/ใช้ 2 หน้านี้ในแอปจริงแล้วหรือยัง** ถ้าใช้ประจำอยู่แล้วไม่มีปัญหา อาจไม่ต้อง
+ไล่ทดสอบซ้ำทั้งหมดตาม checklist ด้านล่าง แค่ spot-check ก็พอ
+
+ไฟล์เกี่ยวข้อง:
+- static/dashboard.js: `_qplTableCore`, `_renderFinQplReport`, `loadFinQplReport`,
+  `_renderFinCompare`, `_finCmpQuarterTable`, `_qplScrollToLatest`
+- sources/financials_store.py: `compute_qpl_report`, `_merge_set_qpl_payload`
+- app.py: `/api/financials-qpl-report/<symbol>`, `/api/financials-compare/<symbol>`,
+  `/api/financials-qpl-set/<symbol>`
+
+### 3A. หน้างบการเงิน → มุมมอง "📋 P&L รายไตรมาส"
+1. restart Flask server ก่อนเสมอ (บทเรียนสำคัญจาก memory: เคยเข้าใจผิดว่า 9 กลุ่ม
+   ข้อมูลหายเป็นบั๊ก ทั้งที่แค่ user ลืม restart server หลังแก้ app.py)
+2. ทดสอบกับหุ้นตัวอย่างที่เคย verify ค่าไว้แล้ว: PTT, KAMART, IRPC, LPH, SIAM, ANI
+3. เช็คตาราง broker-style เรียงปี พ.ศ. x ไตรมาส, คอลัมน์ล่าสุดขวาสุด, scroll
+   auto-ไปสุดขวาตอนโหลด (_qplScrollToLatest)
+4. เปิดแท็บ "🇹🇭 SET.or.th" เช็คตาราง set_qpl ล้วน ๆ ที่เพิ่มเข้าไปด้วย
+   (#fin-set-qpl-box)
+5. เช็คหุ้นปีบัญชีไม่ตรงปฏิทิน (non-Dec FYE) เช่น AOT/BTS/KSL/KTIS — ค่าที่โชว์ต้อง
+   คีย์ตรงกับไตรมาสปฏิทินจริงหลังแก้บั๊ก endDate (รอบ 6 ที่แก้ไปแล้ว 2026-08-18)
+6. เช็ค 0 console error
+
+### 3B. แท็บ "⚖️ เทียบหุ้น 2 ตัว"
+1. **เช็ค git diff/grep ก่อนแก้อะไรใหม่เสมอ** — เคยเจอเซสชัน/เครื่องมืออื่นแก้
+   dashboard.js คู่ขนาน (เพิ่ม toggle รายไตรมาส/รายปี `_finCmpPeriod` มาโดยไม่รู้ตัว
+   มาก่อนแล้วรอบหนึ่ง) ถ้าเจอโค้ด/พารามิเตอร์ที่ไม่คุ้น อย่าเพิ่งคิดว่าเป็นบั๊ก
+   ให้เช็คก่อนว่ามีคนอื่นแก้เข้ามาหรือเปล่า
+2. ทดสอบคู่หุ้นไทย-ไทย (เช่น MINT vs CENTEL — เคยมีปัญหาที่นี่มาก่อนแต่สาเหตุคือ
+   ลืม restart server ไม่ใช่บั๊ก) และคู่ที่มี DR (fallback ไป Finnomena/Yahoo)
+3. เช็คตารางเทียบรายไตรมาส (บนสุดของหน้า): 13 metric group x 4 แถว (ค่าจริง A /
+   %QoQ A / ค่าจริง B / %QoQ B) = 52 แถว — field ที่เป็น % (Gross/Net Margin) ต้อง
+   โชว์ pp (+2.30pp) ไม่ใช่ % growth
+4. เช็ค sticky column ซ้ายสุด (ชื่อรายการ) ไม่หลุดตอนเลื่อนแนวนอน ทั้งแถวข้อมูล
+   และแถวหัวกลุ่ม (groupHdr ที่มี colspan — เคยมีบั๊ก sticky ไม่ทำงานเพราะ div
+   wrapper ไม่ครบ แก้แล้วรอบ 8)
+5. เช็ค scroll เริ่มที่ปีล่าสุดอัตโนมัติ, border ไม่ซ้อน/เหลื่อมจาก
+   border-collapse:collapse
+6. เช็คว่ากราฟ dual-line เก่าถูกลบออกจริง (ไม่มี dead UI ค้าง)
+7. เช็ค 0 console error
+
+เสร็จเมื่อ: ทดสอบทั้ง 2 หน้าผ่าน browser จริง (หรือ spot-check ตามที่ผู้ใช้ยืนยันว่า
+ใช้งานอยู่แล้วไม่มีปัญหา) — อัปเดต memory qpl-quarterly-report-view.md +
+fincompare-set-source-switch.md ปิด "ยังไม่ทดสอบ browser จริง"
+
+
+================================================================================
+ลำดับความสำคัญที่แนะนำ: หัวข้อ 1 (เร็ว, งานเล็ก) → หัวข้อ 3 (QA งานเก่าที่น่าจะ
+เสถียรอยู่แล้ว ทำ spot-check พอ) → หัวข้อ 2 (งาน dev จริง ต้องดูโค้ดเพิ่มก่อนลงมือ)
+แต่ผู้ใช้เลือกลำดับเองได้ตามต้องการ
+================================================================================
