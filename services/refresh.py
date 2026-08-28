@@ -361,11 +361,15 @@ def run_with_progress(callback, base_dir=None, period="max"):
 # 6. run_quick_update — ดาวน์โหลดแค่วันที่ขาด แล้ว recalculate
 # ============================================================
 
-def run_quick_update(callback, base_dir=None):
+def run_quick_update(callback, base_dir=None, exclude_halted_early=False, reverify_extra_days=0):
     """
     Quick Update: โหลด set_history.json → download gap → recalculate metrics
     → ดึง fundamentals (P/E, P/BV, Div Yield) ใหม่ผ่าน SET API (fallback Yahoo)
     → บันทึก set_history.json + set_data.json
+
+    exclude_halted_early, reverify_extra_days: ใช้เฉพาะ run_static_update.py (CI/เว็บ
+    มือถือ-ไอแพด) — ค่า default (False/0) คงพฤติกรรมเดิมทุกประการสำหรับปุ่ม Quick Update
+    บนเดสก์ท็อป ดู docstring ของแต่ละจุดที่ใช้งานด้านล่าง
     """
     if base_dir is None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -415,8 +419,38 @@ def run_quick_update(callback, base_dir=None):
     if stale_tickers:
         logging.info(f"[QuickUpdate] ข้ามหุ้นค้างนาน {len(stale_tickers)} ตัว (วันล่าสุดเก่ากว่า {stale_cut.date()})")
 
+    # เฉพาะ CI (เว็บมือถือ/ไอแพด, exclude_halted_early=True จาก run_static_update.py) —
+    # หุ้นติด SP/NC/NP/H ที่ตามหลังยังไม่ถึงเกณฑ์ 14 วัน (stale_cut ด้านบน) จะลาก min_last
+    # ทั้งกระดานให้ค้างวันเก่าอยู่เรื่อยๆ ทุกรอบ ปิดโอกาส SET API fast-path (ต้องขาดพอดี
+    # 1 วันเทรด) ไปเป็นสัปดาห์ (พบจริง 2026-08-27: ค้างตั้งแต่ 17 ส.ค. บังคับ fallback
+    # Yahoo ทั้งกระดานทุกรอบ จนเจอราคา AMATA/RS ที่ยังไม่ settle) — เช็คเครื่องหมายของ
+    # เฉพาะหุ้นที่ตามหลังทันที ถ้าติด SP/NC/NP/H จริงก็ตัดออกจากการคำนวณ min_last เลย
+    # ไม่ต้องรอครบ 14 วัน (ยังอยู่ใน tickers/remaining เดิม ไม่ถูกข้ามการดึงราคาจริง)
+    if exclude_halted_early:
+        max_last_str = max_last.strftime("%Y-%m-%d")
+        lagging_now = [t for t, d in active_map.items() if d != max_last_str]
+        if lagging_now:
+            try:
+                from sources.set_api import fetch_signs_batch, _SUSPEND_SIGNS
+                signs = fetch_signs_batch(lagging_now)
+                halted = {t for t, s in signs.items()
+                          if {c.strip() for c in s.split(",")} & _SUSPEND_SIGNS}
+                if halted and len(halted) < len(active_map):
+                    logging.info(f"[QuickUpdate] กันหุ้นติดเครื่องหมาย {len(halted)} ตัวออกจาก "
+                                 f"การหา start_date ทันที (ไม่รอครบ 14 วัน): {sorted(halted)[:10]}")
+                    active_map = {t: d for t, d in active_map.items() if t not in halted}
+            except Exception as e:
+                logging.warning(f"[QuickUpdate] เช็คเครื่องหมายล่วงหน้าล้มเหลว ({e}) — ข้าม")
+
     min_last  = min(active_map.values())
     start_dt  = pd.to_datetime(min_last)  # re-fetch วันล่าสุดเสมอ เผื่อดึงก่อนตลาดปิด
+    if reverify_extra_days:
+        # เฉพาะ CI — ขยายช่วง re-fetch ย้อนหลังเพิ่ม กัน Yahoo ปล่อยราคาที่ยังไม่ settle
+        # ออกมาแล้วรอบถัดไปข้ามวันไปแล้ว ไม่มีโอกาสดึงมาแก้ไขซ้ำอีก (เดิม re-fetch แค่
+        # "วันล่าสุด" วันเดียว — พบจริง 2026-08-27 กรณี AMATA/RS ที่ Yahoo ใช้เวลาแก้ไข
+        # นานหลายชั่วโมง ข้ามรอบ cron ไปแล้ว) ไม่กระทบเงื่อนไข fast-path (เช็คจาก mode_date
+        # ไม่ใช่ start_date) แค่ทำให้ Yahoo fallback/catch-up ดึงย้อนหลังกว้างขึ้นเท่านั้น
+        start_dt = start_dt - pd.tseries.offsets.BDay(reverify_extra_days)
     today     = pd.Timestamp.now().normalize()
 
     if start_dt > today:

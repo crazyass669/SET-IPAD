@@ -99,15 +99,46 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/ market_flow_data.json s50_flow_data.json bond_flow_data.json
+
+          DATA_PATHS="data/ market_flow_data.json s50_flow_data.json bond_flow_data.json"
+          git add $DATA_PATHS
           if git diff --cached --quiet; then
             echo "ไม่มีข้อมูลใหม่ — ข้าม commit"
             exit 0
           fi
-          git commit -m "data: auto-update $(date -u '+%Y-%m-%d %H:%M') UTC"
-          if ! git pull --rebase origin main; then
-            echo "rebase ล้มเหลว — ยกเลิก rebase กัน repo ค้างสถานะ"
-            git rebase --abort
-            exit 1
-          fi
-          git push origin HEAD:main
+
+          # สำรองไฟล์ข้อมูลที่เพิ่ง bake รอบนี้ไว้นอก git ก่อน กันหายระหว่าง retry —
+          # เจอจริง 2026-08-27 หลายรอบติด: มีคน/รอบอื่น push ทับ data/ ชนกันพอดี (ทั้ง
+          # จาก auto-commit เครื่องผู้ใช้เอง และ workflow run ที่ทับซ้อนกัน) เดิม rebase
+          # ชนแล้ว exit 1 ทันที ทั้งที่ผล bake รอบนี้ถูกต้องสมบูรณ์อยู่แล้ว ต้องมารันใหม่
+          # ทั้งรอบเปล่าๆ — path พวกนี้เป็นไฟล์ generate ล้วน ไม่มีใครแก้มือ ปลอดภัยที่จะ
+          # เลือกฝั่งเราทับเสมอเวลาชนกัน (ของสดล่าสุดจากรอบนี้ย่อมถูกต้องกว่า)
+          BACKUP=$(mktemp -d)
+          cp -r data "$BACKUP/data"
+          for f in market_flow_data.json s50_flow_data.json bond_flow_data.json; do
+            [ -f "$f" ] && cp "$f" "$BACKUP/"
+          done
+
+          for i in 1 2 3 4 5; do
+            git add $DATA_PATHS
+            if git diff --cached --quiet; then
+              echo "ข้อมูลตรงกับ remote แล้ว (รอบอื่น push อันเดียวกันไปก่อนแล้ว) — ไม่ต้อง commit ซ้ำ"
+              exit 0
+            fi
+            git commit -q -m "data: auto-update $(date -u '+%Y-%m-%d %H:%M') UTC"
+            if git push origin HEAD:main; then
+              echo "push สำเร็จ (ครั้งที่ $i)"
+              exit 0
+            fi
+            echo "push ชนกันรอบ $i/5 — sync กับ remote ล่าสุดแล้วคืนไฟล์ของเรากลับ"
+            git fetch origin main
+            git reset --hard origin/main
+            rm -rf data
+            cp -r "$BACKUP/data" data
+            for f in market_flow_data.json s50_flow_data.json bond_flow_data.json; do
+              [ -f "$BACKUP/$f" ] && cp "$BACKUP/$f" .
+            done
+            sleep $((i * 5))
+          done
+          echo "push ล้มเหลวครบ 5 รอบ"
+          exit 1

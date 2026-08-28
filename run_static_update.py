@@ -71,7 +71,8 @@ was_quick_update = price_store.db_exists(BASE_DIR)
 if was_quick_update:
     log("=== พบ set_prices.db (cache) — Quick Update ===")
     try:
-        refresh_svc.run_quick_update(_progress_cb, BASE_DIR)
+        refresh_svc.run_quick_update(_progress_cb, BASE_DIR,
+                                      exclude_halted_early=True, reverify_extra_days=2)
         log("✅ Quick Update เสร็จ")
     except Exception as e:
         log(f"⚠️ Quick Update ล้ม ({e}) — fallback Full Refresh")
@@ -98,7 +99,8 @@ if was_quick_update:
             f"retry ({attempt}/{MAX_RETRY}): {preview}{' ...' if len(lagging) > 10 else ''} ===")
         time.sleep(RETRY_WAIT_SEC)
         try:
-            refresh_svc.run_quick_update(_progress_cb, BASE_DIR)
+            refresh_svc.run_quick_update(_progress_cb, BASE_DIR,
+                                          exclude_halted_early=True, reverify_extra_days=2)
             log(f"✅ Retry quick update ({attempt}/{MAX_RETRY}) เสร็จ")
         except Exception as e:
             log(f"⚠️ Retry quick update ล้ม ({e}) — หยุด retry")
