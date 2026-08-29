@@ -644,7 +644,8 @@
  "note": "รายชื่อ constituents ปัจจุบัน ณ วันที่ดึงข้อมูล — ตัวที่ไม่อยู่ใน mirror list หลัก (factor_mirror) จะดึงงบผ่าน Yahoo Finance โดยตรงแทน Finnomena เมื่อกรองด้วยปุ่มดัชนีนี้",
  "extra_names": {
   "XYZ": "Block, Inc.",
-  "COR": "Cencora, Inc."
+  "COR": "Cencora, Inc.",
+  "TEL": "Tokyo Electron Ltd."
  },
  "SP500_sector": {
   "MMM": "Industrials",

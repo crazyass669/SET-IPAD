@@ -6591,7 +6591,7 @@ function closeModal() {
   document.body.style.overflow = "";
 }
 
-document.addEventListener("keydown", e => { if(e.key==="Escape") { closeModal(); closeChartModal(); closeStockPopup(); closeHedgeDetailModal(); } });
+document.addEventListener("keydown", e => { if(e.key==="Escape") { closeModal(); closeChartModal(); closeStockPopup(); closeHedgeDetailModal(); closeDhCashCycleModal(); } });
 
 // ============================================================
 // STOCK QUICK POPUP
@@ -24061,7 +24061,6 @@ const DH_SOURCE_MAP = {
   offsite_backup:       { text: 'รันเอง: python backup_financials_offsite.py <โฟลเดอร์ปลายทาง> — ไม่มีปุ่มในแอป (เขียนไฟล์นอกเครื่อง)' },
   static_bake:          { text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py) — ปกติรันอัตโนมัติบน GitHub Actions แล้ว git pull', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
   static_bake_run:      { text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py) — ปกติรันบน GitHub Actions', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
-  set_history:          { text: '⚡ Quick Update หรือ ⟳ Full Refresh', fn: 'startQuickUpdate', fnLabel: '⚡ Quick Update' },
   fin_analytics_yahoo:  { text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py)', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
   stock_valuation_stats:{ text: 'ปุ่ม "🧱 Bake ไฟล์ static ทั้งหมด" ด้านล่างในหน้านี้ (หรือ python run_static_update.py)', fn: 'startStaticBake', fnLabel: '🧱 Bake ไฟล์ static ทั้งหมด' },
   mirror_names:         { text: 'หน้า Data Health — การ์ด "อัพเดทงบไตรมาส" ปุ่ม "🏷️ ดึงชื่อหุ้น mirror ใหม่" (ทำหลัง mirror ได้หุ้นใหม่)', fn: 'startBuildMirrorNames', fnLabel: '🏷️ ดึงชื่อหุ้น mirror ใหม่' },
@@ -24206,6 +24205,62 @@ async function loadDataHealth() {
   loadBackupFilesStatus();
   loadLastRuns();
   loadUpdateHistory();
+}
+
+// ตาราง "วงจรเงินสด SET vs Yahoo" เต็ม (ไม่ตัด 12 ตัวแรกเหมือนตารางใน note ของ item
+// q_cash_cycle_crosscheck) — เปิดจากลิงก์ "และอีก N ตัว" โหลดผ่าน
+// /api/data-health/cash-cycle-crosscheck-full แยกต่างหาก ไม่ผูกกับ /api/data-health หลัก
+// ที่ถูกเรียกบ่อย (badge เช็คทุกครั้งเปิดแอป) กันยัดตารางเต็ม ~470+ แถวเข้าไปทุกครั้ง
+let _dhCcFullRows = null;
+async function _dhShowCashCycleFull() {
+  const body = document.getElementById('dh-cc-body');
+  if (!body) return;
+  body.innerHTML = '<div class="empty" style="padding:16px">กำลังโหลด...</div>';
+  document.getElementById('dh-cc-modal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  try {
+    const r = await _fetchTimeout('/api/data-health/cash-cycle-crosscheck-full', 20000, 'หมดเวลาโหลด (เกิน 20 วิ)');
+    const d = await r.json();
+    if (d.error) { body.innerHTML = `<div class="empty" style="color:var(--red)">⚠ ${_escHtml(d.error)}</div>`; return; }
+    _dhCcFullRows = d.rows || [];
+    body.innerHTML = `
+      <div style="font-size:11px;color:var(--text2);margin-bottom:8px">
+        ต่างกัน ≥${d.diff_days} วัน ทั้งหมด <b>${_dhCcFullRows.length}</b> ตัว — เรียงจากต่างมากไปน้อย
+      </div>
+      <input id="dh-cc-search" class="scr-input" placeholder="ค้นหา symbol..." style="width:100%;margin-bottom:8px" oninput="_dhCcFilterRows(this.value)">
+      <div id="dh-cc-table-wrap" style="max-height:60vh;overflow-y:auto"></div>`;
+    _dhCcRenderRows(_dhCcFullRows);
+  } catch (e) {
+    body.innerHTML = `<div class="empty" style="color:var(--red)">⚠ โหลดไม่สำเร็จ: ${_escHtml(e.message)}</div>`;
+  }
+}
+
+function _dhCcRenderRows(rows) {
+  const wrap = document.getElementById('dh-cc-table-wrap');
+  if (!wrap) return;
+  if (!rows.length) { wrap.innerHTML = '<div class="empty" style="padding:12px">ไม่พบ</div>'; return; }
+  wrap.innerHTML = `<table class="tbl" style="width:100%">
+    <thead><tr><th>Symbol</th><th class="r">Yahoo</th><th class="r">SET</th><th class="r">Δ วัน</th></tr></thead>
+    <tbody>${rows.map(r => `
+      <tr>
+        <td><b>${_escHtml(r.symbol)}</b></td>
+        <td class="r" style="color:var(--text2)">${r.yahoo.toFixed(0)}</td>
+        <td class="r" style="color:var(--text2)">${r.set.toFixed(0)}</td>
+        <td class="r" style="color:#e8a33d">Δ${r.diff.toFixed(0)}</td>
+      </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+function _dhCcFilterRows(q) {
+  if (!_dhCcFullRows) return;
+  const needle = (q || '').trim().toUpperCase();
+  _dhCcRenderRows(needle ? _dhCcFullRows.filter(r => r.symbol.toUpperCase().includes(needle)) : _dhCcFullRows);
+}
+
+function closeDhCashCycleModal() {
+  const modal = document.getElementById('dh-cc-modal');
+  if (modal) modal.classList.remove('open');
+  document.body.style.overflow = '';
 }
 
 // กดล่าสุดของ Quick Update / Full Refresh — ใช้ /api/update-status ตัวเดียวกับที่
@@ -24466,12 +24521,17 @@ async function checkSetUniverseUpdates() {
     const renamedHtml = renamedRows.length ? `
       <div style="margin-bottom:8px">
         <div style="font-size:12px;font-weight:600;color:#e3b341;margin-bottom:6px">🔄 น่าจะแค่เปลี่ยนชื่อย่อ (${renamedRows.length} ตัว)
-          <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:270px">
+          <span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:290px">
             <strong>เปลี่ยนชื่อ ≠ เพิกถอน</strong><br>
             หุ้นที่หายจากรายชื่ออาจแค่เปลี่ยนชื่อย่อ (ควบรวม/rebrand) ราคาและงบเก่ายังใช้ได้
             ต้องย้ายไปชื่อใหม่ ไม่ใช่ทิ้ง<hr>
-            ระบบเทียบจากรายชื่อทางการของ SET (oldSymbols) ให้แล้ว —
-            <b>ห้ามลบข้อมูลเก่าทิ้ง</b> กดคัดลอกคำสั่งแล้วรันใน terminal เพื่อย้ายราคา/งบไปชื่อใหม่แทน
+            ระบบเทียบจากรายชื่อทางการของ SET (oldSymbols) ให้แล้ว — <b>ห้ามลบข้อมูลเก่าทิ้ง</b><br>
+            <b>วิธีอัปเดต:</b>
+            1) กด "📋 คัดลอกคำสั่ง" ในแถวที่ต้องการ<br>
+            2) เปิด Command Prompt/PowerShell ที่โฟลเดอร์โปรเจกต์ แล้ววางคำสั่ง (Ctrl+V) กด Enter —
+            หรือดับเบิลคลิก <code>rename_symbol.bat</code> ที่ root แล้วพิมพ์ชื่อเดิม/ใหม่ตามที่ถามแทนก็ได้<br>
+            3) สคริปต์จะสำรอง <code>set_prices.db</code>/<code>financials.db</code> อัตโนมัติก่อนย้ายข้อมูลเสมอ<br>
+            4) เสร็จแล้ว restart แอป (<code>start.bat</code>) แล้วกด ⚡ Quick Update อีกรอบ ให้ RS/EMA/Stage คำนวณใหม่จากประวัติเต็ม
           </div></span>
         </div>
         <div style="overflow-x:auto"><table class="tbl" style="min-width:360px">

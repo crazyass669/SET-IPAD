@@ -7823,6 +7823,70 @@ def data_health():
         return jsonify(result)
 
 
+@app.route("/api/data-health/cash-cycle-crosscheck-full")
+def data_health_cash_cycle_crosscheck_full():
+    """รายชื่อคู่หุ้นวงจรเงินสด SET vs Yahoo ที่ต่างกันเกิน threshold ครบทุกตัว (ไม่ตัดโชว์
+    12 ตัวแรกเหมือน note ใน /api/data-health) — แยก route ต่างหากเพราะ /api/data-health
+    ถูกเรียกบ่อยมาก (badge เช็คทุกครั้งเปิดแอป/หลัง Quick Update) ไม่อยากยัดตารางเต็ม
+    (~470+ แถว) เข้าไปทุกครั้งทั้งที่แทบไม่มีใครกดดู โหลดเฉพาะตอนกด "และอีก N ตัว" จริงๆ"""
+    try:
+        cc = _compute_cash_cycle_crosscheck()
+        rows = [{"symbol": s, "yahoo": y, "set": t, "diff": round(abs(y - t), 1)}
+                for s, y, t in cc["diverge"]]
+        return jsonify({"diff_days": cc["diff_days"], "rows": rows})
+    except Exception as e:
+        return jsonify({"error": str(e)[:200]}), 500
+
+
+def _compute_cash_cycle_crosscheck():
+    """คำนวณ cross-check วงจรเงินสด SET vs Yahoo ทั้งตลาด — คืน dict สถิติ + list คู่ที่
+    ต่างกันเกิน threshold ครบทุกตัว (ไม่ตัด) ให้ทั้ง _compute_data_health (ตัดโชว์ 12 ตัวแรก
+    ในตาราง note) และ route /api/data-health/cash-cycle-crosscheck-full (list เต็มตอนกด
+    "และอีก N ตัว") ใช้ลอจิกเดียวกัน กันคำนวณซ้ำ/ผลเพี้ยนกันสองจุด"""
+    _CC_DIFF_DAYS = 15        # เท่ากับ threshold ในการ์ด Tearsheet
+    _CC_PLAUSIBLE = 600       # |วงจรเงินสด| เกินนี้ = นอกช่วงที่เป็นไปได้ของธุรกิจจริง
+    _CC_ABSURD = 1000         # เกินนี้ = สูตรระเบิด (ตัวหารใกล้ 0) ไม่ใช่แค่ outlier
+    _cc_yahoo = {r["symbol"]: r.get("cash_cycle")
+                 for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
+
+    def _cc_latest_amount(acc):
+        for _v in reversed((acc or {}).get("values") or []):
+            if _v.get("amount") is not None:
+                return _v["amount"]
+        return None
+
+    _cc_pairs = _cc_absurd = 0
+    _cc_plausible = []          # (sym, yahoo, set) ที่ทั้งคู่อยู่ในช่วงเป็นไปได้
+    for _sym, _pl in financials_store.iter_source_payloads(BASE_DIR, "set_health"):
+        _acc = None
+        for _th in (_pl.get("themes") or []):
+            for _cat in (_th.get("categories") or []):
+                _acc = next((a for a in (_cat.get("accounts") or [])
+                             if a.get("code") == "q_cash_cycle"), None)
+                if _acc:
+                    break
+            if _acc:
+                break
+        _set_cc = _cc_latest_amount(_acc)
+        _y_cc = _cc_yahoo.get(_sym)
+        if _set_cc is None or _y_cc is None:
+            continue
+        _cc_pairs += 1
+        if abs(_y_cc) > _CC_ABSURD:
+            _cc_absurd += 1
+        if abs(_y_cc) <= _CC_PLAUSIBLE and abs(_set_cc) <= _CC_PLAUSIBLE:
+            _cc_plausible.append((_sym, round(_y_cc, 1), round(_set_cc, 1)))
+    _cc_diverge = sorted((t for t in _cc_plausible if abs(t[1] - t[2]) >= _CC_DIFF_DAYS),
+                         key=lambda t: abs(t[1] - t[2]), reverse=True)
+    return {
+        "diff_days": _CC_DIFF_DAYS,
+        "pairs": _cc_pairs,
+        "absurd": _cc_absurd,
+        "plausible": len(_cc_plausible),
+        "diverge": _cc_diverge,
+    }
+
+
 def _compute_data_health():
     items = []
 
@@ -8422,10 +8486,9 @@ def _compute_data_health():
                 _it["note"] = f"⚠ รอบล่าสุดล้มเหลว: {str(_bake_run.get('message'))[:200]}"
 
     # ── ไฟล์ประกอบอื่นๆ ที่หน้าเว็บใช้จริงแต่เดิมไม่มีใครเฝ้า ──────────────
-    items.append(_dh_item(
-        "set_history", "ประวัติราคา/สถิติย้อนหลัง (set_history.json)", "ราคา/เทคนิค",
-        _dh_mtime(HISTORY_FILE), 30 * 24, 90 * 24,
-        missing_note="ยังไม่เคยสร้าง set_history.json", optional=True))
+    # (ตัด "set_history" ออกจากรายการนี้แล้ว — DUAL_WRITE_JSON=False ตั้งแต่ 2026-07-16
+    # (ดู core/store.py) ทำให้ set_history.json ไม่ถูกเขียนอีกต่อไป mtime เลยค้างถาวร
+    # ไล่ warn→red ไปเรื่อยๆ โดย Quick Update/Full Refresh แก้ให้ไม่ได้จริง)
 
     items.append(_dh_item(
         "fin_analytics_yahoo", "Analytics งบจาก Yahoo (financials_analytics_yahoo.json)",
@@ -8572,42 +8635,12 @@ def _compute_data_health():
     # ค่าฝั่ง Yahoo "เพี้ยนชัด" (|cash cycle| > 1000 วัน = รายได้/ต้นทุนใกล้ 0 หารระเบิด) เยอะ
     # ผิดปกติ ซึ่งแปลว่า compute_cash_cycle พังจริง ไม่ใช่แค่ต่างสูตร
     try:
-        _CC_DIFF_DAYS = 15        # เท่ากับ threshold ในการ์ด Tearsheet
-        _CC_PLAUSIBLE = 600       # |วงจรเงินสด| เกินนี้ = นอกช่วงที่เป็นไปได้ของธุรกิจจริง
-        _CC_ABSURD = 1000         # เกินนี้ = สูตรระเบิด (ตัวหารใกล้ 0) ไม่ใช่แค่ outlier
-        _cc_yahoo = {r["symbol"]: r.get("cash_cycle")
-                     for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
-
-        def _cc_latest_amount(acc):
-            for _v in reversed((acc or {}).get("values") or []):
-                if _v.get("amount") is not None:
-                    return _v["amount"]
-            return None
-
-        _cc_pairs = _cc_absurd = 0
-        _cc_plausible = []          # (sym, yahoo, set) ที่ทั้งคู่อยู่ในช่วงเป็นไปได้
-        for _sym, _pl in financials_store.iter_source_payloads(BASE_DIR, "set_health"):
-            _acc = None
-            for _th in (_pl.get("themes") or []):
-                for _cat in (_th.get("categories") or []):
-                    _acc = next((a for a in (_cat.get("accounts") or [])
-                                 if a.get("code") == "q_cash_cycle"), None)
-                    if _acc:
-                        break
-                if _acc:
-                    break
-            _set_cc = _cc_latest_amount(_acc)
-            _y_cc = _cc_yahoo.get(_sym)
-            if _set_cc is None or _y_cc is None:
-                continue
-            _cc_pairs += 1
-            if abs(_y_cc) > _CC_ABSURD:
-                _cc_absurd += 1
-            if abs(_y_cc) <= _CC_PLAUSIBLE and abs(_set_cc) <= _CC_PLAUSIBLE:
-                _cc_plausible.append((_sym, round(_y_cc, 1), round(_set_cc, 1)))
-        _cc_diverge = sorted((t for t in _cc_plausible if abs(t[1] - t[2]) >= _CC_DIFF_DAYS),
-                             key=lambda t: abs(t[1] - t[2]), reverse=True)
-        _cc_np = len(_cc_plausible)
+        _cc = _compute_cash_cycle_crosscheck()
+        _CC_DIFF_DAYS = _cc["diff_days"]
+        _cc_pairs = _cc["pairs"]
+        _cc_absurd = _cc["absurd"]
+        _cc_np = _cc["plausible"]
+        _cc_diverge = _cc["diverge"]
         _cc_dn = len(_cc_diverge)
         _cc_dpct = (_cc_dn / _cc_np * 100) if _cc_np else 0.0
         _cc_apct = (_cc_absurd / _cc_pairs * 100) if _cc_pairs else 0.0
@@ -8637,7 +8670,9 @@ def _compute_data_health():
                         f'ค่าฝั่ง Yahoo เพี้ยนชัด (สูตรระเบิด) <b>{_cc_absurd}</b> ({_cc_apct:.0f}%)'
                         + (f'<table style="border-collapse:collapse;margin-top:4px">{_cc_rows}</table>'
                            if _cc_diverge else '')
-                        + (f'<div style="color:var(--text2);margin-top:2px">…และอีก {_cc_dn - 12} ตัว</div>'
+                        + (f'<div style="margin-top:2px"><a href="javascript:void(0)" '
+                           f'onclick="_dhShowCashCycleFull()" style="color:var(--blue)">'
+                           f'…และอีก {_cc_dn - 12} ตัว (คลิกดูทั้งหมด)</a></div>'
                            if _cc_dn > 12 else '')
                         + '<div style="margin-top:6px;color:var(--text2);font-size:11px">'
                           'ต่างกันเกินครึ่ง = ปกติ (คนละสูตร/งวด) · ถ้า "เพี้ยนชัด" พุ่งสูง = '

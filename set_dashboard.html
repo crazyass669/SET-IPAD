@@ -4121,6 +4121,20 @@
   </div>
 </div>
 
+<!-- DATA HEALTH: วงจรเงินสด cross-check (SET vs Yahoo) — รายการเต็ม เปิดจากลิงก์
+     "และอีก N ตัว" ใน note ของ item q_cash_cycle_crosscheck (_compute_data_health ใน
+     app.py) โหลด body ผ่าน /api/data-health/cash-cycle-crosscheck-full ตอนกดเท่านั้น
+     (แยกจาก /api/data-health หลักที่ถูกเรียกบ่อย กันยัดตารางเต็มเข้าไปทุกครั้ง) -->
+<div class="modal-overlay" id="dh-cc-modal" onclick="if(event.target===this)closeDhCashCycleModal()">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header">
+      <div class="modal-title" style="font-size:13px;font-weight:400">🔄 วงจรเงินสด SET vs Yahoo — ต่างกันเกิน threshold (ทั้งหมด)</div>
+      <button class="modal-close" onclick="closeDhCashCycleModal()">✕</button>
+    </div>
+    <div class="modal-body" id="dh-cc-body" style="padding:14px 20px"></div>
+  </div>
+</div>
+
 <!-- PAGE: DCF SCREENER — รัน DCF Model (พยากรณ์เต็มรูปแบบ) ทุกหุ้นไทยที่คำนวณได้ ด้วยสมมติฐาน
      WACC/Growth ค่าเริ่มต้นเดียวกันทั้งตลาด (Beta=1.00 คงที่ทุกตัว เหมือนค่าเริ่มต้นในหน้า Tearsheet)
      ดู sources/dcf_screener.py + routes /api/dcf-screener* ใน app.py — local-only, ไม่มี network call
@@ -5572,6 +5586,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260829b"></script>
+<script src="static/dashboard.js?v=20260829e"></script>
 </body>
 </html>
