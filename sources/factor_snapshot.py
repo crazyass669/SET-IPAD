@@ -750,7 +750,8 @@ def mirror_snapshot_meta(base_dir):
         counts = {m: n for m, n in con.execute(f"SELECT market, COUNT(*) FROM {MIRROR_TABLE} GROUP BY market").fetchall()}
     finally:
         con.close()
-    return {"computed_at": fs._get_meta(base_dir, "factor_mirror_at"), "counts": counts}
+    return {"computed_at": fs._get_meta(base_dir, "factor_mirror_at"), "counts": counts,
+            "stale": fs.snapshot_stale_vs_sync(base_dir, "factor_mirror_at", "mirror_source_synced_at")}
 
 
 def get_snapshot(base_dir, is_dr=None):
@@ -781,4 +782,5 @@ def get_snapshot(base_dir, is_dr=None):
 
 def snapshot_meta(base_dir):
     return {"computed_at": fs._get_meta(base_dir, "factor_snapshot_at"),
-            "count": len(get_snapshot(base_dir))}
+            "count": len(get_snapshot(base_dir)),
+            "stale": fs.snapshot_stale_vs_sync(base_dir, "factor_snapshot_at")}

@@ -4335,12 +4335,23 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_dat
             _update(current=current, total=total, message=msg)
 
         result = financials_store.sync_all(BASE_DIR, target, sources=srcs, callback=cb,
-                                           is_dr=is_dr, skip_up_to_date=skip_up_to_date)
+                                           is_dr=is_dr, skip_up_to_date=skip_up_to_date,
+                                           auto_rebuild=False)   # rebuild เองแบบ sync ทันทีด้านล่าง
         _fin_analytics_cache.clear()   # ข้อมูลเปลี่ยน — บังคับคำนวณ growth/PEG/FCF ใหม่รอบถัดไป
         _sector_compare_cache.clear()
         _qpl_parsed_cache.clear()
         _market_trend_cache.clear()
         _sector_trend_cache.clear()
+        # rebuild factor snapshot ทันที (ไม่รอ debounce 300 วิ + ครอบ sync < 5 หุ้นที่เดิม
+        # schedule_rebuild ไม่ยิงเลย) — ครอบทั้งไทย+DR เสมอ (ดู factor_snapshot.build_snapshot)
+        # ไม่แตะ mirror US/HK/JP: _run_financials_sync ไม่เขียน FINN:{ex}: keys ที่ build_mirror
+        # อ่าน (mirror rebuild อยู่ที่ปุ่ม "อัพเดทงบการเงินทั้งหมด" หน้า Data Health / Mirror ทั้งตลาด)
+        if result.get("ok", 0) > 0:
+            _update(message="กำลังคำนวณ factor snapshot ใหม่...")
+            try:
+                factor_snapshot.build_snapshot(BASE_DIR)
+            except Exception as e:
+                print(f"[FinancialsSync] build_snapshot ล้มเหลว (งบ sync สำเร็จแล้ว): {e}")
         _warmup_fin_dependent_caches()
         skipped = result.get("skipped", 0)
         _update(done=True,
@@ -6229,7 +6240,16 @@ def _run_us_index_sync(min_age_days=None):
         if targets:
             result = financials_store.sync_all(BASE_DIR, targets, sources=("yahoo_q", "yahoo"),
                                                callback=cb, is_dr=True, market="US",
-                                               skip_up_to_date=True)
+                                               skip_up_to_date=True, auto_rebuild=False)
+            if result.get("ok", 0) > 0:
+                # สมาชิกดัชนีใหม่ที่เพิ่ง sync งบ (namespace DR:) ต้องเข้า factor_snapshot ฝั่ง DR
+                # ด้วย ไม่งั้น Tearsheet/Peer ของตัวใหม่โชว์ค่าเก่า/ว่าง — เดิม route นี้ล้าง cache
+                # เฉยๆ ไม่ rebuild (mirror FINN: ไม่กระทบ เพราะ route นี้ไม่เขียน FINN: keys)
+                _update(message="กำลังคำนวณ factor snapshot ใหม่...")
+                try:
+                    factor_snapshot.build_snapshot(BASE_DIR)
+                except Exception as e:
+                    print(f"[USIndexSync] build_snapshot ล้มเหลว (งบ sync สำเร็จแล้ว): {e}")
             _clear_fin_analytics_and_warm()
         else:
             result = {"ok": 0, "fail": 0, "total": 0, "skipped": 0}
@@ -6361,7 +6381,15 @@ def _run_hk_index_sync(min_age_days=None):
         if targets:
             result = financials_store.sync_all(BASE_DIR, targets, sources=("yahoo_q", "yahoo"),
                                                callback=cb, is_dr=True, market="HK",
-                                               skip_up_to_date=True)
+                                               skip_up_to_date=True, auto_rebuild=False)
+            if result.get("ok", 0) > 0:
+                # สมาชิกดัชนีใหม่ (namespace DR:) ต้องเข้า factor_snapshot ฝั่ง DR — ดูคอมเมนต์
+                # ที่ US index sync ด้านบน
+                _update(message="กำลังคำนวณ factor snapshot ใหม่...")
+                try:
+                    factor_snapshot.build_snapshot(BASE_DIR)
+                except Exception as e:
+                    print(f"[HKIndexSync] build_snapshot ล้มเหลว (งบ sync สำเร็จแล้ว): {e}")
             _clear_fin_analytics_and_warm()
         else:
             result = {"ok": 0, "fail": 0, "total": 0, "skipped": 0}
@@ -9181,7 +9209,7 @@ def _run_financials_update_all():
                                                    "set_balance", "set_health", "set_factsheet",
                                                    "yahoo_q", "finnomena_q"),
                                           callback=_th_cb, is_dr=False,
-                                          skip_up_to_date=True)
+                                          skip_up_to_date=True, auto_rebuild=False)
 
         syms_dr = _dr_financials_universe()
         _update(current=50, total=100, message=f"sync งบ DR {len(syms_dr)} ตัว...")
@@ -9192,7 +9220,7 @@ def _run_financials_update_all():
         r_dr = financials_store.sync_all(BASE_DIR, syms_dr,
                                           sources=("yahoo", "yahoo_q", "finnomena_q"),
                                           callback=_dr_cb, is_dr=True,
-                                          skip_up_to_date=True)
+                                          skip_up_to_date=True, auto_rebuild=False)
 
         # sync งบสมาชิกดัชนีหลัก US (S&P500+Dow+NDX) / HK (HSI+HSCEI+HSTECH) / JP (Nikkei 225)
         # ผ่าน Yahoo — sync_mirror_yahoo_index สแกน namespace 'DR:{sym}'/'FINN:{ex}:{sym}' ที่มี

@@ -131,6 +131,20 @@ def _set_meta(base_dir, key, value):
         con.close()
 
 
+def snapshot_stale_vs_sync(base_dir, snapshot_at_key, ref_key="last_full_sync_at"):
+    """True ถ้า precomputed snapshot (factor_snapshot/mirror/dcf/pbv-pe) ถูกคำนวณ 'ก่อน'
+    ข้อมูลต้นทางที่ sync ครั้งล่าสุด — ให้ฝั่ง UI ขึ้น badge เตือนว่าควรกด rebuild/คำนวณใหม่
+    timestamp เก็บเป็น string "%Y-%m-%d %H:%M:%S" (fixed-width) เทียบ lexicographic ได้ตรงๆ
+    ไม่มี ref = ยังไม่เคย sync → ไม่ถือว่า stale · มี ref แต่ไม่มี snapshot = stale"""
+    ref = _get_meta(base_dir, ref_key)
+    if not ref:
+        return False
+    snap = _get_meta(base_dir, snapshot_at_key)
+    if not snap:
+        return True
+    return str(snap) < str(ref)
+
+
 def _dr_key(symbol):
     """namespace symbol ของหุ้น DR แยกจากหุ้นไทยตอนเก็บ/อ่าน DB — กัน symbol ชนกัน
     เช่น 'META' มีทั้งหุ้นไทย mai (META Corporation) และ underlying ของ DR (Meta Platforms
@@ -2741,6 +2755,9 @@ def mirror_finnomena(base_dir, exchanges=("TH", "HK", "US"), limit=None,
               json.dumps({"at": datetime.now().strftime("%Y-%m-%d %H:%M"),
                           "ok": ok, "empty": empty, "fail": fail,
                           "total": total, "force": force}, ensure_ascii=False))
+    if ok > 0:
+        _set_meta(base_dir, "mirror_source_synced_at",
+                  datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     print(f"[FinnMirror] จบรอบ: มีงบ {ok} | ไม่มีงบ (บันทึก marker) {empty} | พลาด {fail}")
     return {"ok": ok, "empty": empty, "fail": fail, "total": total}
 
@@ -2920,6 +2937,11 @@ def sync_mirror_yahoo_index(base_dir, tickers_by_ex, workers=4, limit=None, call
                 callback(done, total, f"Yahoo mirror index {done}/{total} | ok={ok} fail={fail}")
 
     print(f"[MirrorYahooIndex] จบ: ok={ok} fail={fail} total={total} skipped={skipped}")
+    if ok > 0:
+        # marker ให้ mirror_snapshot_meta เทียบ staleness — ข้อมูล mirror ต้นทางเพิ่งขยับ
+        # ถ้าหลังจากนี้ยังไม่ได้ build_mirror_snapshot() ให้ UI ขึ้น badge เตือน
+        _set_meta(base_dir, "mirror_source_synced_at",
+                  datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     return {"ok": ok, "fail": fail, "total": total, "skipped": skipped}
 
 
@@ -3631,7 +3653,7 @@ def _set_health_excluded_symbols(base_dir):
 
 
 def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=None,
-            is_dr=False, skip_up_to_date=False, market=None):
+            is_dr=False, skip_up_to_date=False, market=None, auto_rebuild=True):
     """ดึงงบการเงินเต็มของทุก symbol × ทุก source มา upsert เข้า DB
     คืน {"ok": n, "fail": n, "total": n, "skipped": n}
 
@@ -3641,6 +3663,11 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
     เพราะ SET ยังไม่ขึ้นข้อมูล จะถูก skip ทิ้งผิดๆ ทั้งที่ยังไม่มีของจริง) — แบบใหม่นี้ยิงซ้ำทุกครั้ง
     ที่กดจนกว่าจะได้งวดล่าสุดจริง แล้วจะหยุด skip เองพอมีครบ ไม่ต้องเดาจำนวนวัน
     False (ปกติ) = ดึงทุกคู่เสมอเหมือนพฤติกรรมเดิม (full sync — ใช้กับ scheduled task รายไตรมาส)
+
+    auto_rebuild=True (ปกติ): หลัง sync สำเร็จ ตั้ง timer debounce 300 วิ rebuild factor_snapshot
+    ให้เอง — caller ที่เรียก factor_snapshot.build_snapshot() ต่อเองแบบ synchronous ทันที
+    (เช่น _run_financials_sync / _run_financials_update_all ใน app.py) ควรส่ง False กัน rebuild
+    ซ้ำอีกรอบตอน timer ครบ (เปลืองเปล่า — DELETE+INSERT ทั้งตารางหลักพันตัว)
 
     market: ส่งต่อให้ fetch_yahoo_full/fetch_yahoo_quarterly เดา yf ticker ตอน symbol
     ไม่อยู่ใน DR universe ที่ curate ไว้ (หุ้น mirror US/HK ทั่วไปนอกพอร์ต) — ไม่งั้นจะ
@@ -3791,7 +3818,7 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
                 callback(done, total, f"งบการเงิน {done}/{total} ({sym} · {src})...")
 
     _set_meta(base_dir, "last_full_sync_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    if ok > 0 and len(symbols) >= _AUTO_REBUILD_MIN_SYMBOLS:
+    if auto_rebuild and ok > 0 and len(symbols) >= _AUTO_REBUILD_MIN_SYMBOLS:
         try:
             from sources import factor_snapshot   # lazy import กัน circular import (factor_snapshot import โมดูลนี้อยู่แล้ว)
             factor_snapshot.schedule_rebuild(base_dir)

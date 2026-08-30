@@ -258,4 +258,5 @@ def snapshot_meta(base_dir):
         assumptions = json.loads(raw_assumptions) if raw_assumptions else resolve_assumptions(None)
     except (TypeError, ValueError):
         assumptions = resolve_assumptions(None)
-    return {"computed_at": at, "count": len(rows), "ok_count": ok_count, "assumptions": assumptions}
+    return {"computed_at": at, "count": len(rows), "ok_count": ok_count, "assumptions": assumptions,
+            "stale": fs.snapshot_stale_vs_sync(base_dir, "pbv_pe_screener_at")}

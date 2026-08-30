@@ -560,7 +560,7 @@ function startMirrorYahooIndexSync() {
 function startFinancialsUpdateAll() {
   if (!confirm('เช็ค DR ใหม่ → งบหุ้นไทยทุกตัว (Yahoo+SET+Finnomena) → งบ DR → หุ้น US/HK ที่ค้นบ่อย → คำนวณ factor snapshot ใหม่?\n\nอาจใช้เวลานานถึงเกือบครึ่งชั่วโมง (ขึ้นกับจำนวนหุ้น/DR ที่ต้องดึง) — ปิดแท็บ/ปิดคอมได้ระหว่างรัน')) return;
   _startJob("/api/financials-update-all", "fin-update-all-btn", "🔄 อัพเดทงบการเงินทั้งหมด", null,
-    () => { checkDataHealthBadge(); loadFinUpdateAllStatus(); });
+    () => { _invalidateFinClientCaches(); loadFinAnalytics(); checkDataHealthBadge(); loadFinUpdateAllStatus(); });
 }
 
 // โชว์ "กดล่าสุดเมื่อไหร่ + ผลลัพธ์" ติดกับปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" กันสับสนว่าข้อมูลที่ได้
@@ -4696,10 +4696,11 @@ function renderDcfScreener() {
   if (metaBox) {
     const a = d.meta.assumptions || {};
     const overrideCount = DCF_SCR_OPTIONAL_FIELDS.filter(([, key]) => a[key] != null).length;
-    metaBox.textContent = `คำนวณล่าสุด ${d.meta.computed_at || '—'} · คำนวณได้ ${d.meta.ok_count}/${d.meta.count} ตัว`
+    metaBox.innerHTML = `คำนวณล่าสุด ${d.meta.computed_at || '—'} · คำนวณได้ ${d.meta.ok_count}/${d.meta.count} ตัว`
       + (a.rf_pct != null ? ` · Rf ${a.rf_pct}% · β ${a.beta} · ERP ${a.erp_pct}% · TG ${a.terminal_growth_pct}% · ${a.years} ปี` : '')
       + (a.use_analyst_growth ? ' · 🎯 Growth ปี1-3 = ประมาณการนักวิเคราะห์ (Yahoo)' : '')
-      + (overrideCount > 0 ? ` · กำหนดเองทั้งตลาด ${overrideCount} ช่อง` : '');
+      + (overrideCount > 0 ? ` · กำหนดเองทั้งตลาด ${overrideCount} ช่อง` : '')
+      + _finStaleBadge(d.meta.stale, 'กด ⟳ คำนวณใหม่');
   }
   const rows = _dcfScrFilteredSorted();
   if (countBox) countBox.textContent = `${rows.length} ตัว`;
@@ -4937,10 +4938,11 @@ function renderPbvPeScreener() {
     const ov = [];
     if (a.coe_pct != null) ov.push('r');
     if (a.roe_pct != null) ov.push('ROE');
-    metaBox.textContent = `คำนวณล่าสุด ${d.meta.computed_at || '—'} · คำนวณได้ ${d.meta.ok_count}/${d.meta.count} ตัว`
+    metaBox.innerHTML = `คำนวณล่าสุด ${d.meta.computed_at || '—'} · คำนวณได้ ${d.meta.ok_count}/${d.meta.count} ตัว`
       + (a.g_pct != null ? ` · g ${a.g_pct}%` : '')
       + (a.coe_pct != null ? ` · r ${a.coe_pct}% (กรอกตรง)` : ` · r = Rf ${a.rf_pct}% + β ${a.beta}·ERP ${a.erp_pct}%`)
-      + (ov.length ? ` · กำหนดเองทั้งตลาด: ${ov.join(', ')}` : '');
+      + (ov.length ? ` · กำหนดเองทั้งตลาด: ${ov.join(', ')}` : '')
+      + _finStaleBadge(d.meta.stale, 'กด ⟳ คำนวณใหม่');
   }
   const rows = _pbvPeScrFilteredSorted();
   if (countBox) countBox.textContent = `${rows.length} ตัว`;
@@ -7275,6 +7277,7 @@ function startFinancialsSync(btnId = 'fin-sync-btn') {
         if (el) el.textContent = txt;
       });
     }).catch(() => {});
+    _invalidateFinClientCaches();   // เผื่อเปิดหน้าอื่นค้างในแท็บนี้ — บังคับ refetch ตอนกลับไป
     loadFinAnalytics();   // ข้อมูลใหม่ — คำนวณ growth/PEG/FCF ใหม่
   });
 }
@@ -7285,6 +7288,21 @@ function startFinancialsSync(btnId = 'fin-sync-btn') {
 // ============================================================
 let _finAnalyticsLoaded = false;
 let _finAnalyticsData   = null;   // เก็บ raw response ไว้ผสานเข้าหุ้น DR ทีหลังได้ (โหลด DR ช้ากว่า)
+
+// ล้าง cache ฝั่ง browser ที่อิงงบการเงิน/factor snapshot — เรียกหลังกดปุ่ม sync งบเสร็จ ไม่งั้น
+// หน้าที่เคยเปิดค้างในแท็บเดิม (แนวโน้มตลาด/Sector/Screener+/DCF/PBV-PE/เทียบเพื่อน/งบผสาน) จะโชว์
+// ของก่อน sync จนกว่าผู้ใช้จะ F5 · ตัวแปรทั้งหมดเป็น module-scope let ประกาศไว้แล้วที่อื่น
+function _invalidateFinClientCaches() {
+  _marketTrendData = null;
+  _sectorCmpData = null;
+  _growthScrCache = {};
+  _fsRows = null; _fsLoaded = false;
+  _dcfScreenerData = null;
+  _pbvPeScreenerData = null;
+  _peerRows = []; _peerMedian = null; _peerMeta = null;
+  _finMergedData = null; _finQplData = null;
+  _finAnalyticsData = null; _finAnalyticsLoaded = false;
+}
 
 function _mergeFinAnalyticsInto(stocks, keyFn, universe = 'set') {
   if (!_finAnalyticsData) return;
@@ -8402,9 +8420,15 @@ function resetScreener() {
 // FUNDAMENTAL SCREENER (Screener+) — กรองจาก factor_snapshot (Finnomena+Yahoo+SET)
 // ============================================================
 let _fsRows = null, _fsLoaded = false, _fsBuilt = false;
-let _fsMainMetaText = '';   // ข้อความ fs-meta ของ snapshot หลัก (ไทย+DR) — สลับกลับมาโชว์เมื่อออกจาก universe US/HK
+let _fsMainMetaText = '';   // HTML fs-meta ของ snapshot หลัก (ไทย+DR) — สลับกลับมาโชว์เมื่อออกจาก universe US/HK
 let _fsMirNames = {};   // {US: {ticker: ชื่อบริษัท}, HK: {...}} — โชว์ใต้ symbol ในตารางผล
 let _fsSort = { key: 'roe', dir: -1 };
+
+// badge เตือนเมื่อ snapshot ถูกคำนวณก่อนงบล่าสุดที่ sync (meta.stale จาก backend) — คืน '' ถ้าสด
+function _finStaleBadge(stale, hint) {
+  if (!stale) return '';
+  return ` <span style="color:var(--yellow);font-weight:600">⚠ งบอัปเดตหลังรอบคำนวณนี้${hint ? ` — ${hint}` : ''}</span>`;
+}
 // นับ request ล่าสุดของ _runFscreenerMirror — กันสลับตลาด/แก้ filter รัวๆ ก่อน request
 // เดิมเสร็จ แล้ว response เก่ามาถึงทีหลัง response ใหม่ (ไม่รับประกันลำดับ) เขียนทับ
 // ผลลัพธ์ที่ถูกต้องด้วยข้อมูลเก่า/ผิดตลาดแบบเงียบๆ (เจอตอนรีวิว 2026-08-11)
@@ -9343,8 +9367,9 @@ async function loadFscreener() {
       + (m.esg_count ? ` · CG/ESG ${m.esg_count} บริษัท (${m.esg_updated_at || '-'})` : '')
       + (m.shareholder_count ? ` · ผู้ถือหุ้นใหญ่ ${m.shareholder_count} ตัว (${m.shareholder_updated_at || '-'})` : '')
       + (m.foreign_count ? ` · ห้องต่างชาติ ${m.foreign_count} ตัว (${m.foreign_updated_at || '-'})` : '')
-      + (m.analyst_count ? ` · นักวิเคราะห์ ${m.analyst_with_target || 0}/${m.analyst_count} ตัว (${(m.analyst_updated_at || '-').slice(0, 10)})` : '');
-    document.getElementById('fs-meta').textContent = _fsMainMetaText;
+      + (m.analyst_count ? ` · นักวิเคราะห์ ${m.analyst_with_target || 0}/${m.analyst_count} ตัว (${(m.analyst_updated_at || '-').slice(0, 10)})` : '')
+      + _finStaleBadge(m.stale, 'กด "🔄 อัพเดทงบการเงินทั้งหมด" หน้า 🩺 Data Health เพื่อ rebuild');
+    document.getElementById('fs-meta').innerHTML = _fsMainMetaText;
     resetFscreener(true);   // เคลียร์ค่าฟอร์มก่อน (skipRun=true: ไม่แตะผลลัพธ์/localStorage)
     loadFsSettings();       // ดึงค่าที่เคยตั้งไว้ล่าสุดกลับมา (persist เหมือนเมนู Screener ปกติ)
     document.getElementById('fs-count').textContent = '';
@@ -9462,8 +9487,9 @@ async function _runFscreenerMirror(uni, conds) {
     // fs-meta ค้างโชว์ "คำนวณเมื่อ" ของ snapshot ไทย+DR แม้กำลังดูข้อมูล US/HK อยู่
     const mm = d.meta || {};
     const mCount = (mm.counts && mm.counts[uni.toUpperCase()]) ?? total;
-    document.getElementById('fs-meta').textContent =
-      `${mCount.toLocaleString()} หุ้น (mirror) · คำนวณเมื่อ ${mm.computed_at || '-'}`;
+    document.getElementById('fs-meta').innerHTML =
+      `${mCount.toLocaleString()} หุ้น (mirror) · คำนวณเมื่อ ${mm.computed_at || '-'}`
+      + _finStaleBadge(mm.stale, 'กด "🔄 อัพเดทงบการเงินทั้งหมด" หน้า 🩺 Data Health เพื่อ rebuild');
     document.getElementById('fs-count').textContent =
       `พบ ${total.toLocaleString()} หุ้น` + (total > rows.length ? ` (แสดง ${rows.length} อันดับแรก — เพิ่มเงื่อนไขเพื่อแคบผล)` : '');
     document.getElementById('fs-export').style.display = rows.length ? '' : 'none';
@@ -9555,7 +9581,7 @@ function runFscreener() {
   // กลับมา universe หลัก (ทั้งหมด/ไทย/DR) — คืนข้อความ fs-meta ของ snapshot หลัก
   // เผื่อรอบก่อนหน้าอยู่ที่ US/HK แล้วค้างโชว์ meta ของ mirror อยู่
   const metaEl = document.getElementById('fs-meta');
-  if (metaEl && _fsMainMetaText) metaEl.textContent = _fsMainMetaText;
+  if (metaEl && _fsMainMetaText) metaEl.innerHTML = _fsMainMetaText;
   if (!_fsRows) return;
 
   let rows = _fsRows.filter(r => {
