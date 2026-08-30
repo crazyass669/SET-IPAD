@@ -3328,6 +3328,8 @@
         title="งบทางการจาก SET.or.th (หุ้นไทยเท่านั้น)">🇹🇭 SET.or.th</button>
       <button class="filter-btn" id="fin-view-health-btn" onclick="setFinView('health',this)" style="min-width:170px"
         title="SET Financial Health Check — สุขภาพการเงินตามหมวดที่ SET จัดมาให้ (คุณภาพรายได้/สภาพคล่อง/หนี้สิน ฯลฯ) 5 งวด (หุ้นไทยเท่านั้น)">🩺 สุขภาพการเงิน (SET)</button>
+      <button class="filter-btn" id="fin-view-factsheet-btn" onclick="setFinView('factsheet',this)" style="min-width:160px"
+        title="Factsheet SET.or.th — วงจรเงินสด/อัตราส่วนการเงิน/อัตราการเติบโต/สถิติซื้อขายรายปี/ผลตอบแทนเทียบ sector-market (หุ้นไทยเท่านั้น, endpoint ไม่มีเอกสารรองรับ)">📄 Factsheet (SET)</button>
       <button class="filter-btn" id="fin-view-cashflow-btn" onclick="setFinView('cashflow',this)" style="min-width:190px"
         title="กระแสเงินสด (OCF/CFI/CFF/CapEx) + งบดุลย่อ จากงบที่บริษัทยื่นจริง (SET.or.th) รายไตรมาส — หุ้นไทยเท่านั้น เก็บสะสม ~3-4 ไตรมาสล่าสุดต่อรอบ">💵 กระแสเงินสด &amp; งบดุล (SET)</button>
       <button class="filter-btn" id="fin-view-qpl-btn" onclick="setFinView('qpl',this)" style="min-width:150px"
@@ -3561,12 +3563,21 @@
   <div id="mt-grid" style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:14px">
     <div class="idx-card" style="cursor:default">
       <div class="idx-card-name">รายได้รวม</div>
-      <div class="idx-card-sym">แท่ง = รายได้ (ลบ.) · เส้น = YoY ของบริษัทที่เทียบกันได้</div>
+      <div class="idx-card-sym">แท่ง = รายได้ (ลบ.) · เส้น = อัตราเติบโตของบริษัทที่เทียบกันได้ (สลับ QoQ/YoY)</div>
+      <div class="filter-row" style="margin:6px 0 0;gap:4px">
+        <button class="filter-btn" id="mt-tog-revline-qoq" onclick="_mtSetLineMode('rev','qoq',this)" style="font-size:11px;padding:3px 10px">QoQ</button>
+        <button class="filter-btn active" id="mt-tog-revline-yoy" onclick="_mtSetLineMode('rev','yoy',this)" style="font-size:11px;padding:3px 10px">YoY</button>
+      </div>
       <div style="height:260px;margin-top:8px"><canvas id="mt-chart-revenue"></canvas></div>
     </div>
     <div class="idx-card" style="cursor:default">
       <div class="idx-card-name">กำไรสุทธิรวม + NPM</div>
-      <div class="idx-card-sym">แท่ง = กำไรส่วนผู้ถือหุ้น (ลบ.) · เส้น = Aggregate NPM</div>
+      <div class="idx-card-sym">แท่ง = กำไรส่วนผู้ถือหุ้น (ลบ.) · เส้น = Aggregate NPM หรืออัตราเติบโตกำไร (สลับได้)</div>
+      <div class="filter-row" style="margin:6px 0 0;gap:4px">
+        <button class="filter-btn active" id="mt-tog-npline-npm" onclick="_mtSetLineMode('profit','npm',this)" style="font-size:11px;padding:3px 10px">NPM</button>
+        <button class="filter-btn" id="mt-tog-npline-yoy" onclick="_mtSetLineMode('profit','yoy',this)" style="font-size:11px;padding:3px 10px">YoY</button>
+        <button class="filter-btn" id="mt-tog-npline-qoq" onclick="_mtSetLineMode('profit','qoq',this)" style="font-size:11px;padding:3px 10px">QoQ</button>
+      </div>
       <div style="height:260px;margin-top:8px"><canvas id="mt-chart-profit"></canvas></div>
     </div>
     <div class="idx-card" style="cursor:default">
@@ -4330,9 +4341,35 @@
     <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:6px;cursor:pointer" title="กรองเฉพาะหุ้นที่รายได้ กำไรสุทธิ และมาร์จิ้นสุทธิ (Δ NPM) เป็นบวกพร้อมกันทั้ง QoQ และ YoY — โตแรงจริงต่อเนื่อง ไม่ใช่แค่ไตรมาสเดียวหรือฐานเทียบเล็กจนบวมเกินจริง">
       <input type="checkbox" id="growth-scr-strict" onchange="renderGrowthScreener()"> 🚀 โตแรงจริง (รายได้+กำไร+NPM บวกทั้ง QoQ/YoY)
     </label>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:3px 8px;border:1px dashed var(--border);border-radius:6px"
+      title="กรองแยกทีละตัวชี้วัด/ทีละมุม — ติ๊กได้หลายช่องพร้อมกัน (ต้องผ่านทุกช่องที่ติ๊ก) · ช่องที่เทียบไม่ได้ (null / พลิกกำไร) ถือว่าไม่ผ่าน · Δ NPM = จุด pp ที่มาร์จิ้นสุทธิขยาย/หด (ไม่ใช่ NPM ดิบ) ให้ตรงกับ 🚀 โตแรงจริง — ติ๊กครบทั้ง 6 ช่อง = ผลเท่ากับ 🚀 โตแรงจริงพอดี">
+      <span style="font-size:11px;color:var(--text2);font-weight:600">โต + แยกมุม:</span>
+      <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="checkbox" id="growth-scr-rev-qoq" onchange="renderGrowthScreener()"> รายได้ QoQ
+      </label>
+      <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="checkbox" id="growth-scr-rev-yoy" onchange="renderGrowthScreener()"> รายได้ YoY
+      </label>
+      <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="checkbox" id="growth-scr-profit-qoq" onchange="renderGrowthScreener()"> กำไร QoQ
+      </label>
+      <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="checkbox" id="growth-scr-profit-yoy" onchange="renderGrowthScreener()"> กำไร YoY
+      </label>
+      <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:4px;cursor:pointer" title="Δ NPM QoQ > 0 — มาร์จิ้นสุทธิขยายเทียบไตรมาสก่อน (โตแบบคุณภาพดี ไม่ใช่ตัดราคาแข่ง)">
+        <input type="checkbox" id="growth-scr-npm-qoq" onchange="renderGrowthScreener()"> Δ NPM QoQ
+      </label>
+      <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:4px;cursor:pointer" title="Δ NPM YoY > 0 — มาร์จิ้นสุทธิขยายเทียบไตรมาสเดียวกันปีก่อน">
+        <input type="checkbox" id="growth-scr-npm-yoy" onchange="renderGrowthScreener()"> Δ NPM YoY
+      </label>
+      <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;cursor:pointer;border-left:1px solid var(--border);padding-left:8px" title="ปกติช่อง 'กำไร QoQ/YoY' จะตัดหุ้นที่พลิกจากขาดทุนเป็นกำไรออก (ฐานงวดก่อนติดลบ คำนวณ % ไม่ได้) — ติ๊กช่องนี้ให้นับหุ้นพลิกกำไร (🔄) ว่าผ่านเงื่อนไข 'กำไรบวก' ด้วย · ไม่มีผลถ้าไม่ได้ติ๊ก 'กำไร QoQ' หรือ 'กำไร YoY'">
+        <input type="checkbox" id="growth-scr-incl-turnaround" onchange="renderGrowthScreener()"> + รวมหุ้นพลิกกำไร
+      </label>
+    </div>
     <label style="font-size:12px;color:var(--fg);display:flex;align-items:center;gap:6px;cursor:pointer" title="กรองเฉพาะหุ้นที่ OCF/NI เป็นบวก (กำไรมีเงินสดหนุนจริง) — หุ้นที่ไม่มีข้อมูล OCF (กลุ่มการเงิน/นอกช่วง SET sync) จะถูกตัดออกไปด้วยเพราะเทียบไม่ได้">
       <input type="checkbox" id="growth-scr-ocf-positive" onchange="renderGrowthScreener()"> OCF/NI เป็นบวก
     </label>
+    <button id="growth-scr-reset-btn" class="filter-btn" onclick="resetGrowthScrFilters()" title="ล้างช่องค้น/Sector และช่องติ๊กทั้งหมดกลับค่าเริ่มต้น (ไม่แตะไตรมาสที่เลือก)">↺ ล้างตัวกรอง</button>
     <button id="growth-scr-export-btn" class="filter-btn" onclick="exportGrowthScreenerCsv()">⬇️ Export CSV</button>
     <span id="growth-scr-count" style="font-size:11.5px;color:var(--text2);margin-left:auto"></span>
   </div>
@@ -5083,6 +5120,14 @@
     </div>
     <!-- FIN PANEL -->
     <div id="cm-fin-panel" style="display:none;max-height:60vh;overflow-y:auto">
+      <!-- toggle รายปี/รายไตรมาส — ใช้ inline style (ไม่ใช่ .filter-btn) เพราะ openChartModal
+           ล้าง .active ของ .filter-btn ทุกอันใน #chart-modal ตอนเปิด · _syncCmFinPeriodUI() sync สี -->
+      <div style="display:flex;gap:0;margin-bottom:10px">
+        <button id="cm-fin-per-y" onclick="setCmFinPeriod('y')"
+          style="font-size:11px;padding:3px 12px;border:1px solid var(--border);border-radius:5px 0 0 5px;background:var(--card2);color:var(--text2);cursor:pointer">รายปี</button>
+        <button id="cm-fin-per-q" onclick="setCmFinPeriod('q')"
+          style="font-size:11px;padding:3px 12px;border:1px solid var(--border);border-left:none;border-radius:0 5px 5px 0;background:var(--accent);color:#fff;cursor:pointer">รายไตรมาส</button>
+      </div>
       <div id="cm-fin-loading" style="text-align:center;padding:32px;color:var(--text2);font-size:13px">กำลังโหลดงบการเงิน...</div>
       <div id="cm-fin-body"></div>
       <div id="cm-fin-band" style="margin-top:12px"></div>
@@ -5586,6 +5631,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260829e"></script>
+<script src="static/dashboard.js?v=20260830d"></script>
 </body>
 </html>

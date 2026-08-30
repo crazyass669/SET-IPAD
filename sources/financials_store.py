@@ -248,6 +248,66 @@ def _merge_set_health_payload(old, new):
             "themes": list(old_themes.values())}
 
 
+def _merge_factsheet_period_list(old_list, new_list):
+    """union list ของ period-object (cash_cycle/financial_ratio/financial_growth — รูปร่าง
+    เดียวกันทั้ง 3 ตัว) ตาม key (quarter,year) — endpoint คืนแค่หน้าต่างแคบ (4 งวด/ครั้ง) ต้อง
+    สะสมข้าม sync เหมือน set_health (ดู _merge_set_health_payload) แต่ตื้นกว่า 1 ชั้น (ไม่มี
+    theme/category ซ้อน แค่ period -> data array) union ชั้นในด้วย account_name เดียวกัน
+    new_list เป็น None (sub-endpoint fetch พลาด/404) คืน old_list เดิมทันที กันลบข้อมูลสะสม"""
+    if new_list is None:
+        return old_list
+    if old_list is None:
+        return new_list
+    old_by_key = {(p.get("quarter"), p.get("year")): p for p in old_list}
+    for new_p in new_list:
+        key = (new_p.get("quarter"), new_p.get("year"))
+        old_p = old_by_key.get(key)
+        if not old_p:
+            old_by_key[key] = new_p
+            continue
+        merged_data = {d["account_name"]: d for d in old_p.get("data", []) if d.get("account_name")}
+        for d in new_p.get("data", []):
+            if d.get("account_name"):
+                merged_data[d["account_name"]] = d
+        old_p["data"] = list(merged_data.values())
+        for f in ("as_of_date", "fs_type", "begin_date", "end_date", "is_restatement"):
+            old_p[f] = new_p.get(f)
+    return sorted(old_by_key.values(), key=lambda p: p.get("as_of_date") or "")
+
+
+def _merge_factsheet_trading_stat(old_list, new_list):
+    """union list แบบแบนของ trading_stat ตาม key 'period' (เช่น 'YTD'/'2025'/'2024') — ทั้ง
+    record แทนที่กันตรงๆ เมื่อ key ชนกัน (ไม่มี data ซ้อนให้ union ชั้นในเหมือน
+    _merge_factsheet_period_list) ดังนั้น 'YTD' ที่เป็นตัวเลขวิ่งเปลี่ยนทุกวันจะถูกค่าใหม่ทับ
+    เสมอโดยอัตโนมัติ ส่วนปีเต็มที่ปิดไปแล้วแทบไม่เปลี่ยน แต่ก็ทับได้เช่นกันถ้า SET แก้ย้อนหลัง"""
+    if new_list is None:
+        return old_list
+    if old_list is None:
+        return new_list
+    merged = {p.get("period"): p for p in old_list if p.get("period")}
+    for p in new_list:
+        if p.get("period"):
+            merged[p["period"]] = p
+    return list(merged.values())
+
+
+def _merge_set_factsheet_payload(old, new):
+    """ผสาน SET factsheet (source='set_factsheet') สะสมข้ามรอบ sync — รวม 5 sub-endpoint
+    (cash_cycle/financial_ratio/financial_growth/trading_stat ใช้ merge สะสม เพราะแต่ละรอบ
+    ได้แค่หน้าต่างแคบ, price_performance เป็น snapshot ปัจจุบันล้วนๆ ไม่มีประวัติ overwrite
+    ทั้งก้อนทุกครั้ง) key ไหน fetch พลาดรอบนี้ (None) ใช้ของเก่าต่อ ไม่ลบทิ้ง"""
+    if old is None:
+        return new
+    return {
+        "symbol": new.get("symbol", old.get("symbol")),
+        "cash_cycle": _merge_factsheet_period_list(old.get("cash_cycle"), new.get("cash_cycle")),
+        "financial_ratio": _merge_factsheet_period_list(old.get("financial_ratio"), new.get("financial_ratio")),
+        "financial_growth": _merge_factsheet_period_list(old.get("financial_growth"), new.get("financial_growth")),
+        "trading_stat": _merge_factsheet_trading_stat(old.get("trading_stat"), new.get("trading_stat")),
+        "price_performance": new.get("price_performance") or old.get("price_performance"),
+    }
+
+
 def upsert(base_dir, symbol, source, payload, is_dr=False):
     """เขียน payload ลง DB แบบ 'ผสานกับของเก่า' ไม่ใช่เขียนทับทั้งก้อน — สะสม
     ประวัติย้อนหลังไปเรื่อยๆ แม้ Yahoo/SET.or.th จะให้ย้อนหลังจำกัดแค่ ~4-5 ปีต่อครั้งก็ตาม
@@ -264,6 +324,8 @@ def upsert(base_dir, symbol, source, payload, is_dr=False):
         merged = _merge_set_qpl_payload(old, payload)
     elif source == "set_health":
         merged = _merge_set_health_payload(old, payload)
+    elif source == "set_factsheet":
+        merged = _merge_set_factsheet_payload(old, payload)
     else:
         merged = payload
     con = _connect(base_dir)
@@ -440,7 +502,7 @@ def _target_period(source, today=None):
     y = today.year
     if source == "yahoo":
         candidates = [date(y - 1, 12, 31), date(y, 12, 31)]
-    elif source == "set_health":
+    elif source in ("set_health", "set_factsheet"):
         candidates = [date(y - 1, 12, 31), date(y, 6, 30), date(y, 12, 31)]
     else:
         candidates = [date(y - 1, 12, 31), date(y, 3, 31), date(y, 6, 30),
@@ -469,6 +531,13 @@ def _payload_latest_period(source, payload):
         if source == "set_health":
             dates = [date.fromisoformat(p["as_of_date"]) for p in (payload.get("periods") or [])
                      if p.get("as_of_date")]
+            return max(dates) if dates else None
+        if source == "set_factsheet":
+            # cash_cycle เป็น None แน่นอนสำหรับหุ้นกลุ่มการเงิน/REIT (404 ที่ต้นทาง) — fallback
+            # ไป financial_ratio ที่ครอบคลุมทุกหุ้นแทน กันหุ้นกลุ่มนี้ค้างสถานะ "ยังไม่มีข้อมูล"
+            # ทั้งที่ sync สำเร็จแล้ว (skip_up_to_date จะไม่ยอม skip ให้ ยิงซ้ำทุกรอบไม่จบ)
+            periods = payload.get("cash_cycle") or payload.get("financial_ratio") or []
+            dates = [date.fromisoformat(p["as_of_date"]) for p in periods if p.get("as_of_date")]
             return max(dates) if dates else None
         if source == "set":
             dates = [date.fromisoformat(e["endDate"][:10])
@@ -2075,6 +2144,29 @@ def sync_set_health(base_dir, symbol):
     return get(base_dir, symbol, "set_health")
 
 
+_FACTSHEET_KEYS = ("cash_cycle", "financial_ratio", "financial_growth",
+                   "trading_stat", "price_performance")
+
+
+def get_set_factsheet(base_dir, symbol):
+    """อ่าน SET factsheet (source='set_factsheet' — วงจรเงินสด/อัตราส่วนการเงิน/อัตราการเติบโต/
+    สถิติซื้อขาย/ผลตอบแทนเทียบ sector-market) ที่สะสมไว้ใน DB ตรงๆ ไม่ยิงสด — คืน None ถ้ายังไม่
+    เคย sync หุ้นตัวนี้เลย คืนโครงเดียวกับ fetch_financial_factsheet เป๊ะ"""
+    return get(base_dir, symbol, "set_factsheet")
+
+
+def sync_set_factsheet(base_dir, symbol):
+    """ยิงสด SET factsheet รอบใหม่ (fetch_financial_factsheet — ห่อ try/except แยกรายตัวต่อ
+    sub-endpoint อยู่แล้วในชั้น fetch) + ผสานกับที่เก็บสะสมไว้ (ดู _merge_set_factsheet_payload)
+    แล้วเขียนกลับ — guard 'ว่าง' ตรวจทุก key พร้อมกัน (any) ไม่ใช่ key เดียว เพราะ cash_cycle
+    เป็น None ได้ปกติสำหรับหุ้นกลุ่มการเงิน/REIT โดยอีก 4 key ยังมีค่าอยู่"""
+    from sources.set_api import fetch_financial_factsheet
+    fresh = fetch_financial_factsheet(symbol)
+    if fresh and any(fresh.get(k) for k in _FACTSHEET_KEYS):
+        upsert(base_dir, symbol, "set_factsheet", fresh, is_dr=False)
+    return get(base_dir, symbol, "set_factsheet")
+
+
 # ============================================================
 # Fetch — SET.or.th (ทุก field จาก company-highlight)
 # ============================================================
@@ -3606,7 +3698,7 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
     _yahoo_gate = threading.Semaphore(3)   # จำกัด Yahoo request พร้อมกันไม่เกิน 3 (แยกจาก SET.or.th)
     _finn_gate  = threading.Semaphore(2)   # Finnomena ไม่รู้เพดาน rate-limit — ยิงสุภาพไว้ก่อน
     _set_qpl_gate = threading.Semaphore(2)   # set_qpl ยิงหลาย request/หุ้น (chart+periods+detail สูงสุด 6) หนักกว่า 'set' เฉยๆ
-    _set_extra_gate = threading.Semaphore(2)   # set_cashflow/set_balance (periods loop เหมือน set_qpl detail) + set_health (1 call) ใช้ gate เดียวกัน กันยิง SET.or.th ถี่เกินตอน sync พร้อมกันหลาย source
+    _set_extra_gate = threading.Semaphore(2)   # set_cashflow/set_balance (periods loop เหมือน set_qpl detail) + set_health (1 call) + set_factsheet (5 call sequential ใน gate เดียว) ใช้ gate เดียวกัน กันยิง SET.or.th ถี่เกินตอน sync พร้อมกันหลาย source
     _yahoo_session = _new_yahoo_session()
     _yahoo_throttle = _YahooThrottle()
 
@@ -3656,6 +3748,13 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
                     payload = fetch_financial_health(sym, ctx=set_ctx, hdr=set_hdr)
                 finally:
                     time.sleep(0.2)  # เบากว่า cashflow/balance เพราะยิงแค่ 1 request/หุ้น
+        elif src == "set_factsheet":
+            with _set_extra_gate:
+                try:
+                    from sources.set_api import fetch_financial_factsheet
+                    payload = fetch_financial_factsheet(sym, ctx=set_ctx, hdr=set_hdr)
+                finally:
+                    time.sleep(0.2)  # 5 sub-call sequential ในฟังก์ชันเดียว ใช้ gate คลุมทั้งก้อนครั้งเดียว
         else:
             payload = fetch_set_full(sym, set_ctx, set_hdr)
             time.sleep(0.15)  # throttle เบาๆ กัน SET.or.th block IP
@@ -3667,7 +3766,8 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
         # sync_set_balance_series/sync_set_health มีอยู่แล้ว (`if fresh: upsert(...)`) แค่ยังไม่เคยมีใน
         # bulk sync path นี้ (code review 2026-08-26, ขยายครอบ set_health ด้วยหลัง code review ต่อ)
         _empty = ((src in ("set_cashflow", "set_balance") and not payload.get("quarters"))
-                  or (src == "set_health" and not payload.get("themes")))
+                  or (src == "set_health" and not payload.get("themes"))
+                  or (src == "set_factsheet" and not any(payload.get(k) for k in _FACTSHEET_KEYS)))
         if not _empty:
             upsert(base_dir, sym, src, payload, is_dr=is_dr)
         return sym, src

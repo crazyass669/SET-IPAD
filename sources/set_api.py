@@ -656,6 +656,136 @@ def fetch_financial_health(symbol, ctx=None, hdr=None):
     return {"symbol": sym, "periods": periods, "themes": themes}
 
 
+def _fetch_factsheet_series(endpoint, symbol, ctx=None, hdr=None):
+    """ใช้ร่วมกันกับ 3 sub-endpoint ของ factsheet ที่รูปร่างเหมือนกันเป๊ะ — cash-cycle/
+    financial-ratio/financial-growth: list ของ period-object แต่ละงวดมี data:[{accountName,value}]
+    (ต่างจาก financial-health ตรงที่ไม่มี theme/category ซ้อน แค่ period → data แบนๆ)
+    endpoint: 'cash-cycle' | 'financial-ratio' | 'financial-growth'
+    คืน list[{"quarter","year","as_of_date","fs_type","begin_date","end_date","is_restatement",
+    "data":[{"account_name","value"}]}] — ไม่ try/except ปล่อย exception ให้ caller จัดการเอง
+    (404 มีความหมายจริงสำหรับ cash-cycle ของหุ้นกลุ่มการเงิน/REIT ไม่ใช่ fetch พลาดชั่วคราว)"""
+    sym = symbol[:-3] if symbol.endswith(".BK") else symbol
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, f"/api/set/factsheet/{urllib.parse.quote(sym)}/{endpoint}?lang=th", timeout=15)
+    out = []
+    for p in (d or []):
+        out.append({
+            "quarter": p.get("quarter"), "year": p.get("year"),
+            "as_of_date": (p.get("asOfDate") or "")[:10], "fs_type": p.get("fsType"),
+            "begin_date": (p.get("beginDate") or "")[:10] or None,
+            "end_date": (p.get("endDate") or "")[:10] or None,
+            "is_restatement": p.get("isRestatement"),
+            "data": [{"account_name": a.get("accountName"), "value": a.get("value")}
+                     for a in (p.get("data") or [])],
+        })
+    return out
+
+
+def fetch_factsheet_cash_cycle(symbol, ctx=None, hdr=None):
+    """วงจรเงินสด (DSO/DIO/DPO + อัตราส่วนหมุนเวียนลูกหนี้/สินค้า/เจ้าหนี้) จาก
+    /api/set/factsheet/<sym>/cash-cycle — ตัวเดียวกับที่หน้า factsheet ของ SET.or.th โชว์
+    (ตรวจสอบตัวเลขกับหน้าเว็บจริงแล้วตรงเป๊ะทุกทศนิยม, ดู memory cash-cycle-set-factsheet)
+    404 เสมอสำหรับหุ้นกลุ่มการเงิน/ประกัน/REIT (เหมือน fetch_financial_health เป๊ะ — สูตร
+    cash cycle ไม่ใช้กับงบดุลกลุ่มนี้) แค่ 4 งวด/ครั้ง (หน้าต่างแคบ ต้องสะสมข้าม sync)"""
+    return _fetch_factsheet_series("cash-cycle", symbol, ctx, hdr)
+
+
+def fetch_factsheet_financial_ratio(symbol, ctx=None, hdr=None):
+    """อัตราส่วนทางการเงิน (สภาพคล่อง/ROE/ROA/D-E/หมุนเวียนสินทรัพย์/margin) จาก
+    /api/set/factsheet/<sym>/financial-ratio — ครอบคลุมทุกหุ้นรวมกลุ่มการเงิน (ให้ชุด
+    ratio ต่างออกไปสำหรับธนาคาร เช่น NIM% แทน D/E) ต่างจาก cash-cycle ที่ 404 กลุ่มนี้"""
+    return _fetch_factsheet_series("financial-ratio", symbol, ctx, hdr)
+
+
+def fetch_factsheet_financial_growth(symbol, ctx=None, hdr=None):
+    """อัตราการเติบโต YoY (ยอดขาย/ต้นทุน/รายได้รวม/ค่าใช้จ่าย/กำไรสุทธิ) จาก
+    /api/set/factsheet/<sym>/financial-growth — ครอบคลุมทุกหุ้นเหมือน financial-ratio"""
+    return _fetch_factsheet_series("financial-growth", symbol, ctx, hdr)
+
+
+def fetch_factsheet_trading_stat(symbol, ctx=None, hdr=None):
+    """สถิติซื้อขายรายปี (PE/PBV/Yield/MktCap/Beta/Payout ratio/turnover) จาก
+    /api/set/factsheet/<sym>/trading-stat — รูปร่างต่างจาก cash-cycle/ratio/growth (list
+    แบนไม่มี data ซ้อน) คืนแค่ 3 งวด (YTD + 2 ปีเต็มล่าสุด) ต้องสะสมข้าม sync เหมือนกัน
+    'YTD' เป็นตัวเลขวิ่งเปลี่ยนทุกวัน ไม่ใช่งวดปิดจริง — merge ต้อง overwrite ทับเสมอ"""
+    sym = symbol[:-3] if symbol.endswith(".BK") else symbol
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, f"/api/set/factsheet/{urllib.parse.quote(sym)}/trading-stat?lang=th", timeout=15)
+    out = []
+    for r in (d or []):
+        out.append({
+            "date": (r.get("date") or "")[:10], "period": r.get("period"),
+            "market": r.get("market"), "industry": r.get("industry"), "sector": r.get("sector"),
+            "prior": r.get("prior"), "open": r.get("open"), "high": r.get("high"), "low": r.get("low"),
+            "close": r.get("close"), "change": r.get("change"), "percent_change": r.get("percentChange"),
+            "total_volume": r.get("totalVolume"), "total_value": r.get("totalValue"),
+            "pe": r.get("pe"), "pbv": r.get("pbv"),
+            "book_value_per_share": r.get("bookValuePerShare"), "dividend_yield": r.get("dividendYield"),
+            "market_cap": r.get("marketCap"), "listed_share": r.get("listedShare"), "par": r.get("par"),
+            "financial_date": (r.get("financialDate") or "")[:10] or None,
+            "turnover_ratio": r.get("turnoverRatio"), "beta": r.get("beta"),
+            "dividend_payout_ratio": r.get("dividendPayoutRatio"), "average_value": r.get("averageValue"),
+        })
+    return out
+
+
+def fetch_factsheet_price_performance(symbol, ctx=None, hdr=None):
+    """%เปลี่ยนแปลงราคา 5วัน/1ด./3ด./6ด./YTD เทียบ หุ้น vs sector vs market + PE/PBV/turnover
+    3 ระดับ จาก /api/set/factsheet/<sym>/price-performance — snapshot ณ ปัจจุบันล้วนๆ ไม่มี
+    ประวัติ/งวด (ต่างจาก 4 endpoint อื่นในไฟล์นี้) overwrite ทั้งก้อนทุกครั้งที่ sync ใหม่
+    คืน {"stock":{...},"sector":{...},"market":{...}} แต่ละก้อนมี field เดียวกัน"""
+    sym = symbol[:-3] if symbol.endswith(".BK") else symbol
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+    d = _get_json(ctx, hdr, f"/api/set/factsheet/{urllib.parse.quote(sym)}/price-performance?lang=th", timeout=15)
+
+    def _block(b):
+        b = b or {}
+        return {"symbol": b.get("symbol"),
+                "five_day_percent_change": b.get("fiveDayPercentChange"),
+                "one_month_percent_change": b.get("oneMonthPercentChange"),
+                "three_month_percent_change": b.get("threeMonthPercentChange"),
+                "six_month_percent_change": b.get("sixMonthPercentChange"),
+                "ytd_percent_change": b.get("ytdPercentChange"),
+                "pe_ratio": b.get("peRatio"), "pb_ratio": b.get("pbRatio"),
+                "turnover_ratio": b.get("turnoverRatio")}
+    return {"stock": _block((d or {}).get("stock")),
+            "sector": _block((d or {}).get("sector")),
+            "market": _block((d or {}).get("market"))}
+
+
+def fetch_financial_factsheet(symbol, ctx=None, hdr=None):
+    """รวม 5 sub-endpoint ของ SET.or.th factsheet เป็นก้อนเดียว — ต่างจาก fetch_financial_health
+    ตรงที่แต่ละ sub-call ห่อ try/except แยกรายตัว (ไม่ปล่อยให้ exception หลุดออกฟังก์ชัน) เพราะ
+    cash-cycle 404 แน่นอนสำหรับหุ้นกลุ่มการเงิน/ประกัน/REIT (~30-40% ของตลาด) แต่อีก 4
+    sub-endpoint ครอบคลุมกลุ่มนี้ปกติ — ธนาคารตัวหนึ่งจึงต้องได้ cash_cycle=None โดยไม่กระทบ
+    อีก 4 key เลย (ดู PLAN แท็บ Factsheet ใหม่)
+
+    bootstrap cookie ครั้งเดียวใช้ร่วมกันทั้ง 5 คำขอ (ไม่ bootstrap ซ้ำต่อ sub-call)
+    คืน {"symbol","cash_cycle","financial_ratio","financial_growth","trading_stat",
+    "price_performance"} — key ไหน fetch พลาด (404/timeout/ฯลฯ) จะเป็น None"""
+    sym = symbol[:-3] if symbol.endswith(".BK") else symbol
+    if ctx is None or hdr is None:
+        ctx, hdr = _bootstrap_headers()
+
+    def _try(fn):
+        try:
+            return fn(sym, ctx, hdr)
+        except Exception:
+            return None
+
+    return {
+        "symbol": sym,
+        "cash_cycle": _try(fetch_factsheet_cash_cycle),
+        "financial_ratio": _try(fetch_factsheet_financial_ratio),
+        "financial_growth": _try(fetch_factsheet_financial_growth),
+        "trading_stat": _try(fetch_factsheet_trading_stat),
+        "price_performance": _try(fetch_factsheet_price_performance),
+    }
+
+
 def fetch_historical_trading(symbol, ctx=None, hdr=None):
     """ราคา+PE/PBV/BVPS/DivYield รายวันของหุ้น 1 ตัวจาก
     /api/set/stock/<sym>/historical-trading — endpoint ล็อคความลึกไว้ที่ ~118 แท่ง

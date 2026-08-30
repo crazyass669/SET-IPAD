@@ -3900,6 +3900,38 @@ def financial_health(symbol):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/financial-factsheet/<symbol>")
+def financial_factsheet(symbol):
+    """SET.or.th factsheet ของหุ้น 1 ตัว (source='set_factsheet' ใน financials.db) — รวม 5
+    sub-endpoint: วงจรเงินสด/อัตราส่วนการเงิน/อัตราการเติบโต/สถิติซื้อขายรายปี/ผลตอบแทนเทียบ
+    sector-market เจอ endpoint ตระกูลนี้ตอนตรวจสอบตัวเลข "วงจรเงินสด" ที่หน้า factsheet จริงของ
+    SET.or.th โชว์ (ดักฟัง network ด้วย Playwright — ตรงกับ /financial-health เดิมไม่ครบ)
+    DB-first เหมือน /api/financial-health ใช้กับแท็บ "📄 Factsheet (SET)" ในเมนูงบการเงิน
+
+    key 'มีข้อมูลไหม' ต้องเช็คแบบ any ไม่ใช่ key เดียว — cash_cycle เป็น None ปกติสำหรับหุ้น
+    กลุ่มการเงิน/REIT (endpoint นั้น 404 เสมอ เหมือน financial-health) แต่อีก 4 key ยังมีค่า"""
+    sym = symbol.upper().strip()
+    refresh = request.args.get("refresh") == "1"
+    keys = financials_store._FACTSHEET_KEYS
+    try:
+        import urllib.error
+        data = None if refresh else financials_store.get_set_factsheet(BASE_DIR, sym)
+        if not data:
+            data = financials_store.sync_set_factsheet(BASE_DIR, sym)
+        if not data or not any(data.get(k) for k in keys):
+            return jsonify({"error": f"ไม่มีข้อมูล Factsheet ของ {sym}"}), 404
+        return jsonify(data)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            cached = financials_store.get_set_factsheet(BASE_DIR, sym)
+            if cached and any(cached.get(k) for k in keys):
+                return jsonify(cached)
+            return jsonify({"error": f"ไม่มีข้อมูล Factsheet ของ {sym}"}), 404
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/financial-cashflow-balance/<symbol>")
 def financial_cashflow_balance(symbol):
     """กระแสเงินสด (OCF/CFI/CFF/CapEx) + งบดุลย่อ (เงินสด/ลูกหนี้/สต็อก/หนี้สินรวม/ส่วนผู้ถือหุ้น)
@@ -4296,7 +4328,8 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_dat
         # yahoo_q = งบรายไตรมาส (สะสมทุกรอบ sync — ใช้กรอง QoQ/YoY-Q ใน Screener)
         # finnomena_q = งบไตรมาสย้อนยาว ~20 ปี (backfill ครั้งเดียวได้ streak/เร่งตัว/TTM เต็มสูตร)
         srcs = tuple(sources) if sources else ("yahoo", "set", "set_qpl", "set_cashflow",
-                                                "set_balance", "set_health", "yahoo_q", "finnomena_q")
+                                                "set_balance", "set_health", "set_factsheet",
+                                                "yahoo_q", "finnomena_q")
 
         def cb(current, total, msg):
             _update(current=current, total=total, message=msg)
@@ -8144,7 +8177,11 @@ def _compute_data_health():
         _fin_cov_srcs = [("yahoo", "Yahoo Finance"), ("finnomena_q", "Finnomena"),
                           ("set", "SET company-highlight"), ("set_qpl", "SET P&L รายไตรมาส"),
                           ("set_cashflow", "SET กระแสเงินสด"), ("set_balance", "SET งบดุล"),
-                          ("set_health", "SET Financial Health")]
+                          ("set_health", "SET Financial Health"), ("set_factsheet", "SET Factsheet")]
+        # set_factsheet ไม่ต้องเข้า _fin_cov_informational เหมือน set_health — แม้ sub-key
+        # cash_cycle 404 ทั้งกลุ่มการเงิน/REIT (~30-40% ของตลาด) แต่ payload รวมยังนับว่า "มี"
+        # เพราะอีก 4 sub-key (financial_ratio/growth/trading_stat/price_performance) ครอบคลุม
+        # เต็มตลาด — coverage ของ row นี้จึงไม่ถูกบังคับเพดานต่ำแบบ set_health
         # set_health ไม่นับเข้า worst_pct/สถานะรวม — SET.or.th endpoint นี้ไม่ครอบกลุ่มการเงิน/
         # ประกัน/REIT เลย (404 เป็นระบบ วัดจริง 2026-08-26: ~30-40% ของตลาด) เพดาน coverage ของ
         # source นี้จะต่ำกว่า 100% ถาวรแม้ sync ครบทุกตัวที่ทำได้แล้วก็ตาม — ถ้านับรวมจะทำให้ item
@@ -9141,7 +9178,8 @@ def _run_financials_update_all():
             _update(current=round(pct), total=100, message=f"งบหุ้นไทย: {done}/{total}")
         r_th = financials_store.sync_all(BASE_DIR, syms_th,
                                           sources=("yahoo", "set", "set_qpl", "set_cashflow",
-                                                   "set_balance", "set_health", "yahoo_q", "finnomena_q"),
+                                                   "set_balance", "set_health", "set_factsheet",
+                                                   "yahoo_q", "finnomena_q"),
                                           callback=_th_cb, is_dr=False,
                                           skip_up_to_date=True)
 
