@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260827b">
+<link rel="stylesheet" href="static/dashboard.css?v=20260830f">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -49,7 +49,7 @@
   <button class="nav-btn" onclick="showPage('heatmap',this)" title="Market Heatmap — รวมหุ้นไทย/US/HK/JP ในหน้าเดียว สลับตลาดด้วยแท็บ 🇹🇭🇺🇸🇭🇰🇯🇵">Heatmap</button>
   <button class="nav-btn" onclick="showPage('stock-rotation',this)" title="Stock Rotation — RRG รายหุ้น ไทย(DR)/US/HK/JP รวมหน้าเดียว สลับตลาดด้วยแท็บ 🇹🇭🇺🇸🇭🇰🇯🇵">🔄 Stock Rotation</button>
   <button class="nav-btn" onclick="showPage('band',this)">Val. Band</button>
-  <button class="nav-btn" onclick="showPage('dcf-screener',this)" title="DCF Screener — รัน DCF Model (พยากรณ์เต็มรูปแบบ) กับหุ้นไทยทุกตัวที่คำนวณได้ ด้วยสมมติฐาน WACC/Growth ค่าเริ่มต้นเดียวกันทั้งตลาด (Beta=1.00 คงที่) เรียงตาม upside% มาก→น้อย เป็นการคัดกรองเบื้องต้น ไม่ใช่คำแนะนำซื้อ/ขาย · local-only">🎯 DCF Screener</button>
+  <button id="nav-dcf-screener-btn" class="nav-btn" onclick="showPage('dcf-screener',this)" title="DCF Screener — รัน DCF Model (พยากรณ์เต็มรูปแบบ) กับหุ้นไทยทุกตัวที่คำนวณได้ ด้วยสมมติฐาน WACC/Growth ค่าเริ่มต้นเดียวกันทั้งตลาด (Beta=1.00 คงที่) เรียงตาม upside% มาก→น้อย เป็นการคัดกรองเบื้องต้น ไม่ใช่คำแนะนำซื้อ/ขาย · local-only">🎯 DCF Screener</button>
   <button id="nav-pbv-pe-screener-btn" class="nav-btn" onclick="showPage('pbv-pe-screener',this)" title="Fair Value P/B·P/E — Justified P/B (ROE-based) + Justified P/E ทั้งตลาดหุ้นไทย เรียงตาม upside% เป็นตัวเติมเต็ม DCF Screener สำหรับกลุ่มการเงินที่ DCF ใช้ไม่ได้ · คัดกรองเบื้องต้น ไม่ใช่คำแนะนำซื้อ/ขาย · local-only">⚖️ Fair Value P/B·P/E</button>
   <button id="nav-growth-screener-btn" class="nav-btn" onclick="showPage('growth-screener',this)" title="หุ้นโตแรงรายไตรมาส — รายได้/กำไรสุทธิ QoQ%/YoY% ทั้งตลาด SET+mai เลือกไตรมาสย้อนหลังได้ กดหัวตารางเรียงหาหุ้นโตแรงสุด (source: SET.or.th official รายไตรมาส) · local-only">🚀 หุ้นโตแรงรายไตรมาส</button>
   <button class="nav-btn nav-btn-highlight" onclick="showPage('watchlist',this)">⭐ Watchlist</button>
@@ -4305,15 +4305,15 @@
 <div id="page-growth-screener" class="page">
   <div class="page-title">🚀 หุ้นโตแรงรายไตรมาส</div>
   <div class="page-sub">
-    รายได้/กำไรสุทธิรายไตรมาสทั้งตลาด SET+mai เทียบไตรมาสก่อนหน้า (QoQ) และไตรมาสเดียวกันปีก่อน (YoY)
+    <span id="growth-scr-th-desc">รายได้/กำไรสุทธิรายไตรมาสทั้งตลาด SET+mai เทียบไตรมาสก่อนหน้า (QoQ) และไตรมาสเดียวกันปีก่อน (YoY)
     เป็น % — เลือกไตรมาสย้อนหลังได้จากช่องด้านล่าง กดหัวตารางเพื่อเรียงหาหุ้นที่โตแรงสุด ข้อมูลจาก
     SET.or.th official รายไตรมาส (source <code>set_qpl</code>) — กลุ่มการเงิน/ประกันไม่มีรายการ
     "รายได้จากการขายและให้บริการ" ในผังบัญชี จึงโชว์รายได้เป็น "—" แต่กำไรสุทธิยังคำนวณได้ปกติ ·
     หุ้นที่พลิกจากขาดทุน/เท่าทุนเป็นกำไรจะโชว์ป้าย "🔄 พลิกกำไร" แทน % (หารด้วยฐานติดลบไม่มีความหมาย)
     · เพิ่ม 3 ตัวชี้วัดคุณภาพ (hover หัวตารางอ่านคำอธิบายเต็ม): <b>Δ NPM</b> มาร์จิ้นขยาย/หดกี่จุด,
     <b>ต่อเนื่อง</b> โตติดกันกี่ไตรมาส (ต้องเป็นบวกทุกไตรมาสด้วย ไม่ใช่แค่ขาดทุนหดตัวลง), <b>OCF/NI</b>
-    กำไรมีเงินสดหนุนจริงไหม (จาก SET official cash_flow เท่าที่เคย sync สะสมไว้แล้ว — งวดที่ยังไม่มี
-    ข้อมูลโชว์ "—")
+    กำไรมีเงินสดหนุนจริงไหม (จากงบกระแสเงินสดเท่าที่เคย sync สะสมไว้แล้ว — งวดที่ยังไม่มี
+    ข้อมูลโชว์ "—")</span>
     <br><button class="filter-btn" onclick="document.getElementById('npm-delta-note-modal').classList.add('open')"
       style="margin-top:6px;font-size:10px;padding:2px 8px"
       title="วิธีอ่านค่า Δ NPM แบบละเอียด พร้อมตัวอย่างง่ายๆ">📖 วิธีอ่านค่า Δ NPM (+15.5pp / −14.9pp)</button>
@@ -4322,7 +4322,17 @@
       title="P/S คืออะไร เท่าไหร่ถึงถูก/แพง มีประโยชน์ยังไง">📖 วิธีอ่านค่า P/S</button>
   </div>
 
+  <div id="growth-scr-uni-note" class="page-sub" style="margin-top:-4px;margin-bottom:10px;display:none"></div>
+
   <div class="card" style="padding:10px 16px;margin-bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <select id="growth-scr-universe" class="scr-input" style="min-width:150px;font-weight:600" onchange="_growthScrSwitchUniverse(this.value)"
+      title="เลือกตลาด — หุ้นไทยจาก SET.or.th official / ต่างประเทศจาก Finnomena (DR/US/HK) หรือ Yahoo (JP)">
+      <option value="th">🇹🇭 SET / mai</option>
+      <option value="dr">🌐 DR (พอร์ตต่างประเทศ)</option>
+      <option value="us">🇺🇸 US (ทั้งตลาด)</option>
+      <option value="hk">🇭🇰 HK (ทั้งตลาด)</option>
+      <option value="jp">🇯🇵 JP (Nikkei 225)</option>
+    </select>
     <div style="display:flex;align-items:center;gap:6px">
       <button class="filter-btn" id="growth-scr-prev-btn" onclick="_growthScrShiftQuarter(1)" title="ไตรมาสก่อนหน้า">◀</button>
       <select id="growth-scr-quarter-select" class="scr-input" style="min-width:130px" onchange="_growthScrJumpQuarter(this.value)"></select>
@@ -5631,6 +5641,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260830e"></script>
+<script src="static/dashboard.js?v=20260831a"></script>
 </body>
 </html>

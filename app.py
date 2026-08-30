@@ -153,6 +153,35 @@ _qpl_parsed_cache: dict = {}
 _QPL_PARSED_CACHE_TTL = 24 * 3600
 _qpl_parsed_lock = threading.Lock()
 
+# Quarterly growth screener — เวอร์ชันหุ้นต่างประเทศ (?universe=dr|us|hk|jp) อ่าน finnomena_q/
+# yahoo_q ดิบผ่าน financials_store._load_mirror_qpl_all (US mirror ~3.9k payload — cold load
+# ช้ากว่าหุ้นไทยมาก) cache แยกต่อ universe แต่ TTL/SWR เดียวกับหุ้นไทย · เคลียร์พร้อม
+# _qpl_parsed_cache ทุกจุด + ใน _clear_fin_analytics_and_warm (งาน sync mirror US/HK/JP)
+_qpl_mirror_caches: dict = {}     # uni -> {"result":.., "ts":..}  (persistent per uni)
+_qpl_mirror_locks: dict = {}      # uni -> threading.Lock
+_qpl_mirror_guard = threading.Lock()
+
+
+def _qpl_mirror_slot(uni):
+    """คืน (cache_dict, lock) ต่อ universe — lazily init, persistent (ห้าม .clear() ทั้ง dict
+    เพราะ _swr_get_or_refresh ต้องได้ dict เดิมทุกครั้ง — เคลียร์ด้วย _clear_qpl_mirror_caches
+    ที่ pop เฉพาะ result/ts ออก)"""
+    slot = _qpl_mirror_caches.get(uni)
+    if slot is None:
+        with _qpl_mirror_guard:
+            slot = _qpl_mirror_caches.get(uni)
+            if slot is None:
+                slot = {}
+                _qpl_mirror_locks[uni] = threading.Lock()
+                _qpl_mirror_caches[uni] = slot
+    return slot, _qpl_mirror_locks[uni]
+
+
+def _clear_qpl_mirror_caches():
+    for slot in list(_qpl_mirror_caches.values()):
+        slot.pop("result", None)
+        slot.pop("ts", None)
+
 # Market trend cache — แนวโน้มตลาดย้อนหลัง 20 ไตรมาส (หน้า "📈 แนวโน้มตลาด") คำนวณ ROE/Cash
 # Quality เองจาก finnomena_q ไม่ได้ยืม financials_analytics() เหมือน sector-compare จึงไม่เสี่ยง
 # deadlock กับ _fin_analytics_lock แต่ยังแยก cache/lock ของตัวเองเพื่อความชัดเจน
@@ -4299,7 +4328,33 @@ def _clear_fin_analytics_and_warm():
     ฝั่งหุ้นไทย จึงไม่ล้าง _sector_compare_cache/_market_trend_cache เหมือนเดิม —
     การอุ่นจะไป hit cache เดิมของ 2 ตัวนั้นทันที ไม่มี cost เพิ่ม"""
     _fin_analytics_cache.clear()
+    _clear_qpl_mirror_caches()   # งานกลุ่มนี้ sync finnomena_q/yahoo_q ของ mirror US/HK/JP
     threading.Thread(target=_warmup_fin_dependent_caches, daemon=True).start()
+
+
+def _quarterly_bake_universe():
+    """หุ้นไทยที่เว็บมือถือแสดงจริง = symbol ใน data/set_data.json (ตรงกับที่ bake ไป
+    แล้ว) — fallback ไป _financials_universe() ถ้าอ่านไฟล์ไม่ได้"""
+    try:
+        with open(DATA_FILE, encoding="utf-8") as f:
+            return [s["symbol"] for s in json.load(f).get("stocks", [])]
+    except Exception:
+        return _financials_universe()
+
+
+def _bake_financials_quarterly_file():
+    """re-bake data/financials_quarterly.json (งบ P&L รายไตรมาส SET.or.th ให้เวอร์ชันมือถือ)
+    เรียกท้ายงาน sync งบไทยทุกจุด (ปุ่ม Data Health / CLI) — set_qpl เพิ่งเปลี่ยน
+    non-fatal: ล้มก็ปล่อย (ไฟล์เดิมยังอยู่) ไม่ให้กระทบงาน sync ที่สำเร็จแล้ว"""
+    try:
+        fq = financials_store.bake_quarterly_pl(BASE_DIR, _quarterly_bake_universe())
+        os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
+        with open(os.path.join(BASE_DIR, "data", "financials_quarterly.json"), "w", encoding="utf-8") as f:
+            json.dump(fq, f, ensure_ascii=False, separators=(",", ":"))
+        _fin_quarterly_cache.clear()
+        print(f"[FinancialsQuarterly] bake data/financials_quarterly.json — {len(fq['set'])} หุ้น")
+    except Exception as e:
+        print(f"[FinancialsQuarterly] bake ล้มเหลว (ข้าม): {e}")
 
 
 def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_date=False):
@@ -4340,6 +4395,8 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_dat
         _fin_analytics_cache.clear()   # ข้อมูลเปลี่ยน — บังคับคำนวณ growth/PEG/FCF ใหม่รอบถัดไป
         _sector_compare_cache.clear()
         _qpl_parsed_cache.clear()
+        _fin_quarterly_cache.clear()   # set_qpl เปลี่ยน — bake งบรายไตรมาสใหม่รอบถัดไป
+        _clear_qpl_mirror_caches()   # DR sync (is_dr=True) แตะ finnomena_q/yahoo_q ของ DR:
         _market_trend_cache.clear()
         _sector_trend_cache.clear()
         # rebuild factor snapshot ทันที (ไม่รอ debounce 300 วิ + ครอบ sync < 5 หุ้นที่เดิม
@@ -4352,6 +4409,8 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_dat
                 factor_snapshot.build_snapshot(BASE_DIR)
             except Exception as e:
                 print(f"[FinancialsSync] build_snapshot ล้มเหลว (งบ sync สำเร็จแล้ว): {e}")
+        if not is_dr and result.get("ok", 0) > 0:
+            _bake_financials_quarterly_file()   # set_qpl หุ้นไทยเปลี่ยน -> re-bake ไฟล์เว็บมือถือ
         _warmup_fin_dependent_caches()
         skipped = result.get("skipped", 0)
         _update(done=True,
@@ -4579,6 +4638,32 @@ def _financials_analytics_core(yahoo_only: bool):
     return _swr_get_or_refresh(slot, _fin_analytics_lock, _FIN_ANALYTICS_CACHE_TTL, _compute)
 
 
+# งบกำไรขาดทุนรายไตรมาส (SET.or.th official, source 'set_qpl') — bake เป็น
+# data/financials_quarterly.json ให้เวอร์ชันมือถือ/iPad แสดง ≥8 ไตรมาสล่าสุด
+# (Yahoo ให้แค่ ~5 ไตรมาส · Finnomena ห้ามขึ้น GitHub) set_qpl สะสมถาวรอยู่แล้ว
+# ใน financials.db ผ่าน _merge_set_qpl_payload — endpoint นี้แค่ดึงออกมา
+_fin_quarterly_cache: dict = {}
+_fin_quarterly_lock = threading.Lock()
+_FIN_QUARTERLY_TTL = 3 * 3600
+
+
+@app.route("/api/financials-quarterly")
+def financials_quarterly():
+    """คืน {"as_of": "...", "set": {sym: {"q":[...], "revenue":[...], "gross_profit":[...],
+    "op_profit":[...], "net_profit":[...]}}} — 16 ไตรมาสล่าสุดต่อหุ้นไทย จาก set_qpl
+    ไม่มี financials.db (เช่นบน CI) -> {"set": {}} ให้ run_static_update.py คงไฟล์เดิม"""
+    def _compute():
+        return financials_store.bake_quarterly_pl(BASE_DIR, _quarterly_bake_universe())
+
+    with _fin_quarterly_lock:
+        slot = _fin_quarterly_cache.setdefault("th", {})
+    try:
+        return jsonify(_swr_get_or_refresh(slot, _fin_quarterly_lock, _FIN_QUARTERLY_TTL, _compute))
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"ดึงงบรายไตรมาสล้มเหลว: {e}", "set": {}}), 500
+
+
 @app.route("/api/sector-compare")
 def sector_compare():
     """มุมมอง "⚖ เปรียบเทียบ Sector" ในหน้า "ดัชนีกลุ่มอุตสาหกรรม SET & mai" — รวมรายได้/กำไรสุทธิ
@@ -4634,6 +4719,69 @@ def sector_compare():
     return jsonify(compare)
 
 
+def _compute_qpl_mirror_parsed(uni):
+    """โหลดชั้นดิบของ growth screener เวอร์ชันต่างประเทศ (?universe=dr|us|hk|jp) —
+    financials_store._load_mirror_qpl_all (finnomena_q ฐาน + yahoo_q ทับ) + เติม sector/name/
+    mkt_cap เฉพาะที่หาได้ต่อตลาด
+
+    namespace ใน financials.db (เช็คจริง 2026-08-30):
+      DR portfolio  -> 'DR:{mnemonic}'   (finnomena_q + yahoo_q)
+      mirror US/HK  -> 'FINN:{EX}:{tkr}' (finnomena_q ล้วน — ไม่มี yahoo_q)
+      Nikkei 225    -> 'DR:{numeric}'    (yahoo_q ล้วน จาก _run_jp_index_sync q_targets step —
+                       'FINN:JP:' มีแค่ yahoo รายปี ไม่มีรายไตรมาส) ~202/225 ตัว
+    DR/US/HK ไม่มี sector ให้ (factor_snapshot ไม่เก็บ + dr_cache.json ก็ไม่มี), JP มีจาก jp_index_metrics"""
+    like = {"dr": "DR:%", "us": "FINN:US:%", "hk": "FINN:HK:%", "jp": "DR:%"}[uni]
+    name_prefix = {"dr": "DR:", "us": "FINN:US:", "hk": "FINN:HK:", "jp": None}[uni]
+    allowed = None
+    sector_by_symbol, name_override, mktcap_override = {}, {}, {}
+
+    # ชื่อบริษัท — payload ดิบมักเก็บแค่รหัส (name == ticker) get_names_bulk ขุดจาก yahoo/yahoo_q
+    # ที่มีชื่อจริง (เหมือน /api/mirror-symbols-named) · JP ใช้ชื่อจาก jp_index_metrics แทน
+    if name_prefix:
+        name_override.update(financials_store.get_names_bulk(BASE_DIR, name_prefix))
+
+    if uni == "dr":
+        allowed = set(_dr_financials_universe())
+        try:
+            with open(os.path.join(BASE_DIR, "dr_cache.json"), encoding="utf-8") as f:
+                for s in json.load(f).get("stocks", []):
+                    if s.get("mkt_cap") is not None:
+                        mktcap_override[s["sym"]] = s["mkt_cap"]
+        except Exception:
+            pass
+    elif uni in ("us", "hk"):
+        # ชุดเดียวกับ Screener+ ?universe=us/hk — หุ้น mirror ที่ผ่าน quality filter
+        # (>=12 ไตรมาส + มี PE จริง — ดู factor_snapshot.build_mirror_snapshot) ตัด OTC/junk ออกแล้ว
+        allowed = set(factor_snapshot.get_mirror_symbols(BASE_DIR).get(uni.upper(), []))
+    elif uni == "jp":
+        from sources import jp_index_metrics
+        # ยึด jp_index_metrics เป็นแหล่งชื่อ/sector/mkt_cap + กรอง universe ให้เป็นเฉพาะ
+        # สมาชิก Nikkei 225 จริง (กัน DR:{numeric} ของ HK ที่ leading-zero เช่น '0700'
+        # หลุดเข้ามา — Nikkei ใช้เลข 4 หลักไม่มี 0 นำ ไม่ชนกันอยู่แล้ว แต่ cross-check ชื่อไว้อีกชั้น)
+        allowed = set()
+        for s in jp_index_metrics.load_local(BASE_DIR).get("stocks", []):
+            sym = s.get("symbol") or ""
+            if not sym.endswith(".T"):
+                continue
+            bare = sym[:-2]
+            allowed.add(bare)
+            if s.get("sector"):
+                sector_by_symbol[bare] = s["sector"]
+            if s.get("name"):
+                name_override[bare] = s["name"]
+            if s.get("mkt_cap") is not None:
+                mktcap_override[bare] = s["mkt_cap"]
+
+    loaded = financials_store._load_mirror_qpl_all(BASE_DIR, like, allowed_bare=allowed)
+    return {
+        "parsed": loaded["parsed"],
+        "cashflow_parsed": loaded["cashflow_parsed"],
+        "sector_by_symbol": sector_by_symbol,
+        "name_by_symbol": {**loaded["name_by_symbol"], **name_override},
+        "mktcap_by_symbol": {**loaded["mktcap_by_symbol"], **mktcap_override},
+    }
+
+
 @app.route("/api/quarterly-growth-screener")
 def quarterly_growth_screener():
     """หน้าใหม่ "🚀 หุ้นโตแรงรายไตรมาส" — ลิสหุ้น SET+mai ทั้งตลาดแบบแบน (ไม่จัดกลุ่ม sector ต่างจาก
@@ -4643,7 +4791,30 @@ def quarterly_growth_screener():
 
     แคชแยกชั้นจาก /api/sector-compare แม้อ่านตาราง set_qpl เดียวกัน (ดูคอมเมนต์ _qpl_parsed_cache
     ด้านบน) — ชั้นโหลดดิบ (sqlite+JSON parse) แคช 24h, ชั้นคำนวณ QoQ/YoY รันสดทุก request ตาม
-    quarter param ที่ขอมา"""
+    quarter param ที่ขอมา
+
+    ?universe=dr|us|hk|jp — หุ้นต่างประเทศ: อ่าน finnomena_q/yahoo_q แทน set_qpl
+    (financials_store._load_mirror_qpl_all) get_qpl_growth_screener ตัวเดียวกันคำนวณต่อ —
+    cache แยกต่อ universe (_qpl_mirror_caches) ไม่ใส่/th -> หุ้นไทยเหมือนเดิม"""
+    quarter = request.args.get("quarter") or None
+    uni = (request.args.get("universe") or "th").lower()
+
+    if uni in ("dr", "us", "hk", "jp"):
+        try:
+            slot, lock = _qpl_mirror_slot(uni)
+            cached = _swr_get_or_refresh(slot, lock, _QPL_PARSED_CACHE_TTL,
+                                         lambda: _compute_qpl_mirror_parsed(uni))
+            result = financials_store.get_qpl_growth_screener(
+                cached["parsed"], cached["sector_by_symbol"], target_quarter=quarter,
+                name_by_symbol=cached["name_by_symbol"], cashflow_parsed=cached["cashflow_parsed"],
+                mktcap_by_symbol=cached["mktcap_by_symbol"])
+            for row in result.get("stocks", []):
+                row["market"] = uni
+        except Exception as e:
+            traceback.print_exc()
+            return jsonify({"error": f"โหลดข้อมูลเติบโตรายไตรมาส ({uni}) ล้มเหลว: {e}"}), 500
+        return jsonify(result)
+
     def _compute_parsed():
         sector_by_symbol = {}
         name_by_symbol = {}
@@ -4674,7 +4845,6 @@ def quarterly_growth_screener():
     try:
         cached = _swr_get_or_refresh(_qpl_parsed_cache, _qpl_parsed_lock,
                                       _QPL_PARSED_CACHE_TTL, _compute_parsed)
-        quarter = request.args.get("quarter") or None
         result = financials_store.get_qpl_growth_screener(
             cached["parsed"], cached["sector_by_symbol"], target_quarter=quarter,
             name_by_symbol=cached["name_by_symbol"], cashflow_parsed=cached["cashflow_parsed"],
@@ -9275,6 +9445,7 @@ def _run_financials_update_all():
 
         _update(current=93, total=100, message="กำลังคำนวณ factor snapshot ใหม่...")
         factor_snapshot.build_snapshot(BASE_DIR)
+        _bake_financials_quarterly_file()   # re-bake data/financials_quarterly.json (งบไตรมาสเว็บมือถือ)
         idx_changed = bool(r_idx["ok"] or r_idx["fail"])
         if refreshed_mirror or idx_changed:
             _update(current=97, total=100, message="กำลัง rebuild mirror snapshot US/HK...")
@@ -9286,6 +9457,7 @@ def _run_financials_update_all():
         _fin_analytics_cache.clear()
         _sector_compare_cache.clear()
         _qpl_parsed_cache.clear()
+        _clear_qpl_mirror_caches()
         _market_trend_cache.clear()
         _sector_trend_cache.clear()
         _warmup_fin_dependent_caches()

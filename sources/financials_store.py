@@ -3046,6 +3046,141 @@ def _load_set_qpl_all(base_dir, allowed_symbols, source="set_qpl"):
     return parsed
 
 
+def _mirror_income_layer(payload):
+    """{(year_ad,q): {revenue, gross_profit, net_profit}} จาก payload ทรง finnomena_q/yahoo_q
+    (section->field->{วันสิ้นงวด: ค่า}) — ยกตรรกะสกัด income field มาจาก compute_qpl_report
+    (ชั้น Finnomena/Yahoo) แต่เอาแค่ 3 บรรทัดที่ get_qpl_growth_screener ใช้จริง (รายได้/
+    กำไรขั้นต้น/กำไรสุทธิ) bucket วันสิ้นงวด -> ไตรมาสปฏิทินผ่าน _year_quarter_from_date เดิม
+    (จัดการ FYE ไม่ตรงปฏิทิน NVDA/WMT ไว้แล้ว)"""
+    def _f(v):
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    out = {}
+    if not payload:
+        return out
+    inc = payload.get("income", {}) or {}
+    rev_m = inc.get("Total Revenue") or inc.get("Operating Revenue") or {}
+    gp_m = inc.get("Gross Profit") or {}
+    cogs_m = inc.get("Cost Of Revenue") or {}
+    ni_m = inc.get("Net Income") or inc.get("Net Income Common Stockholders") or {}
+    for d in set(rev_m) | set(gp_m) | set(ni_m):
+        y, q = _year_quarter_from_date(d)
+        if not q:
+            continue
+        r, g, n = _f(rev_m.get(d)), _f(gp_m.get(d)), _f(ni_m.get(d))
+        if g is None:
+            c = _f(cogs_m.get(d))
+            if r is not None and c is not None:
+                g = r - c
+        row = {}
+        if r is not None:
+            row["revenue"] = r
+        if g is not None:
+            row["gross_profit"] = g
+        if n is not None:
+            row["net_profit"] = n
+        if row:
+            out[(y, q)] = row
+    return out
+
+
+def _load_mirror_qpl_all(base_dir, like_pattern, allowed_bare=None):
+    """คู่ขนานกับ _load_set_qpl_all แต่สำหรับหุ้นต่างประเทศ (DR / mirror US-HK-JP) ที่ SET.or.th
+    ไม่มีข้อมูล — อ่าน source 'finnomena_q' (ฐาน, ลึก ~16 ปี) + 'yahoo_q' (ทับ, สดกว่า แต่ตื้น)
+    ทีละ query (เหมือน _load_set_qpl_all — ไม่เปิด connection ต่อ ticker) แล้วผสาน field-level
+    ต่อไตรมาสเป็น shape เดียวกับ _load_set_qpl_all ({รหัสดิบ: {(year_ad,q): row}}) เพื่อป้อนเข้า
+    get_qpl_growth_screener ตัวเดิมโดยไม่ต้องแก้ logic คำนวณ
+
+    like_pattern (เช็ค namespace จริง 2026-08-30):
+      'DR:%'      -> DR portfolio (finnomena_q + yahoo_q) และ Nikkei 225 (yahoo_q ล้วน —
+                    _run_jp_index_sync เก็บใต้ 'DR:{numeric}' ไม่ใช่ 'FINN:JP:') caller
+                    กรองด้วย allowed_bare ให้เหลือเฉพาะชุดที่ต้องการ
+      'FINN:US:%' / 'FINN:HK:%' -> mirror US/HK (finnomena_q ล้วน — ไม่มี yahoo_q ในสอง namespace นี้)
+    ('FINN:JP:%' มีแค่ yahoo รายปี ไม่มีรายไตรมาส — อย่าใช้)
+    allowed_bare: set ของรหัสดิบที่อนุญาต (เช่น หุ้นที่ผ่าน quality filter จาก
+    factor_snapshot.get_mirror_symbols) — None = เอาทุกตัวที่ query เจอ
+
+    คืน dict {"parsed", "cashflow_parsed", "mktcap_by_symbol", "name_by_symbol"} —
+    - parsed: {รหัสดิบ: {(year_ad,q): {revenue, gross_profit, net_profit}}}
+    - cashflow_parsed: {รหัสดิบ: {(year_ad,q): {ocf}}} (จาก _bscf_layer_from_payload คีย์ 'cfo'
+      remap เป็น 'ocf' ให้ตรงกับที่ get_qpl_growth_screener คาดหวัง)
+    - mktcap_by_symbol: {รหัสดิบ: market_cap} งวดล่าสุดของ valuation 'Market Cap' (Finnomena
+      เท่านั้น — แหล่งเดียวกับ build_mirror_snapshot) JP ไม่มี -> ไม่มีคีย์
+    - name_by_symbol: {รหัสดิบ: ชื่อบริษัท} จาก payload 'name' (yahoo_q ก่อน finnomena_q)
+    """
+    init_db(base_dir)
+    con = _connect(base_dir)
+    try:
+        finn_rows = con.execute(
+            "SELECT symbol, payload FROM financials WHERE source='finnomena_q' AND symbol LIKE ?",
+            (like_pattern,)).fetchall()
+        yq_rows = con.execute(
+            "SELECT symbol, payload FROM financials WHERE source='yahoo_q' AND symbol LIKE ?",
+            (like_pattern,)).fetchall()
+    finally:
+        con.close()
+
+    def _load(rows):
+        out = {}
+        for sym, raw in rows:
+            bare = sym.split(":")[-1]   # 'DR:NVDA' / 'FINN:US:AAPL' / 'FINN:HK:0700' -> ตัวสุดท้าย
+            if allowed_bare is not None and bare not in allowed_bare:
+                continue
+            try:
+                out[bare] = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    finn_by = _load(finn_rows)
+    yq_by = _load(yq_rows)
+
+    parsed, cashflow_parsed, mktcap_by_symbol, name_by_symbol = {}, {}, {}, {}
+    for bare in set(finn_by) | set(yq_by):
+        fp, yp = finn_by.get(bare), yq_by.get(bare)
+
+        # P&L — Finnomena เป็นฐาน แล้ว Yahoo ทับทีละ field (สดกว่า) เหมือนลำดับชั้น compute_qpl_report
+        merged = {}
+        for key, row in _mirror_income_layer(fp).items():
+            merged[key] = dict(row)
+        for key, row in _mirror_income_layer(yp).items():
+            merged.setdefault(key, {}).update(row)
+        if merged:
+            parsed[bare] = merged
+
+        # OCF ต่อไตรมาส — _bscf_layer_from_payload คืนคีย์ 'cfo' (Operating Cash Flow) remap เป็น 'ocf'
+        cf = {}
+        for pl in (fp, yp):   # Yahoo ทับ Finnomena (คีย์ (year,q) เดียวกันเพราะ derive จาก endDate เหมือนกัน)
+            for key, row in _bscf_layer_from_payload(pl).items():
+                if row.get("cfo") is not None:
+                    cf[key] = {"ocf": row["cfo"]}
+        if cf:
+            cashflow_parsed[bare] = cf
+
+        # market cap งวดล่าสุด (Finnomena valuation) — สำหรับ P/S · เอาวันล่าสุดที่ค่าไม่ใช่ None
+        # (บางตัวมีคีย์วันใหม่แต่ค่า null — ถ้าใช้ max(keys) ตรงๆ จะได้ None แล้ว float() ระเบิด)
+        mc_row = (fp or {}).get("valuation", {}).get("Market Cap", {}) or {}
+        mc_vals = [(d, v) for d, v in mc_row.items() if v is not None]
+        if mc_vals:
+            try:
+                mktcap_by_symbol[bare] = float(max(mc_vals)[1])
+            except (TypeError, ValueError):
+                pass
+
+        # ชื่อบริษัท — yahoo_q ก่อน (สดสุด) แล้ว finnomena_q
+        for pl in (yp, fp):
+            nm = (pl or {}).get("name")
+            if nm and nm != bare:
+                name_by_symbol[bare] = nm
+                break
+
+    return {"parsed": parsed, "cashflow_parsed": cashflow_parsed,
+            "mktcap_by_symbol": mktcap_by_symbol, "name_by_symbol": name_by_symbol}
+
+
 def _target_quarter(parsed):
     """quarter เป้าหมาย = ค่าที่พบบ่อยที่สุดของ "quarter ล่าสุดที่แต่ละหุ้นมีข้อมูล" (mode) — หุ้นที่ยัง
     ไม่รายงานงวดนั้นถูกข้ามในการรวมต่อ (จำนวนหุ้นต่อจุดจึงไม่เท่ากันเป็นปกติ) คืน None ถ้า parsed ว่าง"""
@@ -4952,3 +5087,49 @@ def check_valuation_quality(base_dir, symbol, payload, market=None, is_dr=False,
             })
 
     return {"checked": True, "warnings": warnings}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# bake งบกำไรขาดทุนรายไตรมาส (SET.or.th official — source 'set_qpl') สำหรับ
+# เวอร์ชันมือถือ/iPad → data/financials_quarterly.json
+#
+# 'set_qpl' สะสมถาวรอยู่แล้ว (_merge_set_qpl_payload) ทำให้บริษัทส่วนใหญ่มี ≥8 ไตรมาส
+# แม้ SET.or.th จะ serve สดแค่ ~2 ปี — ตรงนี้แค่ดึงออกมา bake ไม่มี Finnomena/Yahoo ปน
+# (Finnomena ห้ามขึ้น GitHub ตาม CLAUDE.md · SET.or.th public เหมือน set_daily_valuation)
+# ─────────────────────────────────────────────────────────────────────────────
+def bake_quarterly_pl(base_dir, symbols, max_q=16):
+    """คืน {"as_of": "YYYY-MM-DD", "set": {sym: {...}}} สำหรับ bake ไฟล์ static
+
+    ต่อหุ้น: {"q": ["2024Q1", ...], "revenue": [...], "gross_profit": [...],
+             "op_profit": [...], "net_profit": [...]}  — เอา max_q ไตรมาสล่าสุด
+    ค่าเป็นบาทเต็มหน่วย · null ถ้า field ขาด · ข้ามหุ้นที่ < 4 ไตรมาส
+    ถ้าไม่มี financials.db (เช่นบน CI) คืน {"set": {}} ให้ตัว bake ใช้ guard คงไฟล์เดิม
+    """
+    from datetime import datetime, timezone, timedelta
+    as_of = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")
+    if not db_exists(base_dir):
+        return {"as_of": as_of, "set": {}}
+
+    parsed = _load_set_qpl_all(base_dir, set(symbols), source="set_qpl")
+    FIELDS = [("revenue", "revenue"), ("gross_profit", "gross_profit"),
+              ("op_profit", "operating_profit"), ("net_profit", "net_profit")]
+    out = {}
+    for sym, quarters in parsed.items():
+        keys = sorted(quarters.keys())[-max_q:]
+        if len(keys) < 4:
+            continue
+        # เก็บเป็น "ล้านบาท" (จำนวนเต็ม) ให้ไฟล์เล็กลง — มือถือคูณ 1e6 กลับก่อน format
+        rec = {"q": [f"{y}Q{q}" for (y, q) in keys], "unit": "M฿"}
+        for out_key, src_key in FIELDS:
+            vals = []
+            for k in keys:
+                v = quarters[k].get(src_key)
+                try:
+                    vals.append(round(float(v) / 1e6) if v is not None else None)
+                except (TypeError, ValueError):
+                    vals.append(None)
+            rec[out_key] = vals
+        # ข้ามถ้าไม่มีรายได้เลยสักไตรมาส (payload เปล่า)
+        if any(v is not None for v in rec["revenue"]):
+            out[sym] = rec
+    return {"as_of": as_of, "set": out}

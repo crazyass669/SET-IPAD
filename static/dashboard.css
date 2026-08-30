@@ -1096,11 +1096,11 @@ body.static-mode #tbl-momentum   th:nth-child(4),  body.static-mode #tbl-momentu
      note) ไม่ใช่แค่ปุ่ม กันเหลือช่องว่าง/tooltip ค้าง */
   .btn-wrap:has(#kill-dup-btn), .btn-wrap:has(#job-reset-btn) { display: none; }
 
-  /* Fair Value P/B·P/E Screener / หุ้นโตแรงรายไตรมาส — ตารางทั้งตลาดคอลัมน์
-     เยอะ/กว้าง ยังใช้งานไม่ได้จริงบนจอสัมผัส (มือถือ/แท็บเล็ต) เหมือนเหตุผล
-     Peer Compare/Tearsheet ด้านบน — ซ่อนทางเข้าจาก nav ไว้ก่อน เดสก์ท็อป
-     เข้าได้ปกติ */
-  #nav-pbv-pe-screener-btn, #nav-growth-screener-btn { display: none; }
+  /* DCF Screener / Fair Value P/B·P/E Screener / หุ้นโตแรงรายไตรมาส — ตารางทั้ง
+     ตลาดคอลัมน์เยอะ/กว้าง ยังใช้งานไม่ได้จริงบนจอสัมผัส (มือถือ/แท็บเล็ต) เหมือน
+     เหตุผล Peer Compare/Tearsheet ด้านบน + ทั้ง 3 ตัวไม่ได้ bake ลง data/*.json
+     (เว็บมือถือกดแล้วได้ error) — ซ่อนทางเข้าจาก nav ไว้ก่อน เดสก์ท็อปเข้าได้ปกติ */
+  #nav-dcf-screener-btn, #nav-pbv-pe-screener-btn, #nav-growth-screener-btn { display: none; }
 }
 
 /* ── การ์ดคู่มือลำดับการกดอัพเดท (หน้า Data Health) ────────────────────

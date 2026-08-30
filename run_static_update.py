@@ -219,6 +219,10 @@ SNAPSHOTS = [
     # ที่ไม่แตะ Finnomena เลย (financials.db เต็มเป็น local-only ตามกฎ ห้ามขึ้น GitHub)
     # ใช้ปลุกช่องกรองบางส่วนใน Stock Screener ที่เดิมถูกปิดทั้งหมดบนเว็บมือถือ/ไอแพด
     ("/api/financials-analytics?source=yahoo", "financials_analytics_yahoo.json", False),
+    # งบกำไรขาดทุนรายไตรมาส (SET.or.th official 'set_qpl' — สะสมใน financials.db) ให้
+    # เวอร์ชันมือถือแสดง ≥8 ไตรมาสล่าสุด · CI ไม่มี financials.db -> คืน {"set":{}} ->
+    # _is_empty_payload guard คงไฟล์ที่ commit ไว้ (bake จริงตอนรัน local หลัง sync งบ)
+    ("/api/financials-quarterly", "financials_quarterly.json", False),
     # คำอธิบายบริษัท (EN + แปลไทย) หุ้น DR — sync ด้วยปุ่มในเครื่องเป็นระยะ (ดูคู่มือ)
     # ไฟล์นี้แค่อ่าน cache local (dr_descriptions.json) มา bake ไม่ได้ fetch สดตอน CI รัน
     ("/api/dr-descriptions",                   "dr_descriptions.json",            False),

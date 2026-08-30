@@ -3336,6 +3336,12 @@ function _wlOpenMirrorTearsheet(mkt, sym) {
   openInternalHash(`#ts/${mkt.toLowerCase()}/${encodeURIComponent(sym)}`);
 }
 
+// คลิกหุ้น DR ใน Watchlist — โหมด 🗗 → หน้างบการเงินแท็บใหม่, ไม่งั้น chart modal (มี _drData แล้ว)
+function _wlOpenDr(sym) {
+  if (navOpenMode() === 'new') { openInternalHash('#fin/dr/' + encodeURIComponent(sym)); return; }
+  openDRChartModal(sym);
+}
+
 function addToWatchlist() {
   let raw = document.getElementById("wl-input").value.trim().toUpperCase();
   if (!raw) return;
@@ -3685,7 +3691,7 @@ function renderWatchlist() {
         <tr data-sym="${esc(sym)}" data-dr-close='${JSON.stringify(d.close100||[])}'>
           <td><span class="${rsColor(d.rs_score)}" style="font-weight:700">${d.rs_score??"-"}</span></td>
           <td>
-            <strong class="sym-link" style="color:var(--blue)" onclick="openDRChartModal('${_escJsAttr(under)}')">${esc(under)}</strong>
+            <strong class="sym-link" style="color:var(--blue)" onclick="_wlOpenDr('${_escJsAttr(under)}')">${esc(under)}</strong>
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">DR</span>
             <a class="tv-link" href="${tvHref}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>
           </td>
@@ -3726,7 +3732,7 @@ function renderWatchlist() {
         <tr data-sym="US:${u.symbol}">
           <td><span class="${rsColor(u.rs_score)}" style="font-weight:700">${u.rs_score??"-"}</span></td>
           <td>
-            <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('US','${u.symbol}')` : `openUsChartModal('${u.symbol}')`}">${u.symbol}</strong>
+            <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('US','${u.symbol}')` : `_openMirrorStock('${u.symbol}','us')`}">${u.symbol}</strong>
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">US</span>
             ${isMirror ? `<span style="font-size:9px;color:var(--text2)" title="หุ้นนอกดัชนีหลัก S&P500/Dow/NDX — ข้อมูลดึงแบบ on-demand เหมือนหน้า Tearsheet (cache 1 วัน)">🔍</span>` : ''}
             ${_usTvLink(u.symbol)}
@@ -3765,7 +3771,7 @@ function renderWatchlist() {
         <tr data-sym="HK:${h.symbol}">
           <td><span class="${rsColor(h.rs_score)}" style="font-weight:700">${h.rs_score??"-"}</span></td>
           <td>
-            <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('HK','${h.symbol}')` : `openHkChartModal('${h.symbol}')`}">${h.symbol}</strong>
+            <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('HK','${h.symbol}')` : `_openMirrorStock('${h.symbol}','hk')`}">${h.symbol}</strong>
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">HK</span>
             ${isMirror ? `<span style="font-size:9px;color:var(--text2)" title="หุ้นนอกดัชนีหลัก HSI/HSCEI/HSTECH — ข้อมูลดึงแบบ on-demand เหมือนหน้า Tearsheet (cache 1 วัน)">🔍</span>` : ''}
             ${_hkTvLink(h.symbol)}
@@ -3812,7 +3818,7 @@ function renderWatchlist() {
           <tr data-sym="${esc(newSym)}" data-dr-close='${JSON.stringify(d.close100||[])}'>
             <td><span class="${rsColor(d.rs_score)}" style="font-weight:700">${d.rs_score??"-"}</span></td>
             <td>
-              <strong class="sym-link" style="color:var(--blue)" onclick="openDRChartModal('${_escJsAttr(under)}')">${esc(under)}</strong>
+              <strong class="sym-link" style="color:var(--blue)" onclick="_wlOpenDr('${_escJsAttr(under)}')">${esc(under)}</strong>
               <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">DR</span>
               <a class="tv-link" href="${tvHref2}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>
             </td>
@@ -3851,7 +3857,7 @@ function renderWatchlist() {
           <tr data-sym="US:${u.symbol}">
             <td><span class="${rsColor(u.rs_score)}" style="font-weight:700">${u.rs_score??"-"}</span></td>
             <td>
-              <strong class="sym-link" style="color:var(--blue)" onclick="openUsChartModal('${u.symbol}')">${u.symbol}</strong>
+              <strong class="sym-link" style="color:var(--blue)" onclick="_openMirrorStock('${u.symbol}','us')">${u.symbol}</strong>
               <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">US</span>
               ${_usTvLink(u.symbol)}
             </td>
@@ -3887,7 +3893,7 @@ function renderWatchlist() {
           <tr data-sym="HK:${h.symbol}">
             <td><span class="${rsColor(h.rs_score)}" style="font-weight:700">${h.rs_score??"-"}</span></td>
             <td>
-              <strong class="sym-link" style="color:var(--blue)" onclick="openHkChartModal('${h.symbol}')">${h.symbol}</strong>
+              <strong class="sym-link" style="color:var(--blue)" onclick="_openMirrorStock('${h.symbol}','hk')">${h.symbol}</strong>
               <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">HK</span>
               ${_hkTvLink(h.symbol)}
             </td>
@@ -5021,12 +5027,24 @@ function exportPbvPeScreenerCsv() {
 // เมนูนี้คืนลิสหุ้นแบบแบนทั้งตลาด (ไม่จัดกลุ่ม sector) + เลือกไตรมาสย้อนหลังได้ ไม่ผูกไตรมาสล่าสุด
 // ตายตัว — cache ผลตอบกลับต่อไตรมาสไว้ฝั่ง client กันยิง fetch ซ้ำตอนกด ◀▶ ไปมา
 // ============================================================
-let _growthScrCache = {};        // "YYYY-Q" -> API response ({quarter, available_quarters, stocks})
+// _growthScrCache: uni ('th'|'dr'|'us'|'hk'|'jp') -> { "YYYY-Q" -> API response }
+// หุ้นไทย (th) อ่าน set_qpl ทางการ · ต่างประเทศ (dr/us/hk/jp) อ่าน finnomena_q/yahoo_q ผ่าน
+// ?universe= (ดู _compute_qpl_mirror_parsed ใน app.py) — คอลัมน์/ตัวกรอง/หน่วยเงินต่างกันตาม uni
+let _growthScrCache = {};
+let _growthScrUni = 'th';        // ตลาดที่กำลังดู (จาก <select id="growth-scr-universe">)
 let _growthScrQuarter = null;    // ไตรมาสที่กำลังดูอยู่ตอนนี้ (string "YYYY-Q")
 let _growthScrLoading = false;
+let _growthScrLoadKeys = new Set();   // "uni|quarter" ที่กำลัง fetch อยู่ (กันยิงซ้ำอันเดิม แต่ยอมให้อันอื่นยิงพร้อมกัน)
 let _growthScrSort = { key: 'profit_yoy', dir: 'desc' };
 const GROWTH_SCR_MIN_BASE = 50_000_000;   // บาท — ฐานเทียบขั้นต่ำกันโต % หลอกจากฐานจิ๋ว (เหมือน
                                            // _MT_PROFIT_GROWTH_MIN_BASE ใน Market Trend แต่ใช้กับทั้งรายได้/กำไร)
+                                           // ใช้เฉพาะ uni='th' (สกุลบาท) — ต่างประเทศซ่อน checkbox นี้
+// หน่วยเงินของคอลัมน์รายได้/กำไร ต่อ universe (ตัวเลขดิบเป็นสกุลท้องถิ่นของงบ)
+const _GROWTH_SCR_CCY = { th: 'ลบ.', dr: 'ล้าน', us: '$M', hk: 'HK$M', jp: '¥M' };
+// uni ที่มี sector ให้แสดง — DR/US/HK ไม่มี (factor_snapshot ไม่เก็บ), JP มีจาก jp_index_metrics
+const _GROWTH_SCR_HAS_SECTOR = new Set(['th', 'jp']);
+function _growthScrCur() { return (_growthScrCache[_growthScrUni] || {})[_growthScrQuarter]; }
+
 const GROWTH_SCR_COLS = [
   { key: 'symbol', label: 'หุ้น', align: 'left' },
   { key: 'sector', label: 'Sector', align: 'left' },
@@ -5042,18 +5060,75 @@ const GROWTH_SCR_COLS = [
   { key: 'profit_streak', label: 'ต่อเนื่อง', align: 'right',
     tip: 'จำนวนไตรมาสติดต่อกัน (QoQ) ที่กำไร/รายได้เป็นบวกและโตกว่าไตรมาสก่อนหน้า — แยกหุ้นโตต่อเนื่องจริงจากโตแค่ไตรมาสเดียวแบบสุ่ม/ฤดูกาล หรือขาดทุนหดตัวลงเรื่อยๆ' },
   { key: 'ocf_ni_pct', label: 'OCF/NI', align: 'right',
-    tip: 'เงินสดจากการดำเนินงาน (OCF) หารกำไรสุทธิ — <50% หรือติดลบ = 🚩 กำไรอาจไม่มีเงินสดหนุนจริง (ลูกหนี้ค้างเยอะ) จาก SET official cash_flow เท่าที่เคย sync สะสมไว้แล้ว (งวดเก่ากว่านั้นโชว์ "—")' },
+    tip: 'เงินสดจากการดำเนินงาน (OCF) หารกำไรสุทธิ — <50% หรือติดลบ = 🚩 กำไรอาจไม่มีเงินสดหนุนจริง (ลูกหนี้ค้างเยอะ) จากงบกระแสเงินสดที่เคย sync สะสมไว้แล้ว (งวดที่ไม่มีข้อมูลโชว์ "—")' },
   { key: 'ps', label: 'P/S', align: 'right',
     tip: 'Price-to-Sales = มูลค่าตลาด (ราคาปัจจุบัน) ÷ รายได้ TTM ของไตรมาสที่กำลังดู — ใช้ได้แม้หุ้นขาดทุน (ต่างจาก PE) แต่ถ้าเลื่อนไปดูไตรมาสเก่า ตัวเศษยังเป็นราคา ณ ปัจจุบันเสมอ ไม่ใช่ราคา ณ ตอนนั้น' },
 ];
+
+// คอลัมน์ที่โชว์จริงต่อ universe — ตัด Sector ออกสำหรับ DR/US/HK (ไม่มีข้อมูล sector)
+function _growthScrCols() {
+  return _GROWTH_SCR_HAS_SECTOR.has(_growthScrUni)
+    ? GROWTH_SCR_COLS
+    : GROWTH_SCR_COLS.filter(c => c.key !== 'sector');
+}
 
 function _growthScrEsc(s) {
   return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
+// ข้อความอธิบายแหล่งข้อมูลต่อ universe (โชว์ใน #growth-scr-uni-note) — สั้น ๆ พอบอกที่มา/ข้อจำกัด
+const _GROWTH_SCR_UNI_NOTE = {
+  th: '',
+  dr: 'DR ต่างประเทศในพอร์ต (~240 ตัว) · งบรายไตรมาสจาก Finnomena (US/HK underlying ลึก ~16 ปี) + Yahoo · ตัวเลขเป็นสกุลเงินท้องถิ่นของงบ · ไม่มี cross-check SET.or.th',
+  us: 'หุ้น US ทั้งตลาด (~3,000 ตัว ผ่านตัวกรองคุณภาพ ตัด OTC/junk) · งบรายไตรมาสจาก Finnomena ~16 ปี · ตัวเลขเป็น USD (ล้าน) · ไม่มี sector/OC-NI ครบเท่าหุ้นไทย',
+  hk: 'หุ้น HK ทั้งตลาด (~1,000 ตัว) · งบรายไตรมาสจาก Finnomena · ตัวเลขเป็น HKD (ล้าน) · P/S มีเฉพาะบางตัว (Finnomena ไม่ได้ให้ market cap ครบ)',
+  jp: '⚠️ Yahoo ให้งบ "รายไตรมาส" ของหุ้นญี่ปุ่นแค่ EPS/จำนวนหุ้น ไม่มีรายได้/กำไรสุทธิ — มีข้อมูลจริงแค่ ~10 ตัวจาก Nikkei 225 (ส่วนใหญ่รายงานครึ่งปี) หน้านี้จึงเกือบว่างสำหรับ JP',
+};
+
+function _growthScrApplyUniUI() {
+  const note = document.getElementById('growth-scr-uni-note');
+  if (note) {
+    const txt = _GROWTH_SCR_UNI_NOTE[_growthScrUni] || '';
+    note.textContent = txt;
+    note.style.display = txt ? '' : 'none';
+  }
+  // ย่อหน้าอธิบายแบบหุ้นไทย (set_qpl / กลุ่มการเงิน ฯลฯ) โชว์เฉพาะแท็บ th
+  const thDesc = document.getElementById('growth-scr-th-desc');
+  if (thDesc) thDesc.style.display = _growthScrUni === 'th' ? '' : 'none';
+  // ซ่อน Sector (DR/US/HK ไม่มี) + "ตัดฐานเทียบเล็กเกินไป" (threshold เป็นสกุลบาท ใช้ได้แค่ th)
+  const secSel = document.getElementById('growth-scr-sector');
+  if (secSel) secSel.style.display = _GROWTH_SCR_HAS_SECTOR.has(_growthScrUni) ? '' : 'none';
+  const minBase = document.getElementById('growth-scr-min-base');
+  if (minBase) {
+    const lbl = minBase.closest('label');
+    if (lbl) lbl.style.display = _growthScrUni === 'th' ? '' : 'none';
+  }
+  _growthScrEnsureDrData();   // แท็บ DR ต้องมี _drData ไว้ทำลิงก์ TV + เปิด chart modal
+}
+
+// สลับ universe — reset ไตรมาส/sort กลับ default แล้วโหลดชุดใหม่ (หรือ render จาก cache ถ้าเคยโหลด)
+function _growthScrSwitchUniverse(uni) {
+  if (uni === _growthScrUni) return;
+  _growthScrUni = uni;
+  _growthScrQuarter = null;
+  _growthScrSort = { key: 'profit_yoy', dir: 'desc' };
+  _growthScrApplyUniUI();
+  const cached = _growthScrCache[uni];
+  if (cached && Object.keys(cached).length) {
+    // ไตรมาสล่าสุดที่โหลดไว้ของ uni นี้ (คีย์แรก = ผลรอบแรกเสมอ) — อ่านจาก field quarter ของ payload
+    _growthScrQuarter = Object.values(cached)[0].quarter;
+    _growthScrPopulateQuarterSelect(Object.values(cached)[0].available_quarters || []);
+    _growthScrPopulateSectorSelect(_growthScrCur()?.stocks || []);
+    renderGrowthScreener();
+    return;
+  }
+  fetchGrowthScreener();
+}
+
 function loadGrowthScreenerPage() {
-  if (_growthScrQuarter && _growthScrCache[_growthScrQuarter]) { renderGrowthScreener(); return; }
+  _growthScrApplyUniUI();
+  if (_growthScrQuarter && _growthScrCur()) { renderGrowthScreener(); return; }
   fetchGrowthScreener();
 }
 
@@ -5061,26 +5136,40 @@ function loadGrowthScreenerPage() {
 // เพราะ _growthScrShiftQuarter/_growthScrJumpQuarter เรียก .then() ต่อ (บั๊กที่เจอจริงกับ DCF Screener
 // ตอนลืม return — ปุ่มจะดูเหมือนใช้งานได้ปกติเวลาเทสต์คร่าวๆ แต่จริงๆ race กันอยู่ ดู dcf-screener-batch memory)
 function fetchGrowthScreener(quarter) {
-  if (_growthScrLoading) return Promise.resolve();
+  const uni = _growthScrUni;
+  const loadKey = uni + '|' + (quarter || '');
+  // guard ต่อ key (universe+quarter) ไม่ใช่ global — สลับแท็บ/ไตรมาสระหว่างที่อีกอันกำลังโหลด
+  // ต้องยิงได้ (เดิม _growthScrLoading global บล็อกจน US cold ~15 วิ ทำให้สลับแล้วนิ่งเงียบ)
+  if (_growthScrLoadKeys.has(loadKey)) return Promise.resolve();
+  _growthScrLoadKeys.add(loadKey);
   _growthScrLoading = true;
   const box = document.getElementById('growth-screener-table');
   if (box && !_growthScrQuarter) box.innerHTML = '<div class="empty">กำลังโหลด...</div>';
-  const qs = quarter ? ('?quarter=' + encodeURIComponent(quarter)) : '';
-  return _fetchTimeout('/api/quarterly-growth-screener' + qs, 30000,
-      'หมดเวลารอข้อมูลเติบโตรายไตรมาส (เกิน 30 วิ)')
+  const params = [];
+  if (uni !== 'th') params.push('universe=' + uni);
+  if (quarter) params.push('quarter=' + encodeURIComponent(quarter));
+  const qs = params.length ? ('?' + params.join('&')) : '';
+  // ต่างประเทศ cold load ช้ากว่า (US mirror ~3.9k payload parse ~15 วิ) — เผื่อ timeout ยาวขึ้น
+  const timeoutMs = uni === 'th' ? 30000 : 90000;
+  return _fetchTimeout('/api/quarterly-growth-screener' + qs, timeoutMs,
+      'หมดเวลารอข้อมูลเติบโตรายไตรมาส')
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
-      _growthScrCache[d.quarter] = d;
+      (_growthScrCache[uni] || (_growthScrCache[uni] = {}))[d.quarter] = d;
+      if (uni !== _growthScrUni) return;   // ผู้ใช้สลับ universe ระหว่างรอ — ทิ้งผลนี้ (เก็บ cache ไว้แล้ว)
       _growthScrQuarter = d.quarter;
       _growthScrPopulateQuarterSelect(d.available_quarters || []);
       _growthScrPopulateSectorSelect(d.stocks || []);
       renderGrowthScreener();
     })
     .catch(e => {
-      if (box) box.innerHTML = `<div class="empty">โหลดข้อมูลไม่สำเร็จ: ${_growthScrEsc(e.message || e)}</div>`;
+      if (box && uni === _growthScrUni) box.innerHTML = `<div class="empty">โหลดข้อมูลไม่สำเร็จ: ${_growthScrEsc(e.message || e)}</div>`;
     })
-    .finally(() => { _growthScrLoading = false; });
+    .finally(() => {
+      _growthScrLoadKeys.delete(loadKey);
+      _growthScrLoading = _growthScrLoadKeys.size > 0;
+    });
 }
 
 function _growthScrQuarterLabel(q) {
@@ -5109,7 +5198,7 @@ function _growthScrPopulateSectorSelect(stocks) {
 // ปุ่ม ◀▶ เลื่อนทีละไตรมาสจาก available_quarters ของรอบที่โหลดล่าสุด (เรียงใหม่->เก่า ดังนั้น
 // dir=+1 = ไตรมาสก่อนหน้า (index มากขึ้น), dir=-1 = ไตรมาสถัดไป/ใหม่กว่า (index น้อยลง)
 function _growthScrShiftQuarter(dir) {
-  const d = _growthScrCache[_growthScrQuarter];
+  const d = _growthScrCur();
   const list = d?.available_quarters || [];
   const idx = list.indexOf(_growthScrQuarter);
   if (idx === -1) return;
@@ -5120,7 +5209,7 @@ function _growthScrShiftQuarter(dir) {
 
 function _growthScrJumpQuarter(quarter) {
   if (!quarter || quarter === _growthScrQuarter) return;
-  if (_growthScrCache[quarter]) {
+  if ((_growthScrCache[_growthScrUni] || {})[quarter]) {
     _growthScrQuarter = quarter;
     const sel = document.getElementById('growth-scr-quarter-select');
     if (sel) sel.value = quarter;
@@ -5154,6 +5243,8 @@ function _growthScrIsTurnaround(row, mode) {
 // ฐานเทียบคือรายได้/กำไรสุทธิของงวดปัจจุบัน (row.revenue/row.net_profit) เอง ไม่ใช่งวดก่อน เพราะ
 // เป็นตัวชี้วัด ณ จุดเดียว ไม่ใช่ % เปลี่ยนแปลง
 function _growthScrMaskedRows(stocks) {
+  // threshold GROWTH_SCR_MIN_BASE เป็นสกุลบาท — ใช้ได้เฉพาะหุ้นไทย (ตัวเลขต่างประเทศคนละสกุล)
+  if (_growthScrUni !== 'th') return stocks;
   const minBaseOn = document.getElementById('growth-scr-min-base')?.checked;
   if (!minBaseOn) return stocks;
   const mask = (row, valKey, baseKey) => {
@@ -5231,7 +5322,7 @@ function _growthScrSortVal(row, key) {
 
 // ใช้ร่วมกันทั้งตอน render ตารางและตอน export CSV — export เอาแถวที่กรอง/เรียงตามที่เห็นบนจอ
 function _growthScrFilteredSorted() {
-  const d = _growthScrCache[_growthScrQuarter];
+  const d = _growthScrCur();
   if (!d || !d.stocks) return [];
   const q = (document.getElementById('growth-scr-search')?.value || '').toUpperCase().trim();
   const sector = document.getElementById('growth-scr-sector')?.value || '';
@@ -5279,7 +5370,8 @@ function resetGrowthScrFilters() {
 
 function _growthScrThb(v) {
   if (v == null) return '<span class="text2">—</span>';
-  return (v / 1e6).toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' ลบ.';
+  const unit = _GROWTH_SCR_CCY[_growthScrUni] || 'ล้าน';
+  return (v / 1e6).toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' ' + unit;
 }
 
 // เซลล์ % กำไร — โชว์ป้ายพลิกกำไรแทนขีดกลางเฉยๆ ถ้าเข้าเงื่อนไข turnaround (ต่างจากเซลล์รายได้ที่
@@ -5325,10 +5417,70 @@ function _growthScrOcfCell(r) {
   return `<span class="${cls}">${ratio.toFixed(0)}%${badge}</span>`;
 }
 
-// คลิกชื่อหุ้น — ใช้ chart modal ปกติถ้ามีราคาย้อนหลังพอ (>=5 วัน ตามเงื่อนไขใน openChartModal เอง)
-// ไม่งั้น fallback ไป Tearsheet แทน (ดึงข้อมูลเองฝั่ง server ไม่ต้องพึ่ง DATA.stocks) — กันหุ้นเพิ่ง
-// IPO ที่มีข้อมูล set_qpl แล้วแต่ยังสะสมราคาไม่ถึง 5 แท่งกดแล้วเจอแค่ alert เฉยๆ
+// โหลด _drData (จาก /api/dr — เหมือน renderWatchlist/Screener+ ทำ) แบบ lazy ครั้งเดียว
+// แล้ว re-render ตาราง DR ทับให้เอง — ต้องมีก่อนถึงจะทำลิงก์ TradingView (ต้องรู้ yf จริง เช่น
+// sym='GIGA' -> yf='3986.HK') และเปิด openDRChartModal ได้ (มัน find(x=>x.sym===sym) ใน _drData)
+let _growthScrDrLoading = false;
+function _growthScrEnsureDrData() {
+  if (_growthScrUni !== 'dr' || _drData || _growthScrDrLoading) return;
+  _growthScrDrLoading = true;
+  _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000)
+    .then(r => r.json())
+    .then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; if (_growthScrUni === 'dr') renderGrowthScreener(); } })
+    .catch(() => {})
+    .finally(() => { _growthScrDrLoading = false; });
+}
+
+// ลิงก์ TradingView ต่อตลาด — us/hk/jp ใช้ helper ตลาดนั้น (raw ticker), DR ต้อง lookup yf จริง
+// จาก _drData ก่อน (mnemonic เช่น 'GIGA' ≠ yf '3986.HK') — ว่างไปก่อนถ้า _drData ยังไม่โหลด
+// (_growthScrEnsureDrData จะ re-render ทับให้เมื่อโหลดเสร็จ) · th ใช้ tvLink เดิม
+function _growthScrTvLink(sym) {
+  if (_growthScrUni === 'us') return _usTvLink(sym);
+  if (_growthScrUni === 'hk') return _hkTvLink(sym);
+  if (_growthScrUni === 'jp') return _jpTvLink(sym);
+  if (_growthScrUni === 'dr') {
+    const d = (_drData || []).find(x => x.sym === sym);
+    return d && d.yf
+      ? `<a class="tv-link" href="https://www.tradingview.com/chart/?symbol=${yfToTVSym(d.yf)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="ดูใน TradingView">↗</a>`
+      : '';
+  }
+  return tvLink(sym);
+}
+
+// deep-link หน้ารายละเอียดหุ้นต่อ universe — ใช้ตอนโหมด "🗗 แท็บใหม่" + fallback หุ้นนอกดัชนี
+//  th → Tearsheet (#ts/th/) · dr → หน้างบการเงิน DR tab (#fin/dr/{mnemonic})
+//  us/hk/jp → หน้างบการเงิน DR tab + market prefix (#fin/dr/US:{ticker}) — ที่ที่งบรายไตรมาส
+//  ของหุ้น mirror อยู่จริง (Tearsheet 404 สำหรับตัวเล็ก ๆ นอกดัชนีที่ Yahoo resolve ไม่ได้)
+function _growthScrDeepLink(symbol) {
+  const s = encodeURIComponent(symbol);
+  if (_growthScrUni === 'th') return '#ts/th/' + s;
+  if (_growthScrUni === 'dr') return '#fin/dr/' + s;
+  return `#fin/dr/${_growthScrUni.toUpperCase()}:` + s;
+}
+
+// คลิกชื่อหุ้น:
+//  โหมด "🗗 แท็บใหม่" (navOpenMode==='new') — เปิด deep-link รายละเอียดหุ้นในแท็บใหม่ (ไม่เปิด modal)
+//  โหมด "🔗 หน้าเดิม":
+//    us/hk/jp: _openMirrorStock (อยู่ในดัชนีหลัก → chart modal · นอกดัชนี → หน้างบการเงิน)
+//    dr: openDRChartModal (ต้องมี _drData ก่อน) · ไม่เจอ → หน้างบการเงิน
+//    th: chart modal ถ้ามีราคาพอ · ไม่งั้น Tearsheet
 function _growthScrOpenSymbol(symbol) {
+  const uni = _growthScrUni;
+  if (navOpenMode() === 'new') { openInternalHash(_growthScrDeepLink(symbol)); return; }
+  if (_FS_MIRROR_IDX[uni]) { _openMirrorStock(symbol, uni); return; }
+  if (uni === 'dr') {
+    const openDr = () => {
+      if ((_drData || []).some(x => x.sym === symbol)) openDRChartModal(symbol);
+      else openInternalHash('#fin/dr/' + encodeURIComponent(symbol));
+    };
+    if (_drData) { openDr(); return; }
+    _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000)
+      .then(r => r.json())
+      .then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; } })
+      .catch(() => {})
+      .finally(openDr);
+    return;
+  }
   const s = typeof DATA !== 'undefined' && DATA && DATA.stocks && DATA.stocks.find(x => x.symbol === symbol);
   if (s && s.price_history && s.price_history.length >= 5) {
     openChartModal(symbol);
@@ -5337,40 +5489,54 @@ function _growthScrOpenSymbol(symbol) {
   }
 }
 
+// เนื้อเซลล์ต่อคอลัมน์ — ให้ตารางวนตาม _growthScrCols() (คอลัมน์ต่างกันตาม universe)
+function _growthScrCellHtml(r, key) {
+  switch (key) {
+    case 'symbol':
+      // <a href> ด้วย deep-link — คลิกปกติให้ _growthScrOpenSymbol จัดการ (modal / แท็บใหม่ตามโหมด),
+      // แต่ Ctrl/กลางคลิกให้เบราว์เซอร์เปิด href เอง (แท็บใหม่ native) — ตรงกับที่ผู้ใช้คาดหวัง
+      return `<a class="sym-link" href="${_growthScrDeepLink(r.symbol)}" onclick="_growthScrOpenSymbol('${_growthScrEsc(r.symbol)}');return false" style="font-weight:700;text-decoration:none">${_growthScrEsc(r.symbol)}</a>${_growthScrTvLink(r.symbol)}`
+        + (r.name ? `<div class="text2" style="font-size:10px">${_growthScrEsc(r.name)}</div>` : '');
+    case 'sector': return `<span class="text2">${_growthScrEsc(r.sector || '')}</span>`;
+    case 'revenue': return _growthScrThb(r.revenue);
+    case 'net_profit': return _growthScrThb(r.net_profit);
+    case 'revenue_qoq': return pct(r.revenue_qoq, 1);
+    case 'revenue_yoy': return pct(r.revenue_yoy, 1);
+    case 'profit_qoq': return _growthScrProfitCell(r, 'profit_qoq');
+    case 'profit_yoy': return _growthScrProfitCell(r, 'profit_yoy');
+    case 'npm': return r.npm != null ? r.npm.toFixed(1) + '%' : '<span class="text2">—</span>';
+    case 'npm_change_yoy': return _growthScrNpmDeltaCell(r);
+    case 'profit_streak': return _growthScrStreakCell(r);
+    case 'ocf_ni_pct': return _growthScrOcfCell(r);
+    case 'ps': return _scrFmtX(r.ps);
+    default: return '';
+  }
+}
+
 function renderGrowthScreener() {
-  const d = _growthScrCache[_growthScrQuarter];
+  const d = _growthScrCur();
   const box = document.getElementById('growth-screener-table');
   const countBox = document.getElementById('growth-scr-count');
   if (!box) return;
   if (!d || !d.stocks || !d.stocks.length) {
-    box.innerHTML = '<div class="empty">ยังไม่มีข้อมูล</div>';
+    box.innerHTML = _growthScrUni === 'th'
+      ? '<div class="empty">ยังไม่มีข้อมูล</div>'
+      : '<div class="empty">ไม่มีข้อมูลงบรายไตรมาสสำหรับตลาดนี้ (ดูคำอธิบายด้านบน)</div>';
+    if (countBox) countBox.textContent = '';
     return;
   }
+  const cols = _growthScrCols();
   const rows = _growthScrFilteredSorted();
   if (countBox) {
     let txt = `${rows.length}/${d.stocks.length} ตัว · ไตรมาส ${_growthScrQuarterLabel(d.quarter)}`;
-    if (d.ocf_coverage === false) txt += ' · ⚠️ ไม่มีข้อมูล OCF/NI ไตรมาสนี้ (นอกช่วงที่ SET sync ไว้)';
+    if (d.ocf_coverage === false) txt += ' · ⚠️ ไม่มีข้อมูล OCF/NI ไตรมาสนี้';
     countBox.textContent = txt;
   }
   if (!rows.length) { box.innerHTML = '<div class="empty">ไม่พบหุ้นตรงเงื่อนไข</div>'; return; }
 
-  const rowsHtml = rows.map(r => `<tr>
-      <td><b class="sym-link" onclick="_growthScrOpenSymbol('${r.symbol}')">${r.symbol}</b>${tvLink(r.symbol)}
-        ${r.name ? `<div class="text2" style="font-size:10px">${_growthScrEsc(r.name)}</div>` : ''}</td>
-      <td class="text2">${_growthScrEsc(r.sector || '')}</td>
-      <td style="text-align:right">${_growthScrThb(r.revenue)}</td>
-      <td style="text-align:right">${pct(r.revenue_qoq, 1)}</td>
-      <td style="text-align:right">${pct(r.revenue_yoy, 1)}</td>
-      <td style="text-align:right">${_growthScrThb(r.net_profit)}</td>
-      <td style="text-align:right">${_growthScrProfitCell(r, 'profit_qoq')}</td>
-      <td style="text-align:right">${_growthScrProfitCell(r, 'profit_yoy')}</td>
-      <td style="text-align:right">${r.npm != null ? r.npm.toFixed(1) + '%' : '<span class="text2">—</span>'}</td>
-      <td style="text-align:right">${_growthScrNpmDeltaCell(r)}</td>
-      <td style="text-align:right">${_growthScrStreakCell(r)}</td>
-      <td style="text-align:right">${_growthScrOcfCell(r)}</td>
-      <td style="text-align:right">${_scrFmtX(r.ps)}</td>
-    </tr>`).join('');
-  const headHtml = GROWTH_SCR_COLS.map(c => {
+  const rowsHtml = rows.map(r => '<tr>' + cols.map(c =>
+    `<td style="text-align:${c.align}">${_growthScrCellHtml(r, c.key)}</td>`).join('') + '</tr>').join('');
+  const headHtml = cols.map(c => {
     const arrow = _growthScrSort.key === c.key ? (_growthScrSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
     const title = c.tip ? `${c.tip} (กดเรียงลำดับ)` : 'กดเรียงลำดับ';
     return `<th style="text-align:${c.align};cursor:pointer;user-select:none;white-space:nowrap" onclick="_growthScrSetSort('${c.key}')" title="${_growthScrEsc(title)}">${c.label}${arrow}</th>`;
@@ -5408,7 +5574,7 @@ function exportGrowthScreenerCsv() {
   const a = document.createElement('a');
   const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   a.href = url;
-  a.download = `growth_screener_${_growthScrQuarter || ''}_${ts}.csv`;
+  a.download = `growth_screener_${_growthScrUni}_${_growthScrQuarter || ''}_${ts}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -9108,27 +9274,42 @@ const _FS_MIRROR_IDX = {
   jp: { get: () => _jpData, set: v => { _jpData = v; }, endpoint: '/api/jp-index-metrics', suffix: '.T', open: openJpChartModal },
 };
 
-async function fsOpenDetail(sym, isDr) {
+// เปิดหน้ารายละเอียดหุ้น mirror US/HK/JP — ใช้ร่วมกัน (Growth Screener / Screener+ / Peer Compare):
+//  โหมด "🗗 แท็บใหม่" → deep-link หน้างบการเงินในแท็บใหม่
+//  โหมด "🔗 หน้าเดิม" → อยู่ในดัชนีหลัก (lazy-fetch index metrics) เปิด chart modal, ไม่งั้น deep-link หน้างบ
+// mkt = 'us' | 'hk' | 'jp' (ตัวเล็ก)
+function _openMirrorStock(sym, mkt) {
+  const idx = _FS_MIRROR_IDX[mkt];
+  // deep-link ใช้รหัสดิบไม่มี suffix (#fin/ route regex จับ 'HK:'/'JP:' prefix แล้ว symbol ตามหลัง)
+  const deep = `#fin/dr/${mkt.toUpperCase()}:` + encodeURIComponent(sym.replace(/\.(HK|T)$/i, ''));
+  if (!idx || navOpenMode() === 'new') { openInternalHash(deep); return; }
+  const go = () => {
+    const lookup = idx.suffix && !sym.endsWith(idx.suffix) ? sym + idx.suffix : sym;
+    if ((idx.get()?.stocks || []).some(s => s.symbol === lookup)) idx.open(lookup);
+    else openInternalHash(deep);
+  };
+  if (idx.get()) { go(); return; }
+  _fetchTimeout(idx.endpoint, 30000).then(r => r.json()).then(d => idx.set(d)).catch(() => {}).finally(go);
+}
+
+// deep-link หน้ารายละเอียดหุ้นของแถว Screener+ (ตาม fs-universe) — ใช้เป็น href ให้ Ctrl/กลางคลิก
+// เปิดแท็บใหม่ได้เอง + ตอนโหมด "🗗 แท็บใหม่" · us/hk/jp → หน้างบการเงิน DR tab + market prefix
+// (Tearsheet #ts/ ไม่รับ 'dr' และ 404 กับหุ้น mirror ตัวเล็กที่ Yahoo resolve ไม่ได้)
+function _fsDeepLink(sym, isDr) {
   const uni = document.getElementById('fs-universe')?.value;
-  if (_FS_MIRROR_IDX[uni]) {
-    const idx = _FS_MIRROR_IDX[uni];
-    if (!idx.get()) {
-      try { idx.set(await (await fetch(idx.endpoint)).json()); }
-      catch (e) { /* เช็ค found ด้านล่างจะเป็น false แล้วตกไป fallback เอง */ }
-    }
-    // hk/jp_index_metrics.json เก็บ symbol แบบมี suffix '.HK'/'.T' (เช่น "0700.HK"/"7203.T")
-    // แต่แถวใน mirror snapshot เป็นรหัสดิบไม่มี suffix (เช่น "0700"/"7203") — ต่อให้ตรงก่อน lookup
-    const lookupSym = idx.suffix && !sym.endsWith(idx.suffix) ? `${sym}${idx.suffix}` : sym;
-    const found = (idx.get()?.stocks || []).some(s => s.symbol === lookupSym);
-    if (found) { idx.open(lookupSym); return; }
-    // หุ้น mirror ส่วนใหญ่ (~4,500 จาก ~5,108 ตัว ของ US/HK) อยู่นอกดัชนีหลัก (S&P500/Dow/NDX
-    // หรือ HSI/HSCEI/HSTECH) ไม่มีราคารายวันเก็บไว้ในเครื่องเลย เปิดกราฟไม่ได้จริงๆ (ต่างจาก DR
-    // ที่ดึงราคาสดจาก yfinance เองได้เสมอ, JP ไม่ควรเข้า branch นี้เลยเพราะทั้ง universe
-    // อยู่ในดัชนีหลักหมด — ถ้าเข้ามาจริงคือ jp-index-metrics.json โหลดไม่สำเร็จ) — พาไปหน้า
-    // งบการเงินแทนเด้ง alert บอกให้กด 'Index Max' ซึ่งช่วยไม่ได้ถ้าเป็นตัวนอกดัชนีจริง
-    fsOpenFin(sym, true);
-    return;
-  }
+  const s = encodeURIComponent(sym);
+  if (uni === 'us' || uni === 'hk' || uni === 'jp') return `#fin/dr/${uni.toUpperCase()}:` + s;
+  if (isDr) return '#fin/dr/' + s;
+  return '#ts/th/' + s;
+}
+
+async function fsOpenDetail(sym, isDr) {
+  // โหมด "🗗 แท็บใหม่" — เปิด deep-link ในแท็บใหม่ ไม่เปิด modal/นำทางทับหน้าเดิม
+  if (navOpenMode() === 'new') { openInternalHash(_fsDeepLink(sym, isDr)); return; }
+  const uni = document.getElementById('fs-universe')?.value;
+  // mirror US/HK/JP — ในดัชนีหลัก chart modal, นอกดัชนี → หน้างบการเงิน market ถูกต้อง
+  // (เดิม fsOpenFin ค้าง _finMirMarket='US' ทำให้ HK/JP หาไม่เจอ)
+  if (_FS_MIRROR_IDX[uni]) { _openMirrorStock(sym, uni); return; }
   if (isDr) {
     if (!_drData) {
       try {
@@ -9734,7 +9915,7 @@ function renderFsTable(rows) {
       let v;
       if (c.k === 'symbol') {
         const sub = name ? `<div style="font-size:10px;color:var(--text2);font-weight:400;max-width:150px;overflow:hidden;text-overflow:ellipsis">${name}</div>` : '';
-        v = `<a href="#" onclick="fsOpenDetail('${r.symbol}', ${r.is_dr ? 'true' : 'false'}); return false"
+        v = `<a href="${_fsDeepLink(r.symbol, r.is_dr)}" onclick="fsOpenDetail('${r.symbol}', ${r.is_dr ? 'true' : 'false'}); return false"
                style="color:var(--blue);font-weight:700;text-decoration:none" title="ดูรายละเอียด ${r.symbol}">${r.symbol}</a>${_fsSymTvLink(r, uni)}${sub}`;
       } else {
         v = _fsColHtml(r, c);
@@ -10120,7 +10301,7 @@ function renderPeerTable() {
       : (highlight ? 'background:rgba(88,166,255,0.12);font-weight:700' : (dim ? 'opacity:0.55' : ''));
     const symCell = isMedian
       ? '<td style="text-align:left">MEDIAN</td>'
-      : `<td style="text-align:left"><strong class="sym-link" onclick="closePeerAndOpenChart('${r.symbol}')">${r.symbol}</strong>${tvLink(r.symbol)}${dim ? ' <span title="ข้อมูลงบยังไม่ครบพอ (น้อยกว่า 4 ไตรมาส) — ตัวเลขอาจไม่นิ่ง" style="cursor:help">⚠</span>' : ''}</td>`;
+      : `<td style="text-align:left"><strong class="sym-link" onclick="closePeerAndOpenChart('${r.symbol}')">${r.symbol}</strong>${_peerTvLink(r.symbol)}${dim ? ' <span title="ข้อมูลงบยังไม่ครบพอ (น้อยกว่า 4 ไตรมาส) — ตัวเลขอาจไม่นิ่ง" style="cursor:help">⚠</span>' : ''}</td>`;
     const mcCell = `<td>${isMedian ? '—' : fmtCap(r.mkt_cap)}</td>`;
     const tds = cols.map(c => {
       const v = r[c.k];
@@ -10295,11 +10476,21 @@ function renderPeerScatter() {
   });
 }
 
+// ลิงก์ TradingView ต่อแถว peer ตามตลาดของกลุ่มที่กำลังดู (เดิมใช้ tvLink แบบ SET เสมอ → US/HK/JP ผิด)
+function _peerTvLink(sym) {
+  return _peerMarket === 'US' ? _usTvLink(sym)
+    : _peerMarket === 'HK' ? _hkTvLink(sym)
+    : _peerMarket === 'JP' ? _jpTvLink(sym)
+    : tvLink(sym);
+}
+
 function closePeerAndOpenChart(sym) {
-  if (_peerMarket === 'US') openUsChartModal(sym);
-  else if (_peerMarket === 'HK') openHkChartModal(sym);
-  else if (_peerMarket === 'JP') openJpChartModal(sym);
-  else openChartModal(sym);
+  if (_peerMarket === 'US' || _peerMarket === 'HK' || _peerMarket === 'JP') {
+    _openMirrorStock(sym, _peerMarket.toLowerCase());   // เคารพโหมด 🗗 + lazy-load + fallback หน้างบ
+    return;
+  }
+  if (navOpenMode() === 'new') { openInternalHash('#ts/th/' + encodeURIComponent(sym)); return; }
+  openChartModal(sym);
 }
 
 function openPeerFromModal() {

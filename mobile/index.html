@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title>SET Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<meta name="description" content="สรุปหุ้นไทย / DR / ETF รายวัน — เวอร์ชันมือถือ อ่านอย่างเดียว">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SET">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="../static/icons/icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="app.css?v=2">
+</head>
+<body>
+
+<div class="boot" id="boot">
+  <div class="spinner"></div>
+  <div class="msg" id="bootMsg">กำลังโหลดข้อมูลตลาด…</div>
+</div>
+
+<div class="app" id="app" hidden>
+  <header class="topbar">
+    <button class="back-btn" id="backBtn" hidden aria-label="ย้อนกลับ">‹</button>
+    <div style="flex:1;min-width:0">
+      <h1 id="scrTitle">ตลาด</h1>
+      <div class="sub" id="scrSub"></div>
+    </div>
+    <button class="icon-btn" id="infoBtn" aria-label="เกี่ยวกับ">ⓘ</button>
+  </header>
+
+  <main class="screen active" id="s-market"></main>
+  <main class="screen" id="s-stocks"></main>
+  <main class="screen" id="s-detail"></main>
+  <main class="screen" id="s-watch"></main>
+  <main class="screen" id="s-rotation"></main>
+  <main class="screen" id="s-more"></main>
+
+  <nav class="tabbar" id="tabbar">
+    <button data-scr="market" class="on">
+      <svg class="tb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19V10M10 19V5M16 19v-7M22 19H2"/></svg>
+      <span class="tb-l">ตลาด</span></button>
+    <button data-scr="stocks">
+      <svg class="tb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1.4" fill="currentColor" stroke="none"/></svg>
+      <span class="tb-l">หุ้น</span></button>
+    <button data-scr="watch">
+      <svg class="tb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3.5l2.6 5.5 5.9.8-4.3 4.2 1 5.9L12 17.9 6.8 20.9l1-5.9L3.5 9.8l5.9-.8z"/></svg>
+      <span class="tb-l">วอทช์ลิสต์</span></button>
+    <button data-scr="rotation">
+      <svg class="tb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4"/><path d="M20 12a8 8 0 0 1-13.7 5.6L4 16M4 20v-4h4"/></svg>
+      <span class="tb-l">หมุนเวียน</span></button>
+    <button data-scr="more">
+      <svg class="tb-ic" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+      <span class="tb-l">เพิ่มเติม</span></button>
+  </nav>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="sheet" id="sheet" aria-label="เกี่ยวกับ">
+  <div class="grab"></div>
+  <h2>SET Dashboard — เวอร์ชันมือถือ</h2>
+  <p>สรุปหุ้นไทย / DR / ETF รายวัน สำหรับดูบนมือถือ/iPad — <b>อ่านอย่างเดียว</b></p>
+  <p>ข้อมูลอัปเดตอัตโนมัติทุกวันหลังตลาดปิด (ราคา · RS · งบย้อนหลัง) — ตัวเลขเป็นราคาปิดล่าสุด ไม่ใช่เรียลไทม์</p>
+  <p>Screener กรองด้วยงบ, DCF/Fair-value ทั้งตลาด, หุ้นต่างประเทศ, ข่าวรายตัว และการเพิ่ม/ลบวอทช์ลิสต์ — ทำที่เวอร์ชันรันบนเครื่อง</p>
+</aside>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js?v=2"></script>
+</body>
+</html>

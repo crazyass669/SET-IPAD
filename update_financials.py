@@ -135,6 +135,27 @@ try:
     print("[Snapshot] กำลัง build factor snapshot ...", flush=True)
     res = snap.build_snapshot(BASE)
     print(f"[Snapshot] หลัก: ไทย {res['set']} + DR {res['dr']} = {res['total']} แถว", flush=True)
+
+    # bake งบกำไรขาดทุนรายไตรมาส (SET.or.th 'set_qpl') -> data/financials_quarterly.json
+    # ให้เวอร์ชันมือถือ/iPad แสดง ≥8 ไตรมาสล่าสุด — set_qpl สะสมถาวรใน financials.db แล้ว
+    # ตรงนี้แค่ดึงออก bake ทันทีหลัง sync (ไม่ต้องรอ run_static_update.py แยก) · SET.or.th
+    # public เหมือน set_daily_valuation — commit ขึ้น GitHub ได้ (ไม่มี Finnomena ปน)
+    try:
+        import json as _json
+        # universe = หุ้นที่เว็บมือถือแสดงจริง (symbol ใน data/set_data.json) — fallback
+        # ไป _th_universe() ถ้าอ่านไม่ได้ (เช่นยังไม่เคยรัน run_static_update.py)
+        try:
+            with open(os.path.join(BASE, "data", "set_data.json"), encoding="utf-8") as _f:
+                q_syms = [s["symbol"] for s in _json.load(_f).get("stocks", [])]
+        except Exception:
+            q_syms = _th_universe()
+        fq = fs.bake_quarterly_pl(BASE, q_syms)
+        os.makedirs(os.path.join(BASE, "data"), exist_ok=True)
+        with open(os.path.join(BASE, "data", "financials_quarterly.json"), "w", encoding="utf-8") as f:
+            _json.dump(fq, f, ensure_ascii=False, separators=(",", ":"))
+        print(f"[งบรายไตรมาส] bake data/financials_quarterly.json — {len(fq['set'])} หุ้น", flush=True)
+    except Exception as e:
+        print(f"[งบรายไตรมาส] ⚠️ bake ล้ม: {e}", flush=True)
     idx_changed = bool(idx_result["ok"] or idx_result["fail"])
     # rebuild mirror snapshot ถ้าสั่ง mirror หรือมีการ refresh หุ้นค้นบ่อย/ดัชนีหลัก (ให้ Screener สดตาม)
     if with_mirror or refreshed_mirror or idx_changed:
