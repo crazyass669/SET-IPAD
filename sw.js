@@ -10,7 +10,7 @@
 // bump เลขนี้ทุกครั้งที่ปล่อยของใหม่แล้วอยากล้าง cache เก่าทิ้งทั้งหมด —
 // activate() ด้านล่างลบ cache ที่ชื่อไม่ตรงกับค่านี้ ทำให้เครื่องที่ค้างของเก่า
 // (โดยเฉพาะแอปที่ติดตั้งเป็น PWA) ดึงไฟล์ใหม่ทั้งชุดในการเปิดครั้งถัดไป
-const CACHE = 'set-dash-v4';
+const CACHE = 'set-dash-v5';
 const PRECACHE = [
   './',
   'set_dashboard.html',
@@ -42,6 +42,11 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;   // ไม่ยุ่งกับ request ข้ามโดเมน
+
+  // /mobile/* เป็นของ SW แอป viewer (set-mobile-*) — SW ตัวนี้ scope / ครอบอยู่ก็จริง
+  // แต่ห้ามแคชไว้ใน set-dash-* ไม่งั้นเครื่องที่ redirect จาก PWA เก่ามา mobile/ จะแบก
+  // สำเนา mobile asset ซ้ำใน cache เว็บเต็มเป็น dead weight (ไม่มีใครล้าง)
+  if (url.pathname.includes('/mobile/')) return;
 
   // ข้อมูลตลาด: ของสดสำคัญกว่า — network-first, ล่มค่อยใช้ cache ล่าสุด
   if (url.pathname.includes('/data/') && url.pathname.endsWith('.json')) {

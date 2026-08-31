@@ -16,13 +16,20 @@
     else if (q.has('full')) target = 'set_dashboard.html';
     else {
       var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-      var narrow = Math.min(screen.width, screen.height) <= 820;
+      // จอเล็กเป็นตัวชี้เฉพาะเมื่อเป็น touch device จริง — screen.width/height เป็น CSS px
+      // ที่โดน OS display scaling หาร (แล็ปท็อป 1920×1080 @150% -> 1280×720) เลยพลาดเด้ง
+      // เดสก์ท็อปจอเล็กเข้า viewer อ่านอย่างเดียวได้ถ้าไม่กรองด้วย touch
+      var touch = (navigator.maxTouchPoints || 0) > 0 || 'ontouchstart' in window;
+      var narrow = touch && Math.min(screen.width, screen.height) <= 820;
       if (coarse || narrow) target = 'mobile/';
     }
   } catch (e) {}
-  location.replace(target);
+  // พา query/hash ไปด้วย — ไม่งั้น ?full เด้งเข้า set_dashboard.html แบบไม่มี param
+  // แล้ว head script ที่นั่นเด้งกลับ mobile/ ทันที (override ใช้ไม่ได้)
+  location.replace(target + location.search + location.hash);
 })();
 </script>
+<noscript><meta http-equiv="refresh" content="0; url=set_dashboard.html"></noscript>
 </head>
 <body style="background:#0d1117;color:#8b95a1;font:400 15px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:24px">
 กำลังเปิด SET Dashboard…
