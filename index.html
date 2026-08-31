@@ -1,5 +1,31 @@
 <!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<meta http-equiv="refresh" content="0; url=set_dashboard.html">
-<title>SET Dashboard</title></head>
-<body><a href="set_dashboard.html">เปิด SET Dashboard</a></body></html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0d1117">
+<title>SET Dashboard</title>
+<script>
+/* เด้งตามอุปกรณ์: มือถือ/แท็บเล็ต -> แอป viewer ที่ mobile/ · เดสก์ท็อป -> หน้าเต็ม
+   ?m = บังคับมือถือ · ?full = บังคับหน้าเต็ม (เผื่ออยากเปิดหน้าเต็มบน iPad) */
+(function () {
+  var target = 'set_dashboard.html';
+  try {
+    var q = new URLSearchParams(location.search);
+    if (q.has('m')) target = 'mobile/';
+    else if (q.has('full')) target = 'set_dashboard.html';
+    else {
+      var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      var narrow = Math.min(screen.width, screen.height) <= 820;
+      if (coarse || narrow) target = 'mobile/';
+    }
+  } catch (e) {}
+  location.replace(target);
+})();
+</script>
+</head>
+<body style="background:#0d1117;color:#8b95a1;font:400 15px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:24px">
+กำลังเปิด SET Dashboard…
+<p><a href="mobile/" style="color:#4493f8">เวอร์ชันมือถือ</a> &nbsp;·&nbsp; <a href="set_dashboard.html" style="color:#4493f8">เวอร์ชันเต็ม</a></p>
+</body>
+</html>

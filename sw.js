@@ -10,7 +10,7 @@
 // bump เลขนี้ทุกครั้งที่ปล่อยของใหม่แล้วอยากล้าง cache เก่าทิ้งทั้งหมด —
 // activate() ด้านล่างลบ cache ที่ชื่อไม่ตรงกับค่านี้ ทำให้เครื่องที่ค้างของเก่า
 // (โดยเฉพาะแอปที่ติดตั้งเป็น PWA) ดึงไฟล์ใหม่ทั้งชุดในการเปิดครั้งถัดไป
-const CACHE = 'set-dash-v3';
+const CACHE = 'set-dash-v4';
 const PRECACHE = [
   './',
   'set_dashboard.html',
@@ -28,8 +28,11 @@ self.addEventListener('install', e => {
 
 self.addEventListener('activate', e => {
   e.waitUntil(
+    // ลบเฉพาะ cache ของเว็บเต็มรุ่นเก่า (prefix set-dash-) — ห้ามแตะ set-mobile-*
+    // ของแอป viewer ที่ scope /mobile/ เป็นเจ้าของ (เครื่องที่ redirect จาก PWA เก่า
+    // มา mobile/ จะมี SW สองตัวพร้อมกัน — ถ้าไม่กรอง prefix จะล้าง cache ของกันและกัน)
     caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+      Promise.all(keys.filter(k => k.startsWith('set-dash-') && k !== CACHE).map(k => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });

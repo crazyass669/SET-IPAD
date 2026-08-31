@@ -60,12 +60,27 @@ const D = {
   stocks: [],      // SET + mai (normalized rows)
   dr: [],          // DR (normalized rows)
   etf: [],         // ETF (normalized rows)
+  sectors: [],     // set_data.json .sectors (กลุ่มอุตสาหกรรม — สรุปรวมพร้อม ret_*)
+  industries: [],  // set_data.json .industries (หมวดใหญ่)
   rows: [],        // all three concatenated
   byId: {},        // 'set:PTT' -> row
   fin: {},         // financials_analytics_yahoo .set  (symbol -> obj)
   finDr: {},       // .dr
   finQ: {},        // financials_quarterly .set (symbol -> {q, revenue, gross_profit, op_profit, net_profit})
   watchlist: [],   // ['AAV', ...]
+  internals: null, // market_internals.json (new_highs / new_lows series ~3 เดือน)
+  breadth: null,   // breadth_1y.json (pct_above_ema*, adv/dec, McClellan ย้อนหลัง 1 ปี)
+  mstats: null,    // market_stats.json (PE/PBV/ปันผล/มูลค่าตลาด band ตลาด ย้อนหลังยาว)
+  dailyVal: null,  // set_daily_valuation.json (PE/PBV/ปันผล/EPS SET & mai วันนี้)
+  stockVal: null,  // stock_valuation_stats.json (PE/PBV + z-score รายหุ้น)
+  indices: null,   // indices_data.json (ดัชนีกลุ่ม — โหลดเมื่อเปิดหน้าครั้งแรก, ~1.2MB gz)
+  flow: null,      // market_flow.json (SET net buy/sell รายวัน — โหลดเมื่อเปิดหน้า "เงินทุน")
+  flowS50: null,   // market_flow_s50.json (S50 futures)
+  flowBond: null,  // market_flow_bond.json (ตราสารหนี้ ต่างชาติ)
+  flowShort: null, // short_sales.json (short position รายหุ้น + daily_tail)
+  flowSig: null,   // flow_signals.json (สัญญาณเงินทุนรวม — insider/short/nvdr dir + score)
+  insider: {},     // { <days>: {r59:[...], r246:[...], fetched} } — โหลดตามปุ่ม 7/30/90/180
+  rotAlerts: null, // rotation_alerts.json (transitions / pending — โหลดเมื่อเปิดหน้า "หมุนเวียน")
   asOf: '',
   mkt: null,       // computed market summary
 };
@@ -173,6 +188,23 @@ function computeMarket() {
     sectors,
   };
 }
+// penny flag = dq.flags ของ set_data.json (เหมือน _dqIsPenny ใน dashboard.js) —
+// tick เดียวของหุ้นราคาไม่กี่สตางค์ทำ ret_1d/RS กระโดดจนครองอันดับปลอม
+const isPenny = r => ((r.raw && r.raw.dq && r.raw.dq.flags) || []).includes('penny');
+// RS distribution binning (ตรงกับ bins ใน renderOverview ของ dashboard.js —
+// ตัด rs == null ออกก่อน ไม่งั้นหุ้น ineligible ไปกองใน bin แรก)
+function rsDist(stocks) {
+  const defs = [
+    ['0–19', 0, 20, 'var(--down)'], ['20–39', 20, 40, '#e0682f'],
+    ['40–59', 40, 60, 'var(--warn)'], ['60–69', 60, 70, '#5b8def'],
+    ['70–79', 70, 80, 'var(--accent)'], ['80–89', 80, 90, '#4bb36b'],
+    ['90–99', 90, 100, 'var(--up)'],
+  ];
+  return defs.map(([label, mn, mx, color]) => ({
+    label, color,
+    n: stocks.filter(s => s.rs != null && s.rs >= mn && s.rs < mx).length,
+  }));
+}
 
 /* ---------------- boot ---------------- */
 async function boot() {
@@ -185,14 +217,21 @@ async function boot() {
   }
   D.asOf = sd.data_as_of || sd.updated_at || '';
   D.stocks = (sd.stocks || []).map(rowSet);
+  D.sectors = sd.sectors || [];
+  D.industries = sd.industries || [];
 
   bmsg.textContent = 'กำลังโหลด DR / ETF / งบ…';
-  const [dr, etf, fin, finQ, wl] = await Promise.allSettled([
+  const [dr, etf, fin, finQ, wl, intl, brd, mst, dval, sval] = await Promise.allSettled([
     loadJSON('../data/dr_data.json', 30000),
     loadJSON('../data/etf_data.json', 30000),
     loadJSON('../data/financials_analytics_yahoo.json', 30000),
     loadJSON('../data/financials_quarterly.json', 30000),
     loadJSON('../data/watchlist.json', 15000),
+    loadJSON('../data/market_internals.json', 20000),
+    loadJSON('../data/breadth_1y.json', 20000),
+    loadJSON('../data/market_stats.json', 20000),
+    loadJSON('../data/set_daily_valuation.json', 15000),
+    loadJSON('../data/stock_valuation_stats.json', 20000),
   ]);
   const missing = [];
   if (dr.status === 'fulfilled') D.dr = (dr.value.stocks || []).map(rowDr); else missing.push('DR');
@@ -200,6 +239,12 @@ async function boot() {
   if (fin.status === 'fulfilled') { D.fin = fin.value.set || {}; D.finDr = fin.value.dr || {}; } else missing.push('งบการเงิน');
   if (finQ.status === 'fulfilled') D.finQ = finQ.value.set || {};
   if (wl.status === 'fulfilled' && Array.isArray(wl.value)) D.watchlist = wl.value;
+  if (intl.status === 'fulfilled') D.internals = intl.value;
+  if (brd.status === 'fulfilled') D.breadth = brd.value;
+  if (intl.status !== 'fulfilled' || brd.status !== 'fulfilled') missing.push('ข้อมูลย้อนหลัง');
+  if (mst.status === 'fulfilled') D.mstats = mst.value;
+  if (dval.status === 'fulfilled') D.dailyVal = dval.value;
+  if (sval.status === 'fulfilled') D.stockVal = sval.value;
 
   D.rows = [...D.stocks, ...D.dr, ...D.etf];
   D.rows.forEach(r => { D.byId[r.id] = r; });
@@ -208,7 +253,8 @@ async function boot() {
   $('#boot').classList.add('hidden');
   $('#app').hidden = false;
   wireNav();
-  renderMarket(); renderStocks(); renderWatch(); renderRotation(); renderMore();
+  renderMarket(); renderStocks(); renderWatch(); renderMore();
+  // renderRotation() ไม่เรียกตอน boot — มี canvas + fetch rotation_alerts, ให้ go('rotation') จัดการ
   setScrHeader('market');
   if (missing.length) toast('โหลดไม่ครบ: ' + missing.join(', ') + ' — บางส่วนอาจไม่แสดง');
   registerSW();
@@ -230,9 +276,17 @@ const TITLES = {
   market: () => ['ตลาด', 'SET & mai · ปิดตลาด ' + thaiDate(D.asOf)],
   stocks: () => ['รายชื่อหุ้น', D.rows.length + ' หลักทรัพย์ · ' + thaiDate(D.asOf)],
   watch: () => ['วอทช์ลิสต์', D.watchlist.length + ' รายการ · ปิดตลาด ' + thaiDate(D.asOf)],
-  rotation: () => ['การหมุนเวียนกลุ่ม', 'ผลตอบแทน 1 เดือน ตามกลุ่มอุตสาหกรรม'],
-  more: () => ['เพิ่มเติม', 'เครื่องมือทั้งหมด'],
+  rotation: () => ['การหมุนเวียนกลุ่ม', 'แผนที่หมุนเวียน (RRG) + สัญญาณเปลี่ยนโซน'],
+  more: () => ['เพิ่มเติม', 'ขอบเขตของเวอร์ชันมือถือ'],
+  indices: () => ['ดัชนีกลุ่มอุตสาหกรรม', 'ผลตอบแทน · RS · โมเมนตัม รายดัชนี'],
+  valuation: () => ['Valuation', 'กรอบ PE / PBV / ปันผล เทียบค่าเฉลี่ยย้อนหลัง'],
+  heatmap: () => ['Heatmap', 'ภาพรวมตลาดไทยแยกกลุ่มอุตสาหกรรม'],
+  flow: () => ['เงินทุน', 'กระแสเงิน · ชอร์ต · ผู้บริหาร · สัญญาณรวม'],
+  screener: () => ['สแกนหุ้น', _scrMode === 'plus'
+    ? 'กรองด้วยงบการเงิน — F-Score · ROE · มาร์จิ้น · การเติบโต'
+    : 'กรอง RS · สเตจ · ราคา · มูลค่าตลาด · ปันผล'],
 };
+const SUBPAGES = new Set(['indices', 'valuation', 'heatmap', 'flow', 'screener']);
 function setScrHeader(scr) {
   if (scr === 'detail') {
     const r = D.byId[curId];
@@ -249,9 +303,19 @@ function go(scr) {
   curScreen = scr;
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   $('#s-' + scr).classList.add('active');
-  document.querySelectorAll('.tabbar button').forEach(b => b.classList.toggle('on', b.dataset.scr === scr));
-  $('#backBtn').hidden = scr !== 'detail';
+  const navScr = SUBPAGES.has(scr) ? 'more' : scr;
+  document.querySelectorAll('.tabbar button').forEach(b => b.classList.toggle('on', b.dataset.scr === navScr));
+  $('#backBtn').hidden = scr !== 'detail' && !SUBPAGES.has(scr);
   setScrHeader(scr);
+  // หน้ารายชื่อหุ้นเปิดค้าง view ไว้ — วาดซ้ำให้บรรทัดสรุป (#scrSub) ตรงกับ view/ฟิลเตอร์ปัจจุบัน
+  if (scr === 'stocks') paintStkView();
+  // หน้าที่มี canvas: วาดใหม่ตอนเปิด (canvas ที่ซ่อนอยู่ตอน render แรกกว้าง 0)
+  else if (scr === 'rotation') renderRotation();
+  else if (scr === 'indices') renderIndices();
+  else if (scr === 'valuation') renderValuation();
+  else if (scr === 'heatmap') renderHeatmap();
+  else if (scr === 'flow') renderFlow();
+  else if (scr === 'screener') renderScreener();
   window.scrollTo(0, 0);
 }
 function openDetail(id) {
@@ -262,7 +326,7 @@ function openDetail(id) {
 }
 function wireNav() {
   $('#tabbar').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.scr); });
-  $('#backBtn').addEventListener('click', () => go(detailFrom));
+  $('#backBtn').addEventListener('click', () => go(curScreen === 'detail' ? detailFrom : 'more'));
   $('#infoBtn').addEventListener('click', () => { $('#scrim').classList.add('open'); $('#sheet').classList.add('open'); });
   $('#scrim').addEventListener('click', () => { $('#scrim').classList.remove('open'); $('#sheet').classList.remove('open'); });
 }
@@ -273,6 +337,7 @@ function listRow(r, metric = 'pct') {
   let sub;
   if (metric === 'rs') sub = `<span class="dl flat">RS ${r.rs ?? '–'}</span>`;
   else if (metric === 'cap') sub = `<span class="dl flat">${fmtCapShort(r.mkt_cap)}</span>`;
+  else if (metric === 'dy') { const dy = r.raw && r.raw.div_yield; sub = `<span class="dl flat">${dy == null ? 'ไม่จ่ายปันผล' : 'ปันผล ' + nf(dy, 2) + '%'}</span>`; }
   else if (metric === '1m') sub = `<span class="dl ${cls(r.ret_1m)}">${pct(r.ret_1m)} · 1ด</span>`;
   else sub = `<span class="dl ${cls(r.chg1d)}">${pct(r.chg1d)}</span>`;
   b.innerHTML = `
@@ -281,6 +346,19 @@ function listRow(r, metric = 'pct') {
       <span class="sub2">${shortName(r.name)}${r.sub ? ' · ' + r.sub : ''}</span>
     </span>
     <span class="trail"><div class="px">${nf(r.price, r.price < 1 ? 3 : 2)}</div>${sub}</span>
+    <span class="chev">›</span>`;
+  b.addEventListener('click', () => openDetail(r.id));
+  return b;
+}
+function rsLeaderRow(r) {
+  const b = el('button', 'rlr');
+  b.innerHTML = `
+    <span class="rk ${r.rs >= 90 ? 'hot' : ''}">${r.rs ?? '–'}</span>
+    <span class="mid2">
+      <span class="tkr-lg">${r.symbol}</span>
+      <span class="sub2">${shortName(r.name)}${r.sub ? ' · ' + r.sub : ''}</span>
+    </span>
+    <span class="mo"><span class="mv ${cls(r.ret_1m)}">${pct(r.ret_1m)}</span><span class="ml">1 เดือน</span></span>
     <span class="chev">›</span>`;
   b.addEventListener('click', () => openDetail(r.id));
   return b;
@@ -348,12 +426,64 @@ function renderMarket() {
     .forEach(([lab, v]) => fgWrap.appendChild(barRow(lab, v, v >= 55 ? 'g' : v >= 45 ? '' : 'r', true)));
   m.appendChild(fgWrap);
 
-  // 52w high / low
+  // RS distribution histogram
+  const rd = rsDist(D.stocks);
+  const rdMax = Math.max(...rd.map(b => b.n), 1);
+  const rs90 = rd[6].n, rs80 = rd[5].n + rd[6].n, rs70 = rd[4].n + rs80;
+  const rdWrap = el('div');
+  rdWrap.appendChild(secHead('การกระจายค่า RS'));
+  const rdBars = el('div', 'rsd');
+  rdBars.innerHTML = rd.map(b =>
+    `<span class="col"><span class="cnt">${b.n}</span><span class="bar" style="height:${Math.round(b.n / rdMax * 100)}%;background:${b.color}"></span></span>`
+  ).join('');
+  rdWrap.appendChild(rdBars);
+  rdWrap.appendChild(el('div', 'rsd-x', rd.map(b => `<span>${b.label}</span>`).join('')));
+  rdWrap.appendChild(el('div', 'rsd-sum', `RS 90+ : ${rs90} ตัว  ·  RS 80+ : ${rs80} ตัว  ·  RS 70+ : ${rs70} ตัว`));
+  m.appendChild(rdWrap);
+
+  // RS leaders — 10 หุ้นแข็งแกร่งสุด (กัน penny stock ออก เหมือน dashboard.js)
+  const leaders = D.stocks.filter(s => s.rs != null && !isPenny(s))
+    .sort((a, b) => (b.rs || 0) - (a.rs || 0)).slice(0, 10);
+  if (leaders.length) {
+    const ldWrap = el('div');
+    ldWrap.appendChild(secHead('หุ้นนำตลาด · RS สูงสุด'));
+    leaders.forEach(r => ldWrap.appendChild(rsLeaderRow(r)));
+    m.appendChild(ldWrap);
+  }
+
+  // 52w high / low  (+ กราฟ new-high / new-low ย้อนหลัง ~3 เดือน)
   const hl = el('div');
   hl.appendChild(secHead('จุดสูง–ต่ำ 52 สัปดาห์ วันนี้'));
   hl.appendChild(statRow('ทำจุดสูงใหม่', `<span class="up">${k.nHigh} ตัว</span>`));
   hl.appendChild(statRow('ทำจุดต่ำใหม่', `<span class="down">${k.nLow} ตัว</span>`));
+  const intl = D.internals;
+  if (intl && Array.isArray(intl.new_highs) && intl.new_highs.length > 1) {
+    hl.appendChild(el('div', 'chart-wrap', '<canvas class="spark" id="nhnlChart" style="height:140px"></canvas>'));
+    hl.appendChild(el('div', 'chart-src',
+      '<span class="up">▬</span> ทำจุดสูงใหม่  ·  <span class="down">▬</span> ทำจุดต่ำใหม่'));
+    _kickCanvas('nhnlChart', cv => drawNHNL(cv, intl.dates, intl.new_highs, intl.new_lows));
+  }
   m.appendChild(hl);
+
+  // market breadth — ย้อนหลัง 1 ปี (adv/dec, % เหนือ EMA, McClellan)
+  const bd = D.breadth;
+  if (bd && Array.isArray(bd.dates) && bd.dates.length > 5) {
+    const n1 = bd.dates.length - 1;
+    const bw = el('div');
+    bw.appendChild(secHead('ความกว้างของตลาด · ย้อนหลัง 1 ปี'));
+    bw.appendChild(statRow('หุ้นบวก / ลบ วันนี้',
+      `<span class="up">${bd.adv[n1]}</span> / <span class="down">${bd.dec[n1]}</span>`));
+    bw.appendChild(el('div', 'chart-wrap', '<canvas class="spark" id="bdEmaChart" style="height:130px"></canvas>'));
+    bw.appendChild(el('div', 'chart-src',
+      `<span style="color:var(--warn)">▬</span> เหนือ EMA50 ${nf(bd.pct_above_ema50[n1], 0)}%   ·   <span class="up">▬</span> เหนือ EMA200 ${nf(bd.pct_above_ema200[n1], 0)}%`));
+    _kickCanvas('bdEmaChart', cv => drawBreadthEMA(cv, bd.dates, bd.pct_above_ema50, bd.pct_above_ema200));
+    const mcc = bd.mcclellan_osc[n1], mccSum = bd.mcclellan_sum[n1];
+    bw.appendChild(el('div', 'chart-wrap', '<canvas class="spark" id="bdMccChart" style="height:120px"></canvas>'));
+    bw.appendChild(el('div', 'chart-src',
+      `McClellan Oscillator <span class="${cls(mcc)}">${nf(mcc, 1)}</span> · summation ${sgn(mccSum)}${nf(mccSum, 0)}`));
+    _kickCanvas('bdMccChart', cv => drawMccBars(cv, bd.dates, bd.mcclellan_osc));
+    m.appendChild(bw);
+  }
 
   // top movers
   const mv = el('div');
@@ -385,50 +515,140 @@ function renderMarket() {
 }
 
 /* ---------------- STOCKS list ---------------- */
+// view tabs พอร์ตจากหน้า "หุ้นทั้งหมด" ของเว็บ (setStocksView / renderBreakout /
+// renderMomentum / renderEMABreadth / renderSectorRankTable) — predicate เดียวกัน
+// หุ้นไทย (SET+mai) เท่านั้นสำหรับทุก view ยกเว้น 'all' ที่รวม DR/ETF เหมือนเดิม
+let stkView = 'all';
 let listFilter = 'all', listSort = 'cap', listQuery = '';
-const FILTERS = [['all', 'ทั้งหมด'], ['SET', 'SET'], ['mai', 'mai'], ['DR', 'DR'], ['ETF', 'ETF']];
-function matchesFilter(r) {
+let _boSide = 'high', _boRS = 70, _boEMA = '50';   // breakout: ใกล้จุดสูง/ต่ำ 52 สัปดาห์
+let _momTf = 'all4';                                // momentum: จำนวน timeframe ที่ต้องบวกพร้อมกัน
+let _secBy = 'sector';                              // emaBreadth / sectorRank: กลุ่ม vs หมวดใหญ่
+
+const STK_VIEWS = [
+  ['all', 'ทั้งหมด'], ['rs80', 'RS 80+'], ['emerging', '🌱 กำลังมา'],
+  ['stage2', 'Stage 2'], ['breakout', '52W สูง/ต่ำ'], ['momentum', '⚡ โมเมนตัม'],
+  ['emaBreadth', 'ความกว้าง EMA'], ['sectorRank', 'จัดอันดับกลุ่ม'],
+];
+const KIND_FILTERS = [['all', 'ทั้งหมด'], ['SET', 'SET'], ['mai', 'mai'], ['DR', 'DR'], ['ETF', 'ETF']];
+const SORT_OPTS = [['cap', 'มูลค่าตลาด'], ['pct', '% วันนี้'], ['ret_1m', '% 1 เดือน'], ['rs', 'RS'], ['az', 'ก–ฮ']];
+const SORTF = {
+  cap: (a, b) => (b.mkt_cap || 0) - (a.mkt_cap || 0),
+  pct: (a, b) => (b.chg1d ?? -999) - (a.chg1d ?? -999),
+  ret_1m: (a, b) => (b.ret_1m ?? -999) - (a.ret_1m ?? -999),
+  rs: (a, b) => (b.rs ?? -1) - (a.rs ?? -1),
+  mom: (a, b) => (((b.raw && b.raw.rs_momentum) ?? b.ret_1m ?? -999) - ((a.raw && a.raw.rs_momentum) ?? a.ret_1m ?? -999)),
+  az: (a, b) => a.symbol < b.symbol ? -1 : 1,
+};
+const VIEW_DEFAULT_SORT = { all: 'cap', rs80: 'rs', emerging: 'mom', stage2: 'rs', momentum: 'ret_1m' };
+const VIEW_NOTE = {
+  rs80: 'หุ้นไทยที่ค่า RS ตั้งแต่ 80 ขึ้นไป — แข็งแรงกว่าตลาดในรอบ ~1 ปี',
+  emerging: 'RS 35–79 กำลังไต่ขึ้นเร็ว: ผลตอบแทน 1 เดือน ≥ 3% และราคายืนเหนือ EMA50',
+  stage2: 'สเตจ 2 ตามหลักไวน์สไตน์ — ราคายืนเหนือ EMA200 (ตัวกรองสเตจของแอปเต็ม)',
+  momentum: 'ผลตอบแทนเป็นบวกพร้อมกันในทุกช่วงเวลาที่เลือก',
+};
+
+function matchesKind(r) {
   if (listFilter === 'all') return true;
   if (listFilter === 'DR') return r.kind === 'dr';
   if (listFilter === 'ETF') return r.kind === 'etf';
   return r.tag === listFilter; // SET | mai
 }
+function viewPredicate(view) {
+  if (view === 'rs80') return s => s.rs != null && s.rs >= 80;
+  if (view === 'stage2') return s => s.raw && s.raw.stage === 2;
+  if (view === 'emerging') return s => {
+    const rs = s.rs || 0;
+    return rs >= 35 && rs < 80 && (s.ret_1m || 0) >= 3 && s.above_ema50 === true && !isPenny(s);
+  };
+  if (view === 'momentum') return s => {
+    const g = k => (s[k] ?? -1) > 0;
+    if (_momTf === 'all4') return g('chg1d') && g('ret_1w') && g('ret_1m') && g('ret_3m');
+    if (_momTf === '3tf') return g('ret_1w') && g('ret_1m') && g('ret_3m');
+    return g('ret_1m') && g('ret_3m');
+  };
+  return () => true;
+}
+
 function renderStocks() {
   const c = $('#s-stocks'); c.innerHTML = '';
-  c.innerHTML = `
+  const tabs = el('div', 'vtabs');
+  tabs.innerHTML = STK_VIEWS.map(([k, t]) => `<button class="vtab ${stkView === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('');
+  c.appendChild(tabs);
+  const main = el('div'); main.id = 'stkMain'; c.appendChild(main);
+  tabs.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    stkView = b.dataset.k;
+    tabs.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    if (VIEW_DEFAULT_SORT[stkView]) listSort = VIEW_DEFAULT_SORT[stkView];
+    b.scrollIntoView({ block: 'nearest', inline: 'center' });
+    paintStkView();
+  });
+  paintStkView();
+}
+
+function paintStkView() {
+  const main = $('#stkMain'); if (!main) return;
+  main.innerHTML = '';
+  if (stkView === 'breakout') return breakoutView(main);
+  if (stkView === 'emaBreadth') return groupBreadthView(main);
+  if (stkView === 'sectorRank') return sectorRankView(main);
+  stockListView(main, stkView);
+}
+
+/* ---- stock-list views (all / rs80 / emerging / stage2 / momentum) ---- */
+function stockListView(main, view) {
+  const isAll = view === 'all';
+  const pool = isAll ? D.rows : D.stocks;
+  const pred = viewPredicate(view);
+  const sortOpts = view === 'emerging'
+    ? [['mom', 'เร่ง RS'], ...SORT_OPTS] : SORT_OPTS;
+  if (!SORTF[listSort]) listSort = 'cap';
+
+  main.innerHTML = `
     <div class="search"><svg class="mag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="stkSearch" placeholder="ค้นหาชื่อย่อ / ชื่อบริษัท"></div>
-    <div class="seg" id="stkFilter">${FILTERS.map(([k, t]) => `<button data-k="${k}" class="${listFilter === k ? 'on' : ''}">${t}</button>`).join('')}</div>
-    <div class="sortbar" id="stkSort">${[['cap', 'มูลค่าตลาด'], ['pct', '% วันนี้'], ['ret_1m', '% 1 เดือน'], ['rs', 'RS'], ['az', 'ก–ฮ']]
-      .map(([k, t]) => `<button class="sortchip ${listSort === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('')}</div>
+    ${isAll ? `<div class="seg" id="stkKind">${KIND_FILTERS.map(([k, t]) => `<button data-k="${k}" class="${listFilter === k ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}
+    ${view === 'momentum' ? `<div class="seg" id="momTf">${[['all4', '1D·1W·1M·3M'], ['3tf', '1W·1M·3M'], ['2tf', '1M·3M']].map(([k, t]) => `<button data-k="${k}" class="${_momTf === k ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}
+    <div class="sortbar" id="stkSort">${sortOpts.map(([k, t]) => `<button class="sortchip ${listSort === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('')}</div>
+    ${!isAll ? `<div class="note" id="viewNote"></div>` : ''}
     <div id="stkList"></div>`;
   $('#stkSearch').value = listQuery;
-  const S = {
-    cap: (a, b) => (b.mkt_cap || 0) - (a.mkt_cap || 0),
-    pct: (a, b) => (b.chg1d ?? -999) - (a.chg1d ?? -999),
-    ret_1m: (a, b) => (b.ret_1m ?? -999) - (a.ret_1m ?? -999),
-    rs: (a, b) => (b.rs ?? -1) - (a.rs ?? -1),
-    az: (a, b) => a.symbol < b.symbol ? -1 : 1,
-  };
+
   const paint = () => {
     const q = listQuery.trim().toLowerCase();
-    let arr = D.rows.filter(r => {
-      if (!matchesFilter(r)) return false;
+    let arr = pool.filter(r => {
+      if (isAll ? !matchesKind(r) : !pred(r)) return false;
       if (q) return r.symbol.toLowerCase().includes(q) || String(r.name).toLowerCase().includes(q);
       return true;
-    }).sort(S[listSort]);
+    }).sort(SORTF[listSort] || SORTF.cap);
+    const vn = $('#viewNote');
+    if (vn) vn.textContent = (VIEW_NOTE[view] || '') + ' · ' + arr.length + ' ตัว';
     const box = $('#stkList'); box.innerHTML = '';
-    if (!arr.length) { box.appendChild(el('div', 'list-cap', q ? `ไม่พบหลักทรัพย์ที่ตรงกับ “${listQuery}”` : 'ไม่มีข้อมูล')); return; }
-    const metric = listSort === 'rs' ? 'rs' : listSort === 'cap' ? 'cap' : listSort === 'ret_1m' ? '1m' : 'pct';
+    if (!arr.length) {
+      box.appendChild(el('div', 'list-cap', q ? `ไม่พบหลักทรัพย์ที่ตรงกับ “${listQuery}”` : 'ไม่มีหลักทรัพย์ที่ตรงเงื่อนไข'));
+      $('#scrSub').textContent = '0 หลักทรัพย์ · ปิดตลาด ' + thaiDate(D.asOf);
+      return;
+    }
+    const metric = listSort === 'rs' ? 'rs' : listSort === 'cap' ? 'cap'
+      : (listSort === 'ret_1m' || listSort === 'mom') ? '1m' : 'pct';
     const MAX = 400;
     arr.slice(0, MAX).forEach(r => box.appendChild(listRow(r, metric)));
     if (arr.length > MAX) box.appendChild(el('div', 'list-cap', `แสดง ${MAX} จาก ${arr.length} — พิมพ์ค้นหาเพื่อกรอง`));
     $('#scrSub').textContent = arr.length + ' หลักทรัพย์ · ปิดตลาด ' + thaiDate(D.asOf);
   };
+
   $('#stkSearch').addEventListener('input', e => { listQuery = e.target.value; paint(); });
-  $('#stkFilter').addEventListener('click', e => {
+  const kindEl = $('#stkKind');
+  if (kindEl) kindEl.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     listFilter = b.dataset.k;
-    $('#stkFilter').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    kindEl.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    paint();
+  });
+  const tfEl = $('#momTf');
+  if (tfEl) tfEl.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _momTf = b.dataset.k;
+    tfEl.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
     paint();
   });
   $('#stkSort').addEventListener('click', e => {
@@ -438,6 +658,185 @@ function renderStocks() {
     paint();
   });
   paint();
+}
+
+/* ---- breakout view: หุ้นใกล้ทำจุดสูง/ต่ำ 52 สัปดาห์ (พอร์ตจาก renderBreakout) ---- */
+function breakoutView(main) {
+  const RS_OPTS = [[0, 'RS ไม่กรอง'], [50, 'RS 50+'], [70, 'RS 70+'], [80, 'RS 80+']];
+  const EMA_OPTS = [['any', 'EMA ไม่กรอง'], ['50', '> EMA50'], ['200', '> EMA50+200']];
+  const DIST = 10;
+  main.innerHTML = `
+    <div class="seg" id="boSide">
+      <button data-k="high" class="${_boSide === 'high' ? 'on' : ''}">ใกล้จุดสูง 52 สัปดาห์</button>
+      <button data-k="low" class="${_boSide === 'low' ? 'on' : ''}">ใกล้จุดต่ำ 52 สัปดาห์</button>
+    </div>
+    <div class="sortbar" id="boRS">${RS_OPTS.map(([k, t]) => `<button class="sortchip ${_boRS === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('')}</div>
+    <div class="sortbar" id="boEMA">${EMA_OPTS.map(([k, t]) => `<button class="sortchip ${_boEMA === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('')}</div>
+    <div class="note" id="boNote"></div>
+    <div id="boList"></div>`;
+
+  const paint = () => {
+    const isHigh = _boSide === 'high';
+    const arr = D.stocks.map(s => {
+      const anchor = isHigh ? s.high_52w : s.low_52w;
+      const from = (anchor > 0 && s.price != null) ? (s.price - anchor) / anchor * 100 : null;
+      return { s, from };
+    }).filter(o => {
+      if (o.from == null) return false;
+      if ((o.s.rs || 0) < _boRS) return false;
+      if (isHigh ? (o.from < -DIST) : (o.from > DIST)) return false;
+      if (_boEMA === '50' && !o.s.above_ema50) return false;
+      if (_boEMA === '200' && (!o.s.above_ema50 || !o.s.above_ema200)) return false;
+      return true;
+    }).sort((a, b) => isHigh ? b.from - a.from : a.from - b.from);
+    $('#boNote').textContent = `${arr.length} หุ้น ${isHigh ? 'ใกล้ทำจุดสูงใหม่' : 'ใกล้ทำจุดต่ำใหม่'} 52 สัปดาห์ (ห่างไม่เกิน ${DIST}%)`;
+    const box = $('#boList'); box.innerHTML = '';
+    if (!arr.length) { box.appendChild(el('div', 'list-cap', 'ไม่พบหุ้นที่ตรงเงื่อนไข — ลองผ่อนตัวกรอง RS / EMA')); return; }
+    arr.slice(0, 200).forEach(({ s, from }) => box.appendChild(boRow(s, from, isHigh)));
+  };
+
+  $('#boSide').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _boSide = b.dataset.k;
+    $('#boSide').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    paint();
+  });
+  $('#boRS').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _boRS = +b.dataset.k;
+    $('#boRS').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    paint();
+  });
+  $('#boEMA').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _boEMA = b.dataset.k;
+    $('#boEMA').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    paint();
+  });
+  paint();
+}
+function boRow(r, from, isHigh) {
+  const b = el('button', 'rlr');
+  const lbl = isHigh ? (from >= 0 ? 'จุดสูงใหม่' : nf(from, 1) + '%')
+    : (from <= 0.5 ? 'จุดต่ำใหม่' : '+' + nf(from, 1) + '%');
+  const lblCls = isHigh ? (from >= -2 ? 'up' : 'flat') : (from <= 2 ? 'down' : 'flat');
+  b.innerHTML = `
+    <span class="rk ${r.rs >= 90 ? 'hot' : ''}">${r.rs ?? '–'}</span>
+    <span class="mid2">
+      <span class="tkr-lg">${r.symbol}</span>
+      <span class="sub2">${shortName(r.name)}${r.sub ? ' · ' + r.sub : ''}</span>
+    </span>
+    <span class="mo"><span class="mv ${lblCls}">${lbl}</span><span class="ml">${isHigh ? 'จากจุดสูง' : 'จากจุดต่ำ'}</span></span>
+    <span class="chev">›</span>`;
+  b.addEventListener('click', () => openDetail(r.id));
+  return b;
+}
+
+/* ---- ความกว้าง EMA รายกลุ่ม (พอร์ตจาก renderEMABreadth) ---- */
+function groupBreadthView(main) {
+  main.innerHTML = `
+    <div class="seg" id="gbBy">
+      <button data-k="sector" class="${_secBy === 'sector' ? 'on' : ''}">กลุ่มอุตสาหกรรม</button>
+      <button data-k="industry" class="${_secBy === 'industry' ? 'on' : ''}">หมวดใหญ่</button>
+    </div>
+    <div class="note">สัดส่วนหุ้นในกลุ่มที่ราคายืนเหนือ EMA20 / 50 / 200 — เรียงตามคะแนนรวม</div>
+    <div id="gbList"></div>`;
+  const paint = () => {
+    const kk = _secBy;
+    const groups = {};
+    D.stocks.forEach(r => {
+      const g = (r.raw && r.raw[kk]) || 'ไม่ระบุ';
+      (groups[g] || (groups[g] = [])).push(r);
+    });
+    const rows = Object.entries(groups).map(([name, arr]) => {
+      const n = arr.length;
+      const p = f => Math.round(arr.filter(f).length / n * 100);
+      const p20 = p(s => s.above_ema20 === true);
+      const p50 = p(s => s.above_ema50 === true);
+      const p200 = p(s => s.above_ema200 === true);
+      return { name, n, p20, p50, p200, score: Math.round((p20 + p50 + p200) / 3) };
+    }).sort((a, b) => b.score - a.score);
+    const box = $('#gbList'); box.innerHTML = '';
+    rows.forEach(r => box.appendChild(gbRow(r)));
+  };
+  $('#gbBy').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _secBy = b.dataset.k;
+    $('#gbBy').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    paint();
+  });
+  paint();
+}
+function gbRow(r) {
+  const d = el('div', 'gbr');
+  const mini = (lab, v) => {
+    const cc = v >= 60 ? 'g' : v >= 40 ? '' : 'r';
+    return `<span class="gb-mini"><span class="gb-ml">${lab}</span>
+      <span class="track"><span class="fill ${cc}" style="width:${Math.max(2, v)}%"></span></span>
+      <span class="gb-mv">${v}%</span></span>`;
+  };
+  d.innerHTML = `
+    <div class="gb-top"><span class="gb-nm">${r.name}</span>
+      <span class="gb-sc ${r.score >= 60 ? 'up' : r.score < 40 ? 'down' : 'flat'}">${r.score}</span></div>
+    <div class="gb-sub">${r.n} หลักทรัพย์</div>
+    <div class="gb-bars">${mini('EMA20', r.p20)}${mini('EMA50', r.p50)}${mini('EMA200', r.p200)}</div>`;
+  return d;
+}
+
+/* ---- จัดอันดับกลุ่มตามผลตอบแทน (พอร์ตจาก renderSectorRankTable) ---- */
+function sectorRankView(main) {
+  main.innerHTML = `
+    <div class="seg" id="srBy">
+      <button data-k="sector" class="${_secBy === 'sector' ? 'on' : ''}">กลุ่มอุตสาหกรรม</button>
+      <button data-k="industry" class="${_secBy === 'industry' ? 'on' : ''}">หมวดใหญ่</button>
+    </div>
+    <div class="note">อันดับผลตอบแทนของแต่ละกลุ่มในแต่ละช่วงเวลา (1 = ดีสุด) — เรียงตามอันดับเฉลี่ย · โมเมนตัม = อันดับ 1 ปี ลบ 1 เดือน</div>
+    <div class="grk grk-hd"><span class="sr-nm">กลุ่ม</span><span>1ด</span><span>3ด</span><span>6ด</span><span>1ปี</span><span class="sr-avg">เฉลี่ย</span></div>
+    <div id="srList"></div>`;
+  const paint = () => {
+    const groups = (_secBy === 'sector' ? D.sectors : D.industries).slice();
+    const H = [['ret_1w', 'w'], ['ret_1m', 'm'], ['ret_3m', 'q'], ['ret_6m', 'h'], ['ret_1y', 'y']];
+    const rank = {};
+    groups.forEach(g => rank[g.name] = {});
+    H.forEach(([f, k]) => {
+      groups.filter(g => g[f] != null).sort((a, b) => b[f] - a[f]).forEach((g, i) => rank[g.name][k] = i + 1);
+    });
+    const rows = groups.map(g => {
+      const r = rank[g.name];
+      const have = ['y', 'h', 'q', 'm'].map(k => r[k]).filter(x => x != null);
+      const avg = have.length === 4 ? +(have.reduce((a, b) => a + b, 0) / 4).toFixed(1) : null;
+      const mom = (r.m != null && r.y != null) ? r.y - r.m : null;
+      return { name: g.name, r1m: r.m, r3m: r.q, r6m: r.h, r1y: r.y, avg, mom };
+    }).sort((a, b) => (a.avg == null ? 999 : a.avg) - (b.avg == null ? 999 : b.avg));
+    const box = $('#srList'); box.innerHTML = '';
+    rows.forEach(r => box.appendChild(srRow(r, groups.length)));
+  };
+  $('#srBy').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _secBy = b.dataset.k;
+    $('#srBy').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    paint();
+  });
+  paint();
+}
+function srRow(r, total) {
+  const d = el('div', 'grk');
+  const badge = rk => {
+    if (rk == null) return '<span class="rkb flat">–</span>';
+    const q = rk / total;
+    const c = q <= 0.25 ? 'a' : q <= 0.5 ? 'b' : q <= 0.75 ? 'c' : 'd';
+    return `<span class="rkb ${c}">#${rk}</span>`;
+  };
+  let mom = '';
+  if (r.mom != null && r.mom !== 0) {
+    const fire = r.mom >= 10 ? ' 🔥' : r.mom <= -10 ? ' ❄️' : '';
+    mom = `<span class="sr-mom ${r.mom > 0 ? 'up' : 'down'}">${r.mom > 0 ? '+' : ''}${r.mom}${fire}</span>`;
+  }
+  d.innerHTML = `
+    <span class="sr-nm">${r.name}${mom}</span>
+    <span>${badge(r.r1m)}</span><span>${badge(r.r3m)}</span><span>${badge(r.r6m)}</span><span>${badge(r.r1y)}</span>
+    <span class="sr-avg">${r.avg ?? '–'}</span>`;
+  return d;
 }
 
 /* ---------------- WATCHLIST ---------------- */
@@ -456,43 +855,397 @@ function renderWatch() {
   c.appendChild(el('div', 'note', 'วอทช์ลิสต์ซิงก์มาจากเวอร์ชันรันบนเครื่อง (อ่านอย่างเดียว) — เพิ่ม/ลบทำที่เครื่อง'));
 }
 
-/* ---------------- ROTATION ---------------- */
-function renderRotation() {
-  const c = $('#s-rotation'); c.innerHTML = '';
-  const secs = D.mkt.sectors;
-  const rowF = ([name, v, cnt]) => {
-    const r = el('div', 'rot-row');
-    const w = Math.min(48, Math.abs(v) * 1.7 + 1);
-    r.innerHTML = `
-      <span class="rl"><span class="rn">${name}</span><span class="rc">${cnt} บริษัท</span></span>
-      <span class="dv"><span class="mid"></span><span class="seg ${v >= 0 ? 'g' : 'r'}" style="width:${w}%"></span></span>
-      <span class="rv ${cls(v)}">${pct(v, 1)}</span>`;
-    return r;
-  };
-  c.appendChild(secHead('นำตลาด'));
-  secs.filter(s => s[1] > 0).forEach(s => c.appendChild(rowF(s)));
-  c.appendChild(secHead('ตามหลังตลาด'));
-  secs.filter(s => s[1] <= 0).forEach(s => c.appendChild(rowF(s)));
+/* ================================================================
+   ROTATION + RRG (เฟส 2 ข้อ 8) — พอร์ตย่อจาก dashboard.js
+   drawRotationScatter / renderRotAlerts / renderRotation
+   ข้อมูล: set_data.json .sectors (35) / .industries (16)
+           — ret_1w/1m/3m/6m/1y + avg_rs + count
+           rotation_alerts.json (โหลดตอนเปิดหน้าครั้งแรก)
+   ================================================================ */
+let _rotView = 'sector';   // sector = กลุ่มอุตสาหกรรม (35) · industry = หมวดใหญ่ (16)
+let _rotTf = 'long';       // long = X:3ด Y:1ด · short = X:1ด Y:1สัปดาห์
+let _rotSel = null;        // ชื่อกลุ่มที่แตะเลือก (โชว์เส้นทาง + ไฮไลต์)
+let _rotAlertsLoading = false;
+let _rrgHit = [];          // [{name,x,y,r}] พิกัด CSS px สำหรับ hit-test การแตะ
+
+const ROT_QUAD = {
+  lead:    { th: 'นำ',     en: 'Leading',   c: '#3fb950' },
+  improve: { th: 'ฟื้นตัว', en: 'Improving',  c: '#4f9cf0' },
+  weaken:  { th: 'อ่อนแรง', en: 'Weakening',  c: '#e3b341' },
+  lag:     { th: 'ตามหลัง', en: 'Lagging',   c: '#f85149' },
+};
+const _QEN2TH = { Leading: ROT_QUAD.lead, Improving: ROT_QUAD.improve, Weakening: ROT_QUAD.weaken, Lagging: ROT_QUAD.lag };
+function rotQuadKey(x, y) {
+  if (x > 0 && y > 0) return 'lead';
+  if (x <= 0 && y > 0) return 'improve';
+  if (x > 0 && y <= 0) return 'weaken';
+  return 'lag';
+}
+const _rotAxis = tf => tf === 'short'
+  ? { tf, xk: 'ret_1m', yk: 'ret_1w', xl: '1 เดือน', yl: '1 สัปดาห์', cap: { xLo: -15, xHi: 20, yLo: -10, yHi: 10 } }
+  : { tf, xk: 'ret_3m', yk: 'ret_1m', xl: '3 เดือน', yl: '1 เดือน', cap: { xLo: -30, xHi: 60, yLo: -30, yHi: 60 } };
+
+const ROT_PALETTE = ['#58a6ff', '#3fb950', '#ffa657', '#f85149', '#d2a8ff', '#79c0ff', '#56d364',
+  '#e3b341', '#ff7b72', '#bc8cff', '#1f9e75', '#87ceeb', '#ffb347', '#ff6eb4', '#7ee787', '#40e0d0',
+  '#ff8c42', '#9370db', '#20b2aa', '#ffd700', '#00bcd4', '#ff69b4', '#98fb98', '#dda0dd', '#f0e68c',
+  '#87cefa', '#a8e6cf', '#90ee90', '#ffcba4', '#c3b1e1'];
+function _rotColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return ROT_PALETTE[h % ROT_PALETTE.length];
+}
+const _RCFONT = '"IBM Plex Sans Thai","Noto Sans Thai",sans-serif';
+
+async function loadRotAlerts() {
+  if (D.rotAlerts || _rotAlertsLoading) return;
+  _rotAlertsLoading = true;
+  try { D.rotAlerts = await loadJSON('../data/rotation_alerts.json', 20000); }
+  catch (e) { D.rotAlerts = { _failed: true }; }
+  _rotAlertsLoading = false;
+  if (curScreen === 'rotation') renderRotation();
 }
 
-/* ---------------- MORE (stub) ---------------- */
+// Relative Rotation Graph — scatter symlog + quadrant + ลูกศรทิศ + เส้นทาง (เลือก)
+function drawRRG(cv, items, tf, sel) {
+  const ax = _rotAxis(tf);
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const w = cv.clientWidth, h = cv.clientHeight || 340;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const x = cv.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, w, h);
+  _rrgHit = [];
+
+  const pts = items.filter(s => s[ax.xk] != null && s[ax.yk] != null);
+  if (pts.length < 1) return;
+  const PAD = { t: 18, r: 12, b: 22, l: 30 };
+  const PW = w - PAD.l - PAD.r, PH = h - PAD.t - PAD.b;
+  const SL = 3;
+  const sl = v => Math.sign(v) * Math.log10(1 + Math.abs(v) / SL);
+  const gx = s => s[ax.xk], gy = s => s[ax.yk];
+  const sxs = pts.map(s => sl(gx(s))), sys = pts.map(s => sl(gy(s)));
+  const xLow = Math.min(Math.min(...sxs), sl(ax.cap.xLo)) * 1.08;
+  const xHigh = Math.max(Math.max(...sxs) * 1.15, sl(ax.cap.xHi));
+  const yLow = Math.min(Math.min(...sys), sl(ax.cap.yLo)) * 1.08;
+  const yHigh = Math.max(Math.max(...sys) * 1.15, sl(ax.cap.yHi));
+  const toX = v => PAD.l + (sl(v) - xLow) / (xHigh - xLow) * PW;
+  const toY = v => PAD.t + (yHigh - sl(v)) / (yHigh - yLow) * PH;
+  const ox = toX(0), oy = toY(0);
+
+  // quadrant fills
+  [[PAD.l, PAD.t, ox - PAD.l, oy - PAD.t, 'rgba(79,156,240,.10)'],
+   [ox, PAD.t, PAD.l + PW - ox, oy - PAD.t, 'rgba(63,185,80,.10)'],
+   [PAD.l, oy, ox - PAD.l, PAD.t + PH - oy, 'rgba(248,81,73,.10)'],
+   [ox, oy, PAD.l + PW - ox, PAD.t + PH - oy, 'rgba(227,179,65,.09)']]
+    .forEach(([qx, qy, qw, qh, f]) => { x.fillStyle = f; x.fillRect(qx, qy, qw, qh); });
+  // quadrant labels
+  x.font = '700 10px ' + _RCFONT; x.textBaseline = 'top';
+  x.fillStyle = 'rgba(79,156,240,.7)'; x.textAlign = 'left'; x.fillText('ฟื้นตัว', PAD.l + 4, PAD.t + 3);
+  x.fillStyle = 'rgba(63,185,80,.75)'; x.textAlign = 'right'; x.fillText('นำ', PAD.l + PW - 4, PAD.t + 3);
+  x.textBaseline = 'bottom';
+  x.fillStyle = 'rgba(248,81,73,.7)'; x.textAlign = 'left'; x.fillText('ตามหลัง', PAD.l + 4, PAD.t + PH - 3);
+  x.fillStyle = 'rgba(227,179,65,.8)'; x.textAlign = 'right'; x.fillText('อ่อนแรง', PAD.l + PW - 4, PAD.t + PH - 3);
+
+  // center axes
+  x.strokeStyle = 'rgba(139,149,161,.4)'; x.lineWidth = 1; x.setLineDash([4, 4]);
+  x.beginPath(); x.moveTo(ox, PAD.t); x.lineTo(ox, PAD.t + PH); x.stroke();
+  x.beginPath(); x.moveTo(PAD.l, oy); x.lineTo(PAD.l + PW, oy); x.stroke();
+  x.setLineDash([]);
+  // frame
+  x.strokeStyle = 'rgba(139,149,161,.18)'; x.strokeRect(PAD.l, PAD.t, PW, PH);
+  // tick labels (นอก dead zone)
+  x.font = '9px "IBM Plex Mono",ui-monospace,monospace'; x.fillStyle = '#5b636e';
+  const xt = [-30, -10, 10, 30, 60].filter(v => sl(v) > xLow && sl(v) < xHigh);
+  const yt = [-30, -10, 10, 30, 60].filter(v => sl(v) > yLow && sl(v) < yHigh);
+  x.textBaseline = 'top'; x.textAlign = 'center';
+  xt.forEach(v => { if (v) x.fillText((v > 0 ? '+' : '') + v, toX(v), PAD.t + PH + 5); });
+  x.textBaseline = 'middle'; x.textAlign = 'right';
+  yt.forEach(v => { if (v) x.fillText((v > 0 ? '+' : '') + v, PAD.l - 4, toY(v)); });
+
+  // bubbles + collision spring
+  const R = items.length > 20 ? 8 : 11;
+  const P = pts.map(s => {
+    const px = toX(gx(s)), py = toY(gy(s));
+    return { s, name: s.name, x: px, y: py, ox: px, oy: py, R, color: _rotColor(s.name) };
+  });
+  const MIN = R * 2 + 2;
+  for (let it = 0; it < 40; it++) {
+    for (let i = 0; i < P.length; i++) {
+      for (let j = i + 1; j < P.length; j++) {
+        const dx = P[j].x - P[i].x, dy = P[j].y - P[i].y;
+        const d = Math.hypot(dx, dy) || 0.01;
+        if (d < MIN) {
+          const push = (MIN - d) / 2, nx = dx / d, ny = dy / d;
+          P[i].x -= nx * push; P[i].y -= ny * push;
+          P[j].x += nx * push; P[j].y += ny * push;
+        }
+      }
+      P[i].x += (P[i].ox - P[i].x) * 0.06;
+      P[i].y += (P[i].oy - P[i].y) * 0.06;
+      P[i].x = Math.max(PAD.l + R, Math.min(PAD.l + PW - R, P[i].x));
+      P[i].y = Math.max(PAD.t + R, Math.min(PAD.t + PH - R, P[i].y));
+    }
+  }
+
+  // trail ของกลุ่มที่เลือก
+  const selP = sel ? P.find(p => p.name === sel) : null;
+  if (selP) {
+    const s = selP.s;
+    let anch = tf === 'short'
+      ? [[s.ret_3m, s.ret_1m], [s.ret_1m, s.ret_1w]]
+      : [[s.ret_1y, s.ret_6m], [s.ret_6m, s.ret_3m], [s.ret_3m, s.ret_1m]];
+    const T = anch.filter(a => a[0] != null && a[1] != null).map(a => ({ x: toX(a[0]), y: toY(a[1]) }));
+    T.push({ x: selP.x, y: selP.y });
+    for (let i = 1; i < T.length; i++) {
+      const a = T[i - 1], b = T[i], t1 = i / (T.length - 1);
+      x.strokeStyle = selP.color; x.globalAlpha = 0.25 + t1 * 0.55; x.lineWidth = 2.5;
+      x.beginPath(); x.moveTo(a.x, a.y); x.lineTo(b.x, b.y); x.stroke();
+      x.globalAlpha = 0.3; x.fillStyle = selP.color;
+      x.beginPath(); x.arc(a.x, a.y, selP.R * 0.45, 0, 7); x.fill();
+    }
+    x.globalAlpha = 1;
+  }
+
+  // วาดวง
+  P.forEach(p => {
+    const dim = sel && p.name !== sel;
+    x.save();
+    if (dim) {
+      x.globalAlpha = 0.16; x.fillStyle = '#3d444d';
+      x.beginPath(); x.arc(p.x, p.y, p.R, 0, 7); x.fill();
+    } else {
+      // ทิศเคลื่อนที่ (ตอนไม่มีตัวเลือก)
+      if (!sel) {
+        const px0 = tf === 'short' ? toX(p.s.ret_3m ?? p.s.ret_1m) : toX(p.s.ret_6m ?? p.s.ret_3m);
+        const py0 = tf === 'short' ? toY(p.s.ret_1m ?? 0) : toY(p.s.ret_3m ?? 0);
+        const dx = p.ox - px0, dy = p.oy - py0, len = Math.hypot(dx, dy);
+        if (len > 1) {
+          const a = Math.atan2(dy, dx), tip = p.R + 5, sz = 4;
+          const tx = p.x + Math.cos(a) * tip, ty = p.y + Math.sin(a) * tip;
+          x.globalAlpha = 0.7; x.fillStyle = p.color;
+          x.beginPath();
+          x.moveTo(tx, ty);
+          x.lineTo(tx - Math.cos(a - 0.5) * sz, ty - Math.sin(a - 0.5) * sz);
+          x.lineTo(tx - Math.cos(a + 0.5) * sz, ty - Math.sin(a + 0.5) * sz);
+          x.closePath(); x.fill(); x.globalAlpha = 1;
+        }
+      }
+      x.shadowColor = p.color; x.shadowBlur = 9;
+      x.fillStyle = _hexA(p.color, 0.22);
+      x.beginPath(); x.arc(p.x, p.y, p.R, 0, 7); x.fill();
+      x.shadowBlur = 0;
+      x.strokeStyle = p.color; x.lineWidth = p.name === sel ? 3 : 2;
+      if ((p.s.n_valid ?? p.s.count ?? 9) < 3) x.setLineDash([3, 2]);
+      x.beginPath(); x.arc(p.x, p.y, p.R, 0, 7); x.stroke(); x.setLineDash([]);
+      if (p.s.avg_rs != null) {
+        x.fillStyle = '#fff'; x.font = `700 ${p.R >= 11 ? 10 : 9}px ` + _RCFONT;
+        x.textAlign = 'center'; x.textBaseline = 'middle';
+        x.fillText(Math.round(p.s.avg_rs), p.x, p.y);
+      }
+    }
+    x.restore();
+    _rrgHit.push({ name: p.name, x: p.x, y: p.y, r: p.R });
+  });
+
+  // ป้ายชื่อกลุ่มที่เลือก
+  if (selP) {
+    x.font = '700 11px ' + _RCFONT;
+    const lbl = selP.name.length > 22 ? selP.name.slice(0, 20) + '…' : selP.name;
+    const tw = x.measureText(lbl).width + 12;
+    let lx = selP.x + selP.R + 6, ly = selP.y - 9;
+    if (lx + tw > PAD.l + PW) lx = selP.x - selP.R - 6 - tw;
+    ly = Math.max(PAD.t + 2, Math.min(PAD.t + PH - 20, ly));
+    x.fillStyle = 'rgba(13,17,23,.92)'; x.strokeStyle = selP.color; x.lineWidth = 1.4;
+    if (x.roundRect) { x.beginPath(); x.roundRect(lx, ly, tw, 18, 4); x.fill(); x.stroke(); }
+    else { x.fillRect(lx, ly, tw, 18); x.strokeRect(lx, ly, tw, 18); }
+    x.fillStyle = '#fff'; x.textAlign = 'left'; x.textBaseline = 'middle';
+    x.fillText(lbl, lx + 6, ly + 9);
+  }
+}
+function _hexA(hex, a) {
+  const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+function rrgLegend(elm, items, ax) {
+  const pts = items.filter(s => s[ax.xk] != null && s[ax.yk] != null)
+    .sort((a, b) => (b[ax.xk] + b[ax.yk]) - (a[ax.xk] + a[ax.yk]));
+  elm.innerHTML = pts.map(s => {
+    const on = _rotSel === s.name;
+    const label = s.name.length > 22 ? s.name.slice(0, 21) + '…' : s.name;
+    return `<button class="rrg-chip${on ? ' on' : ''}" data-n="${_esc(s.name)}" style="--cc:${_rotColor(s.name)}"><span class="rc-sq"></span>${label}</button>`;
+  }).join('');
+  elm.onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _rotSel = _rotSel === b.dataset.n ? null : b.dataset.n;
+    renderRotation();
+  };
+}
+
+function rotSelCard(s, ax) {
+  const q = ROT_QUAD[rotQuadKey(s[ax.xk], s[ax.yk])];
+  const d = el('div', 'rot-sel');
+  const g = [['1 สัปดาห์', s.ret_1w], ['1 เดือน', s.ret_1m], ['3 เดือน', s.ret_3m],
+            ['6 เดือน', s.ret_6m], ['1 ปี', s.ret_1y]]
+    .map(([k, v]) => `<span>${k}</span><b class="${cls(v)}">${pct(v, 1)}</b>`).join('');
+  d.innerHTML = `
+    <div class="rs-h"><span class="rs-n">${s.name}</span>
+      <span class="rs-q" style="background:${_hexA(q.c, 0.16)};color:${q.c}">${q.th} · ${q.en}</span></div>
+    <div class="rs-g">${g}
+      <span>RS เฉลี่ย</span><b>${s.avg_rs == null ? '–' : Math.round(s.avg_rs)}</b>
+      <span>จำนวนบริษัท</span><b>${s.count ?? '–'}</b></div>
+    <button class="rs-clear">ล้างการเลือก</button>`;
+  d.querySelector('.rs-clear').addEventListener('click', () => { _rotSel = null; renderRotation(); });
+  return d;
+}
+
+function rotListRow(s, ax) {
+  const yv = s[ax.yk], q = ROT_QUAD[rotQuadKey(s[ax.xk], yv)];
+  const r = el('button', 'rot-row2');
+  r.innerHTML = `
+    <span class="rl"><span class="rn">${s.name}</span><span class="rc">${s.count ?? '–'} บริษัท · RS ${s.avg_rs == null ? '–' : Math.round(s.avg_rs)}</span></span>
+    <span class="rq" style="color:${q.c}">${q.th}</span>
+    <span class="rv ${cls(yv)}">${pct(yv, 1)}</span>`;
+  r.addEventListener('click', () => {
+    _rotSel = _rotSel === s.name ? null : s.name;
+    renderRotation();
+    if (_rotSel) window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  return r;
+}
+
+const _qSpan = q => { const t = _QEN2TH[q]; return t ? `<b style="color:${t.c}">${t.th}</b>` : `<b>${q}</b>`; };
+
+function rotAlertsSection() {
+  const wrap = el('div');
+  wrap.appendChild(secHead('การเปลี่ยนโซนหมุนเวียน'));
+  const d = D.rotAlerts;
+  if (!d) { wrap.appendChild(el('div', 'list-cap', 'กำลังโหลดสัญญาณ…')); loadRotAlerts(); return wrap; }
+  if (d._failed) { wrap.appendChild(el('div', 'list-cap', 'โหลดสัญญาณไม่สำเร็จ')); return wrap; }
+  const trans = (d.transitions || []).slice(0, 8);
+  const pend = (d.pending || []);
+  const transF = (d.transitions_fast || []).slice(0, 6);
+  const pendF = (d.pending_fast || []).filter(p => p.days >= 2);
+  const tyLbl = t => t === 'industry' ? 'หมวด' : 'กลุ่ม';
+  const tRow = t => `<div class="rot-al"><span class="ra-d">${thaiDate(t.date)}</span>
+    <span class="ra-n">${_esc(t.name)}</span><span class="ra-t">${tyLbl(t.type)}</span>
+    <span class="ra-q">${_qSpan(t.from)} → ${_qSpan(t.to)}</span></div>`;
+  const pRow = p => `<div class="rot-al pend"><span class="ra-n">⏳ ${_esc(p.name)}</span>
+    <span class="ra-t">${tyLbl(p.type)}</span>
+    <span class="ra-q">เข้า ${_qSpan(p.to)} · ${p.days}/${p.need} วัน</span></div>`;
+  if (!trans.length && !pend.length && !transF.length && !pendF.length) {
+    wrap.appendChild(el('div', 'list-cap', 'ยังไม่มีสัญญาณเปลี่ยนโซนที่ยืนยันแล้ว'));
+    return wrap;
+  }
+  wrap.appendChild(el('div', 'chart-src', 'ยืนยัน 3 วันทำการ · แกน 3 เดือน / 1 เดือน · ⏳ = กำลังนับยืนยัน'));
+  wrap.appendChild(el('div', null, (trans.map(tRow).join('')) + pend.map(pRow).join('')));
+  if (transF.length || pendF.length) {
+    wrap.appendChild(el('div', 'chart-src', '⚡ สัญญาณเร็ว (แกน 1 เดือน / 1 สัปดาห์) — ไวกว่าแต่แม่นยำน้อยกว่า รอชุดหลักยืนยัน'));
+    wrap.appendChild(el('div', null, transF.map(tRow).join('') + pendF.map(pRow).join('')));
+  }
+  return wrap;
+}
+
+function renderRotation() {
+  const c = $('#s-rotation'); if (!c) return;
+  c.innerHTML = '';
+  const items = _rotView === 'industry' ? D.industries : D.sectors;
+  const ax = _rotAxis(_rotTf);
+  if (!items || !items.length) {
+    c.appendChild(el('div', 'list-cap', 'ไม่มีข้อมูลกลุ่มอุตสาหกรรมในชุดข้อมูลนี้'));
+    return;
+  }
+
+  const vseg = el('div', 'seg');
+  vseg.innerHTML = `<button data-v="sector" class="${_rotView === 'sector' ? 'on' : ''}">กลุ่มอุตสาหกรรม</button><button data-v="industry" class="${_rotView === 'industry' ? 'on' : ''}">หมวดใหญ่</button>`;
+  c.appendChild(vseg);
+  const tseg = el('div', 'seg');
+  tseg.innerHTML = `<button data-t="long" class="${_rotTf === 'long' ? 'on' : ''}">แกน 3ด / 1ด</button><button data-t="short" class="${_rotTf === 'short' ? 'on' : ''}">แกน 1ด / 1สัปดาห์</button>`;
+  c.appendChild(tseg);
+  vseg.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _rotView = b.dataset.v; _rotSel = null; renderRotation(); } });
+  tseg.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _rotTf = b.dataset.t; renderRotation(); } });
+
+  c.appendChild(el('div', 'chart-wrap', '<canvas class="rrg" id="rrgCanvas"></canvas>'));
+  c.appendChild(el('div', 'chart-src',
+    `แกนนอน = ผลตอบแทน ${ax.xl} · แกนตั้ง = ${ax.yl} · เลขในวง = RS · ลูกศร = ทิศเคลื่อนที่ · แตะวงเพื่อดูเส้นทาง`));
+  const legend = el('div', 'rrg-legend'); legend.id = 'rrgLegend'; c.appendChild(legend);
+
+  if (_rotSel) {
+    const s = items.find(i => i.name === _rotSel);
+    if (s) c.appendChild(rotSelCard(s, ax));
+  }
+
+  _kickCanvas('rrgCanvas', cv => {
+    drawRRG(cv, items, _rotTf, _rotSel);
+    rrgLegend(legend, items, ax);
+    cv.onclick = e => {
+      const rc = cv.getBoundingClientRect();
+      const mx = e.clientX - rc.left, my = e.clientY - rc.top;
+      let best = null, bd = 1e9;
+      _rrgHit.forEach(p => {
+        const d = Math.hypot(p.x - mx, p.y - my);
+        if (d < p.r + 12 && d < bd) { bd = d; best = p.name; }
+      });
+      if (best) { _rotSel = _rotSel === best ? null : best; renderRotation(); }
+    };
+  });
+
+  c.appendChild(rotAlertsSection());
+
+  const list = el('div');
+  list.appendChild(secHead(`เรียงตามผลตอบแทน ${ax.yl}`));
+  [...items].filter(s => s[ax.yk] != null).sort((a, b) => b[ax.yk] - a[ax.yk])
+    .forEach(s => list.appendChild(rotListRow(s, ax)));
+  c.appendChild(list);
+
+  $('#scrSub').textContent = `${items.length} ${_rotView === 'industry' ? 'หมวด' : 'กลุ่ม'} · แกน ${ax.xl} / ${ax.yl}`;
+}
+
+/* ---------------- MORE (เมนูจริง) ---------------- */
+// scr = ชื่อ screen (ถ้ามี #s-<scr> + entry ใน go()) → กดเข้าได้ · ไม่มี = ปุ่มสีจาง "เร็ว ๆ นี้"
+// เฟส 2 ข้อ 4-8 ค่อยเติม scr ให้ทีละอัน (ดัชนีกลุ่ม/Valuation/Screener/Heatmap/เงินทุน)
+const MORE_MENU = [
+  { ic: '📊', t: 'ดัชนีกลุ่มอุตสาหกรรม', s: 'ผลตอบแทน SET แยกกลุ่ม + RS + โมเมนตัม', scr: 'indices' },
+  { ic: '⚖️', t: 'Valuation ตลาด & รายหุ้น', s: 'กรอบ PE / PBV / ปันผล เทียบค่าเฉลี่ยย้อนหลัง', scr: 'valuation' },
+  { ic: '🌡', t: 'Heatmap ตลาดไทย', s: 'ภาพรวมตลาดไทยแยกกลุ่มอุตสาหกรรม', scr: 'heatmap' },
+  { ic: '💧', t: 'เงินทุน · Short · Insider', s: 'กระแสเงินต่างชาติ/สถาบัน + ชอร์ต + ธุรกรรมผู้บริหาร + สัญญาณรวม', scr: 'flow' },
+  { ic: '🔍', t: 'สแกนหุ้น (Screener)', s: 'กรอง RS / สเตจ / ราคา / มูลค่าตลาด / ปันผล', scr: 'screener', mode: 'basic' },
+  { ic: '🔬', t: 'สแกนด้วยงบการเงิน', s: 'กรองด้วย F-Score / ROE / มาร์จิ้น / การเติบโต', scr: 'screener', mode: 'plus' },
+];
+const MORE_LOCKED = [
+  ['🎯', 'DCF / Fair Value P·B·P/E ทั้งตลาด'],
+  ['📈', 'แนวโน้มตลาด · เทียบเพื่อน · Tearsheet'],
+  ['🌍', 'หุ้นต่างประเทศ US / HK / JP'],
+  ['📰', 'ข่าวรายตัว · รายงานทางการ · Val. Band'],
+  ['🐋', 'Hedge Holdings (13F) · Data Health'],
+  ['✏️', 'เพิ่ม / ลบ วอทช์ลิสต์'],
+];
 function renderMore() {
   const c = $('#s-more'); c.innerHTML = '';
-  const groups = [
-    ['ภาพรวม & สแกน', [['📈', 'แนวโน้ม / Rotation'], ['🗂', 'ดัชนีกลุ่ม'], ['🔬', 'Screener+ (กรองด้วยงบ)'], ['🌡', 'Heatmap'], ['🎯', 'สัญญาณเงินทุนรวม']]],
-    ['ราคา & การซื้อขาย', [['💧', 'Capital Flow'], ['📉', 'Short Sales'], ['⚖️', 'Valuation ทั้งตลาด']]],
-    ['รายตัว', [['👤', 'Insider / ผู้ถือหุ้นใหญ่']]],
-  ];
-  groups.forEach(([g, items]) => {
-    c.appendChild(secHead(g));
-    items.forEach(([ic, t]) => {
-      const b = el('button', 'mitem');
-      b.innerHTML = `<span class="mi-ic">${ic}</span><span class="mi-t">${t}</span><span class="chev">›</span>`;
-      b.addEventListener('click', () => toast('เมนูนี้มีเฉพาะเวอร์ชันรันบนเครื่อง'));
-      c.appendChild(b);
-    });
+
+  c.appendChild(secHead('เครื่องมือเพิ่มเติม'));
+  const box = el('div');
+  MORE_MENU.forEach(m => {
+    const nav = !!m.scr;
+    const row = el(nav ? 'button' : 'div', 'mitem' + (nav ? '' : ' soon'));
+    row.innerHTML = `
+      <span class="mi-ic">${m.ic}</span>
+      <span class="mi-body"><span class="mi-t">${m.t}</span><span class="mi-s">${m.s}</span></span>
+      ${nav ? '<span class="chev">›</span>' : '<span class="mi-badge">เร็ว ๆ นี้</span>'}`;
+    if (nav) row.addEventListener('click', () => { if (m.mode) _scrMode = m.mode; go(m.scr); });
+    box.appendChild(row);
   });
-  c.appendChild(el('div', 'note', 'เมนูที่ต้องดึงข้อมูลสด (Screener กรองด้วยงบ, DCF/Fair-value ทั้งตลาด, หุ้นต่างประเทศ, ข่าวรายตัว) มีเฉพาะเวอร์ชันรันบนเครื่อง'));
+  c.appendChild(box);
+  c.appendChild(el('div', 'note',
+    'เวอร์ชันมือถือเน้นดูสรุปหุ้นไทย / DR / ETF รายวัน + งบย้อนหลัง — แตะที่หลักทรัพย์เพื่อดูกราฟ ผลตอบแทน และงบรายไตรมาสในแท็บ “งบการเงิน”'));
+
+  c.appendChild(secHead('มีเฉพาะเวอร์ชันบนเครื่อง'));
+  const box2 = el('div');
+  MORE_LOCKED.forEach(([ic, t]) => {
+    const row = el('div', 'mitem locked');
+    row.innerHTML = `<span class="mi-ic">${ic}</span><span class="mi-body"><span class="mi-t">${t}</span></span>`;
+    box2.appendChild(row);
+  });
+  c.appendChild(box2);
+  c.appendChild(el('div', 'note', 'เครื่องมือกลุ่มนี้ต้องดึงข้อมูลสด / ใช้ฐานข้อมูลเต็มบนโน้ตบุ๊ก'));
 }
 
 /* ---------------- DETAIL ---------------- */
@@ -661,7 +1414,7 @@ function tabFin(r) {
     statRow('รายได้ QoQ', pct(f.rev_qoq, 2), cls(f.rev_qoq)),
     statRow('กำไรสุทธิ YoY', pct(f.profit_yoy_q, 2), cls(f.profit_yoy_q)),
     statRow('กำไรสุทธิ QoQ', pct(f.profit_qoq, 2), cls(f.profit_qoq)),
-    statRow('กำไรเป็นบวกติดกัน', (f.profit_pos_streak_q ?? 0) + ' ไตรมาส', f.profit_pos_streak_q >= 4 ? 'up' : ''),
+    statRow('กำไรเป็นบวกติดกัน', (f.profit_pos_streak_q ?? 0) + ' ปี', f.profit_pos_streak_q >= 3 ? 'up' : ''),
     statRow(`CAGR รายได้ / กำไร (${f.years_span} ปี)`,
       `<span class="${cls(f.rev_cagr)}">${pct(f.rev_cagr, 1)}</span>  ·  <span class="${cls(f.profit_cagr)}">${pct(f.profit_cagr, 1)}</span>`),
   );
@@ -761,6 +1514,118 @@ function drawQBars(cv, labels, vals) {
   }
 }
 
+/* ---------------- market-breadth mini charts (ตลาด) ---------------- */
+function _cvBase(cv, hDef) {
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const w = cv.clientWidth, h = cv.clientHeight || hDef;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const x = cv.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, w, h);
+  return { x, w, h };
+}
+// รอ canvas มีความกว้างจริงก่อนวาด (แท็บ/หน้าอาจยังซ่อน) — เลิกถ้า element หาย
+function _kickCanvas(id, fn) {
+  let tries = 0;
+  requestAnimationFrame(function k() {
+    const cv = document.getElementById(id);
+    if (!cv) return;
+    if (cv.clientWidth > 0) { fn(cv); return; }
+    if (++tries > 120) return;
+    requestAnimationFrame(k);
+  });
+}
+const _MONO9 = '9px "IBM Plex Mono",ui-monospace,monospace';
+// x-axis date labels — จัด align กันหลุดขอบ (ซ้าย=left, ขวา=right, กลาง=center)
+// และเว้น label ที่ใกล้ตัวสุดท้ายเกินไป ไม่ให้ทับกับ label ขวาสุด
+function _xLabels(x, dates, n, px, h, slice) {
+  x.fillStyle = '#5b636e'; x.textBaseline = 'alphabetic';
+  const step = Math.max(1, Math.round(n / 5));
+  for (let i = 0; i < n; i++) {
+    const last = i === n - 1;
+    if (!last && (i % step !== 0 || i > n - 1 - step * 0.6)) continue;
+    x.textAlign = last ? 'right' : i === 0 ? 'left' : 'center';
+    x.fillText(dates[i].slice(slice[0], slice[1]), px(i), h - 4);
+  }
+}
+
+function drawNHNL(cv, dates, nh, nl) {
+  const { x, w, h } = _cvBase(cv, 140);
+  const n = Math.min(nh.length, nl.length, dates.length);
+  if (n < 2) return;
+  const mx = Math.max(...nh.slice(0, n), ...nl.slice(0, n), 1);
+  const pl = 28, pr = 10, pt = 8, pb = 16, plotH = h - pt - pb;
+  const px = i => pl + i / (n - 1) * (w - pl - pr);
+  const py = v => pt + plotH * (1 - v / mx);
+  x.font = _MONO9; x.textBaseline = 'middle';
+  [0, 0.5, 1].forEach(f => {
+    const gy = pt + plotH * (1 - f);
+    x.strokeStyle = 'rgba(139,149,161,.14)'; x.beginPath(); x.moveTo(pl, gy); x.lineTo(w - pr, gy); x.stroke();
+    x.fillStyle = '#5b636e'; x.textAlign = 'right'; x.fillText(Math.round(mx * f), pl - 5, gy);
+  });
+  x.beginPath();
+  for (let i = 0; i < n; i++) i ? x.lineTo(px(i), py(nh[i])) : x.moveTo(px(i), py(nh[i]));
+  x.lineTo(px(n - 1), py(0)); x.lineTo(px(0), py(0)); x.closePath();
+  x.fillStyle = 'rgba(63,185,80,.16)'; x.fill();
+  x.beginPath();
+  for (let i = 0; i < n; i++) i ? x.lineTo(px(i), py(nh[i])) : x.moveTo(px(i), py(nh[i]));
+  x.strokeStyle = '#3fb950'; x.lineWidth = 2; x.lineJoin = 'round'; x.stroke();
+  x.beginPath();
+  for (let i = 0; i < n; i++) i ? x.lineTo(px(i), py(nl[i])) : x.moveTo(px(i), py(nl[i]));
+  x.strokeStyle = '#f85149'; x.lineWidth = 1.5; x.stroke();
+  _xLabels(x, dates, n, px, h, [5, 10]);
+}
+
+function drawBreadthEMA(cv, dates, a, b) {
+  const { x, w, h } = _cvBase(cv, 130);
+  const n = dates.length; if (n < 2) return;
+  const pl = 26, pr = 12, pt = 8, pb = 16, plotH = h - pt - pb;
+  const px = i => pl + i / (n - 1) * (w - pl - pr);
+  const py = v => pt + plotH * (1 - v / 100);
+  x.font = _MONO9; x.textBaseline = 'middle';
+  [20, 50, 80].forEach(rv => {
+    const gy = py(rv);
+    x.strokeStyle = 'rgba(139,149,161,.14)'; x.setLineDash([3, 3]);
+    x.beginPath(); x.moveTo(pl, gy); x.lineTo(w - pr, gy); x.stroke(); x.setLineDash([]);
+    x.fillStyle = '#5b636e'; x.textAlign = 'right'; x.fillText(rv, pl - 5, gy);
+  });
+  const line = (arr, col) => {
+    x.strokeStyle = col; x.lineWidth = 1.6; x.lineJoin = 'round'; x.beginPath();
+    let started = false;
+    arr.forEach((v, i) => {
+      if (v == null) return;
+      const xx = px(i), yy = py(v);
+      started ? x.lineTo(xx, yy) : x.moveTo(xx, yy); started = true;
+    });
+    x.stroke();
+  };
+  line(a, '#d29922'); line(b, '#3fb950');
+  _xLabels(x, dates, n, px, h, [2, 7]);
+}
+
+function drawMccBars(cv, dates, osc) {
+  const { x, w, h } = _cvBase(cv, 120);
+  const n = dates.length; if (n < 2) return;
+  const vals = osc.slice(0, n);
+  const m = Math.max(...vals.filter(v => v != null).map(Math.abs), 50);
+  const pl = 26, pr = 12, pt = 6, pb = 16, plotH = h - pt - pb;
+  const px = i => pl + i / (n - 1) * (w - pl - pr);
+  const py = v => pt + plotH * (1 - (v + m) / (2 * m));
+  const y0 = py(0), bw = Math.max(1, (w - pl - pr) / n - 0.5);
+  x.font = _MONO9; x.textBaseline = 'middle';
+  [-70, 0, 70].forEach(rv => {
+    if (Math.abs(rv) > m) return;
+    const gy = py(rv);
+    x.strokeStyle = 'rgba(139,149,161,.14)'; x.beginPath(); x.moveTo(pl, gy); x.lineTo(w - pr, gy); x.stroke();
+    x.fillStyle = '#5b636e'; x.textAlign = 'right'; x.fillText(rv, pl - 5, gy);
+  });
+  vals.forEach((v, i) => {
+    if (v == null) return;
+    const xx = px(i), yy = py(v);
+    x.fillStyle = v >= 0 ? 'rgba(63,185,80,.7)' : 'rgba(248,81,73,.7)';
+    x.fillRect(xx, Math.min(yy, y0), bw, Math.max(1, Math.abs(yy - y0)));
+  });
+  _xLabels(x, dates, n, px, h, [2, 7]);
+}
+
 /* ---------------- canvas sparkline ---------------- */
 function drawSpark(cv, ser) {
   if (!cv) return;
@@ -804,9 +1669,1235 @@ window.addEventListener('resize', () => {
     if (curScreen === 'detail') {
       const r = D.byId[curId];
       if (r && r.ph) drawSpark($('#dChart'), sliceHistory(r.ph, Object.keys(TFRET).includes(dTf) ? dTf : '6M', r.price));
+    } else if (curScreen === 'market' && D.mkt) {
+      renderMarket();   // มีหลาย canvas — วาดใหม่ทั้งหน้าง่ายกว่าไล่ redraw ทีละอัน
+    } else if (curScreen === 'rotation') {
+      renderRotation();
+    } else if (curScreen === 'valuation') {
+      renderValuation();
+    } else if (curScreen === 'indices') {
+      renderIndices();
+    } else if (curScreen === 'heatmap') {
+      renderHeatmap();
+    } else if (curScreen === 'flow') {
+      renderFlow();
     }
   }, 120);
 });
+
+/* ================================================================
+   เฟส 2 ข้อ 4 + 6 : ดัชนีกลุ่มอุตสาหกรรม / Valuation / Heatmap ตลาดไทย
+   พอร์ต 1:1 จาก dashboard.js (loadIndicesPage/renderValuation/renderHeatmap)
+   ข้อมูล bake พร้อม: indices_data.json · market_stats.json ·
+   set_daily_valuation.json · stock_valuation_stats.json · set_data.json
+   ================================================================ */
+
+/* ---- heat colors (ported จาก dashboard.js _heatColor / _heatColorRS) ---- */
+function heatColor(v, cap = 15) {
+  if (v == null) return 'var(--surface-hi)';
+  const t = Math.min(Math.abs(v) / cap, 1);
+  return v >= 0 ? `rgba(63,185,80,${0.14 + t * 0.86})` : `rgba(248,81,73,${0.14 + t * 0.86})`;
+}
+function heatColorRS(v) {
+  if (v == null) return 'var(--surface-hi)';
+  const t = Math.abs(v - 50) / 50;
+  return v >= 50 ? `rgba(63,185,80,${0.14 + t * 0.86})` : `rgba(248,81,73,${0.14 + t * 0.86})`;
+}
+const heatTextOn = (v, cap) => Math.abs(v ?? 0) > cap * 0.55 ? '#fff' : 'var(--text)';
+const rsTextOn = v => ((v ?? 50) > 68 || (v ?? 50) < 32) ? '#fff' : 'var(--text)';
+
+/* mini area sparkline (สั้น เตี้ย — สำหรับการ์ดดัชนี) */
+function drawTiny(cv, ser) {
+  const { x, w, h } = _cvBase(cv, 52);
+  const s = (ser || []).filter(v => v != null && !isNaN(v));
+  if (s.length < 2) return;
+  const mn = Math.min(...s), mx = Math.max(...s), rng = (mx - mn) || 1;
+  const up = s[s.length - 1] >= s[0];
+  const col = up ? '#3fb950' : '#f85149';
+  const px = i => i / (s.length - 1) * w;
+  const py = v => h - 3 - (v - mn) / rng * (h - 6);
+  const grad = x.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, up ? 'rgba(63,185,80,.20)' : 'rgba(248,81,73,.18)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  x.beginPath(); x.moveTo(px(0), py(s[0]));
+  s.forEach((v, i) => x.lineTo(px(i), py(v)));
+  x.lineTo(px(s.length - 1), h); x.lineTo(0, h); x.closePath(); x.fillStyle = grad; x.fill();
+  x.beginPath(); s.forEach((v, i) => i ? x.lineTo(px(i), py(v)) : x.moveTo(px(i), py(v)));
+  x.strokeStyle = col; x.lineWidth = 1.6; x.lineJoin = 'round'; x.stroke();
+}
+
+/* ================= HEATMAP ตลาดไทย (ข้อ 6) ================= */
+// พอร์ตจาก renderHeatmap / HM_CFG — grid ราย sector, สี = metric, แตะ = เปิดรายละเอียดหุ้น
+// key ตรงกับ field ใน row (rowSet): วันนี้ = chg1d ไม่ใช่ ret_1d
+const HM_METRICS = [
+  ['chg1d', '1 วัน', 15], ['ret_1w', '1 สัปดาห์', 15], ['ret_1m', '1 เดือน', 20],
+  ['ret_3m', '3 เดือน', 30], ['ret_ytd', 'ต้นปี', 30], ['ret_1y', '1 ปี', 50],
+  ['rs', 'RS', 0], ['from_52wh', 'จาก 52W สูง', 40],
+];
+let _hmMetric = 'chg1d', _hmDir = -1;   // -1 = มาก→น้อย
+
+function hmValue(r, key) {
+  if (key === 'rs') return r.rs;
+  if (key === 'from_52wh') return (r.high_52w > 0 && r.price != null) ? (r.price - r.high_52w) / r.high_52w * 100 : null;
+  return r[key];
+}
+
+function renderHeatmap() {
+  const c = $('#s-heatmap'); if (!c) return;
+  c.innerHTML = '';
+  const def = HM_METRICS.find(m => m[0] === _hmMetric) || HM_METRICS[0];
+  const cap = def[2] || 20;
+  const isRS = _hmMetric === 'rs';
+
+  const bar = el('div', 'sortbar'); bar.id = 'hmMetricBar';
+  bar.innerHTML = HM_METRICS.map(([k, t]) => `<button class="sortchip ${_hmMetric === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('');
+  c.appendChild(bar);
+  const dir = el('div', 'seg');
+  dir.innerHTML = `<button data-d="-1" class="${_hmDir === -1 ? 'on' : ''}">มาก → น้อย</button><button data-d="1" class="${_hmDir === 1 ? 'on' : ''}">น้อย → มาก</button>`;
+  c.appendChild(dir);
+  c.appendChild(el('div', 'chart-src',
+    (isRS ? 'เขียว = RS สูง · แดง = RS ต่ำ' : 'เขียว = บวก · แดง = ลบ') + ' · แตะเพื่อดูรายละเอียด'));
+  const grid = el('div'); grid.id = 'hmGrid'; c.appendChild(grid);
+
+  bar.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _hmMetric = b.dataset.k; renderHeatmap(); } });
+  dir.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _hmDir = +b.dataset.d; renderHeatmap(); } });
+
+  const groups = {};
+  D.stocks.forEach(r => {
+    const g = (r.raw && r.raw.sector) || 'ไม่ระบุ';
+    (groups[g] || (groups[g] = [])).push(r);
+  });
+  const secAvg = arr => {
+    const vs = arr.map(r => hmValue(r, _hmMetric)).filter(v => v != null);
+    return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
+  };
+  const secList = Object.entries(groups).sort((a, b) =>
+    _hmDir * ((secAvg(b[1]) ?? -999) - (secAvg(a[1]) ?? -999)));
+
+  grid.innerHTML = secList.map(([sec, arr]) => {
+    const sorted = [...arr].sort((a, b) =>
+      _hmDir * ((hmValue(b, _hmMetric) ?? -999) - (hmValue(a, _hmMetric) ?? -999)));
+    const avg = secAvg(arr);
+    const avgCls = avg == null ? 'flat' : isRS ? (avg >= 50 ? 'up' : 'down') : (avg >= 0 ? 'up' : 'down');
+    const avgTxt = avg == null ? '–' : isRS ? 'avg RS ' + Math.round(avg) : pct(avg, 1);
+    const cells = sorted.map(r => {
+      const v = hmValue(r, _hmMetric);
+      const bg = isRS ? heatColorRS(v) : heatColor(v, cap);
+      const tc = isRS ? rsTextOn(v) : heatTextOn(v, cap);
+      const lbl = v == null ? '–' : isRS ? 'RS ' + Math.round(v) : (v > 0 ? '+' : '') + nf(v, 1) + '%';
+      return `<button class="hm-cell" style="background:${bg};color:${tc}" data-id="${r.id}">
+        <span class="hc-s">${r.symbol}</span><span class="hc-p">${nf(r.price, r.price < 1 ? 3 : 2)}</span><span class="hc-v">${lbl}</span></button>`;
+    }).join('');
+    return `<div class="hm-sec">
+      <div class="hm-sh"><span class="hm-sn">${sec}</span><span class="${avgCls}">${avgTxt}</span><span class="hm-sc">${arr.length} หุ้น</span></div>
+      <div class="hm-cells">${cells}</div></div>`;
+  }).join('');
+
+  grid.addEventListener('click', e => {
+    const b = e.target.closest('.hm-cell'); if (b) openDetail(b.dataset.id);
+  });
+}
+
+/* ================= ดัชนีกลุ่มอุตสาหกรรม (ข้อ 4) ================= */
+// พอร์ตจาก loadIndicesPage / renderIdxGrid / renderIdxHeatmap
+// indices_data.json ~1.2MB gz — โหลดตอนเปิดหน้าครั้งแรก (ไม่โหลดตอน boot)
+const IDX_GROUPS = [
+  ['ALL', 'ทั้งหมด'], ['SET_INDICES', 'ดัชนี SET'], ['SET_INDUSTRY', 'กลุ่มอุตสาหกรรม'],
+  ['SET_SECTORS', 'หมวดธุรกิจ'], ['MAI_INDUSTRY', 'mai'],
+];
+const IDX_SORTS = [
+  ['ret_1d', '1 วัน'], ['ret_1w', '1 สัปดาห์'], ['ret_1m', '1 เดือน'], ['ret_3m', '3 เดือน'],
+  ['ret_6m', '6 เดือน'], ['ret_1y', '1 ปี'], ['mom', 'โมเมนตัม'], ['rs_set', 'RS'],
+];
+const IDX_GLBL = { SET_INDICES: 'ดัชนี SET', SET_INDUSTRY: 'กลุ่มอุตสาหกรรม', SET_SECTORS: 'หมวดธุรกิจ', MAI_INDUSTRY: 'mai' };
+let _idxGroup = 'ALL', _idxSort = 'ret_1m', _idxView = 'cards', _idxLoading = false;
+
+const idxShort = sym => String(sym).replace(/^\^/, '').replace(/\.BK$/, '');
+// Momentum Score = 1M% − 6M%÷6 (เหมือน renderIdxGrid) — ไม่มี 6M คืน null
+const idxMom = i => (i.ret_1m != null && i.ret_6m != null) ? +(i.ret_1m - i.ret_6m / 6).toFixed(2) : null;
+
+async function loadIndicesData() {
+  if (D.indices || _idxLoading) return;
+  _idxLoading = true;
+  try {
+    D.indices = await loadJSON('../data/indices_data.json', 45000);
+  } catch (e) {
+    _idxLoading = false;
+    const c = $('#s-indices');
+    if (curScreen === 'indices') c.innerHTML = `<div class="list-cap">โหลดข้อมูลดัชนีไม่สำเร็จ — ${e.message}</div>`;
+    return;
+  }
+  _idxLoading = false;
+  if (curScreen === 'indices') renderIndices();
+}
+
+function renderIndices() {
+  const c = $('#s-indices'); if (!c) return;
+  if (!D.indices) {
+    c.innerHTML = '<div class="list-cap">กำลังโหลดข้อมูลดัชนี…</div>';
+    loadIndicesData();
+    return;
+  }
+  c.innerHTML = '';
+
+  const view = el('div', 'seg');
+  view.innerHTML = `<button data-v="cards" class="${_idxView === 'cards' ? 'on' : ''}">การ์ด</button><button data-v="heat" class="${_idxView === 'heat' ? 'on' : ''}">Heatmap</button>`;
+  c.appendChild(view);
+  const gbar = el('div', 'sortbar'); gbar.id = 'idxGroupBar';
+  gbar.innerHTML = IDX_GROUPS.map(([k, t]) => `<button class="sortchip ${_idxGroup === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('');
+  c.appendChild(gbar);
+  const sbar = el('div', 'sortbar'); sbar.id = 'idxSortBar';
+  sbar.innerHTML = IDX_SORTS.map(([k, t]) => `<button class="sortchip ${_idxSort === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('');
+  c.appendChild(sbar);
+  const body = el('div'); body.id = 'idxBody'; c.appendChild(body);
+
+  view.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _idxView = b.dataset.v; renderIndices(); } });
+  gbar.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _idxGroup = b.dataset.k; renderIndices(); } });
+  sbar.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _idxSort = b.dataset.k; renderIndices(); } });
+
+  let items = Object.values(D.indices).map(i => ({ ...i, mom: idxMom(i) }));
+  if (_idxGroup !== 'ALL') items = items.filter(i => i.group === _idxGroup);
+  const sortF = _idxSort === 'mom' ? (i => i.mom) : (i => i[_idxSort]);
+  items.sort((a, b) => (sortF(b) ?? -999) - (sortF(a) ?? -999));
+
+  if (!items.length) { body.appendChild(el('div', 'list-cap', 'ไม่มีดัชนีในกลุ่มนี้')); return; }
+  if (_idxView === 'heat') { idxHeatmap(body, items); return; }
+  items.forEach(i => body.appendChild(idxCard(i)));
+}
+
+function idxCard(i) {
+  const d = el('div', 'idxr');
+  const sid = 'ik_' + idxShort(i.sym).replace(/[^A-Za-z0-9]/g, '');
+  d.innerHTML = `
+    <div class="ir-top">
+      <span class="ir-l"><span class="ir-sym">${idxShort(i.sym)}</span><span class="ir-nm">${i.name}</span></span>
+      <span class="ir-r"><span class="ir-last">${nf(i.last, 2)}</span><span class="dl ${cls(i.ret_1d)}">${pct(i.ret_1d)}</span></span>
+    </div>
+    <canvas class="ir-spark" id="${sid}"></canvas>
+    <div class="ir-rets">
+      ${[['1สัปดาห์', 'ret_1w'], ['1เดือน', 'ret_1m'], ['3เดือน', 'ret_3m'], ['6เดือน', 'ret_6m'], ['1ปี', 'ret_1y']]
+      .map(([t, k]) => `<span><i>${t}</i><b class="${cls(i[k])}">${pct(i[k], 1)}</b></span>`).join('')}
+    </div>
+    <div class="ir-foot">
+      <span>RS <b class="${i.rs_set >= 50 ? 'up' : 'down'}">${i.rs_set ?? '–'}</b></span>
+      <span>โมเมนตัม <b class="${cls(i.mom)}">${i.mom == null ? '–' : (i.mom > 0 ? '+' : '') + nf(i.mom, 1)}</b></span>
+    </div>`;
+  _kickCanvas(sid, cv => drawTiny(cv, (i.closes || []).slice(-64)));
+  return d;
+}
+
+function idxHeatmap(container, items) {
+  const key = _idxSort;
+  const isRS = key === 'rs_set';
+  const cap = { ret_1d: 8, ret_1w: 12, ret_1m: 18, ret_3m: 28, ret_6m: 40, ret_1y: 55, mom: 12 }[key] || 20;
+  const groups = {};
+  items.forEach(i => { (groups[i.group] || (groups[i.group] = [])).push(i); });
+  const order = ['SET_INDICES', 'SET_INDUSTRY', 'SET_SECTORS', 'MAI_INDUSTRY'];
+  container.innerHTML = order.filter(g => groups[g]).map(g => {
+    const arr = [...groups[g]].sort((a, b) => ((key === 'mom' ? b.mom : b[key]) ?? -999) - ((key === 'mom' ? a.mom : a[key]) ?? -999));
+    const cells = arr.map(i => {
+      const v = key === 'mom' ? i.mom : i[key];
+      const bg = isRS ? heatColorRS(v) : heatColor(v, cap);
+      const tc = isRS ? rsTextOn(v) : heatTextOn(v, cap);
+      const lbl = v == null ? '–' : isRS ? 'RS ' + Math.round(v)
+        : key === 'mom' ? (v > 0 ? '+' : '') + nf(v, 1) : (v > 0 ? '+' : '') + nf(v, 1) + '%';
+      return `<div class="hm-cell" style="background:${bg};color:${tc}"><span class="hc-s">${idxShort(i.sym)}</span><span class="hc-v">${lbl}</span></div>`;
+    }).join('');
+    return `<div class="hm-sec"><div class="hm-sh"><span class="hm-sn">${IDX_GLBL[g] || g}</span><span class="hm-sc">${arr.length}</span></div><div class="hm-cells">${cells}</div></div>`;
+  }).join('');
+}
+
+/* ================= VALUATION (ข้อ 4) ================= */
+// พอร์ตจาก renderValuation / _calcStatsClient / filterByPeriod + stock-valuation
+const VAL_PERIODS = [['ALL', 'ทั้งหมด'], ['20Y', '20 ปี'], ['10Y', '10 ปี'], ['5Y', '5 ปี'], ['3Y', '3 ปี'], ['1Y', '1 ปี']];
+let _valPeriod = 'ALL';
+let _svMetric = 'pe', _svScope = 'mkt', _svZone = 'all', _svQ = '';
+
+function valFilterPeriod(dates, vals, period) {
+  if (!dates || !vals) return { dates: [], vals: [] };
+  if (period === 'ALL') return { dates, vals };
+  const yrs = { '1Y': 1, '3Y': 3, '5Y': 5, '10Y': 10, '20Y': 20 }[period] || 999;
+  const cut = new Date(); cut.setFullYear(cut.getFullYear() - yrs);
+  const cs = cut.toISOString().slice(0, 7);
+  const idx = dates.findIndex(d => d >= cs);
+  return idx < 0 ? { dates, vals } : { dates: dates.slice(idx), vals: vals.slice(idx) };
+}
+function valStats(vals) {
+  const v = (vals || []).filter(x => x != null && !isNaN(x));
+  if (v.length < 2) return null;
+  const arr = [...v].sort((a, b) => a - b);
+  const avg = v.reduce((a, b) => a + b, 0) / v.length;
+  const std = Math.sqrt(v.reduce((a, b) => a + (b - avg) ** 2, 0) / v.length);
+  const cur = v[v.length - 1];
+  const r2 = x => Math.round(x * 100) / 100;
+  return {
+    current: r2(cur), min: r2(arr[0]), max: r2(arr[arr.length - 1]), avg: r2(avg), std: r2(std),
+    zscore: std ? r2((cur - avg) / std) : 0,
+    percentile: Math.round(arr.filter(x => x <= cur).length / arr.length * 1000) / 10,
+  };
+}
+// cheapIsHigh: ปันผลยิ่งสูงยิ่งถูก → พลิกสัญญาณ z ตอนตีความ ถูก/แพง
+function valZone(z, cheapIsHigh) {
+  const zz = cheapIsHigh ? -z : z;
+  if (zz > 2) return ['แพงผิดปกติ', 'r'];
+  if (zz > 1) return ['แพงกว่าปกติ', 'w'];
+  if (zz > -1) return ['ใกล้ค่าเฉลี่ย', 'n'];
+  if (zz > -2) return ['ถูกกว่าปกติ', 'g'];
+  return ['ถูกผิดปกติ', 'g'];
+}
+
+function drawValLine(cv, vals, avg) {
+  const { x, w, h } = _cvBase(cv, 92);
+  const s = (vals || []).map(v => (v == null || isNaN(v)) ? null : v);
+  const nn = s.filter(v => v != null);
+  if (nn.length < 2) return;
+  // แกน y ตัด outlier 2% บน-ล่างทิ้ง (mai P/E เคยพุ่ง 200x ทำให้เส้นอื่นแบนหมด) — เส้นยังพล็อตครบ
+  const srt = [...nn].sort((a, b) => a - b);
+  const q = f => srt[Math.min(srt.length - 1, Math.max(0, Math.round(f * (srt.length - 1))))];
+  let mn = q(0.02), mx = q(0.98);
+  if (mx - mn < 1e-6) { mn = srt[0]; mx = srt[srt.length - 1]; }
+  if (avg != null) { mn = Math.min(mn, avg); mx = Math.max(mx, avg); }
+  const rng = (mx - mn) || 1, pr = 46, pt = 8, pb = 6, n = s.length;
+  const px = i => i / (n - 1) * (w - pr);
+  const py = v => { const t = Math.max(-0.12, Math.min(1.12, (v - mn) / rng)); return pt + (1 - t) * (h - pt - pb); };
+  x.font = '600 10px ' + '"IBM Plex Mono",ui-monospace,monospace';
+  x.textAlign = 'left'; x.textBaseline = 'middle';
+  const ay = avg != null ? py(avg) : null;
+  if (avg != null) {
+    x.strokeStyle = 'rgba(210,153,34,.75)'; x.setLineDash([4, 3]); x.lineWidth = 1;
+    x.beginPath(); x.moveTo(0, ay); x.lineTo(w - pr, ay); x.stroke(); x.setLineDash([]);
+    x.fillStyle = '#d29922'; x.fillText(nf(avg, avg >= 100 ? 0 : 1), w - pr + 5, ay);
+  }
+  x.strokeStyle = '#4493f8'; x.lineWidth = 1.5; x.lineJoin = 'round'; x.beginPath();
+  let started = false, li = 0;
+  s.forEach((v, i) => { if (v == null) return; li = i; const xx = px(i), yy = py(v); started ? x.lineTo(xx, yy) : x.moveTo(xx, yy); started = true; });
+  x.stroke();
+  const last = s[li];
+  let ly = py(last);
+  if (ay != null && Math.abs(ly - ay) < 12) ly += (ly <= ay ? -12 : 12);
+  ly = Math.max(8, Math.min(h - 8, ly));
+  x.fillStyle = '#4493f8'; x.beginPath(); x.arc(px(li), py(last), 3, 0, 7); x.fill();
+  x.fillText(nf(last, last >= 100 ? 0 : 1), w - pr + 5, ly);
+}
+
+function valBandCard(title, stat, cheapIsHigh, unit, series) {
+  if (!stat || stat.current == null) return el('div', 'note', title + ' — ข้อมูลไม่พอ');
+  const [zl, zc] = valZone(stat.zscore, cheapIsHigh);
+  const u = unit || 'x';
+  const d = el('div', 'vcard');
+  const sid = 'vc_' + title.replace(/[^A-Za-z0-9]/g, '');
+  const hasChart = series && Array.isArray(series.vals) && series.vals.filter(v => v != null).length >= 8;
+  d.innerHTML = `
+    <div class="vc-head"><span class="vc-t">${title}</span>
+      <span class="pill ${zc}">${(stat.zscore >= 0 ? '+' : '') + nf(stat.zscore, 2)}σ · ${zl}</span></div>
+    <div class="vc-now">${nf(stat.current, 2)}<i>${u}</i></div>
+    <div class="vc-pct">เปอร์เซ็นไทล์ <b>${nf(stat.percentile, 0)}%</b> ของช่วงที่เลือก</div>
+    <div class="track"><span class="fill" style="width:${Math.min(100, Math.max(2, stat.percentile))}%"></span></div>
+    ${hasChart ? `<canvas class="vc-spark" id="${sid}"></canvas>` : ''}
+    <div class="vc-stat">เฉลี่ย ${nf(stat.avg, 2)}${u} · ±1σ ${nf(stat.std, 2)} · ต่ำสุด ${nf(stat.min, 2)} · สูงสุด ${nf(stat.max, 2)}</div>`;
+  if (hasChart) _kickCanvas(sid, cv => drawValLine(cv, series.vals, stat.avg));
+  return d;
+}
+
+function renderValuation() {
+  const c = $('#s-valuation'); if (!c) return;
+  c.innerHTML = '';
+  const ms = D.mstats, dv = D.dailyVal, sv = D.stockVal;
+
+  // 1) สรุปวันนี้
+  if (dv) {
+    c.appendChild(secHead('สรุปมูลค่าตลาดวันนี้'));
+    c.appendChild(el('div', 'chart-src', 'ณ ' + (dv.as_of || thaiDate(D.asOf)) + ' · ที่มา ตลาดหลักทรัพย์ฯ'));
+    const g = el('div', 'vsnap');
+    const cel = (k, v) => `<span class="vs-c"><i>${k}</i><b>${v}</b></span>`;
+    ['SET', 'mai'].forEach(mk => {
+      const d = dv[mk]; if (!d) return;
+      const box = el('div', 'vs-row');
+      box.innerHTML = `<div class="vs-mk">${mk}</div><div class="vs-grid">
+        ${cel('P/E', nf(d.pe, 2) + 'x')}${cel('P/BV', nf(d.pbv, 2) + 'x')}${cel('เงินปันผล', nf(d.div_yield, 2) + '%')}
+        ${cel('EPS', nf(d.eps, 2))}${cel('มูลค่าตลาด', fmtBaht((d.mkt_cap || 0) * 1e6))}${cel('Turnover YTD', nf(d.turnover_ytd, 1) + '%')}</div>`;
+      g.appendChild(box);
+    });
+    c.appendChild(g);
+  }
+
+  // 2) กรอบมูลค่าย้อนหลัง SET / mai
+  if (ms && ms.pe && ms.pbv) {
+    c.appendChild(secHead('กรอบมูลค่าย้อนหลัง'));
+    const pbar = el('div', 'sortbar'); pbar.id = 'valPeriodBar';
+    pbar.innerHTML = VAL_PERIODS.map(([k, t]) => `<button class="sortchip ${_valPeriod === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('');
+    c.appendChild(pbar);
+    pbar.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _valPeriod = b.dataset.k; renderValuation(); } });
+
+    const mkBand = (mkKey, label) => {
+      const wrap = el('div', 'vband');
+      wrap.appendChild(el('div', 'vband-h', label));
+      const defs = [['P/E', ms.pe, false, 'x'], ['P/BV', ms.pbv, false, 'x']];
+      if (mkKey === 'SET' && ms.div_yield) defs.push(['เงินปันผล', ms.div_yield, true, '%']);
+      defs.forEach(([t, stat, cheapHigh, u]) => {
+        const raw = stat.series && stat.series[mkKey];
+        if (!raw) return;
+        const f = valFilterPeriod(stat.dates, raw, _valPeriod);
+        const st = (_valPeriod === 'ALL' && stat.stats && stat.stats[mkKey]) ? stat.stats[mkKey] : valStats(f.vals);
+        wrap.appendChild(valBandCard(t + ' ' + mkKey, st, cheapHigh, u, f));
+      });
+      return wrap;
+    };
+    c.appendChild(mkBand('SET', 'SET Index'));
+    c.appendChild(mkBand('mai', 'mai Index'));
+  }
+
+  // 3) มูลค่ารายหุ้น
+  if (sv && Array.isArray(sv.stocks)) {
+    c.appendChild(secHead('มูลค่ารายหุ้น'));
+    c.appendChild(el('div', 'chart-src', 'ถูก/แพงเทียบค่าเฉลี่ยของตลาดหรือกลุ่มอุตสาหกรรม (z-score) · แตะเพื่อดูรายละเอียด'));
+    const mrow = el('div', 'seg');
+    mrow.innerHTML = `<button data-k="pe" class="${_svMetric === 'pe' ? 'on' : ''}">P/E</button><button data-k="pbv" class="${_svMetric === 'pbv' ? 'on' : ''}">P/BV</button>`;
+    c.appendChild(mrow);
+    const srow = el('div', 'seg');
+    srow.innerHTML = `<button data-k="mkt" class="${_svScope === 'mkt' ? 'on' : ''}">เทียบทั้งตลาด</button><button data-k="sec" class="${_svScope === 'sec' ? 'on' : ''}">เทียบกลุ่ม</button>`;
+    c.appendChild(srow);
+    const ZONES = [['all', 'ทั้งหมด'], ['cheap', 'ถูกผิดปกติ'], ['under', 'ถูกกว่าปกติ'], ['mid', 'ปานกลาง'], ['over', 'แพงกว่าปกติ'], ['exp', 'แพงผิดปกติ']];
+    const zrow = el('div', 'sortbar'); zrow.id = 'svZoneBar';
+    zrow.innerHTML = ZONES.map(([k, t]) => `<button class="sortchip ${_svZone === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('');
+    c.appendChild(zrow);
+    const srch = el('div', 'search');
+    srch.innerHTML = `<svg class="mag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="svSearch" placeholder="ค้นหาชื่อย่อ / ชื่อบริษัท">`;
+    c.appendChild(srch);
+    const list = el('div'); list.id = 'svList'; c.appendChild(list);
+    $('#svSearch').value = _svQ;
+
+    const inZone = z => {
+      if (z == null) return false;
+      if (_svZone === 'all') return true;
+      if (_svZone === 'cheap') return z <= -2;
+      if (_svZone === 'under') return z > -2 && z <= -1;
+      if (_svZone === 'mid') return z > -1 && z < 1;
+      if (_svZone === 'over') return z >= 1 && z < 2;
+      return z >= 2;   // exp
+    };
+    const paint = () => {
+      const zf = `${_svMetric}_z_${_svScope}`;
+      const q = _svQ.trim().toLowerCase();
+      const arr = sv.stocks.filter(s => {
+        if (s[_svMetric] == null) return false;
+        if (!inZone(s[zf])) return false;
+        if (q) return s.symbol.toLowerCase().includes(q) || String(s.name || '').toLowerCase().includes(q);
+        return true;
+      }).sort((a, b) => (a[zf] ?? 999) - (b[zf] ?? 999));
+      const box = $('#svList'); box.innerHTML = '';
+      box.appendChild(el('div', 'note', arr.length + ' หุ้น · เรียงจากถูกสุด (z ต่ำ) ไปแพงสุด'));
+      arr.slice(0, 300).forEach(s => box.appendChild(svRow(s, zf)));
+      if (arr.length > 300) box.appendChild(el('div', 'list-cap', 'แสดง 300 จาก ' + arr.length + ' — พิมพ์ค้นหาเพื่อกรอง'));
+    };
+    mrow.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _svMetric = b.dataset.k; renderValuation(); } });
+    srow.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _svScope = b.dataset.k; renderValuation(); } });
+    zrow.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      _svZone = b.dataset.k;
+      zrow.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      paint();
+    });
+    $('#svSearch').addEventListener('input', e => { _svQ = e.target.value; paint(); });
+    paint();
+  }
+
+  if (!c.children.length) c.appendChild(el('div', 'list-cap', 'ข้อมูล Valuation ยังโหลดไม่ครบ — ลองรีเฟรช'));
+}
+
+function svRow(s, zf) {
+  const z = s[zf];
+  const b = el('button', 'row');
+  const r = D.byId['set:' + s.symbol];
+  const zCls = z == null ? 'flat' : z < 0 ? 'up' : z >= 1 ? 'down' : 'flat';
+  b.innerHTML = `
+    <span class="lead">
+      <span class="nm"><span class="tkr-lg">${s.symbol}</span></span>
+      <span class="sub2">${shortName(s.name || '')}${s.sector ? ' · ' + s.sector : ''}</span>
+    </span>
+    <span class="trail">
+      <div class="px">${nf(s[_svMetric], 2)}<span style="font-size:11px;color:var(--text-mute)">x</span></div>
+      <span class="dl ${zCls}">${z == null ? '–' : (z >= 0 ? '+' : '') + nf(z, 2) + 'σ'}</span>
+    </span>
+    ${r ? '<span class="chev">›</span>' : ''}`;
+  if (r) b.addEventListener('click', () => openDetail('set:' + s.symbol));
+  return b;
+}
+
+/* ================================================================
+   เฟส 2 ข้อ 5 : เงินทุน — กระแสเงิน / ชอร์ต / ผู้บริหาร / สัญญาณรวม
+   พอร์ต 1:1 จาก dashboard.js (renderFlowPage / renderShort* /
+   renderInsider* / _renderConfluenceTable) — หน้าตาใหม่ ข้อมูลครบ
+   ข้อมูล bake พร้อม: market_flow{,_s50,_bond}.json · short_sales.json ·
+   insider_trades_{7,30,90,180}.json · major_changes_{7,30,90,180}.json ·
+   flow_signals.json — โหลดเมื่อเปิดหน้า (ไม่โหลดตอน boot)
+   ================================================================ */
+const FLOW_CFG = {
+  set:  { label: 'SET', unit: 'ล้านบาท', hasIndex: true, src: 'ที่มา ตลาดหลักทรัพย์ฯ',
+          legend: [{ k: 'fund', t: 'สถาบัน+โบรก', c: '#d9a520' },
+                   { k: 'foreign', t: 'ต่างชาติ', c: '#3fb950' },
+                   { k: 'retail', t: 'รายย่อย', c: '#f85149' }] },
+  s50:  { label: 'S50 ฟิวเจอร์ส', unit: 'สัญญา', hasIndex: false, src: 'ที่มา ตลาดสัญญาซื้อขายล่วงหน้า (TFEX)',
+          legend: [{ k: 'fund', t: 'สถาบัน', c: '#d9a520' },
+                   { k: 'foreign', t: 'ต่างชาติ', c: '#3fb950' },
+                   { k: 'retail', t: 'ในประเทศ', c: '#f85149' }] },
+  bond: { label: 'ตราสารหนี้', unit: 'ล้านบาท', hasIndex: false, src: 'ที่มา สมาคมตลาดตราสารหนี้ไทย',
+          legend: [{ k: 'foreign', t: 'ต่างชาติ (NR)', c: '#3fb950' }] },
+};
+let _flowTab = 'cf';
+let _cfMarket = 'set', _cfPeriod = 3, _cfView = 'cum';
+let _shMinPct = 0, _shSort = 'pos', _shQ = '';
+let _insDays = 30, _insQ = '';
+let _cfxFilter = 'all', _cfxQ = '';
+let _flowLoading = false, _insLoading = null;
+
+const _sstk = sym => D.byId['set:' + sym] || null;
+// ชื่อผู้บริหาร/ผู้ถือหุ้นใหญ่มาจากการขูดหน้าเว็บ ก.ล.ต. ดิบ ๆ — escape ก่อนใส่ innerHTML
+const _esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+async function loadFlowBundle() {
+  if (D.flow || _flowLoading) return;
+  _flowLoading = true;
+  const [mf, s50, bond, sh, sig] = await Promise.allSettled([
+    loadJSON('../data/market_flow.json', 30000),
+    loadJSON('../data/market_flow_s50.json', 30000),
+    loadJSON('../data/market_flow_bond.json', 30000),
+    loadJSON('../data/short_sales.json', 30000),
+    loadJSON('../data/flow_signals.json', 20000),
+  ]);
+  if (mf.status === 'fulfilled') D.flow = mf.value;
+  if (s50.status === 'fulfilled') D.flowS50 = s50.value;
+  if (bond.status === 'fulfilled') D.flowBond = bond.value;
+  if (sh.status === 'fulfilled') D.flowShort = sh.value;
+  if (sig.status === 'fulfilled') D.flowSig = sig.value;
+  _flowLoading = false;
+  if (!D.flow && !D.flowShort && !D.flowSig) {
+    D.flow = { rows: [], _failed: true };   // กันวนโหลดซ้ำไม่จบ
+  }
+  if (curScreen === 'flow') renderFlow();
+}
+
+async function loadInsiderBundle(days) {
+  if (D.insider[days] || _insLoading === days) return;
+  _insLoading = days;
+  const [it, mc] = await Promise.allSettled([
+    loadJSON('../data/insider_trades_' + days + '.json', 30000),
+    loadJSON('../data/major_changes_' + days + '.json', 20000),
+  ]);
+  D.insider[days] = {
+    r59: (it.status === 'fulfilled' && Array.isArray(it.value.records)) ? it.value.records : [],
+    r246: (mc.status === 'fulfilled' && Array.isArray(mc.value.records)) ? mc.value.records : [],
+    fetched: (it.status === 'fulfilled' && it.value.fetched_at) || '',
+  };
+  _insLoading = null;
+  if (curScreen === 'flow' && _flowTab === 'ins') renderFlow();
+}
+
+function renderFlow() {
+  const c = $('#s-flow'); if (!c) return;
+  if (!D.flow) {
+    c.innerHTML = '<div class="list-cap">กำลังโหลดข้อมูลเงินทุน…</div>';
+    loadFlowBundle();
+    return;
+  }
+  c.innerHTML = '';
+  const tabs = el('div', 'vtabs'); tabs.id = 'flowTabs';
+  const T = [['cf', 'กระแสเงิน'], ['short', 'ชอร์ต'], ['ins', 'ผู้บริหาร'], ['cfx', 'สัญญาณรวม']];
+  tabs.innerHTML = T.map(([k, t]) => `<button class="vtab ${_flowTab === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('');
+  c.appendChild(tabs);
+  const body = el('div'); body.id = 'flowBody'; c.appendChild(body);
+  tabs.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _flowTab = b.dataset.k;
+    tabs.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    b.scrollIntoView({ block: 'nearest', inline: 'center' });
+    paintFlowTab();
+  });
+  paintFlowTab();
+}
+function paintFlowTab() {
+  const body = $('#flowBody'); if (!body) return;
+  body.innerHTML = '';
+  if (_flowTab === 'cf') return cfView(body);
+  if (_flowTab === 'short') return shView(body);
+  if (_flowTab === 'ins') return insView(body);
+  cfxView(body);
+}
+
+/* ---------------- กระแสเงิน (Capital Flow) ---------------- */
+function flowRowsForPeriod(rows, months) {
+  const s = (rows || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+  if (!months) return s;
+  const c = new Date(); c.setDate(1); c.setMonth(c.getMonth() - months);
+  const cs = `${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}-01`;
+  return s.filter(r => r.date >= cs);
+}
+const _cfAxis = v => {
+  const a = Math.abs(v);
+  if (a >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (a >= 1e3) return (v / 1e3).toFixed(a >= 1e4 ? 0 : 1) + 'K';
+  return Math.round(v).toString();
+};
+const _cfNum = v => v == null ? '–' : (v > 0 ? '+' : '') + Math.round(v).toLocaleString('en-US');
+
+function drawFlowChart(cv, rows, cfg, view) {
+  const { x, w, h } = _cvBase(cv, 170);
+  if (!rows || rows.length < 2) return;
+  const keys = cfg.legend.map(l => l.k);
+  const pl = 42, pr = 10, pt = 14, pb = 18, plotH = h - pt - pb, plotW = w - pl - pr;
+  const cum = {}; keys.forEach(k => cum[k] = 0);
+  const ser = rows.map(r => {
+    const o = { date: r.date, set: r.set };
+    keys.forEach(k => { if (view === 'cum') { cum[k] += (r[k] || 0); o[k] = cum[k]; } else o[k] = r[k] || 0; });
+    return o;
+  });
+  const vals = ser.flatMap(r => keys.map(k => r[k]));
+  const mn = Math.min(...vals, 0), mx = Math.max(...vals, 0), rng = (mx - mn) || 1;
+  const px = i => pl + i / (ser.length - 1) * plotW;
+  const py = v => pt + plotH - ((v - mn) / rng) * plotH;
+  // zero line
+  x.strokeStyle = 'rgba(139,149,161,.22)'; x.setLineDash([4, 4]); x.lineWidth = 1;
+  x.beginPath(); x.moveTo(pl, py(0)); x.lineTo(w - pr, py(0)); x.stroke(); x.setLineDash([]);
+  // SET index (เส้นประจาง) บนแกนขวาเสมือน
+  if (cfg.hasIndex) {
+    const sv = ser.map(r => r.set).filter(v => v != null);
+    if (sv.length > 1) {
+      const smn = Math.min(...sv), smx = Math.max(...sv), sr = (smx - smn) || 1;
+      x.strokeStyle = 'rgba(180,190,210,.5)'; x.lineWidth = 1; x.setLineDash([2, 3]); x.beginPath();
+      let st = false;
+      ser.forEach((r, i) => { if (r.set == null) return; const xx = px(i), yy = pt + plotH - ((r.set - smn) / sr) * plotH; st ? x.lineTo(xx, yy) : x.moveTo(xx, yy); st = true; });
+      x.stroke(); x.setLineDash([]);
+    }
+  }
+  cfg.legend.forEach(({ k, c }) => {
+    x.strokeStyle = c; x.lineWidth = 1.8; x.lineJoin = 'round'; x.beginPath();
+    ser.forEach((r, i) => i ? x.lineTo(px(i), py(r[k])) : x.moveTo(px(i), py(r[k])));
+    x.stroke();
+  });
+  x.font = _MONO9; x.fillStyle = '#5b636e'; x.textAlign = 'right'; x.textBaseline = 'middle';
+  x.fillText(_cfAxis(mx), pl - 4, pt + 4);
+  x.fillText(_cfAxis(mn), pl - 4, pt + plotH);
+  _xLabels(x, ser.map(s => s.date), ser.length, px, h, [2, 7]);
+}
+
+function cfView(body) {
+  const src = { set: D.flow, s50: D.flowS50, bond: D.flowBond }[_cfMarket];
+  const cfg = FLOW_CFG[_cfMarket];
+  body.innerHTML = `
+    <div class="seg" id="cfMkt">${['set', 's50', 'bond'].map(k => `<button data-k="${k}" class="${_cfMarket === k ? 'on' : ''}">${FLOW_CFG[k].label}</button>`).join('')}</div>
+    <div class="sortbar" id="cfPer">${[[1, '1 เดือน'], [3, '3 เดือน'], [6, '6 เดือน'], [12, '1 ปี'], [0, 'ทั้งหมด']].map(([k, t]) => `<button class="sortchip ${_cfPeriod === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('')}</div>
+    <div class="seg" id="cfViewSeg">${[['cum', 'สะสม'], ['net', 'รายวัน']].map(([k, t]) => `<button data-k="${k}" class="${_cfView === k ? 'on' : ''}">${t}</button>`).join('')}</div>
+    <div class="chart-wrap"><canvas class="spark" id="cfChart" style="height:170px"></canvas></div>
+    <div class="chart-src" id="cfSrc"></div>
+    <div class="flow-leg" id="cfLegend"></div>
+    <div class="ftbl" id="cfTbl"></div>`;
+
+  body.querySelector('#cfMkt').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _cfMarket = b.dataset.k; cfView(body); } });
+  body.querySelector('#cfPer').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _cfPeriod = +b.dataset.k; cfView(body); } });
+  body.querySelector('#cfViewSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _cfView = b.dataset.k; cfView(body); } });
+
+  if (!src || !Array.isArray(src.rows) || !src.rows.length) {
+    body.querySelector('#cfSrc').textContent = src && src._failed ? 'โหลดข้อมูลไม่สำเร็จ — ลองรีเฟรช' : 'ยังไม่มีข้อมูลกระแสเงินของตลาดนี้';
+    return;
+  }
+  const rows = flowRowsForPeriod(src.rows, _cfPeriod);
+  _kickCanvas('cfChart', cv => drawFlowChart(cv, rows, cfg, _cfView));
+  const span = rows.length ? `${rows[0].date} – ${rows[rows.length - 1].date}` : '';
+  body.querySelector('#cfSrc').textContent = `หน่วย ${cfg.unit} · ${span} · ${cfg.src}`;
+
+  body.querySelector('#cfLegend').innerHTML = cfg.legend.map(({ k, t, c }) => {
+    const tot = rows.reduce((s, r) => s + (r[k] || 0), 0);
+    const cc = tot > 0 ? 'up' : tot < 0 ? 'down' : 'flat';
+    return `<span><i style="background:${c}"></i>${t} <b class="${cc}">${_cfNum(tot)}</b></span>`;
+  }).join('') + (cfg.hasIndex ? '<span><i style="background:rgba(180,190,210,.7)"></i>SET (เส้นประ)</span>' : '');
+
+  // ตาราง (ใหม่สุดอยู่บน) — cap 90 แถว
+  const nk = cfg.legend.length;
+  const gt = `grid-template-columns:52px repeat(${cfg.hasIndex ? nk + 1 : nk},1fr)`;
+  const head = `<div class="ftr fhd" style="${gt}"><span>วันที่</span>${cfg.legend.map(l => `<span>${l.t}</span>`).join('')}${cfg.hasIndex ? '<span>SET</span>' : ''}</div>`;
+  const totCells = cfg.legend.map(l => {
+    const tot = rows.reduce((s, r) => s + (r[l.k] || 0), 0);
+    return `<span class="${cls(tot)}">${_cfNum(tot)}</span>`;
+  }).join('');
+  const totRow = `<div class="ftr ftot" style="${gt}"><span>รวมช่วงนี้</span>${totCells}${cfg.hasIndex ? '<span></span>' : ''}</div>`;
+  const recent = rows.slice().reverse().slice(0, 90);
+  const dataRows = recent.map(r => {
+    const cells = cfg.legend.map(l => `<span class="${cls(r[l.k])}">${_cfNum(r[l.k])}</span>`).join('');
+    const setCell = cfg.hasIndex ? `<span class="flat">${r.set != null ? nf(r.set, 2) : '–'}</span>` : '';
+    return `<div class="ftr" style="${gt}"><span>${r.date.slice(2)}</span>${cells}${setCell}</div>`;
+  }).join('');
+  body.querySelector('#cfTbl').innerHTML = head + totRow + dataRows +
+    (rows.length > 90 ? `<div class="list-cap">แสดง 90 วันล่าสุด จาก ${rows.length} วันในช่วงนี้</div>` : '');
+}
+
+/* ---------------- ชอร์ต (Short Sales) ---------------- */
+function squeezeCandidates() {
+  const S = D.flowShort; if (!S || !S.stocks) return [];
+  const sig = {};
+  (D.flowSig && D.flowSig.stocks || []).forEach(x => { sig[x.symbol] = x; });
+  const out = [];
+  Object.entries(S.stocks).forEach(([sym, v]) => {
+    if ((v.short_pos_pct || 0) < 1) return;
+    const g = sig[sym];
+    if (!g || !g.insider || !(g.insider.dir > 0)) return;
+    out.push({ sym, pos: v.short_pos_pct || 0, net: g.insider.net_value_mbaht, nBuy: g.insider.n_buy || 0 });
+  });
+  return out.sort((a, b) => b.pos - a.pos);
+}
+
+function shView(body) {
+  body.innerHTML = '';   // เรียกซ้ำตอนกดชิป/กรอง — ล้างก่อนเสมอ กันซ้อน
+  const S = D.flowShort;
+  if (!S || !S.stocks) { body.appendChild(el('div', 'list-cap', 'ยังไม่มีข้อมูลชอร์ต')); return; }
+  const all = Object.entries(S.stocks).map(([sym, v]) => ({ sym, ...v }));
+  const hasPos = all.filter(v => (v.short_pos || 0) > 0).length;
+  const o05 = all.filter(v => (v.short_pos_pct || 0) >= 0.5).length;
+  const o1 = all.filter(v => (v.short_pos_pct || 0) >= 1).length;
+  const o2 = all.filter(v => (v.short_pos_pct || 0) >= 2).length;
+
+  body.appendChild(el('div', 'chart-src',
+    `ข้อมูล ${S.period_from || '–'} – ${S.period_to || '–'} · อัปเดต ${S.last_api_update || '–'} · ที่มา ตลาดหลักทรัพย์ฯ`));
+
+  const chips = el('div', 'shsum');
+  chips.innerHTML = [[0, hasPos, 'มี Short'], [0.5, o05, '> 0.5%'], [1, o1, '> 1%'], [2, o2, '> 2%']]
+    .map(([p, n, t]) => `<button class="shc ${_shMinPct === p && p > 0 ? 'on' : ''}" data-p="${p}"><b>${n}</b><i>${t}</i></button>`).join('');
+  body.appendChild(chips);
+  chips.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const p = +b.dataset.p;
+    _shMinPct = (p > 0 && _shMinPct === p) ? 0 : p;
+    shView(body);
+  });
+
+  const sq = squeezeCandidates();
+  if (sq.length) {
+    body.appendChild(secHead('🎯 Squeeze Radar · ชอร์ตสูง + ผู้บริหารซื้อ'));
+    const wrap = el('div', 'sqz');
+    wrap.innerHTML = sq.slice(0, 12).map(r => {
+      const st = _sstk(r.sym);
+      return `<div class="sqzc" data-sym="${r.sym}">
+        <span class="sq-s">${r.sym}</span>
+        <div class="sq-r"><span>Short Pos</span><b class="down">${nf(r.pos, 2)}%</b></div>
+        <div class="sq-r"><span>ผู้บริหารซื้อ</span><b>${r.nBuy} ครั้ง</b></div>
+        ${r.net != null ? `<div class="sq-r"><span>ซื้อสุทธิ</span><b class="up">+${nf(Math.abs(r.net), 0)} ลบ.</b></div>` : ''}
+        ${st ? `<div class="sq-r"><span>ราคา</span><b>${nf(st.price, st.price < 1 ? 3 : 2)}</b></div>` : ''}
+      </div>`;
+    }).join('');
+    wrap.addEventListener('click', e => {
+      const cd = e.target.closest('.sqzc'); if (cd && _sstk(cd.dataset.sym)) openDetail('set:' + cd.dataset.sym);
+    });
+    body.appendChild(wrap);
+  }
+
+  body.appendChild(secHead('ชอร์ตรายหุ้น'));
+  const srch = el('div', 'search');
+  srch.innerHTML = `<svg class="mag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="shSearch" placeholder="ค้นหาชื่อย่อ">`;
+  body.appendChild(srch);
+  const SORTS = [['pos', 'Pos %'], ['posM', 'จำนวนหุ้น'], ['val', '% มูลค่าซื้อขาย'], ['d1', '% วันนี้']];
+  const sbar = el('div', 'sortbar'); sbar.id = 'shSortBar';
+  sbar.innerHTML = SORTS.map(([k, t]) => `<button class="sortchip ${_shSort === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('');
+  body.appendChild(sbar);
+  const list = el('div'); list.id = 'shList'; body.appendChild(list);
+  $('#shSearch').value = _shQ;
+
+  const paint = () => {
+    const q = _shQ.trim().toUpperCase();
+    let arr = all.filter(v => {
+      if (_shMinPct > 0 ? (v.short_pos_pct || 0) < _shMinPct
+        : !((v.short_pos_pct || 0) > 0 || (v.short_pos || 0) > 0 || (v.period_pct_value || 0) > 0)) return false;
+      if (q && !v.sym.toUpperCase().includes(q)) return false;
+      return true;
+    });
+    const SF = {
+      pos: (a, b) => (b.short_pos_pct || 0) - (a.short_pos_pct || 0),
+      posM: (a, b) => (b.short_pos || 0) - (a.short_pos || 0),
+      val: (a, b) => (b.period_pct_value || 0) - (a.period_pct_value || 0),
+      d1: (a, b) => ((_sstk(b.sym) || {}).chg1d ?? -999) - ((_sstk(a.sym) || {}).chg1d ?? -999),
+    };
+    arr.sort(SF[_shSort] || SF.pos);
+    const box = $('#shList'); box.innerHTML = '';
+    box.appendChild(el('div', 'note', arr.length + ' หุ้น' + (_shMinPct > 0 ? ` · Short Pos ≥ ${_shMinPct}%` : '')));
+    arr.slice(0, 200).forEach(v => box.appendChild(shRow(v)));
+    if (arr.length > 200) box.appendChild(el('div', 'list-cap', 'แสดง 200 จาก ' + arr.length + ' — พิมพ์ค้นหาเพื่อกรอง'));
+  };
+  $('#shSearch').addEventListener('input', e => { _shQ = e.target.value; paint(); });
+  sbar.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _shSort = b.dataset.k;
+    sbar.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    paint();
+  });
+  paint();
+}
+function shRow(v) {
+  const st = _sstk(v.sym);
+  const pos = v.short_pos_pct || 0;
+  const tap = !!st;
+  const b = el(tap ? 'button' : 'div', 'shr');
+  const barW = Math.min(100, pos / 4 * 100);
+  const barC = pos >= 2 ? 'var(--down)' : pos >= 1 ? '#e0682f' : pos >= 0.5 ? 'var(--warn)' : 'var(--text-mute)';
+  // เทรนด์ pp ของ short_pos_pct จาก daily_tail (ชอร์ตลด = เขียว)
+  const tail = Array.isArray(v.daily_tail) ? v.daily_tail : [];
+  let trHtml = '';
+  if (tail.length >= 2) {
+    const d = (v.short_pos_pct || 0) - (tail[0][2] || 0);
+    if (Math.abs(d) >= 0.005) trHtml = `<span class="${d < 0 ? 'up' : 'down'}">${d < 0 ? '▼' : '▲'}${nf(Math.abs(d), 2)}pp</span>`;
+  }
+  // คอลัมน์ขวา — ไม่ซ้ำกับ pos% ตรงกลาง: sort=pos โชว์ %มูลค่าซื้อขาย, อื่น ๆ โชว์ค่าที่เรียง
+  let trailMain, trailLbl, trailCls = 'flat';
+  if (_shSort === 'posM') { trailMain = nf(v.short_pos / 1e6, 2) + 'M'; trailLbl = 'หุ้น'; }
+  else if (_shSort === 'd1') { trailMain = st ? pct(st.chg1d) : '–'; trailLbl = 'วันนี้'; trailCls = st ? cls(st.chg1d) : 'flat'; }
+  else { trailMain = nf(v.period_pct_value || 0, 2) + '%'; trailLbl = '% มูลค่าซื้อขาย'; }
+  b.innerHTML = `
+    <span class="s-l">
+      <span class="tkr-lg">${v.sym}</span>
+      <span class="sub2">${st ? shortName(st.name) + (st.sub ? ' · ' + st.sub : '') : 'ไม่อยู่ในชุดข้อมูลนี้'}</span>
+    </span>
+    <span class="s-pos">${nf(pos, 2)}%<span class="pb" style="width:${Math.max(4, barW)}%;background:${barC}"></span></span>
+    <span class="s-tr"><span class="${trailCls}">${trailMain}</span><span class="s-tl">${trailLbl}</span>${trHtml ? '<br>' + trHtml : ''}</span>`;
+  if (tap) b.addEventListener('click', () => openDetail('set:' + v.sym));
+  return b;
+}
+
+/* ---------------- ผู้บริหาร (Insider / ผู้ถือหุ้นใหญ่) ---------------- */
+function insAccum(recs) {
+  const m = {};
+  (recs || []).forEach(rec => {
+    const s = rec.symbol; if (!s) return;
+    const a = m[s] || (m[s] = { buys: 0, sells: 0, bv: 0, sv: 0, ppl: new Set(), spl: new Set() });
+    const val = (rec.qty && rec.price && isFinite(rec.price)) ? rec.qty * rec.price : 0;
+    if (rec.action === 'buy') { a.buys++; a.ppl.add(rec.name || '?'); a.bv += val; }
+    else if (rec.action === 'sell') { a.sells++; a.spl.add(rec.name || '?'); a.sv += val; }
+  });
+  return Object.entries(m).map(([sym, a]) => {
+    const netVal = a.bv - a.sv;
+    const dom = (a.bv > 0 || a.sv > 0) ? netVal : (a.buys - a.sells);
+    return { sym, ...a, netVal, dom };
+  }).filter(r => r.dom !== 0).sort((x, y) => Math.abs(y.dom) - Math.abs(x.dom));
+}
+
+function insView(body) {
+  body.innerHTML = `
+    <div class="sortbar" id="insDaysBar">${[7, 30, 90, 180].map(d => `<button class="sortchip ${_insDays === d ? 'on' : ''}" data-k="${d}">${d} วัน</button>`).join('')}</div>
+    <div id="insInner"></div>`;
+  body.querySelector('#insDaysBar').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _insDays = +b.dataset.k; insView(body);
+  });
+  const dd = D.insider[_insDays];
+  const inner = body.querySelector('#insInner');
+  if (!dd) { inner.innerHTML = '<div class="list-cap">กำลังโหลดข้อมูลผู้บริหาร…</div>'; loadInsiderBundle(_insDays); return; }
+  paintInsider(inner, dd);
+}
+
+function paintInsider(inner, dd) {
+  inner.innerHTML = '';
+  const r59 = dd.r59, r246 = dd.r246;
+  const b59 = r59.filter(x => x.action === 'buy'), s59 = r59.filter(x => x.action === 'sell');
+  const b246 = r246.filter(x => x.action === 'buy'), s246 = r246.filter(x => x.action === 'sell');
+  if (dd.fetched) inner.appendChild(el('div', 'chart-src', 'อัปเดต ' + dd.fetched + ' · ที่มา สำนักงาน ก.ล.ต.'));
+
+  const tiles = el('div', 'tiles');
+  tiles.innerHTML = `
+    <div class="tile"><div class="t-l">ผู้บริหารซื้อ</div><div class="t-v up">${b59.length}</div><div class="t-s">${new Set(b59.map(x => x.symbol)).size} หุ้น</div></div>
+    <div class="tile"><div class="t-l">ผู้บริหารขาย</div><div class="t-v down">${s59.length}</div><div class="t-s">${new Set(s59.map(x => x.symbol)).size} หุ้น</div></div>
+    <div class="tile"><div class="t-l">ผู้ถือหุ้นใหญ่เพิ่ม</div><div class="t-v up">${b246.length}</div><div class="t-s">รายการ</div></div>
+    <div class="tile"><div class="t-l">ผู้ถือหุ้นใหญ่ลด</div><div class="t-v down">${s246.length}</div><div class="t-s">รายการ</div></div>`;
+  inner.appendChild(tiles);
+
+  // สะสม net buy / net sell ราย symbol (แบบ 59 — ผู้บริหาร)
+  const acc = insAccum(r59);
+  if (acc.length) {
+    const nb = acc.filter(r => r.dom > 0).length, ns = acc.filter(r => r.dom < 0).length;
+    inner.appendChild(secHead(`สะสมผู้บริหาร ${_insDays} วัน · ซื้อสุทธิ ${nb} · ขายสุทธิ ${ns}`));
+    const box = el('div');
+    acc.slice(0, 50).forEach(r => {
+      const st = _sstk(r.sym);
+      const tap = !!st;
+      const hasVal = r.bv > 0 || r.sv > 0;
+      const up = r.dom > 0;
+      const row = el(tap ? 'button' : 'div', 'inr');
+      const side = up ? r.ppl.size : r.spl.size;
+      row.innerHTML = `
+        <span class="i-l">
+          <span class="i-t"><span class="tk">${r.sym}</span>${side >= 2 ? ' <span class="mkt-tag">คลัสเตอร์ ' + side + ' คน</span>' : ''}</span>
+          <span class="i-s">${st ? (st.sub || shortName(st.name)) : '—'} · ซื้อ ${r.buys} / ขาย ${r.sells}</span>
+        </span>
+        <span class="i-r ${up ? 'up' : 'down'}">${hasVal ? (up ? '+' : '−') + nf(Math.abs(r.netVal) / 1e6, 1) + ' ลบ.' : (up ? '+' : '') + r.dom + ' ครั้ง'}
+          <span class="i-sub">${hasVal ? 'มูลค่าสุทธิ' : 'จำนวนครั้งสุทธิ'}</span></span>`;
+      if (tap) row.addEventListener('click', () => openDetail('set:' + r.sym));
+      box.appendChild(row);
+    });
+    inner.appendChild(box);
+  }
+
+  // รายการล่าสุด (ผู้บริหาร + ผู้ถือหุ้นใหญ่ รวมกัน)
+  inner.appendChild(secHead('รายการล่าสุด'));
+  const srch = el('div', 'search');
+  srch.innerHTML = `<svg class="mag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="insSearch" placeholder="ค้นหาชื่อย่อ / ชื่อบุคคล">`;
+  inner.appendChild(srch);
+  const listBox = el('div'); listBox.id = 'insList'; inner.appendChild(listBox);
+  $('#insSearch').value = _insQ;
+
+  const rows = [
+    ...r59.map(x => ({ ...x, src: 'exec' })),
+    ...r246.map(x => ({ ...x, src: 'major' })),
+  ].sort((a, b) => (b.trade_date || '').localeCompare(a.trade_date || ''));
+
+  const paint = () => {
+    const q = _insQ.trim().toLowerCase();
+    const arr = rows.filter(x => {
+      if (!q) return true;
+      const who = (x.src === 'exec' ? x.name : x.holder) || '';
+      return (x.symbol || '').toLowerCase().includes(q) || who.toLowerCase().includes(q);
+    });
+    const box = $('#insList'); box.innerHTML = '';
+    box.appendChild(el('div', 'note', arr.length + ' รายการ'));
+    arr.slice(0, 150).forEach(x => box.appendChild(insRecRow(x)));
+    if (arr.length > 150) box.appendChild(el('div', 'list-cap', 'แสดง 150 จาก ' + arr.length + ' — พิมพ์ค้นหาเพื่อกรอง'));
+  };
+  $('#insSearch').addEventListener('input', e => { _insQ = e.target.value; paint(); });
+  paint();
+}
+function insRecRow(x) {
+  const isExec = x.src === 'exec';
+  const st = _sstk(x.symbol);
+  const tap = !!st;
+  const b = el(tap ? 'button' : 'div', 'inr');
+  const act = x.action === 'buy' ? '<span class="up">▲ ซื้อ</span>' : x.action === 'sell' ? '<span class="down">▼ ขาย</span>' : '<span class="flat">—</span>';
+  const who = _esc((isExec ? x.name : x.holder) || '—');
+  let detail;
+  if (isExec) detail = `${(x.qty || 0).toLocaleString('en-US')} หุ้น${x.price ? ' · ฿' + nf(x.price, 2) : ''}`;
+  else detail = x.pct_before != null ? `${nf(x.pct_after, 2)}% ← ${nf(x.pct_before, 2)}%` : '—';
+  b.innerHTML = `
+    <span class="i-l">
+      <span class="i-t"><span class="tk">${x.symbol}</span> <span class="mkt-tag">${isExec ? 'ผู้บริหาร' : 'ผู้ถือหุ้นใหญ่'}</span></span>
+      <span class="i-s">${thaiDate(x.trade_date)} · ${who}</span>
+    </span>
+    <span class="i-r">${act}<span class="i-sub">${detail}</span></span>`;
+  if (tap) b.addEventListener('click', () => openDetail('set:' + x.symbol));
+  return b;
+}
+
+/* ---------------- สัญญาณเงินทุนรวม (Confluence) ---------------- */
+const _dirIco = d => d > 0 ? '<span class="up">▲</span>' : d < 0 ? '<span class="down">▼</span>' : '<span class="flat">–</span>';
+
+function cfxView(body) {
+  const sig = D.flowSig;
+  if (!sig || !Array.isArray(sig.stocks)) { body.appendChild(el('div', 'list-cap', 'ยังไม่มีข้อมูลสัญญาณเงินทุนรวม')); return; }
+  body.appendChild(el('div', 'chart-src',
+    `${sig.count || sig.stocks.length} หุ้นมีสัญญาณ · อัปเดต ${sig.generated_at || '–'} · ผสานสัญญาณผู้บริหาร + ชอร์ต + ต่างชาติ (NVDR)`));
+
+  const FILT = [['all', 'ทั้งหมด'], ['bull', 'ขาขึ้น'], ['bear', 'ขาลง'], ['triple', 'ครบ 3 ⭐']];
+  const fbar = el('div', 'sortbar'); fbar.id = 'cfxFilt';
+  fbar.innerHTML = FILT.map(([k, t]) => `<button class="sortchip ${_cfxFilter === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('');
+  body.appendChild(fbar);
+  const srch = el('div', 'search');
+  srch.innerHTML = `<svg class="mag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="cfxSearch" placeholder="ค้นหาชื่อย่อ">`;
+  body.appendChild(srch);
+  body.appendChild(el('div', 'cfx-hd', '<span>หุ้น</span><span>ราคา</span><span>คะแนน</span><span>สัญญาณ</span>'));
+  const list = el('div'); list.id = 'cfxList'; body.appendChild(list);
+  $('#cfxSearch').value = _cfxQ;
+
+  const paint = () => {
+    let rows = sig.stocks.slice();
+    if (_cfxFilter === 'bull') rows = rows.filter(r => r.score >= 2);
+    else if (_cfxFilter === 'bear') rows = rows.filter(r => r.score <= -2);
+    else if (_cfxFilter === 'triple') rows = rows.filter(r => r.n_signals === 3);
+    const q = _cfxQ.trim().toUpperCase();
+    if (q) rows = rows.filter(r => r.symbol.toUpperCase().includes(q));
+    rows.sort(_cfxFilter === 'bear'
+      ? (a, b) => a.score - b.score || b.n_signals - a.n_signals
+      : (a, b) => b.score - a.score || b.n_signals - a.n_signals);
+    const box = $('#cfxList'); box.innerHTML = '';
+    box.appendChild(el('div', 'note', rows.length + ' หุ้น'));
+    rows.slice(0, 300).forEach(r => box.appendChild(cfxRow(r)));
+    if (rows.length > 300) box.appendChild(el('div', 'list-cap', 'แสดง 300 จาก ' + rows.length));
+  };
+  fbar.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    _cfxFilter = b.dataset.k;
+    fbar.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    paint();
+  });
+  $('#cfxSearch').addEventListener('input', e => { _cfxQ = e.target.value; paint(); });
+  paint();
+}
+function cfxRow(r) {
+  const st = _sstk(r.symbol);
+  const tap = !!st;
+  const b = el(tap ? 'button' : 'div', 'cfxr');
+  const iv = r.insider || {}, sv = r.short || {}, nv = r.nvdr || {};
+  const sc = r.score;
+  const scCls = sc >= 2 ? 'up' : sc <= -2 ? 'down' : 'flat';
+  const star = r.n_signals === 3 ? ' <span class="warn-star">⭐</span>' : '';
+  const parts = [];
+  if (iv.net_value_mbaht != null) parts.push(`ผบห ${iv.net_value_mbaht >= 0 ? '+' : ''}${nf(iv.net_value_mbaht, 0)} ลบ.`);
+  if (sv.short_pos_pct != null) parts.push(`ชอร์ต ${nf(sv.short_pos_pct, 2)}%`);
+  if (nv.nvdr_pct != null) parts.push(`ต่างชาติ ${nf(nv.nvdr_pct, 2)}%`);
+  b.innerHTML = `
+    <span class="c-l">
+      <span class="tkr-lg">${r.symbol}${star}</span>
+      <span class="sub2">${st ? (st.sub || shortName(st.name)) : 'ไม่อยู่ในชุดข้อมูลนี้'}</span>
+      <span class="c-v2">${parts.join(' · ') || '—'}</span>
+    </span>
+    <span class="c-px">${st ? nf(st.price, st.price < 1 ? 3 : 2) : '–'}<br><span class="${st ? cls(st.chg1d) : 'flat'}" style="font-size:11px">${st ? pct(st.chg1d) : ''}</span></span>
+    <span class="c-sc ${scCls}">${sc > 0 ? '+' : ''}${sc}</span>
+    <span class="c-d">${_dirIco(iv.dir)}${_dirIco(sv.dir)}${_dirIco(nv.dir)}</span>`;
+  if (tap) b.addEventListener('click', () => openDetail('set:' + r.symbol));
+  return b;
+}
+
+/* ================================================================
+   เฟส 2 ข้อ 7 : สแกนหุ้น (Screener) + สแกนด้วยงบการเงิน (Screener+)
+   พอร์ตเงื่อนไข 1:1 จาก dashboard.js runScreener() (+ financial section
+   ผ่าน _mergeFinAnalyticsInto) — หน้าตาใหม่แบบชิปกดเลือก ไม่ใช่ฟอร์มกรอกเลข
+   ข้อมูล bake พร้อม: set_data.json (D.stocks) + financials_analytics_yahoo.json (D.fin)
+   *** งบ Yahoo: QoQ/YoY-Q = รายไตรมาส (~6 งวด) · "เป็นบวกติดกัน" = รายปี
+       (compute_positive_streaks บน payload รายปี — เหมือน _patchPosStreakForStatic) ***
+   หุ้นไทย (SET+mai) เท่านั้น — เหมือน view tabs หน้ารายชื่อหุ้น
+   ================================================================ */
+let _scrMode = 'basic';           // 'basic' | 'plus'
+let _scrSort = 'rs';
+const _scrF = {
+  rsMin: null, stage: null, r1m: null, r3m: null, priceMin: null, priceMax: null,
+  capMin: null, dyMin: null, peMax: null, pbvMax: null,
+  ema20: false, ema50: false, ema200: false, mkt: 'ALL',
+  // งบการเงิน (plus)
+  fScore: null, zSafe: false, roeMin: null, gmMin: null, nmMin: null, deMax: null,
+  fcfMin: null, growthMin: null, revYoyq: null, profitYoyq: null, profitPos: null, revPos: null,
+};
+
+const SCR_RS_OPTS    = [[null, 'ไม่กรอง'], [50, '50+'], [60, '60+'], [70, '70+'], [80, '80+']];
+const SCR_STAGE_OPTS = [[null, 'ไม่กรอง'], [2, '2 · ขาขึ้น'], [1, '1 · สะสมฐาน'], [3, '3 · แจกของ'], [4, '4 · ขาลง']];
+const SCR_R1M_OPTS   = [[null, 'ไม่กรอง'], [0, '≥ 0%'], [3, '≥ 3%'], [5, '≥ 5%'], [10, '≥ 10%']];
+const SCR_R3M_OPTS   = [[null, 'ไม่กรอง'], [0, '≥ 0%'], [10, '≥ 10%'], [20, '≥ 20%']];
+const SCR_CAP_OPTS   = [[null, 'ไม่กรอง'], [1e9, '≥ 1 พันลบ.'], [5e9, '≥ 5 พันลบ.'], [1e10, '≥ 1 หมื่นลบ.'], [5e10, '≥ 5 หมื่นลบ.']];
+const SCR_DY_OPTS    = [[null, 'ไม่กรอง'], [2, '≥ 2%'], [3, '≥ 3%'], [5, '≥ 5%']];
+const SCR_PE_OPTS    = [[null, 'ไม่กรอง'], [10, '≤ 10'], [15, '≤ 15'], [25, '≤ 25']];
+const SCR_PBV_OPTS   = [[null, 'ไม่กรอง'], [1, '≤ 1'], [1.5, '≤ 1.5'], [2, '≤ 2'], [3, '≤ 3']];
+const SCR_FSC_OPTS   = [[null, 'ไม่กรอง'], [5, '≥ 5'], [6, '≥ 6'], [7, '≥ 7'], [8, '≥ 8']];
+const SCR_ROE_OPTS   = [[null, 'ไม่กรอง'], [5, '≥ 5%'], [10, '≥ 10%'], [15, '≥ 15%'], [20, '≥ 20%']];
+const SCR_GM_OPTS    = [[null, 'ไม่กรอง'], [10, '≥ 10%'], [20, '≥ 20%'], [30, '≥ 30%']];
+const SCR_NM_OPTS    = [[null, 'ไม่กรอง'], [5, '≥ 5%'], [10, '≥ 10%'], [15, '≥ 15%']];
+const SCR_DE_OPTS    = [[null, 'ไม่กรอง'], [0.5, '≤ 0.5'], [1, '≤ 1'], [2, '≤ 2']];
+const SCR_FCF_OPTS   = [[null, 'ไม่กรอง'], [0, '≥ 0%'], [3, '≥ 3%'], [5, '≥ 5%']];
+const SCR_GRW_OPTS   = [[null, 'ไม่กรอง'], [3, '≥ 3'], [5, '≥ 5'], [7, '≥ 7']];
+const SCR_YOYQ_OPTS  = [[null, 'ไม่กรอง'], [0, '≥ 0%'], [10, '≥ 10%'], [25, '≥ 25%']];
+const SCR_PYOYQ_OPTS = [[null, 'ไม่กรอง'], [0, '≥ 0%'], [25, '≥ 25%'], [50, '≥ 50%']];
+const SCR_POSY_OPTS  = [[null, 'ไม่กรอง'], [2, '≥ 2 ปี'], [3, '≥ 3 ปี'], [4, '≥ 4 ปี']];
+
+const SCR_PRESETS_BASIC = [
+  ['เริ่มโมเมนตัม', { rsMin: 50, r1m: 3, ema50: true }],
+  ['โมเมนตัมแรง', { rsMin: 70, r1m: 5, r3m: 10, ema50: true, ema200: true }],
+  ['ปันผลสูง + RS', { rsMin: 60, dyMin: 3 }],
+  ['P/BV ต่ำ ฟื้นตัว', { pbvMax: 1.5, rsMin: 45, r1m: 0 }],
+];
+const SCR_PRESETS_PLUS = [
+  ['CANSLIM', { rsMin: 80, ema200: true, profitYoyq: 25, revYoyq: 0 }],
+  ['คุณภาพ ROE สูง', { roeMin: 15, nmMin: 10, deMax: 1 }],
+  ['งบแข็งแรง', { fScore: 7, zSafe: true, deMax: 1 }],
+  ['กำไรโตเด่น', { profitYoyq: 25, revYoyq: 15, growthMin: 5 }],
+];
+
+const SCR_SORTS_BASIC = [['rs', 'RS'], ['pct', '% วันนี้'], ['ret_1m', '% 1 เดือน'], ['cap', 'มูลค่าตลาด'], ['dy', 'ปันผล']];
+const SCR_SORTS_PLUS  = [['rs', 'RS'], ['fscore', 'F-Score'], ['roe', 'ROE'], ['revyoy', 'รายได้ YoY'], ['cap', 'มูลค่าตลาด']];
+const _sfin = sym => D.fin[sym] || {};
+const SCR_SORTF = {
+  rs:     (a, b) => (b.rs ?? -1) - (a.rs ?? -1),
+  pct:    (a, b) => (b.chg1d ?? -999) - (a.chg1d ?? -999),
+  ret_1m: (a, b) => (b.ret_1m ?? -999) - (a.ret_1m ?? -999),
+  cap:    (a, b) => (b.mkt_cap ?? 0) - (a.mkt_cap ?? 0),
+  dy:     (a, b) => ((b.raw && b.raw.div_yield) ?? -1) - ((a.raw && a.raw.div_yield) ?? -1),
+  fscore: (a, b) => (_sfin(b.symbol).f_score ?? -1) - (_sfin(a.symbol).f_score ?? -1),
+  roe:    (a, b) => (_sfin(b.symbol).roe ?? -999) - (_sfin(a.symbol).roe ?? -999),
+  revyoy: (a, b) => (_sfin(b.symbol).rev_yoy_q ?? -999) - (_sfin(a.symbol).rev_yoy_q ?? -999),
+};
+
+// เงื่อนไขตรงกับ runScreener() ของ dashboard.js — ตัวกรองที่ไม่ได้ตั้ง (null/false) ข้ามไป
+// ค่างบที่เป็น null ถูกตัดออกเมื่อเปิดตัวกรองนั้น ๆ (เหมือน `s.xxx == null || s.xxx < min`)
+function scrPass(r) {
+  const f = _scrF, raw = r.raw;
+  if (f.rsMin != null && (r.rs ?? -1) < f.rsMin) return false;
+  if (f.stage != null && raw.stage !== f.stage) return false;
+  if (f.r1m != null && (r.ret_1m ?? -Infinity) < f.r1m) return false;
+  if (f.r3m != null && (r.ret_3m ?? -Infinity) < f.r3m) return false;
+  if (f.priceMin != null && (r.price ?? 0) < f.priceMin) return false;
+  if (f.priceMax != null && f.priceMax > 0 && (r.price ?? 0) > f.priceMax) return false;
+  if (f.capMin != null && (!r.mkt_cap || r.mkt_cap < f.capMin)) return false;
+  if (f.dyMin != null && (raw.div_yield == null || raw.div_yield < f.dyMin)) return false;
+  if (f.peMax != null && (raw.pe == null || raw.pe > f.peMax)) return false;
+  if (f.pbvMax != null && (raw.pbv == null || raw.pbv > f.pbvMax)) return false;
+  if (f.ema20 && !r.above_ema20) return false;
+  if (f.ema50 && !r.above_ema50) return false;
+  if (f.ema200 && !r.above_ema200) return false;
+  if (f.mkt !== 'ALL' && raw.market !== f.mkt) return false;
+  if (_scrMode === 'plus') {
+    const a = D.fin[r.symbol];
+    if (f.fScore != null    && !(a && a.f_score    != null && a.f_score    >= f.fScore))    return false;
+    if (f.zSafe             && !(a && a.z_zone === 'safe'))                                  return false;
+    if (f.roeMin != null    && !(a && a.roe        != null && a.roe        >= f.roeMin))    return false;
+    if (f.gmMin != null     && !(a && a.gross_margin != null && a.gross_margin >= f.gmMin)) return false;
+    if (f.nmMin != null     && !(a && a.net_margin != null && a.net_margin >= f.nmMin))     return false;
+    if (f.deMax != null     && !(a && a.de_ratio   != null && a.de_ratio   <= f.deMax))     return false;
+    if (f.fcfMin != null    && !(a && a.fcf_yield  != null && a.fcf_yield  >= f.fcfMin))    return false;
+    if (f.growthMin != null && !(a && a.growth_score != null && a.growth_score >= f.growthMin)) return false;
+    if (f.revYoyq != null    && !(a && a.rev_yoy_q    != null && a.rev_yoy_q    >= f.revYoyq))    return false;
+    if (f.profitYoyq != null && !(a && a.profit_yoy_q != null && a.profit_yoy_q >= f.profitYoyq)) return false;
+    if (f.profitPos != null  && (( a && a.profit_pos_streak_q) ?? -1) < f.profitPos)         return false;
+    if (f.revPos != null     && (( a && a.rev_pos_streak_q)    ?? -1) < f.revPos)            return false;
+  }
+  return true;
+}
+
+function scrClearF() {
+  Object.assign(_scrF, {
+    rsMin: null, stage: null, r1m: null, r3m: null, priceMin: null, priceMax: null,
+    capMin: null, dyMin: null, peMax: null, pbvMax: null,
+    ema20: false, ema50: false, ema200: false, mkt: 'ALL',
+    fScore: null, zSafe: false, roeMin: null, gmMin: null, nmMin: null, deMax: null,
+    fcfMin: null, growthMin: null, revYoyq: null, profitYoyq: null, profitPos: null, revPos: null,
+  });
+}
+function scrApplyPreset(obj) { scrClearF(); Object.assign(_scrF, obj); renderScreener(); }
+
+const _scrGrp = (label, key, opts) => `<div class="scr-f"><div class="scr-fl">${label}</div>
+  <div class="sortbar" data-scrkey="${key}">${opts.map(([v, t]) =>
+    `<button class="sortchip ${(_scrF[key] ?? null) === v ? 'on' : ''}" data-v="${v == null ? '' : v}">${t}</button>`).join('')}</div></div>`;
+
+function renderScreener() {
+  const c = $('#s-screener'); if (!c) return;
+  c.innerHTML = '';
+  const wrap = el('div');   // handler ผูกกับ wrap ที่สร้างใหม่ทุกครั้ง — ไม่สะสม listener บน #s-screener
+  const presets = _scrMode === 'plus' ? SCR_PRESETS_PLUS : SCR_PRESETS_BASIC;
+  const sorts   = _scrMode === 'plus' ? SCR_SORTS_PLUS   : SCR_SORTS_BASIC;
+
+  let h = `<div class="seg">
+      <button data-mode="basic" class="${_scrMode === 'basic' ? 'on' : ''}">พื้นฐาน</button>
+      <button data-mode="plus" class="${_scrMode === 'plus' ? 'on' : ''}">+ งบการเงิน</button>
+    </div>
+    <div class="sortbar">${presets.map(([n], i) => `<button class="sortchip" data-preset="${i}">${n}</button>`).join('')}<button class="sortchip" id="scrClear">ล้างตัวกรอง</button></div>`;
+
+  h += _scrGrp('RS ขั้นต่ำ', 'rsMin', SCR_RS_OPTS)
+    + _scrGrp('สเตจ (Weinstein)', 'stage', SCR_STAGE_OPTS)
+    + _scrGrp('ผลตอบแทน 1 เดือน', 'r1m', SCR_R1M_OPTS)
+    + _scrGrp('ผลตอบแทน 3 เดือน', 'r3m', SCR_R3M_OPTS)
+    + `<div class="scr-f"><div class="scr-fl">ช่วงราคา (บาท)</div><div class="scr-price">
+        <input id="scrPMin" inputmode="decimal" placeholder="ต่ำสุด"><input id="scrPMax" inputmode="decimal" placeholder="สูงสุด"></div></div>`
+    + _scrGrp('มูลค่าตลาดขั้นต่ำ', 'capMin', SCR_CAP_OPTS)
+    + _scrGrp('เงินปันผลขั้นต่ำ', 'dyMin', SCR_DY_OPTS)
+    + _scrGrp('P/E ไม่เกิน', 'peMax', SCR_PE_OPTS)
+    + _scrGrp('P/BV ไม่เกิน', 'pbvMax', SCR_PBV_OPTS)
+    + `<div class="scr-f"><div class="scr-fl">ราคายืนเหนือเส้นค่าเฉลี่ย</div><div class="sortbar" id="scrEma">
+        ${[['ema20', 'EMA20'], ['ema50', 'EMA50'], ['ema200', 'EMA200']].map(([k, t]) =>
+          `<button class="sortchip ${_scrF[k] ? 'on' : ''}" data-ema="${k}">${t}</button>`).join('')}</div></div>`
+    + `<div class="scr-f"><div class="scr-fl">ตลาด</div><div class="seg" id="scrMkt">
+        ${[['ALL', 'ทั้งหมด'], ['SET', 'SET'], ['mai', 'mai']].map(([v, t]) =>
+          `<button data-mkt="${v}" class="${_scrF.mkt === v ? 'on' : ''}">${t}</button>`).join('')}</div></div>`;
+
+  if (_scrMode === 'plus') {
+    h += `<div class="scr-fl scr-fgrp">ตัวกรองงบการเงิน</div>`
+      + _scrGrp('Piotroski F-Score', 'fScore', SCR_FSC_OPTS)
+      + `<div class="scr-f"><div class="scr-fl">Altman Z-Score</div><div class="sortbar">
+          <button class="sortchip ${_scrF.zSafe ? 'on' : ''}" id="scrZSafe">เฉพาะโซนปลอดภัย</button></div></div>`
+      + _scrGrp('ROE ขั้นต่ำ', 'roeMin', SCR_ROE_OPTS)
+      + _scrGrp('อัตรากำไรขั้นต้นขั้นต่ำ', 'gmMin', SCR_GM_OPTS)
+      + _scrGrp('อัตรากำไรสุทธิขั้นต่ำ', 'nmMin', SCR_NM_OPTS)
+      + _scrGrp('D/E ไม่เกิน', 'deMax', SCR_DE_OPTS)
+      + _scrGrp('FCF Yield ขั้นต่ำ', 'fcfMin', SCR_FCF_OPTS)
+      + _scrGrp('Growth Score ขั้นต่ำ', 'growthMin', SCR_GRW_OPTS)
+      + _scrGrp('รายได้ YoY (ไตรมาสล่าสุด)', 'revYoyq', SCR_YOYQ_OPTS)
+      + _scrGrp('กำไรสุทธิ YoY (ไตรมาสล่าสุด)', 'profitYoyq', SCR_PYOYQ_OPTS)
+      + _scrGrp('กำไรเป็นบวกติดกัน', 'profitPos', SCR_POSY_OPTS)
+      + _scrGrp('รายได้เป็นบวกติดกัน', 'revPos', SCR_POSY_OPTS);
+  }
+  wrap.innerHTML = h;
+
+  if (_scrMode === 'plus' && (!D.fin || !Object.keys(D.fin).length))
+    wrap.appendChild(el('div', 'note', '⚠ ยังโหลดข้อมูลงบการเงินไม่ได้ — ตัวกรองงบจะไม่มีผลจนกว่าจะรีเฟรช'));
+
+  wrap.appendChild(secHead('ผลการสแกน'));
+  const sbar = el('div', 'sortbar'); sbar.id = 'scrSortBar';
+  sbar.innerHTML = sorts.map(([k, t]) => `<button class="sortchip ${_scrSort === k ? 'on' : ''}" data-sort="${k}">${t}</button>`).join('');
+  wrap.appendChild(sbar);
+  const res = el('div'); res.id = 'scrResults'; wrap.appendChild(res);
+  c.appendChild(wrap);
+
+  const pmin = $('#scrPMin'), pmax = $('#scrPMax');
+  pmin.value = _scrF.priceMin ?? ''; pmax.value = _scrF.priceMax ?? '';
+  pmin.addEventListener('input', e => { _scrF.priceMin = parseFloat(e.target.value) || null; applyScr(); });
+  pmax.addEventListener('input', e => { _scrF.priceMax = parseFloat(e.target.value) || null; applyScr(); });
+
+  const sibsOn = b => [...b.parentElement.children].forEach(x => x.classList && x.classList.toggle('on', x === b));
+  wrap.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.mode) { if (_scrMode !== b.dataset.mode) { _scrMode = b.dataset.mode; _scrSort = 'rs'; renderScreener(); } return; }
+    if (b.dataset.preset != null) { scrApplyPreset(presets[+b.dataset.preset][1]); return; }
+    if (b.id === 'scrClear') { scrClearF(); renderScreener(); return; }
+    if (b.dataset.ema) { _scrF[b.dataset.ema] = !_scrF[b.dataset.ema]; b.classList.toggle('on'); applyScr(); return; }
+    if (b.dataset.mkt != null) { _scrF.mkt = b.dataset.mkt; sibsOn(b); applyScr(); return; }
+    if (b.id === 'scrZSafe') { _scrF.zSafe = !_scrF.zSafe; b.classList.toggle('on'); applyScr(); return; }
+    if (b.dataset.sort) { _scrSort = b.dataset.sort; sibsOn(b); applyScr(); return; }
+    const bar = b.closest('.sortbar[data-scrkey]');
+    if (bar) {
+      const raw = b.dataset.v;
+      _scrF[bar.dataset.scrkey] = raw === '' ? null : +raw;
+      sibsOn(b);
+      applyScr();
+    }
+  });
+
+  applyScr();
+}
+
+function _scrBasicMetric() {
+  return ({ rs: 'rs', cap: 'cap', ret_1m: '1m', dy: 'dy', pct: 'pct' })[_scrSort] || 'pct';
+}
+
+function applyScr() {
+  const box = $('#scrResults'); if (!box) return;
+  const arr = D.stocks.filter(scrPass).sort(SCR_SORTF[_scrSort] || SCR_SORTF.rs);
+  box.innerHTML = '';
+  box.appendChild(el('div', 'note', arr.length + ' หุ้นตรงเงื่อนไข'
+    + (_scrMode === 'plus' ? ' · เรียงจากมากไปน้อย' : '')));
+  if (!arr.length) {
+    box.appendChild(el('div', 'list-cap', 'ไม่พบหุ้นที่ตรงเงื่อนไข — ลองผ่อนตัวกรองลง'));
+    $('#scrSub').textContent = '0 หุ้นตรงเงื่อนไข · ' + thaiDate(D.asOf);
+    return;
+  }
+  const MAX = 200;
+  const metric = _scrBasicMetric();
+  arr.slice(0, MAX).forEach(r => box.appendChild(_scrMode === 'plus' ? scrPlusRow(r) : listRow(r, metric)));
+  if (arr.length > MAX) box.appendChild(el('div', 'list-cap', `แสดง ${MAX} จาก ${arr.length} — ใส่ตัวกรองเพิ่มเพื่อแคบผล`));
+  $('#scrSub').textContent = arr.length + ' หุ้นตรงเงื่อนไข · ' + thaiDate(D.asOf);
+}
+
+function scrPlusRow(r) {
+  const a = D.fin[r.symbol] || {};
+  const b = el('button', 'scrr');
+  const fCls = a.f_score == null ? 'flat' : a.f_score >= 7 ? 'up' : a.f_score >= 4 ? 'flat' : 'down';
+  const zTxt = a.z_zone === 'safe' ? 'ปลอดภัย' : a.z_zone === 'grey' ? 'เฝ้าระวัง' : a.z_zone === 'distress' ? 'เสี่ยง' : '–';
+  const zCls = a.z_zone === 'safe' ? 'up' : a.z_zone === 'distress' ? 'down' : 'flat';
+  const fin = [
+    `<b class="${fCls}">F ${a.f_score ?? '–'}/${a.f_score_max ?? 9}</b>`,
+    `<b class="${zCls}">Z ${zTxt}</b>`,
+    `<b class="${a.roe >= 10 ? 'up' : 'flat'}">ROE ${a.roe == null ? '–' : nf(a.roe, 0) + '%'}</b>`,
+    `<b class="${cls(a.rev_yoy_q)}">รายได้ ${a.rev_yoy_q == null ? '–' : pct(a.rev_yoy_q, 0)}</b>`,
+    `<b class="${cls(a.profit_yoy_q)}">กำไร ${a.profit_yoy_q == null ? '–' : pct(a.profit_yoy_q, 0)}</b>`,
+  ].join('');
+  b.innerHTML = `
+    <span class="sc-l">
+      <span class="sc-t"><span class="tkr-lg">${r.symbol}</span><span class="mkt-tag">${r.tag}</span></span>
+      <span class="sc-sub">${shortName(r.name)}${r.sub ? ' · ' + r.sub : ''}</span>
+      <span class="sc-fin">${fin}</span>
+    </span>
+    <span class="sc-r">
+      <span class="sc-px">${nf(r.price, r.price < 1 ? 3 : 2)}</span>
+      <span class="sc-ch ${cls(r.chg1d)}">${pct(r.chg1d)}</span>
+    </span>`;
+  b.addEventListener('click', () => openDetail(r.id));
+  return b;
+}
 
 /* ---------------- start ---------------- */
 boot();

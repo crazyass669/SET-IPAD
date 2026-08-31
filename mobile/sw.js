@@ -5,12 +5,12 @@
    - ../data/*.json  : network-first (เอาของสดก่อน, ล่ม/ช้าเกินค่อยใช้ cache ล่าสุด)
    - หน้า/asset อื่น  : stale-while-revalidate (เปิดเร็ว + อัปเดตตัวเองเงียบ ๆ)
    bump เลข CACHE ทุกครั้งที่ปล่อยของใหม่แล้วอยากล้าง cache เก่าทั้งชุด */
-const CACHE = 'set-mobile-v2';
+const CACHE = 'set-mobile-v9';
 const PRECACHE = [
   './',
   'index.html',
-  'app.css?v=2',
-  'app.js?v=2',
+  'app.css?v=9',
+  'app.js?v=9',
   'manifest.json',
   '../static/icons/icon-192.png',
   '../static/icons/icon-512.png',
@@ -24,8 +24,11 @@ self.addEventListener('install', e => {
 
 self.addEventListener('activate', e => {
   e.waitUntil(
+    // ลบเฉพาะ cache ของแอปมือถือรุ่นเก่า (prefix set-mobile-) — ห้ามแตะ set-dash-*
+    // ของ SW เว็บเต็มที่ scope / ครอบอยู่ (คนที่เคยติดตั้ง PWA เก่าแล้วถูก redirect
+    // มา mobile/ จะมี SW สองตัว — ต่างคนต่างล้าง cache กันเองถ้าไม่กรอง prefix)
     caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+      Promise.all(keys.filter(k => k.startsWith('set-mobile-') && k !== CACHE).map(k => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });

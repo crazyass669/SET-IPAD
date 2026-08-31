@@ -10,11 +10,12 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="SET">
 <link rel="manifest" href="manifest.json">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
 <link rel="apple-touch-icon" href="../static/icons/icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
-<link rel="stylesheet" href="app.css?v=2">
+<link rel="stylesheet" href="app.css?v=9">
 </head>
 <body>
 
@@ -39,6 +40,11 @@
   <main class="screen" id="s-watch"></main>
   <main class="screen" id="s-rotation"></main>
   <main class="screen" id="s-more"></main>
+  <main class="screen" id="s-indices"></main>
+  <main class="screen" id="s-valuation"></main>
+  <main class="screen" id="s-heatmap"></main>
+  <main class="screen" id="s-flow"></main>
+  <main class="screen" id="s-screener"></main>
 
   <nav class="tabbar" id="tabbar">
     <button data-scr="market" class="on">
@@ -65,11 +71,11 @@
   <h2>SET Dashboard — เวอร์ชันมือถือ</h2>
   <p>สรุปหุ้นไทย / DR / ETF รายวัน สำหรับดูบนมือถือ/iPad — <b>อ่านอย่างเดียว</b></p>
   <p>ข้อมูลอัปเดตอัตโนมัติทุกวันหลังตลาดปิด (ราคา · RS · งบย้อนหลัง) — ตัวเลขเป็นราคาปิดล่าสุด ไม่ใช่เรียลไทม์</p>
-  <p>Screener กรองด้วยงบ, DCF/Fair-value ทั้งตลาด, หุ้นต่างประเทศ, ข่าวรายตัว และการเพิ่ม/ลบวอทช์ลิสต์ — ทำที่เวอร์ชันรันบนเครื่อง</p>
+  <p>DCF/Fair-value ทั้งตลาด, หุ้นต่างประเทศ US/HK/JP, ข่าวรายตัว และการเพิ่ม/ลบวอทช์ลิสต์ — ทำที่เวอร์ชันรันบนเครื่อง</p>
 </aside>
 
 <div class="toast" id="toast"></div>
 
-<script src="app.js?v=2"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

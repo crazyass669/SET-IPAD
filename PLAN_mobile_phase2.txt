@@ -1,0 +1,248 @@
+################################################################################
+ PLAN — เวอร์ชันมือถือ/iPad เฟส 2 : พอร์ตหน้าที่เหลือให้ครบ (หน้าตาใหม่ ข้อมูลครบ)
+ ร่าง 2026-08-31 · สำหรับ session ใหม่
+################################################################################
+
+--------------------------------------------------------------------------------
+ 0. บริบท / สถานะปัจจุบัน (อ่านก่อน)
+--------------------------------------------------------------------------------
+
+  *** สถานะ (2026-08-31) : ข้อ 1–9 เสร็จครบ ยังไม่ commit — ดู memory
+      mobile-viewer-redesign-2026-08-30
+      ข้อ 8 (2026-08-31): renderRotation() เขียนใหม่ = RRG canvas (drawRRG พอร์ตย่อ
+      จาก drawRotationScatter — symlog + quadrant นำ/ฟื้นตัว/อ่อนแรง/ตามหลัง +
+      collision spring + ลูกศรทิศ + trail ตอนเลือก) · seg กลุ่มอุตสาหกรรม(35)/หมวดใหญ่(16)
+      + seg แกน 3ด/1ด (long) | 1ด/1สัปดาห์ (short) · legend ชิปเลื่อนแนวนอน กด=เลือก ·
+      แตะ canvas hit-test (_rrgHit) · การ์ดกลุ่มที่เลือก (rotSelCard) · section
+      "การเปลี่ยนโซนหมุนเวียน" จาก rotation_alerts.json (lazy loadRotAlerts →
+      D.rotAlerts) = transitions/pending หลัก + ⚡ fast · ตารางเรียงตาม yk ท้ายหน้า
+      · helper ใหม่: _rotAxis _rotColor _hexA drawRRG rrgLegend rotSelCard rotListRow
+      _qSpan rotAlertsSection · state _rotView _rotTf _rotSel · CSS .rrg/.rrg-legend/
+      .rrg-chip/.rot-sel/.rs-*/.rot-row2/.rot-al · go()+resize เพิ่ม branch rotation ·
+      เลิกเรียก renderRotation() ตอน boot (มี canvas+fetch)
+      ข้อ 9 (2026-08-31): redirect root ตามอุปกรณ์
+      - index.html root: JS แทน meta-refresh · pointer:coarse หรือ min(screen)<=820
+        → mobile/ · เดสก์ท็อป → set_dashboard.html · ?m บังคับมือถือ · ?full บังคับเต็ม
+      - set_dashboard.html <head>: script เด้ง mobile/ **เฉพาะ github.io** (ข้าม
+        ?full/?static/file:/ไม่ใช่ github.io) — จับ PWA เก่า start_url นี้ + คนเปิดจากมือถือ
+      - sw.js root: set-dash-v3→v4 + activate ลบ cache เฉพาะ prefix set-dash- (ไม่แตะ
+        set-mobile-*) — เครื่องที่ redirect จะมี SW 2 ตัว
+      - mobile/sw.js: activate กรอง prefix set-mobile- เช่นกัน + เพิ่ม favicon SVG
+      cache bump: mobile/*?v=9 · set-mobile-v9 · Playwright rot 14 + smoke 26 +
+      redirect logic 12 PASS 0 error
+      ---- (ประวัติ) ----
+      ข้อ 7 (2026-08-31): หน้า #s-screener (sub-page ของ "เพิ่มเติม") seg พื้นฐาน/+งบ
+      · MORE_MENU 2 อัน (สแกนหุ้น=basic, สแกนด้วยงบ=plus) go('screener') + ตั้ง _scrMode
+      · ตัวกรองชิปกดเลือก (ไม่ใช่ฟอร์มกรอกเลข) + preset + ช่องราคา min/max
+      · เงื่อนไขตรง runScreener() · plus ใช้ D.fin (financials_analytics_yahoo)
+      · "เป็นบวกติดกัน" = รายปี (relabel ปี) เหมือน _patchPosStreakForStatic
+      · แก้ label detail tabFin "กำไรเป็นบวกติดกัน N ไตรมาส" -> "N ปี" (bug เดิม)
+      · cache -> ?v=8 / set-mobile-v8 · Playwright 33+26 PASS 0 error
+      ข้อ 3 ตัดสิน: คงแถบล่าง 5 ปุ่มเดิม · "เพิ่มเติม" เป็นเมนูจริง
+      ข้อ 4+6: 3 หน้าใหม่ (#s-indices / #s-valuation / #s-heatmap) เป็น sub-page ของ
+      "เพิ่มเติม" (SUBPAGES set — back → more, tab "เพิ่มเติม" ค้างสว่าง)
+      ข้อ 5: หน้า #s-flow (sub-page ของ "เพิ่มเติม") แท็บย่อย 4 อัน = กระแสเงิน /
+      ชอร์ต / ผู้บริหาร / สัญญาณรวม · lazy-load 5 ไฟล์ตอนเปิด (market_flow{,_s50,
+      _bond} + short_sales + flow_signals) · insider_trades/major_changes โหลด
+      ตามปุ่ม 7/30/90/180 · MORE_MENU ทุกอันเป็น navigation จริงแล้ว (ไม่มี "เร็ว ๆ นี้")
+      cache อยู่ที่ ?v=8 / set-mobile-v8 ***
+
+
+โปรเจกต์แยกเวอร์ชันมือถือ/iPad ออกเป็นแอปเล็กของตัวเองที่โฟลเดอร์  mobile/
+(ไม่ patch .static-mode ของ dashboard.js 2.3MB ต่อ) — อ่าน data/*.json ที่
+run_static_update.py / GitHub Actions bake อยู่แล้ว
+
+memory ที่เกี่ยว (Claude memory):
+  - mobile-viewer-redesign-2026-08-30       ← ภาพรวม + decision log
+  - mobile-quarterly-financials-update-routine ← งบรายไตรมาส
+แผนเดิม (Claude plan file): ~/.claude/plans/buzzing-prancing-meerkat.md
+
+เฟส 0 (เสร็จ, push แล้ว commit 4951bd8):
+  mobile/index.html · app.css · app.js · manifest.json · sw.js
+  6 หน้า: ตลาด / รายชื่อหุ้น / วอทช์ลิสต์ / หมุนเวียนกลุ่ม / เพิ่มเติม(ข้อความ) +
+          หน้ารายละเอียดหุ้น (แท็บ ภาพรวม / เทคนิค / งบการเงิน)
+  - รายชื่อหุ้น: SET+mai+DR+ETF normalize เป็น row เดียว, ค้นหา/กรอง/เรียง, cap 400
+  - รายละเอียด: กราฟ price_history จริง + timeframe by date + งบ Yahoo annual +
+                งบ P&L รายไตรมาส (SET.or.th, data/financials_quarterly.json ≥8 งวด)
+  - DR/ETF: 2 แท็บ (ไม่มีงบ)
+  เข้าที่  https://crazyass669.github.io/SET-IPAD/mobile/  (root ยังเด้ง
+  set_dashboard.html เดิม — ยังไม่ทำ redirect)
+  design: dark-only, IBM Plex Sans Thai + Mono, ฐาน 16px, แถบเมนูล่าง 5 ปุ่ม,
+          ไม่มีการ์ดกรอบซ้อน (สไตล์ investing.com)
+
+เฟส 1 (ยังไม่ทำ — ผู้ใช้เลือก "ปล่อย root เดิมไปก่อน"):
+  root index.html -> redirect mobile/ · migrate PWA เก่า (redirect ใน IS_STATIC
+  block ของ dashboard.js) · bump sw.js เดิม
+  >>> จะทำเฟส 1 พร้อมเฟส 2 หรือแยก — ให้ผู้ใช้ตัดสินตอนเริ่ม session
+
+
+--------------------------------------------------------------------------------
+ 1. เป้าหมายเฟส 2
+--------------------------------------------------------------------------------
+
+พอร์ต "เนื้อหาที่เวอร์ชัน static (มือถือเดิม) ใช้งานได้จริง" ทั้งหมดที่ยังไม่ได้
+ทำใน mobile/ ให้เป็นหน้าตาใหม่ — ข้อมูลครบเท่าเดิม แค่เปลี่ยน UI
+
+ไม่ใช่ฟีเจอร์ใหม่ · ไม่ตัดข้อมูล · ไม่แตะ pipeline (run_static_update.py /
+workflow / financials.db)
+
+
+--------------------------------------------------------------------------------
+ 2. ขอบเขต — พอร์ตอะไร / ข้ามอะไร
+--------------------------------------------------------------------------------
+
+พอร์ต (มีใน static mode ที่ใช้ได้ + ข้อมูล bake แล้ว):
+  [2A] ทำหน้าที่มีอยู่แล้วให้ครบ 1:1
+       - ตลาด (Overview): เพิ่ม RS Distribution (histogram) · RS Leaders top-10 ·
+         52W New-High/Low chart (จาก data/market_internals.json — new_highs/new_lows
+         series) · Market Breadth section เต็ม (adv/dec, McClellan จาก breadth_1y.json)
+       - รายชื่อหุ้น: เพิ่ม view tabs เหมือน "หุ้นทั้งหมด" ในเว็บ —
+         all / RS80+ / Emerging / Stage2 / 52W High-Low & Breakout / Momentum /
+         EMA Breadth / จัดอันดับ Sector (+ sector mode)
+       - หมุนเวียนกลุ่ม: เพิ่ม RRG (Relative Rotation Graph, canvas) + rotation
+         alerts/transitions (data/rotation_alerts.json) + toggle sector/industry
+
+  [2B] หน้าใหม่ (ย้ายเข้า nav / เพิ่มเติม)
+       - ดัชนีกลุ่ม (Indices)          data/indices_data.json  (การ์ด + heatmap + compare)
+       - Valuation                     market_stats.json + set_daily_valuation.json +
+                                       stock_valuation_stats.json (band PE/PBV/ปันผล
+                                       ตลาด + รายหุ้นเทียบ history)
+       - Screener (เบสิก)              set_data.json (กรอง RS/stage/ราคา/mkt_cap/ปันผล)
+       - Screener+ (กรองด้วยงบ)         set_data + financials_analytics_yahoo.json
+                                       *** งบ Yahoo "รายปี" เท่านั้น ~4-5 ปี —
+                                       relabel ช่อง "เป็นบวกติดกัน (ไตรมาส)" -> "(ปี)"
+                                       เหมือน _patchPosStreakForStatic ใน dashboard.js
+       - Heatmap (TH)                  set_data.json (mkt-cap heatmap by sector)
+       - Capital Flow                  market_flow.json + market_flow_s50/bond.json
+       - Short Sales                   short_sales.json (+ squeeze radar)
+       - Insider / ผู้ถือหุ้นใหญ่        insider_trades_{7,30,90,180}.json +
+                                       major_changes_{7,30,90,180}.json
+       - สัญญาณเงินทุนรวม (Confluence)  flow_signals.json
+
+ข้าม (นอกขอบเขต mobile เดิม / hidden ใน static + pointer:coarse / ไม่ bake):
+  - หุ้น US / HK / JP + Peer Compare + Tearsheet + Stock Rotation US/HK/JP
+  - DCF Screener · Fair Value P/B·P/E · หุ้นโตแรงรายไตรมาส (ตาราง full-market
+    กว้าง + ไม่ bake — hidden pointer:coarse อยู่แล้ว)
+  - แนวโน้มตลาด (ต้อง financials.db) · ข่าวหุ้น · รายงานทางการ (ดึงสดต่อหุ้น) ·
+    Hedge Holdings · Data Health · Val. Band (ดึงสด)
+  - เพิ่ม/ลบ Watchlist (มือถือ read-only — sync มาจากเครื่อง)
+
+
+--------------------------------------------------------------------------------
+ 3. ข้อมูล — เกือบทุกอย่าง bake แล้ว ไม่ต้องแตะ pipeline
+--------------------------------------------------------------------------------
+
+ไฟล์ (data/)                     ใช้ทำหน้า                       สถานะ
+------------------------------   ---------------------------    ------------------
+set_data.json                    Overview/หุ้น/Screener/Heatmap  ✓ (price_history ~260 แท่ง)
+market_internals.json            52W New-High/Low chart          ✓ (new_highs/new_lows)
+breadth_{1y,3y,5y,all}.json      Market Breadth / McClellan      ✓ (nh/nl/adv/dec/mcclellan)
+indices_data.json                ดัชนีกลุ่ม                       ✓
+market_stats.json / _meta        Valuation band ตลาด             ✓
+set_daily_valuation.json         Valuation PE/PBV รายวัน          ✓
+stock_valuation_stats.json       Valuation รายหุ้น                ✓
+financials_analytics_yahoo.json  Screener+ (งบ Yahoo annual)      ✓
+financials_quarterly.json        งบ P&L รายไตรมาส (เฟส 1.5)       ✓
+market_flow{,_s50,_bond}.json    Capital Flow                    ✓
+short_sales.json                 Short Sales                     ✓
+insider_trades_*.json            Insider                         ✓
+major_changes_*.json             ผู้ถือหุ้นใหญ่                     ✓
+flow_signals.json                สัญญาณเงินทุนรวม                  ✓
+rotation_alerts.json             Rotation alerts                 ✓
+dr_data.json / etf_data.json     DR/ETF (มีใน list แล้ว)          ✓
+
+*** ไม่มีอะไรต้องเพิ่ม bake endpoint ใหม่ ***  (ถ้าเจอว่าขาด — ให้ทำเหมือน
+/api/financials-quarterly: endpoint + SNAPSHOTS ใน run_static_update.py +
+_is_empty_payload guard + bake ตรงใน update_financials.py)
+
+
+--------------------------------------------------------------------------------
+ 4. โครงสร้างนำทาง (ตัดสินใน session — นี่คือข้อเสนอ)
+--------------------------------------------------------------------------------
+
+ตอนนี้ 5 ปุ่มล่าง: ตลาด / หุ้น / วอทช์ลิสต์ / หมุนเวียน / เพิ่มเติม
+มี ~12 หน้าหลังพอร์ต -> "เพิ่มเติม" ต้องเป็นเมนูจริง (ไม่ใช่ข้อความ)
+
+ข้อเสนอ:
+  ปุ่มล่าง 5: [ตลาด] [หุ้น] [วอทช์ลิสต์] [เงินทุน] [เพิ่มเติม]
+    - เงินทุน = แท็บย่อยในหน้าเดียว: Capital Flow / Short / Insider / สัญญาณรวม
+    - เพิ่มเติม = เมนูจริง -> หมุนเวียนกลุ่ม · ดัชนีกลุ่ม · Heatmap · Valuation ·
+                  Screener · Screener+
+  หรือคงหมุนเวียนไว้ที่ปุ่มล่าง แล้วยุบวอทช์ลิสต์เข้าเพิ่มเติม — ให้ผู้ใช้เลือก
+
+pattern nav: `go(scr)` + `#s-<scr>` screen div + `renderXxx()` มีอยู่แล้วใน app.js
+เมนู "เพิ่มเติม" ที่เป็น navigation จริง: ทำ mitem ให้ addEventListener -> go()
+
+
+--------------------------------------------------------------------------------
+ 5. ไฟล์ / pattern ที่ reuse
+--------------------------------------------------------------------------------
+
+ใน mobile/app.js (เฟส 0) — มี helper พร้อม:
+  $ el nf pct cls sgn fmtCap fmtCapShort fmtBaht beQ shortName STAGE thaiDate
+  loadJSON(url,timeout)  ·  D (global state)  ·  rowSet/rowDr/rowEtf (normalize)
+  go(scr) · openDetail(id) · setScrHeader · listRow · secHead · barRow · dvRow
+  drawSpark (line/area canvas) · drawQBars (bar canvas)
+  calcFGI · calcRegime (ported จาก dashboard.js)
+
+compute ที่ต้องพอร์ตเพิ่มจาก static/dashboard.js (เป็น pure function บน array หุ้น):
+  - RS distribution binning (bin rs_score 0-9,10-19,...) — ดู renderOverview
+  - RS leaders top-10 (sort rs_score) — ดู #tbl-rs-preview
+  - นับ new-high ราย sector (price >= high_52w) — dashboard.js:2986
+  - Screener predicate ต่อ view (rs80/emerging/stage2/breakout/momentum/ema200) —
+    ดู showStocksView / renderStocksTable ใน dashboard.js
+  - RRG: x=1M%(หรือ 3M%), y=1W%(หรือ 1M%) ต่อ sector/industry + ลูกศร trail —
+    ดู services/rotation.py + rotation canvas ใน dashboard.js
+  *** ก๊อปมาไว้ mobile/app.js sync มือ (dashboard.js ไม่ใช่ module) ***
+
+Screener+ mobile: ต้อง relabel ตามที่ dashboard.js `_patchPosStreakForStatic`
+(บรรทัด ~146) ทำ — งบ Yahoo เป็น "รายปี" ไม่ใช่ไตรมาส บนมือถือ
+
+
+--------------------------------------------------------------------------------
+ 6. ลำดับแนะนำ
+--------------------------------------------------------------------------------
+
+  1) [2A] ตลาด ครบ (RS dist + RS leaders + 52W chart) — เล็ก คุ้ม เห็นผลไว
+  2) [2A] รายชื่อหุ้น view tabs
+  3) nav restructure + "เพิ่มเติม" เป็นเมนูจริง
+  4) [2B] Valuation + ดัชนีกลุ่ม (ข้อมูลตรงไปตรงมา)
+  5) [2B] Capital Flow / Short / Insider / สัญญาณรวม (หน้า "เงินทุน" แท็บย่อย)
+  6) [2B] Heatmap
+  7) [2B] Screener + Screener+ (ซับซ้อนสุด — predicate เยอะ)
+  8) [2A] หมุนเวียน + RRG
+  9) เฟส 1: redirect root -> mobile/ (ถ้ายังไม่ทำ)
+
+ทำทีละ 1-2 ข้อ/รอบ · bump ?v= ของ app.css/app.js + CACHE ใน sw.js ทุกครั้ง
+(ตอนนี้อยู่ v=7, set-mobile-v7)
+
+
+--------------------------------------------------------------------------------
+ 7. Verification (ทุกรอบ)
+--------------------------------------------------------------------------------
+
+  - cd SET_Dashboard && python -m http.server 8000  ->  localhost:8000/mobile/
+  - Playwright headless viewport 390x844 dsf=2 :
+      กดครบทุกหน้า/แท็บ/ฟิลเตอร์/timeframe + reload -> 0 console error / pageerror
+  - เทียบเลขกับ set_dashboard.html?static เปิดคู่กัน (RS/ราคา/breadth/งบ ตรงกัน)
+  - node --check mobile/app.js
+  - หลัง user push: curl -s -o /dev/null -w "%{http_code}" \
+      https://crazyass669.github.io/SET-IPAD/mobile/  (+ ไฟล์ที่แก้)
+    แล้ว Playwright เปิด URL จริงยืนยันอีกรอบ
+
+
+--------------------------------------------------------------------------------
+ 8. กฎที่พลาดไม่ได้
+--------------------------------------------------------------------------------
+
+  - ห้ามใส่ข้อมูล Finnomena ลง data/*.json (CLAUDE.md) — Screener+ ใช้ Yahoo เท่านั้น
+  - ห้ามแตะ financials.db / set_prices.db (อ่านอย่างเดียว)
+  - ห้ามแตะ .github/workflows/update.yml (data/ commit ครอบอยู่แล้ว)
+  - bump ?v= ของ app.css/app.js + CACHE ของ sw.js ทุกครั้งที่แก้ ไม่งั้น iPad แคชค้าง
+  - ซ่อนชื่อแหล่งข้อมูล (Yahoo/Finnomena/SET.or.th) จาก UI ที่ผู้ใช้เห็น (ยกเว้น
+    หมายเหตุ "ที่มา ตลาดหลักทรัพย์ฯ" ที่ผู้ใช้อนุมัติแล้ว)
+  - dark-only committed · paint bg + ทุกสีจาก token ชัดเจน
+  - session คู่ขนานอาจแก้ dashboard.js/app.py/financials_store.py อยู่ — เพิ่มของใหม่
+    ท้ายไฟล์/แยกฟังก์ชัน อย่าแตะของเดิม · เช็ค git status ก่อน
+  - ผู้ใช้ review + push เอง — ห้าม commit/push ให้
+################################################################################

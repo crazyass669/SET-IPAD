@@ -189,12 +189,73 @@ button{font-family:inherit;color:inherit;cursor:pointer}
 .dv .seg.g{background:var(--up);left:50%}
 .dv .seg.r{background:var(--down);right:50%}
 
-/* rotation row */
+/* ---------- RS distribution histogram ---------- */
+.rsd{display:flex;align-items:flex-end;gap:5px;height:104px;padding:16px 16px 4px}
+.rsd .col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:5px;min-width:0}
+.rsd .col .cnt{font:600 10.5px/1 var(--sans);color:var(--text-dim);font-variant-numeric:tabular-nums}
+.rsd .col .bar{width:100%;max-width:34px;border-radius:4px 4px 2px 2px;min-height:3px}
+.rsd-x{display:flex;gap:5px;padding:0 16px 2px}
+.rsd-x span{flex:1;text-align:center;font:600 9.5px/1.3 var(--mono);color:var(--text-mute);letter-spacing:-.02em}
+.rsd-sum{padding:8px 16px 12px;font:600 12px/1.5 var(--sans);color:var(--text-dim);font-variant-numeric:tabular-nums}
+
+/* ---------- RS leaders row ---------- */
+.rlr{display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+  padding:12px 16px;border:0;border-bottom:1px solid var(--line-soft);background:none}
+.rlr:active{background:var(--surface)}
+.rlr .rk{flex:0 0 auto;width:36px;height:27px;display:grid;place-items:center;border-radius:7px;
+  background:var(--surface-hi);color:var(--text-dim);font:700 13px/1 var(--sans);font-variant-numeric:tabular-nums}
+.rlr .rk.hot{background:var(--up-soft);color:var(--up)}
+.rlr .mid2{flex:1;min-width:0}
+.rlr .mid2 .tkr-lg{font-size:15px}
+.rlr .mid2 .sub2{display:block;margin-top:3px;font:500 12px/1.3 var(--sans);color:var(--text-dim);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rlr .mo{flex:0 0 auto;text-align:right}
+.rlr .mo .mv{font:600 13.5px/1.2 var(--sans);font-variant-numeric:tabular-nums}
+.rlr .mo .ml{display:block;font:500 10px/1 var(--text-mute);color:var(--text-mute);margin-top:3px}
+
+/* rotation row (เดิม — ยังใช้ที่ dvRow market) */
 .rot-row{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line-soft)}
 .rot-row .rl{width:170px;flex:0 0 auto;min-width:0}
 .rot-row .rn{display:block;font:600 13.5px/1.3 var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rot-row .rc{display:block;margin-top:3px;font:500 11px/1 var(--text-dim);color:var(--text-dim)}
 .rot-row .rv{width:62px;flex:0 0 auto;text-align:right;font:600 15.5px/1 var(--sans);font-variant-numeric:tabular-nums}
+
+/* ---------- rotation + RRG (เฟส 2 ข้อ 8) ---------- */
+canvas.rrg{width:100%;height:340px;display:block;touch-action:manipulation}
+.rrg-legend{display:flex;gap:7px;padding:2px 16px 10px;overflow-x:auto;scrollbar-width:none}
+.rrg-legend::-webkit-scrollbar{display:none}
+.rrg-chip{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:6px 11px;border-radius:9px;
+  background:var(--surface);border:1px solid var(--line);
+  font:600 11.5px/1 var(--sans);color:var(--text-dim);white-space:nowrap}
+.rrg-chip .rc-sq{width:9px;height:9px;border-radius:3px;background:var(--cc);flex:0 0 auto}
+.rrg-chip.on{border-color:var(--cc);color:var(--text);background:var(--surface-hi)}
+
+.rot-sel{margin:4px 16px 8px;padding:13px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.rot-sel .rs-h{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.rot-sel .rs-n{font:600 14.5px/1.3 var(--sans);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rot-sel .rs-q{flex:0 0 auto;font:700 11px/1 var(--sans);padding:4px 9px;border-radius:7px}
+.rot-sel .rs-g{display:grid;grid-template-columns:auto 1fr auto 1fr;gap:7px 12px;margin-top:11px;
+  font:500 12px/1 var(--sans);color:var(--text-dim);align-items:baseline}
+.rot-sel .rs-g b{font:600 13px/1 var(--sans);color:var(--text);text-align:right;font-variant-numeric:tabular-nums}
+.rot-sel .rs-clear{margin-top:12px;width:100%;padding:9px;border:1px solid var(--line);border-radius:9px;
+  background:var(--surface-hi);color:var(--text-dim);font:600 12.5px/1 var(--sans)}
+
+.rot-row2{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;
+  border:0;border-bottom:1px solid var(--line-soft);padding:13px 16px}
+.rot-row2:active{background:var(--surface)}
+.rot-row2 .rl{flex:1;min-width:0}
+.rot-row2 .rn{display:block;font:600 13.5px/1.3 var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rot-row2 .rc{display:block;margin-top:3px;font:500 11px/1 var(--sans);color:var(--text-dim)}
+.rot-row2 .rq{flex:0 0 auto;width:52px;text-align:center;font:700 11.5px/1 var(--sans)}
+.rot-row2 .rv{flex:0 0 auto;width:62px;text-align:right;font:600 15px/1 var(--sans);font-variant-numeric:tabular-nums}
+
+.rot-al{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:9px 16px;border-bottom:1px solid var(--line-soft);
+  font:500 12.5px/1.4 var(--sans)}
+.rot-al .ra-d{font:600 10.5px/1 var(--mono);color:var(--text-mute)}
+.rot-al .ra-n{font:600 12.5px/1.3 var(--sans);color:var(--text)}
+.rot-al .ra-t{font:500 10px/1 var(--sans);color:var(--text-mute);border:1px solid var(--line);border-radius:5px;padding:2px 5px}
+.rot-al .ra-q{width:100%;color:var(--text-dim);font:500 12px/1.3 var(--sans)}
+.rot-al.pend{color:var(--text-dim)}
 
 /* ---------- fear & greed compact ---------- */
 .fg{padding:16px 16px 6px}
@@ -235,6 +296,52 @@ button{font-family:inherit;color:inherit;cursor:pointer}
 }
 .sortchip.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .list-cap{padding:16px;font:500 12.5px/1.5 var(--text-mute);color:var(--text-mute);text-align:center}
+
+/* ---------- stocks: view tabs (พอร์ตจาก "หุ้นทั้งหมด" ในเว็บ) ---------- */
+.vtabs{display:flex;gap:6px;padding:12px 16px 2px;overflow-x:auto;scrollbar-width:none}
+.vtabs::-webkit-scrollbar{display:none}
+.vtab{
+  flex:0 0 auto;padding:8px 13px;border-radius:9px;
+  background:var(--surface);border:1px solid var(--line);
+  font:600 12.5px/1 var(--sans);color:var(--text-dim);white-space:nowrap;
+}
+.vtab.on{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* ---------- group breadth row (ความกว้าง EMA รายกลุ่ม) ---------- */
+.gbr{padding:13px 16px;border-bottom:1px solid var(--line-soft)}
+.gbr .gb-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.gbr .gb-nm{font:600 14px/1.3 var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gbr .gb-sc{font:700 16px/1 var(--sans);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.gbr .gb-sub{font:500 11px/1 var(--text-dim);color:var(--text-dim);margin-top:4px}
+.gbr .gb-bars{display:flex;flex-direction:column;gap:6px;margin-top:9px}
+.gb-mini{display:flex;align-items:center;gap:8px}
+.gb-mini .gb-ml{font:600 10px/1 var(--mono);color:var(--text-mute);width:46px;flex:0 0 auto;letter-spacing:-.02em}
+.gb-mini .track{flex:1;height:6px;border-radius:4px;background:var(--surface-hi);overflow:hidden}
+.gb-mini .gb-mv{font:600 11px/1 var(--sans);font-variant-numeric:tabular-nums;width:34px;text-align:right;flex:0 0 auto;color:var(--text-dim)}
+
+/* ---------- sector rank grid (จัดอันดับกลุ่ม) ---------- */
+.grk{
+  display:grid;grid-template-columns:1fr 42px 42px 42px 42px 40px;gap:6px;align-items:center;
+  padding:11px 16px;border-bottom:1px solid var(--line-soft);
+  font-variant-numeric:tabular-nums;
+}
+.grk>span{text-align:center}
+.grk.grk-hd{
+  font:600 10px/1 var(--sans);letter-spacing:.02em;text-transform:uppercase;
+  color:var(--text-dim);border-bottom:1px solid var(--line);
+}
+.grk .sr-nm{
+  font:600 12.5px/1.3 var(--sans);text-align:left;
+  display:flex;flex-direction:column;gap:2px;min-width:0;overflow:hidden;
+}
+.grk .sr-avg{font:700 13px/1 var(--sans);text-align:right}
+.sr-mom{font:600 10.5px/1 var(--sans)}
+.rkb{display:inline-block;padding:2px 5px;border-radius:4px;font:700 10.5px/1.4 var(--sans)}
+.rkb.a{background:var(--up-soft);color:var(--up)}
+.rkb.b{background:rgba(210,153,34,.16);color:var(--warn)}
+.rkb.c{background:rgba(224,104,47,.18);color:#e0682f}
+.rkb.d{background:var(--down-soft);color:var(--down)}
+.rkb.flat{background:var(--surface-hi);color:var(--text-mute)}
 
 /* ---------- detail: hero ---------- */
 .d-hero{padding:16px}
@@ -298,13 +405,21 @@ canvas.spark{width:100%;height:190px;display:block}
 
 /* ---------- "more" menu ---------- */
 .mitem{
-  display:flex;align-items:center;gap:13px;width:100%;
+  display:flex;align-items:center;gap:13px;width:100%;text-align:left;
   padding:14px 16px;border:0;background:none;
   border-bottom:1px solid var(--line-soft);
 }
-.mitem:active{background:var(--surface)}
+.mitem:not(.soon):not(.locked):active{background:var(--surface)}
 .mitem .mi-ic{font-size:18px;width:24px;text-align:center;flex:0 0 auto}
-.mitem .mi-t{flex:1;text-align:left;font:600 14.5px/1.3 var(--sans)}
+.mitem .mi-body{flex:1;min-width:0}
+.mitem .mi-t{display:block;font:600 14px/1.3 var(--sans)}
+.mitem .mi-s{display:block;margin-top:3px;font:500 11.5px/1.45 var(--sans);color:var(--text-dim)}
+.mitem.soon,.mitem.locked{opacity:.5}
+.mitem.soon .mi-t,.mitem.locked .mi-t{color:var(--text-dim);font-weight:500}
+.mi-badge{
+  flex:0 0 auto;font:600 10px/1 var(--sans);color:var(--text-mute);
+  border:1px solid var(--line);border-radius:6px;padding:4px 7px;letter-spacing:.02em;
+}
 
 /* ---------- bottom tab bar ---------- */
 .tabbar{
@@ -341,6 +456,180 @@ canvas.spark{width:100%;height:190px;display:block}
 .sheet .grab{width:36px;height:4px;border-radius:3px;background:var(--line);margin:8px auto 14px}
 .sheet h2{font:700 18px/1.3 var(--sans);margin:0 0 10px}
 .sheet p{font:500 13.5px/1.7 var(--text-dim);color:var(--text-dim);margin:0 0 12px}
+
+/* ============================================================
+   เฟส 2 ข้อ 4 + 6 : ดัชนีกลุ่ม / Valuation / Heatmap ตลาดไทย
+   ============================================================ */
+
+/* ---------- Heatmap grid (ตลาดไทย + ดัชนี) ---------- */
+.hm-sec{padding:12px 12px 2px}
+.hm-sh{display:flex;align-items:baseline;gap:8px;margin-bottom:6px;padding:0 4px}
+.hm-sn{font:600 12px/1.3 var(--sans);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hm-sh .up,.hm-sh .down{font:700 11.5px/1 var(--sans);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.hm-sc{font:500 10px/1 var(--text-mute);color:var(--text-mute);flex:0 0 auto}
+.hm-cells{display:flex;flex-wrap:wrap;gap:3px}
+.hm-cell{
+  width:calc((100% - 12px)/5);min-width:0;
+  border:0;border-radius:6px;padding:6px 3px;
+  display:flex;flex-direction:column;align-items:center;gap:2px;line-height:1;
+}
+.hm-cell:active{filter:brightness(1.15)}
+.hm-cell .hc-s{font:700 10.5px/1 var(--mono);letter-spacing:-.02em;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hm-cell .hc-p{font:500 8.5px/1 var(--sans);opacity:.82;font-variant-numeric:tabular-nums}
+.hm-cell .hc-v{font:600 9.5px/1 var(--sans);font-variant-numeric:tabular-nums}
+
+/* ---------- ดัชนีกลุ่ม: การ์ด ---------- */
+.idxr{padding:12px 16px 11px;border-bottom:1px solid var(--line-soft)}
+.ir-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.ir-l{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
+.ir-sym{font:600 14px/1.15 var(--mono);letter-spacing:.02em}
+.ir-nm{font:500 11.5px/1.3 var(--sans);color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ir-r{text-align:right;flex:0 0 auto}
+.ir-last{display:block;font:600 15px/1.15 var(--sans);font-variant-numeric:tabular-nums}
+.ir-r .dl{font:600 12px/1.2 var(--sans);font-variant-numeric:tabular-nums;margin-top:2px;display:block}
+.ir-spark{width:100%;height:52px;display:block;margin:8px 0 4px}
+.ir-rets{display:flex;gap:4px}
+.ir-rets>span{flex:1;text-align:center;display:flex;flex-direction:column;gap:2px;min-width:0}
+.ir-rets i{font:500 9px/1 var(--sans);color:var(--text-mute);font-style:normal}
+.ir-rets b{font:600 11px/1 var(--sans);font-variant-numeric:tabular-nums}
+.ir-foot{display:flex;gap:16px;margin-top:9px}
+.ir-foot>span{font:500 10.5px/1 var(--sans);color:var(--text-dim)}
+.ir-foot b{font-weight:700;font-variant-numeric:tabular-nums}
+
+/* ---------- Valuation ---------- */
+.vsnap{padding:4px 16px 2px}
+.vs-row{padding:12px 0;border-bottom:1px solid var(--line-soft)}
+.vs-row:last-child{border-bottom:0}
+.vs-mk{font:700 13px/1 var(--sans);margin-bottom:10px}
+.vs-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px 8px}
+.vs-c{display:flex;flex-direction:column;gap:3px;min-width:0}
+.vs-c i{font:500 10px/1.2 var(--sans);color:var(--text-mute);font-style:normal}
+.vs-c b{font:600 13px/1.2 var(--sans);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.vband{padding:2px 16px 2px}
+.vband-h{font:600 10.5px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);padding:14px 0 2px}
+.vcard{padding:13px 0;border-bottom:1px solid var(--line-soft)}
+.vcard:last-child{border-bottom:0}
+.vc-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.vc-t{font:600 13px/1.2 var(--sans)}
+.vc-now{font:700 26px/1 var(--sans);font-variant-numeric:tabular-nums;margin:9px 0 3px}
+.vc-now i{font:600 13px/1 var(--text-dim);color:var(--text-dim);font-style:normal;margin-left:2px}
+.vc-pct{font:500 11.5px/1.4 var(--sans);color:var(--text-dim);margin-bottom:6px}
+.vc-pct b{color:var(--text);font-variant-numeric:tabular-nums}
+.vcard .track{margin:0 0 8px}
+.vc-spark{width:100%;height:92px;display:block;margin-bottom:6px}
+.vc-stat{font:500 10.5px/1.5 var(--sans);color:var(--text-mute);font-variant-numeric:tabular-nums}
+
+/* ============================================================
+   เฟส 2 ข้อ 5 : เงินทุน (กระแสเงิน / ชอร์ต / ผู้บริหาร / สัญญาณรวม)
+   ============================================================ */
+
+/* ---------- กระแสเงิน: legend + ตาราง ---------- */
+.flow-leg{display:flex;flex-wrap:wrap;gap:12px 16px;padding:8px 16px 2px}
+.flow-leg span{display:flex;align-items:center;gap:5px;font:500 11.5px/1.3 var(--sans);color:var(--text-dim)}
+.flow-leg i{width:10px;height:10px;border-radius:3px;flex:0 0 auto}
+.flow-leg b{font-weight:700;font-variant-numeric:tabular-nums}
+
+.ftbl{padding:6px 8px 18px}
+.ftr{display:grid;gap:6px;padding:8px 6px;border-bottom:1px solid var(--line-soft);
+  font:600 11.5px/1.3 var(--mono);text-align:right;font-variant-numeric:tabular-nums;align-items:center}
+.ftr>span:first-child{text-align:left;color:var(--text-dim);font-family:var(--sans)}
+.ftr.fhd{font:600 10px/1.2 var(--sans);letter-spacing:.02em;text-transform:uppercase;
+  color:var(--text-dim);border-bottom:1px solid var(--line)}
+.ftr.ftot{font-weight:700;background:var(--surface);border-radius:6px;border-bottom:0;margin:2px 0}
+
+/* ---------- ชอร์ต: สรุป chips ---------- */
+.shsum{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:12px 16px 6px}
+.shc{display:flex;flex-direction:column;align-items:center;gap:3px;padding:10px 4px;border-radius:10px;
+  background:var(--surface);border:1px solid var(--line)}
+.shc b{font:700 17px/1 var(--sans);font-variant-numeric:tabular-nums}
+.shc i{font:500 10px/1.2 var(--sans);color:var(--text-dim);font-style:normal}
+.shc.on{border-color:var(--accent);background:var(--surface-hi)}
+
+/* ---------- ชอร์ต: Squeeze radar ---------- */
+.sqz{display:flex;flex-wrap:wrap;gap:8px;padding:6px 16px 4px}
+.sqzc{flex:1;min-width:150px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;text-align:left}
+.sqzc .sq-s{font:700 15px/1 var(--mono);color:var(--accent)}
+.sqzc .sq-r{display:flex;justify-content:space-between;gap:8px;margin-top:6px;font:500 11px/1.3 var(--sans);color:var(--text-dim)}
+.sqzc .sq-r b{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}
+
+/* ---------- ชอร์ต: ตารางรายหุ้น ---------- */
+.shr{display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;
+  padding:11px 16px;border:0;border-bottom:1px solid var(--line-soft);
+  width:100%;text-align:left;background:none}
+.shr:active{background:var(--surface)}
+.shr .s-l{min-width:0}
+.shr .s-l .tkr-lg{font-size:14px}
+.shr .s-l .sub2{display:block;margin-top:3px;font:500 11.5px/1.3 var(--sans);color:var(--text-dim);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.shr .s-pos{text-align:right;font:700 13px/1.25 var(--sans);font-variant-numeric:tabular-nums;flex:0 0 auto;min-width:56px}
+.shr .s-pos .pb{display:block;height:3px;border-radius:2px;margin-top:4px;min-width:4px}
+.shr .s-tr{text-align:right;font:600 12px/1.35 var(--sans);font-variant-numeric:tabular-nums;min-width:56px}
+.shr .s-tr .s-tl{display:block;font:500 9px/1.2 var(--sans);color:var(--text-mute)}
+
+/* ---------- ผู้บริหาร: rows ---------- */
+.inr{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;
+  padding:11px 16px;border:0;border-bottom:1px solid var(--line-soft);
+  width:100%;text-align:left;background:none}
+.inr:active{background:var(--surface)}
+.inr .i-l{min-width:0}
+.inr .i-l .i-t{font:600 13.5px/1.3 var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inr .i-l .i-t .tk{font:600 14px/1 var(--mono);color:var(--text)}
+.inr .i-l .i-s{display:block;margin-top:3px;font:500 11px/1.3 var(--sans);color:var(--text-dim);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inr .i-r{text-align:right;font:600 12.5px/1.3 var(--sans);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.inr .i-r .i-sub{display:block;font:500 9.5px/1.2 var(--sans);color:var(--text-mute);margin-top:2px}
+
+/* ---------- สัญญาณรวม: rows ---------- */
+.cfx-hd{display:grid;grid-template-columns:1fr 52px 40px 52px;gap:8px;padding:12px 16px 6px;
+  font:600 9.5px/1.2 var(--sans);letter-spacing:.02em;color:var(--text-dim)}
+.cfx-hd>span:not(:first-child){text-align:right}
+.cfxr{display:grid;grid-template-columns:1fr 52px 40px 52px;gap:8px;align-items:center;
+  padding:11px 16px;border:0;border-bottom:1px solid var(--line-soft);
+  width:100%;text-align:left;background:none}
+.cfxr:active{background:var(--surface)}
+.cfxr .c-l{min-width:0}
+.cfxr .c-l .tkr-lg{font-size:14px}
+.cfxr .c-l .sub2{display:block;margin-top:2px;font:500 11px/1.3 var(--sans);color:var(--text-dim);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cfxr .c-v2{display:block;margin-top:3px;font:500 10px/1.45 var(--mono);color:var(--text-mute);letter-spacing:-.02em}
+.cfxr .c-px{text-align:right;font:600 12.5px/1.3 var(--sans);font-variant-numeric:tabular-nums}
+.cfxr .c-sc{text-align:right;font:700 16px/1 var(--sans);font-variant-numeric:tabular-nums}
+.cfxr .c-d{text-align:right;font:700 12px/1 var(--sans);letter-spacing:2px}
+.warn-star{font-size:11px}
+
+/* ============================================================
+   เฟส 2 ข้อ 7 : สแกนหุ้น (Screener) + Screener+
+   ============================================================ */
+.scr-f{padding:0 0 2px}
+.scr-fl{font:600 11px/1.35 var(--sans);color:var(--text-dim);padding:12px 16px 0;letter-spacing:.02em}
+.scr-fl.scr-fgrp{color:var(--accent);letter-spacing:.08em;text-transform:uppercase;font-size:10.5px;padding-top:20px}
+.scr-price{display:flex;gap:8px;padding:8px 16px 2px}
+.scr-price input{
+  flex:1;min-width:0;padding:10px 12px;
+  background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  color:var(--text);font:500 14px/1 var(--sans);
+}
+.scr-price input::placeholder{color:var(--text-mute)}
+
+.scrr{
+  display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start;
+  padding:12px 16px;border:0;border-bottom:1px solid var(--line-soft);
+  width:100%;text-align:left;background:none;
+}
+.scrr:active{background:var(--surface)}
+.scrr .sc-l{min-width:0}
+.scrr .sc-t{display:flex;align-items:baseline;gap:8px;white-space:nowrap;overflow:hidden}
+.scrr .sc-t .tkr-lg{font-size:15px}
+.scrr .sc-sub{
+  display:block;margin-top:3px;font:500 11.5px/1.3 var(--sans);color:var(--text-dim);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.scrr .sc-fin{display:flex;flex-wrap:wrap;gap:3px 10px;margin-top:6px}
+.scrr .sc-fin b{font:600 10.5px/1.4 var(--sans);font-variant-numeric:tabular-nums;color:var(--text-dim)}
+.scrr .sc-r{text-align:right;flex:0 0 auto}
+.scrr .sc-px{font:600 15px/1.15 var(--sans);font-variant-numeric:tabular-nums}
+.scrr .sc-ch{display:block;margin-top:3px;font:600 12px/1.2 var(--sans);font-variant-numeric:tabular-nums}
 
 @media (prefers-reduced-motion:reduce){
   *{animation-duration:.01ms!important;transition-duration:.01ms!important}

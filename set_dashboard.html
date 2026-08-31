@@ -3,6 +3,21 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>
+/* เวอร์ชันมือถือ/แท็บเล็ตแยกเป็นแอป viewer ที่ mobile/ แล้ว — เฉพาะ GitHub Pages:
+   PWA เก่า (start_url = ไฟล์นี้) + คนเปิดจากมือถือ ให้เด้งไปแอปใหม่
+   ข้าม: ?full / ?static (เทสต์ static บนเดสก์ท็อป) · file:// · ไม่ใช่ github.io */
+(function () {
+  try {
+    if (!location.hostname.endsWith('github.io')) return;
+    var q = new URLSearchParams(location.search);
+    if (q.has('full') || q.has('static')) return;
+    var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    var narrow = Math.min(screen.width, screen.height) <= 820;
+    if (coarse || narrow) location.replace('mobile/');
+  } catch (e) {}
+})();
+</script>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0d1117">
 <link rel="apple-touch-icon" href="static/icons/icon-180.png">
