@@ -15,13 +15,15 @@ const nf = (n, d = 2) => (n == null || isNaN(n)) ? '–' : Number(n).toLocaleStr
 const sgn = n => n > 0 ? '+' : '';
 const cls = n => n > 0 ? 'up' : n < 0 ? 'down' : 'flat';
 const pct = (n, d = 2) => n == null ? '–' : sgn(n) + nf(n, d) + '%';
-function fmtCap(b) { if (b == null) return '–'; const m = b / 1e6; if (m >= 1e6) return nf(m / 1e6, 2) + ' ล้านล้าน'; if (m >= 1e3) return nf(m / 1e3, 1) + ' พันล้าน'; return nf(m, 0) + ' ล้าน'; }
-function fmtCapShort(b) { if (b == null) return '–'; const m = b / 1e6; if (m >= 1e6) return nf(m / 1e6, 2) + ' ลลบ.'; return nf(m, 0) + ' ลบ.'; }
+// ค่าเต็มเป็น "บาท" สำหรับ title (แตะค้าง/ชี้เมาส์เห็นตัวเลขจริงที่ไม่ถูกย่อ/ปัด)
+function exactBaht(v) { return (v == null || isNaN(v)) ? '' : Math.round(v).toLocaleString('en-US') + ' บาท'; }
+function fmtCap(b) { if (b == null) return '–'; const m = b / 1e6; if (m >= 1e6) return nf(m / 1e6, 3) + ' ล้านล้าน'; if (m >= 1e3) return nf(m / 1e3, 2) + ' พันล้าน'; return nf(m, 0) + ' ล้าน'; }
+function fmtCapShort(b) { if (b == null) return '–'; const m = b / 1e6; if (m >= 1e6) return nf(m / 1e6, 3) + ' ลลบ.'; return nf(m, 0) + ' ลบ.'; }
 function fmtBaht(v) {
   if (v == null || isNaN(v)) return '–';
   const s = v < 0 ? '-' : '', a = Math.abs(v);
-  if (a >= 1e12) return s + nf(a / 1e12, 2) + ' ล้านล้าน';
-  if (a >= 1e9) return s + nf(a / 1e9, a >= 1e10 ? 0 : 1) + ' พันล้าน';
+  if (a >= 1e12) return s + nf(a / 1e12, 3) + ' ล้านล้าน';
+  if (a >= 1e9) return s + nf(a / 1e9, 2) + ' พันล้าน';
   if (a >= 1e6) return s + nf(a / 1e6, 0) + ' ล้าน';
   return s + nf(a, 0);
 }
@@ -495,7 +497,9 @@ function renderMarket() {
   mv.appendChild(mvList); m.appendChild(mv);
   const paint = kk => {
     mvList.innerHTML = '';
-    const arr = D.stocks.filter(s => s.chg1d != null && s.price > 0.5)
+    // กัน penny ออกด้วย dq flag เหมือน gainers/losers ของ dashboard.js (เดิมใช้ price>0.5
+    // ซึ่งตัดหุ้น 0.10–0.49 บาทที่ไม่ใช่ penny ทิ้งไปด้วย ทำให้รายชื่อไม่ตรงกับ ver เต็ม)
+    const arr = D.stocks.filter(s => s.chg1d != null && !isPenny(s))
       .sort((a, b) => kk === 'up' ? b.chg1d - a.chg1d : a.chg1d - b.chg1d).slice(0, 20);
     arr.forEach(s => mvList.appendChild(listRow(s)));
   };
@@ -1309,9 +1313,10 @@ function renderDetail() {
   paintTab(dTab);
 }
 
-function statRow(k, v, vClass) {
+function statRow(k, v, vClass, title) {
   const r = el('div', 'stat');
-  r.innerHTML = `<span class="k">${k}</span><span class="v ${vClass || ''}">${v}</span>`;
+  const t = title ? ` title="${String(title).replace(/"/g, '&quot;')}"` : '';
+  r.innerHTML = `<span class="k">${k}</span><span class="v ${vClass || ''}"${t}>${v}</span>`;
   return r;
 }
 function retPair(a, b) {
@@ -1341,7 +1346,7 @@ function tabOverview(r) {
   } else {
     out.push(statRow('ตลาดต้นทาง', raw.region || '—'));
   }
-  out.push(statRow('มูลค่าตลาด', fmtCap(r.mkt_cap)));
+  out.push(statRow('มูลค่าตลาด', fmtCap(r.mkt_cap), '', exactBaht(r.mkt_cap)));
   out.push(statRow('RS Score', `${r.rs ?? '–'} / 99`, r.rs >= 70 ? 'up' : r.rs < 40 ? 'down' : ''));
   if (isSet && STAGE[raw.stage]) out.push(statRow('สเตจ (Weinstein)', `<span class="pill ${STAGE[raw.stage][1]}">${raw.stage} · ${STAGE[raw.stage][0]}</span>`));
   return out;
@@ -1425,7 +1430,7 @@ function quarterlySection(q) {
   const cw = el('div', 'chart-wrap');
   cw.innerHTML = '<canvas class="spark" id="qChart" style="height:150px"></canvas>';
   out.push(cw);
-  out.push(el('div', 'chart-src', `รายได้รายไตรมาส ${show} งวดล่าสุด · ที่มา ตลาดหลักทรัพย์ฯ`));
+  out.push(el('div', 'chart-src', `รายได้รายไตรมาส ${show} งวดล่าสุด · หน่วยล้านบาท · ที่มา ตลาดหลักทรัพย์ฯ`));
   requestAnimationFrame(function kick() {
     const cv = document.getElementById('qChart');
     if (cv && cv.clientWidth > 0) drawQBars(cv, q.q.slice(-show), rev.slice(-show));
@@ -1444,17 +1449,20 @@ function quarterlySection(q) {
   }
 
   // ---- table: last 8 quarters ----
+  // แสดงตัวเลขเต็มหน่วยล้านบาท (ไม่ย่อเป็น "พันล้าน" ที่ปัดเศษจนเพี้ยน)
   const rows = Math.min(n, 8);
+  out.push(el('div', 'chart-src', 'รายได้ / กำไรสุทธิ — หน่วยล้านบาท เต็มจำนวน (แตะค้างที่ตัวเลขเพื่อดูค่าเป็นบาท)'));
   const tbl = el('div', 'qtbl');
   tbl.innerHTML = `<div class="qtr qhd"><span>ไตรมาส</span><span>รายได้</span><span>กำไรสุทธิ</span><span>มาร์จิ้น</span></div>` +
     q.q.slice(-rows).map((lab, i) => {
       const idx = n - rows + i;
-      const rv = rev[idx], nv = np[idx];
+      const rv = rev[idx], nv = np[idx];                 // หน่วยบาท (สำหรับ margin + title)
+      const rvM = rv == null ? null : rv / 1e6, nvM = nv == null ? null : nv / 1e6;
       const mg = (rv && nv != null) ? nv / rv * 100 : null;
       return `<div class="qtr">
         <span class="qp">${beQ(lab)}</span>
-        <span>${fmtBaht(rv)}</span>
-        <span class="${cls(nv)}">${fmtBaht(nv)}</span>
+        <span title="${exactBaht(rv)}">${nf(rvM, 0)}</span>
+        <span class="${cls(nv)}" title="${exactBaht(nv)}">${nf(nvM, 0)}</span>
         <span class="${mg == null ? '' : cls(mg)}">${mg == null ? '–' : nf(mg, 1) + '%'}</span>
       </div>`;
     }).join('');
@@ -1487,12 +1495,13 @@ function drawQBars(cv, labels, vals) {
     }
   });
   // right-edge: สูงสุด (บน) + งวดล่าสุด (ที่ปลายแท่ง — เว้นถ้าเกือบเท่า max อยู่แล้ว)
+  // ป้ายเป็น "ล้านบาท" เต็มจำนวน (ให้ตรงกับตารางด้านล่าง ไม่ย่อ/ปัด)
   x.textAlign = 'left';
-  x.fillStyle = '#8b95a1'; x.fillText(fmtBaht(mx), w - rpad + 5, padT + 2);
+  x.fillStyle = '#8b95a1'; x.fillText(nf(mx / 1e6, 0), w - rpad + 5, padT + 2);
   if (nums[n - 1] < mx * 0.9) {
     const ly = padT + plotH - Math.max(1, nums[n - 1] / mx * plotH);
     x.fillStyle = '#4493f8';
-    x.fillText(fmtBaht(nums[n - 1]), w - rpad + 5, Math.min(h - padB - 4, ly + 4));
+    x.fillText(nf(nums[n - 1] / 1e6, 0), w - rpad + 5, Math.min(h - padB - 4, ly + 4));
   }
 }
 
