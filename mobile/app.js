@@ -496,7 +496,7 @@ function renderMarket() {
   const paint = kk => {
     mvList.innerHTML = '';
     const arr = D.stocks.filter(s => s.chg1d != null && s.price > 0.5)
-      .sort((a, b) => kk === 'up' ? b.chg1d - a.chg1d : a.chg1d - b.chg1d).slice(0, 8);
+      .sort((a, b) => kk === 'up' ? b.chg1d - a.chg1d : a.chg1d - b.chg1d).slice(0, 20);
     arr.forEach(s => mvList.appendChild(listRow(s)));
   };
   paint('up');
@@ -1716,7 +1716,7 @@ const HM_METRICS = [
   ['ret_3m', '3 เดือน', 30], ['ret_ytd', 'ต้นปี', 30], ['ret_1y', '1 ปี', 50],
   ['rs', 'RS', 0], ['from_52wh', 'จาก 52W สูง', 40],
 ];
-let _hmMetric = 'chg1d', _hmDir = -1;   // -1 = มาก→น้อย
+let _hmMetric = 'chg1d', _hmDir = 1;   // 1 = มาก→น้อย (descending) · -1 = น้อย→มาก — ตรงกับ _hmCmp ของ dashboard.js
 
 function hmValue(r, key) {
   if (key === 'rs') return r.rs;
@@ -1735,7 +1735,7 @@ function renderHeatmap() {
   bar.innerHTML = HM_METRICS.map(([k, t]) => `<button class="sortchip ${_hmMetric === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('');
   c.appendChild(bar);
   const dir = el('div', 'seg');
-  dir.innerHTML = `<button data-d="-1" class="${_hmDir === -1 ? 'on' : ''}">มาก → น้อย</button><button data-d="1" class="${_hmDir === 1 ? 'on' : ''}">น้อย → มาก</button>`;
+  dir.innerHTML = `<button data-d="1" class="${_hmDir === 1 ? 'on' : ''}">มาก → น้อย</button><button data-d="-1" class="${_hmDir === -1 ? 'on' : ''}">น้อย → มาก</button>`;
   c.appendChild(dir);
   c.appendChild(el('div', 'chart-src',
     (isRS ? 'เขียว = RS สูง · แดง = RS ต่ำ' : 'เขียว = บวก · แดง = ลบ') + ' · แตะเพื่อดูรายละเอียด'));
