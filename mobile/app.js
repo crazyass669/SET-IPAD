@@ -62,8 +62,8 @@ const D = {
   stocks: [],      // SET + mai (normalized rows)
   dr: [],          // DR (normalized rows)
   etf: [],         // ETF (normalized rows)
-  sectors: [],     // set_data.json .sectors (กลุ่มอุตสาหกรรม — สรุปรวมพร้อม ret_*)
-  industries: [],  // set_data.json .industries (หมวดใหญ่)
+  sectors: [],     // set_data.json .sectors (หมวดธุรกิจ ~35 กลุ่มละเอียด — สรุปรวมพร้อม ret_*)
+  industries: [],  // set_data.json .industries (กลุ่มอุตสาหกรรม ~16 กลุ่มกว้าง + -mai)
   rows: [],        // all three concatenated
   byId: {},        // 'set:PTT' -> row
   fin: {},         // financials_analytics_yahoo .set  (symbol -> obj)
@@ -223,7 +223,9 @@ async function boot() {
   D.industries = sd.industries || [];
 
   bmsg.textContent = 'กำลังโหลด DR / ETF / งบ…';
-  const [dr, etf, fin, finQ, wl, intl, brd, mst, dval, sval] = await Promise.allSettled([
+  // market_stats / set_daily_valuation / stock_valuation_stats ใช้แค่จอ Valuation (subpage
+  // ใต้ "เพิ่มเติม") — lazy load ตอนเปิดหน้าครั้งแรก เหมือน indices / flow ไม่ยิงตอน boot
+  const [dr, etf, fin, finQ, wl, intl, brd] = await Promise.allSettled([
     loadJSON('../data/dr_data.json', 30000),
     loadJSON('../data/etf_data.json', 30000),
     loadJSON('../data/financials_analytics_yahoo.json', 30000),
@@ -231,9 +233,6 @@ async function boot() {
     loadJSON('../data/watchlist.json', 15000),
     loadJSON('../data/market_internals.json', 20000),
     loadJSON('../data/breadth_1y.json', 20000),
-    loadJSON('../data/market_stats.json', 20000),
-    loadJSON('../data/set_daily_valuation.json', 15000),
-    loadJSON('../data/stock_valuation_stats.json', 20000),
   ]);
   const missing = [];
   if (dr.status === 'fulfilled') D.dr = (dr.value.stocks || []).map(rowDr); else missing.push('DR');
@@ -244,9 +243,6 @@ async function boot() {
   if (intl.status === 'fulfilled') D.internals = intl.value;
   if (brd.status === 'fulfilled') D.breadth = brd.value;
   if (intl.status !== 'fulfilled' || brd.status !== 'fulfilled') missing.push('ข้อมูลย้อนหลัง');
-  if (mst.status === 'fulfilled') D.mstats = mst.value;
-  if (dval.status === 'fulfilled') D.dailyVal = dval.value;
-  if (sval.status === 'fulfilled') D.stockVal = sval.value;
 
   D.rows = [...D.stocks, ...D.dr, ...D.etf];
   D.rows.forEach(r => { D.byId[r.id] = r; });
@@ -389,6 +385,7 @@ function dvRow(name, v) {
 }
 
 /* ---------------- MARKET screen ---------------- */
+let _mvSide = 'up';   // top movers: ขึ้นแรง/ลงแรง — เก็บระดับโมดูลเหมือนทุกจอ ไม่งั้น re-render (resize) รีเซ็ต
 function renderMarket() {
   const m = $('#s-market'); m.innerHTML = '';
   const k = D.mkt;
@@ -491,11 +488,12 @@ function renderMarket() {
   const mv = el('div');
   const head = el('div', 'sec');
   head.innerHTML = `<div class="sec-head"><span class="sec-label">หุ้นเคลื่อนไหวมากสุดวันนี้</span></div>
-    <div class="seg" id="mvSeg"><button class="on" data-k="up">ขึ้นแรง</button><button data-k="down">ลงแรง</button></div>`;
+    <div class="seg" id="mvSeg"><button class="${_mvSide === 'up' ? 'on' : ''}" data-k="up">ขึ้นแรง</button><button class="${_mvSide === 'down' ? 'on' : ''}" data-k="down">ลงแรง</button></div>`;
   mv.appendChild(head);
   const mvList = el('div'); mvList.id = 'mvList';
   mv.appendChild(mvList); m.appendChild(mv);
   const paint = kk => {
+    _mvSide = kk;
     mvList.innerHTML = '';
     // กัน penny ออกด้วย dq flag เหมือน gainers/losers ของ dashboard.js (เดิมใช้ price>0.5
     // ซึ่งตัดหุ้น 0.10–0.49 บาทที่ไม่ใช่ penny ทิ้งไปด้วย ทำให้รายชื่อไม่ตรงกับ ver เต็ม)
@@ -503,7 +501,7 @@ function renderMarket() {
       .sort((a, b) => kk === 'up' ? b.chg1d - a.chg1d : a.chg1d - b.chg1d).slice(0, 20);
     arr.forEach(s => mvList.appendChild(listRow(s)));
   };
-  paint('up');
+  paint(_mvSide);
   head.querySelector('#mvSeg').addEventListener('click', e => {
     const btn = e.target.closest('button'); if (!btn) return;
     head.querySelectorAll('#mvSeg button').forEach(x => x.classList.toggle('on', x === btn));
@@ -526,7 +524,7 @@ let stkView = 'all';
 let listFilter = 'all', listSort = 'cap', listQuery = '';
 let _boSide = 'high', _boRS = 70, _boEMA = '50';   // breakout: ใกล้จุดสูง/ต่ำ 52 สัปดาห์
 let _momTf = 'all4';                                // momentum: จำนวน timeframe ที่ต้องบวกพร้อมกัน
-let _secBy = 'sector';                              // emaBreadth / sectorRank: กลุ่ม vs หมวดใหญ่
+let _secBy = 'sector';                              // emaBreadth / sectorRank: หมวดธุรกิจ vs กลุ่มอุตสาหกรรม
 
 const STK_VIEWS = [
   ['all', 'ทั้งหมด'], ['rs80', 'RS 80+'], ['emerging', '🌱 กำลังมา'],
@@ -557,9 +555,23 @@ function matchesKind(r) {
   if (listFilter === 'ETF') return r.kind === 'etf';
   return r.tag === listFilter; // SET | mai
 }
+// พอร์ตจาก getStage() ของ dashboard.js — ถ้า raw.stage เป็น null ประเมินจาก
+// above_ema200 + ema200_slope_pct (ไม่ guess ถ้าข้อมูลไม่พอ) ให้ผล Stage 2 ตรงกับตัวเต็ม
+function stageOf(raw) {
+  if (!raw) return null;
+  if (raw.stage != null) return raw.stage;
+  const above = raw.above_ema200;
+  if (above == null) return null;
+  const slope = raw.ema200_slope_pct ?? null;
+  if (slope == null) return null;
+  if (above && slope >= 0) return 2;
+  if (above && slope < 0) return 3;
+  if (!above && slope >= -1.5) return 1;
+  return 4;
+}
 function viewPredicate(view) {
   if (view === 'rs80') return s => s.rs != null && s.rs >= 80;
-  if (view === 'stage2') return s => s.raw && s.raw.stage === 2;
+  if (view === 'stage2') return s => stageOf(s.raw) === 2;
   if (view === 'emerging') return s => {
     const rs = s.rs || 0;
     return rs >= 35 && rs < 80 && (s.ret_1m || 0) >= 3 && s.above_ema50 === true && !isPenny(s);
@@ -621,7 +633,10 @@ function stockListView(main, view) {
     const q = listQuery.trim().toLowerCase();
     let arr = pool.filter(r => {
       if (isAll ? !matchesKind(r) : !pred(r)) return false;
-      if (q) return r.symbol.toLowerCase().includes(q) || String(r.name).toLowerCase().includes(q);
+      // ค้นได้ทั้ง ticker / ชื่อที่แสดง (name_th) / ชื่ออังกฤษเดิม (raw.name) — เหมือน
+      // renderStocksTable ของตัวเต็มที่เช็ค symbol + name + name_th ครบ
+      if (q) return r.symbol.toLowerCase().includes(q) || String(r.name).toLowerCase().includes(q)
+        || !!(r.raw && r.raw.name && String(r.raw.name).toLowerCase().includes(q));
       return true;
     }).sort(SORTF[listSort] || SORTF.cap);
     const vn = $('#viewNote');
@@ -694,6 +709,7 @@ function breakoutView(main) {
       return true;
     }).sort((a, b) => isHigh ? b.from - a.from : a.from - b.from);
     $('#boNote').textContent = `${arr.length} หุ้น ${isHigh ? 'ใกล้ทำจุดสูงใหม่' : 'ใกล้ทำจุดต่ำใหม่'} 52 สัปดาห์ (ห่างไม่เกิน ${DIST}%)`;
+    $('#scrSub').textContent = arr.length + ' หลักทรัพย์ · ปิดตลาด ' + thaiDate(D.asOf);
     const box = $('#boList'); box.innerHTML = '';
     if (!arr.length) { box.appendChild(el('div', 'list-cap', 'ไม่พบหุ้นที่ตรงเงื่อนไข — ลองผ่อนตัวกรอง RS / EMA')); return; }
     arr.slice(0, 200).forEach(({ s, from }) => box.appendChild(boRow(s, from, isHigh)));
@@ -740,8 +756,8 @@ function boRow(r, from, isHigh) {
 function groupBreadthView(main) {
   main.innerHTML = `
     <div class="seg" id="gbBy">
-      <button data-k="sector" class="${_secBy === 'sector' ? 'on' : ''}">กลุ่มอุตสาหกรรม</button>
-      <button data-k="industry" class="${_secBy === 'industry' ? 'on' : ''}">หมวดใหญ่</button>
+      <button data-k="sector" class="${_secBy === 'sector' ? 'on' : ''}">หมวดธุรกิจ</button>
+      <button data-k="industry" class="${_secBy === 'industry' ? 'on' : ''}">กลุ่มอุตสาหกรรม</button>
     </div>
     <div class="note">สัดส่วนหุ้นในกลุ่มที่ราคายืนเหนือ EMA20 / 50 / 200 — เรียงตามคะแนนรวม</div>
     <div id="gbList"></div>`;
@@ -762,6 +778,7 @@ function groupBreadthView(main) {
     }).sort((a, b) => b.score - a.score);
     const box = $('#gbList'); box.innerHTML = '';
     rows.forEach(r => box.appendChild(gbRow(r)));
+    $('#scrSub').textContent = rows.length + (_secBy === 'industry' ? ' กลุ่มอุตสาหกรรม' : ' หมวดธุรกิจ') + ' · ' + thaiDate(D.asOf);
   };
   $('#gbBy').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
@@ -781,29 +798,69 @@ function gbRow(r) {
   };
   d.innerHTML = `
     <div class="gb-top"><span class="gb-nm">${r.name}</span>
-      <span class="gb-sc ${r.score >= 60 ? 'up' : r.score < 40 ? 'down' : 'flat'}">${r.score}</span></div>
+      <span class="gb-sc ${r.score >= 70 ? 'up' : r.score < 40 ? 'down' : 'flat'}">${r.score}</span></div>
     <div class="gb-sub">${r.n} หลักทรัพย์</div>
     <div class="gb-bars">${mini('EMA20', r.p20)}${mini('EMA50', r.p50)}${mini('EMA200', r.p200)}</div>`;
   return d;
 }
 
 /* ---- จัดอันดับกลุ่มตามผลตอบแทน (พอร์ตจาก renderSectorRankTable) ---- */
+// name (อังกฤษจาก set_data.json) -> ดัชนีกลุ่มใน indices_data.json — พอร์ตจาก
+// SECTOR_NAME_TO_IDX_SYM ของ dashboard.js (mai sector map ไปดัชนี industry group ของ mai)
+const SEC_IDX_SYM = {
+  "Agribusiness": "^AGRI.BK", "Food & Beverage": "^FOOD.BK", "Fashion": "^FASHION.BK",
+  "Home & Office Products": "^HOME.BK", "Personal Products & Pharmaceuticals": "^PERSON.BK",
+  "Banking": "^BANK.BK", "Finance & Securities": "^FIN.BK", "Insurance": "^INSUR.BK",
+  "Automotive": "^AUTO.BK", "Industrial Materials & Machinery": "^IMM.BK",
+  "Paper & Printing Materials": "^PAPER.BK", "Petrochemicals & Chemicals": "^PETRO.BK",
+  "Packaging": "^PKG.BK", "Steel and Metal Products": "^STEEL.BK",
+  "Construction Materials": "^CONMAT.BK", "Construction Services": "^CONS.BK",
+  "Property Development": "^PROP.BK", "Property Fund & REITs": "^PFREIT.BK",
+  "Energy & Utilities": "^ENERG.BK", "Commerce": "^COMM.BK", "Health Care Services": "^HELTH.BK",
+  "Media & Publishing": "^MEDIA.BK", "Professional Services": "^PROF.BK",
+  "Tourism & Leisure": "^TOURISM.BK", "Transportation & Logistics": "^TRANS.BK",
+  "Electronic Components": "^ETRON.BK", "Information & Communication Technology": "^ICT.BK",
+  "Agro & Food Industry": "^AGRO.BK", "Consumer Products": "^CONSUMP.BK",
+  "Financials": "^FINCIAL.BK", "Industrials": "^INDUS.BK",
+  "Property & Construction": "^PROPCON.BK", "Resources": "^RESOURC.BK",
+  "Services": "^SERVICE.BK", "Technology": "^TECH.BK",
+  "Agro & Food Industry -mai": "^AGRO-M.BK", "Consumer Products -mai": "^CONSUMP-M.BK",
+  "Financials -mai": "^FINCIAL-M.BK", "Industrial -mai": "^INDUS-M.BK",
+  "Property & Construction -mai": "^PROPCON-M.BK", "Resources -mai": "^RESOURC-M.BK",
+  "Services -mai": "^SERVICE-M.BK", "Technology -mai": "^TECH-M.BK",
+};
+// override ret_* ของ sector/industry ด้วยดัชนีถ่วง market cap จริงของ SET (indices_data.json)
+// แทนค่าเฉลี่ยหุ้นไม่ถ่วงน้ำหนักจาก set_data.json — ให้ตรงกับ _sectorWithIdxOverride ของตัวเต็ม
+function secIdxOverride(g) {
+  const sym = SEC_IDX_SYM[g.name];
+  const ix = (sym && D.indices) ? D.indices[sym] : null;
+  if (!ix) return g;
+  return { ...g,
+    ret_1d: ix.ret_1d ?? g.ret_1d, ret_1w: ix.ret_1w ?? g.ret_1w,
+    ret_1m: ix.ret_1m ?? g.ret_1m, ret_3m: ix.ret_3m ?? g.ret_3m,
+    ret_6m: ix.ret_6m ?? g.ret_6m, ret_1y: ix.ret_1y ?? g.ret_1y };
+}
 function sectorRankView(main) {
   main.innerHTML = `
     <div class="seg" id="srBy">
-      <button data-k="sector" class="${_secBy === 'sector' ? 'on' : ''}">กลุ่มอุตสาหกรรม</button>
-      <button data-k="industry" class="${_secBy === 'industry' ? 'on' : ''}">หมวดใหญ่</button>
+      <button data-k="sector" class="${_secBy === 'sector' ? 'on' : ''}">หมวดธุรกิจ</button>
+      <button data-k="industry" class="${_secBy === 'industry' ? 'on' : ''}">กลุ่มอุตสาหกรรม</button>
     </div>
-    <div class="note">อันดับผลตอบแทนของแต่ละกลุ่มในแต่ละช่วงเวลา (1 = ดีสุด) — เรียงตามอันดับเฉลี่ย · โมเมนตัม = อันดับ 1 ปี ลบ 1 เดือน</div>
+    <div class="note">อันดับผลตอบแทน (ดัชนีถ่วง market cap) ของแต่ละกลุ่มในแต่ละช่วงเวลา (1 = ดีสุด) — เรียงตามอันดับเฉลี่ย · โมเมนตัม = อันดับ 1 ปี ลบ 1 เดือน</div>
     <div class="grk grk-hd"><span class="sr-nm">กลุ่ม</span><span>1ด</span><span>3ด</span><span>6ด</span><span>1ปี</span><span class="sr-avg">เฉลี่ย</span></div>
     <div id="srList"></div>`;
   const paint = () => {
-    const groups = (_secBy === 'sector' ? D.sectors : D.industries).slice();
-    const H = [['ret_1w', 'w'], ['ret_1m', 'm'], ['ret_3m', 'q'], ['ret_6m', 'h'], ['ret_1y', 'y']];
-    const rank = {};
+    // ถ้ายังไม่โหลด indices_data.json ใช้ค่าเฉลี่ยหุ้นดิบไปก่อน แล้ว re-render เมื่อโหลดเสร็จ
+    // (loadIndicesData เรียก paintStkView กลับมาถ้ายังอยู่จอ "รายชื่อหุ้น")
+    if (!D.indices && !_idxLoading) loadIndicesData();
+    const groups = (_secBy === 'sector' ? D.sectors : D.industries).map(secIdxOverride);
+    const H = [['ret_1m', 'm'], ['ret_3m', 'q'], ['ret_6m', 'h'], ['ret_1y', 'y']];
+    const rank = {}, totals = {};
     groups.forEach(g => rank[g.name] = {});
     H.forEach(([f, k]) => {
-      groups.filter(g => g[f] != null).sort((a, b) => b[f] - a[f]).forEach((g, i) => rank[g.name][k] = i + 1);
+      const valid = groups.filter(g => g[f] != null).sort((a, b) => b[f] - a[f]);
+      valid.forEach((g, i) => rank[g.name][k] = i + 1);
+      totals[k] = valid.length;
     });
     const rows = groups.map(g => {
       const r = rank[g.name];
@@ -813,7 +870,8 @@ function sectorRankView(main) {
       return { name: g.name, r1m: r.m, r3m: r.q, r6m: r.h, r1y: r.y, avg, mom };
     }).sort((a, b) => (a.avg == null ? 999 : a.avg) - (b.avg == null ? 999 : b.avg));
     const box = $('#srList'); box.innerHTML = '';
-    rows.forEach(r => box.appendChild(srRow(r, groups.length)));
+    rows.forEach(r => box.appendChild(srRow(r, totals)));
+    $('#scrSub').textContent = groups.length + (_secBy === 'industry' ? ' กลุ่มอุตสาหกรรม' : ' หมวดธุรกิจ') + ' · ' + thaiDate(D.asOf);
   };
   $('#srBy').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
@@ -823,11 +881,13 @@ function sectorRankView(main) {
   });
   paint();
 }
-function srRow(r, total) {
+function srRow(r, totals) {
   const d = el('div', 'grk');
-  const badge = rk => {
+  // ตัวหารเป็นจำนวนกลุ่มที่ "มีข้อมูล" ต่อ horizon (ตรงกับ _rankBadge ของตัวเต็ม)
+  // ไม่ใช่จำนวนกลุ่มทั้งหมด — สำคัญกับ industries ที่ bucket -mai ข้อมูลบางเบา
+  const badge = (rk, tot) => {
     if (rk == null) return '<span class="rkb flat">–</span>';
-    const q = rk / total;
+    const q = rk / (tot || 1);
     const c = q <= 0.25 ? 'a' : q <= 0.5 ? 'b' : q <= 0.75 ? 'c' : 'd';
     return `<span class="rkb ${c}">#${rk}</span>`;
   };
@@ -838,7 +898,7 @@ function srRow(r, total) {
   }
   d.innerHTML = `
     <span class="sr-nm">${r.name}${mom}</span>
-    <span>${badge(r.r1m)}</span><span>${badge(r.r3m)}</span><span>${badge(r.r6m)}</span><span>${badge(r.r1y)}</span>
+    <span>${badge(r.r1m, totals.m)}</span><span>${badge(r.r3m, totals.q)}</span><span>${badge(r.r6m, totals.h)}</span><span>${badge(r.r1y, totals.y)}</span>
     <span class="sr-avg">${r.avg ?? '–'}</span>`;
   return d;
 }
@@ -866,7 +926,7 @@ function renderWatch() {
            — ret_1w/1m/3m/6m/1y + avg_rs + count
            rotation_alerts.json (โหลดตอนเปิดหน้าครั้งแรก)
    ================================================================ */
-let _rotView = 'sector';   // sector = กลุ่มอุตสาหกรรม (35) · industry = หมวดใหญ่ (16)
+let _rotView = 'sector';   // sector = หมวดธุรกิจ (35) · industry = กลุ่มอุตสาหกรรม (16)
 let _rotTf = 'long';       // long = X:3ด Y:1ด · short = X:1ด Y:1สัปดาห์
 let _rotSel = null;        // ชื่อกลุ่มที่แตะเลือก (โชว์เส้นทาง + ไฮไลต์)
 let _rotAlertsLoading = false;
@@ -1159,7 +1219,7 @@ function renderRotation() {
   }
 
   const vseg = el('div', 'seg');
-  vseg.innerHTML = `<button data-v="sector" class="${_rotView === 'sector' ? 'on' : ''}">กลุ่มอุตสาหกรรม</button><button data-v="industry" class="${_rotView === 'industry' ? 'on' : ''}">หมวดใหญ่</button>`;
+  vseg.innerHTML = `<button data-v="sector" class="${_rotView === 'sector' ? 'on' : ''}">หมวดธุรกิจ</button><button data-v="industry" class="${_rotView === 'industry' ? 'on' : ''}">กลุ่มอุตสาหกรรม</button>`;
   c.appendChild(vseg);
   const tseg = el('div', 'seg');
   tseg.innerHTML = `<button data-t="long" class="${_rotTf === 'long' ? 'on' : ''}">แกน 3ด / 1ด</button><button data-t="short" class="${_rotTf === 'short' ? 'on' : ''}">แกน 1ด / 1สัปดาห์</button>`;
@@ -1200,7 +1260,7 @@ function renderRotation() {
     .forEach(s => list.appendChild(rotListRow(s, ax)));
   c.appendChild(list);
 
-  $('#scrSub').textContent = `${items.length} ${_rotView === 'industry' ? 'หมวด' : 'กลุ่ม'} · แกน ${ax.xl} / ${ax.yl}`;
+  $('#scrSub').textContent = `${items.length} ${_rotView === 'industry' ? 'กลุ่มอุตสาหกรรม' : 'หมวดธุรกิจ'} · แกน ${ax.xl} / ${ax.yl}`;
 }
 
 /* ---------------- MORE (เมนูจริง) ---------------- */
@@ -1653,8 +1713,12 @@ function drawSpark(cv, ser) {
   x.fillStyle = col; x.fillText(fmt2(ser[ser.length - 1]), w - rpad + 6, ey);
 }
 
-let _rz;
+let _rz, _rzW = window.innerWidth;
 window.addEventListener('resize', () => {
+  // ทุกจอ layout ขับด้วยความกว้างล้วน (คอนเทนเนอร์ max-width, canvas width:100% สูงคงที่)
+  // resize ที่ความสูงเปลี่ยนอย่างเดียว (URL bar เด้งตอนสกรอลล์บนมือถือ) ไม่ต้องวาดใหม่
+  if (window.innerWidth === _rzW) return;
+  _rzW = window.innerWidth;
   clearTimeout(_rz);
   _rz = setTimeout(() => {
     if (curScreen === 'detail') {
@@ -1820,6 +1884,7 @@ async function loadIndicesData() {
   }
   _idxLoading = false;
   if (curScreen === 'indices') renderIndices();
+  else if (curScreen === 'stocks') paintStkView();   // จอ "จัดอันดับกลุ่ม" รอ override ดัชนี
 }
 
 function renderIndices() {
@@ -1990,8 +2055,34 @@ function valBandCard(title, stat, cheapIsHigh, unit, series) {
   return d;
 }
 
+// market_stats (77KB) + set_daily_valuation + stock_valuation_stats (184KB) — โหลดตอนเปิดจอ
+// Valuation ครั้งแรก (ไม่โหลดตอน boot) เหมือน loadIndicesData
+let _valLoading = false, _valLoaded = false;
+async function loadValuationData() {
+  if (_valLoaded || _valLoading) return;
+  _valLoading = true;
+  const [mst, dval, sval] = await Promise.allSettled([
+    loadJSON('../data/market_stats.json', 20000),
+    loadJSON('../data/set_daily_valuation.json', 15000),
+    loadJSON('../data/stock_valuation_stats.json', 20000),
+  ]);
+  if (mst.status === 'fulfilled') D.mstats = mst.value;
+  if (dval.status === 'fulfilled') D.dailyVal = dval.value;
+  if (sval.status === 'fulfilled') D.stockVal = sval.value;
+  _valLoading = false;
+  _valLoaded = !!(D.mstats || D.dailyVal || D.stockVal);   // ล้มเหลวหมด = เปิดหน้าใหม่ให้ retry
+  if (curScreen !== 'valuation') return;
+  if (_valLoaded) renderValuation();
+  else $('#s-valuation').innerHTML = '<div class="list-cap">โหลดข้อมูลมูลค่าไม่สำเร็จ — เปิดหน้านี้อีกครั้งเพื่อลองใหม่</div>';
+}
+
 function renderValuation() {
   const c = $('#s-valuation'); if (!c) return;
+  if (!_valLoaded) {
+    c.innerHTML = '<div class="list-cap">กำลังโหลดข้อมูลมูลค่า…</div>';
+    loadValuationData();
+    return;
+  }
   c.innerHTML = '';
   const ms = D.mstats, dv = D.dailyVal, sv = D.stockVal;
 
