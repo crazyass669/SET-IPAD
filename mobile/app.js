@@ -280,9 +280,8 @@ const TITLES = {
   valuation: () => ['Valuation', 'กรอบ PE / PBV / ปันผล เทียบค่าเฉลี่ยย้อนหลัง'],
   heatmap: () => ['Heatmap', 'ภาพรวมตลาดไทยแยกกลุ่มอุตสาหกรรม'],
   flow: () => ['เงินทุน', 'กระแสเงิน · ชอร์ต · ผู้บริหาร · สัญญาณรวม'],
-  screener: () => ['สแกนหุ้น', _scrMode === 'plus'
-    ? 'กรองด้วยงบการเงิน — F-Score · ROE · มาร์จิ้น · การเติบโต'
-    : 'กรอง RS · สเตจ · ราคา · มูลค่าตลาด · ปันผล'],
+  // subtitle ที่แท้จริง (จำนวนหุ้นที่ตรงเงื่อนไข + วันที่) เขียนโดย applyScr() ทันทีหลัง render
+  screener: () => ['สแกนหุ้น', 'กรอง RS · สเตจ · ราคา · งบการเงิน'],
 };
 const SUBPAGES = new Set(['indices', 'valuation', 'heatmap', 'flow', 'screener']);
 function setScrHeader(scr) {
@@ -307,7 +306,9 @@ function go(scr) {
   setScrHeader(scr);
   // หน้ารายชื่อหุ้นเปิดค้าง view ไว้ — วาดซ้ำให้บรรทัดสรุป (#scrSub) ตรงกับ view/ฟิลเตอร์ปัจจุบัน
   if (scr === 'stocks') paintStkView();
-  // หน้าที่มี canvas: วาดใหม่ตอนเปิด (canvas ที่ซ่อนอยู่ตอน render แรกกว้าง 0)
+  // หน้าที่มี canvas: วาดใหม่ตอนเปิด (canvas ที่ซ่อนอยู่ตอน render แรกกว้าง 0
+  // หรือ viewport เปลี่ยนความกว้างตอนอยู่จออื่น — resize handler วาดแค่ curScreen)
+  else if (scr === 'market' && D.mkt) renderMarket();
   else if (scr === 'rotation') renderRotation();
   else if (scr === 'indices') renderIndices();
   else if (scr === 'valuation') renderValuation();
