@@ -1,0 +1,362 @@
+################################################################################
+ PLAN — CODE REVIEW เวอร์ชันมือถือ/iPad เฟส 2 (ข้อ 1–9)
+ ร่าง 2026-08-31 · สำหรับ session ใหม่ · ทำทีละ 1 ลำดับ/รอบ
+ บรรทัดอ้างอิง sync กับ mobile/app.js = 2885 บรรทัด / app.css = 647 บรรทัด
+ (v=11 / set-mobile-v11) — session คู่ขนานยังแก้อยู่ ให้ grep ชื่อฟังก์ชันยืนยัน
+ บรรทัดก่อนเริ่มทุกลำดับ (± ไม่กี่บรรทัดถือว่าตรง)
+################################################################################
+
+--------------------------------------------------------------------------------
+ 0. บริบท / วิธีเปิด diff ให้ /code-review เห็น (อ่านก่อน)
+--------------------------------------------------------------------------------
+
+งานเฟส 2 ทั้ง 9 ข้อ + เฟส 1.5 ลง commit `b364030` (parent `07838b6`) push แล้ว
++ มี tweak เล็ก ๆ ค้าง working tree ทับอีกชั้น (session คู่ขนานยังปรับเมนู)
+ของใหม่รวม ~2,760 บรรทัด — ~2,210 กระจุกใน mobile/app.js ไฟล์เดียว
+
+ไฟล์ในสโคป (นับจาก 07838b6 -> ปัจจุบัน = committed + uncommitted):
+  mobile/app.js       819 -> 2885   (+~2070)
+  mobile/app.css      348 -> 647    (+299)
+  mobile/index.html   screen div 6 -> 11 อัน · tabbar เท่าเดิม 5 ปุ่ม · v=11
+  mobile/sw.js        set-mobile-v3 -> v11 + activate กรอง prefix
+  index.html (root)   เขียนใหม่ทั้งไฟล์ 31 บรรทัด (device redirect)
+  set_dashboard.html  +head script L6–19 (เด้ง PWA เก่า เฉพาะ github.io)
+  sw.js (root)        set-dash-v3 -> v4 + activate กรอง prefix set-dash-
+
+*** /code-review ต้องมี diff/PR/branch/path ***  ไม่มี PR, main == origin/main
+วิธีเปิด (เลือกอย่างใดอย่างหนึ่ง):
+  (ก) ลองชี้ base ตรง ๆ:        code-review <level> 07838b6
+  (ข) ถ้าไม่รับ ref -> รวมทุกอย่างเป็นงานค้างชั่วคราว:
+        git reset --soft 07838b6            # tree ไม่เปลี่ยน แค่ย้าย HEAD
+        ...รีวิว + แก้ทีละลำดับ...
+        git add -A && git commit -m "update" && git push --force-with-lease
+      (repo เดี่ยว push มือ — force-with-lease ปลอดภัยพอ)
+  * ทั้งสองแบบ scope diff = ทุกอย่างตั้งแต่ 07838b6 (committed b364030 +
+    ที่ยังค้าง) — ครบทั้งเฟส 2
+
+--------------------------------------------------------------------------------
+ 1. นอกขอบเขตทุกลำดับ (infra เฟส 0/1.5 — ผ่าน Playwright + ใช้งานจริงแล้ว)
+--------------------------------------------------------------------------------
+
+ห้ามรีวิว/เสนอแก้ เว้นแต่ caller ใหม่เฟส 2 ยิงค่าที่ทำ helper เดิมพัง:
+  - helpers L11–57 ($ el nf sgn cls pct fmtCap* fmtBaht beQ volX shortName
+    thaiDate toast loadJSON) · global state D L58–87 · rowSet/rowDr/rowEtf L88–141
+  - calcFGI/calcRegime/computeMarket L143–195
+  - row component: listRow L335 · secHead L366 · barRow L372 · dvRow L380 · statRow L1312
+  - DETAIL: sliceHistory L1238 · renderDetail L1257 · tabOverview/Tech/Fin L1320–1415 ·
+    quarterlySection L1417 · drawQBars L1465 · drawSpark L1612
+  * hero/tiles/fear-greed ใน renderMarket = เฟส 0 (ไม่รีวิว)
+
+--------------------------------------------------------------------------------
+ 2. โฟกัสมาตรฐาน (ต่อท้ายทุกลำดับ)
+--------------------------------------------------------------------------------
+
+โฟกัสที่: (1) correctness — null/undefined access, unhandled exception, race
+condition, off-by-one, edge case ข้อมูลว่าง/ขาด/ยังไม่โหลด ที่ทำให้ JS throw จน
+หน้า/แท็บค้าง, สูตร/ตรรกะคำนวณผิด (โดยเฉพาะที่พอร์ตมือจาก dashboard.js), ค่าที่โชว์
+ไม่ตรงกับข้อมูลจริง, **shape ที่ JS คาดหวัง ไม่ตรงกับ data/*.json ที่
+run_static_update.py bake จริง** (โค้ดต้นทางอ่าน endpoint สดของ Flask — key ชื่อ/
+หน่วย/nesting อาจต่าง), canvas วาดเพี้ยน/หารศูนย์/NaN, XSS จาก field ที่มาจากการ
+ขูดเว็บ (ชื่อบริษัท/ผู้บริหาร/sector) ใส่ innerHTML โดยไม่ escape
+(2) code quality — โค้ดซ้ำที่ควรรวมเป็น helper เดียว (มี pattern พอร์ตซ้ำ ๆ กัน
+หลายจอ), จุดที่ทำให้สั้น/ง่ายลงได้โดยไม่กระทบ behavior, loop/fetch/DOM ที่ไม่มี
+ประสิทธิภาพ (สร้าง element ในลูปแทน fragment, filter/sort ซ้ำ, โหลด JSON ซ้ำโดย
+ไม่ cache ใน D)
+
+กฎเฉพาะโปรเจกต์: dark-only · ห้ามโชว์ชื่อแหล่งข้อมูล (Yahoo/Finnomena/SET.or.th)
+ใน UI (ยกเว้น "ที่มา ตลาดหลักทรัพย์ฯ") · ห้าม Finnomena ใน data/*.json ·
+bump ?v= app.css/app.js + CACHE sw.js ทุกครั้งที่แก้ (ตอนนี้ v=11 / set-mobile-v11)
+
+
+================================================================================
+ ลำดับ 1: จอ "ตลาด" + Market Breadth mini-charts --- [สถานะ: ⬜ ยังไม่เคยรีวิว]
+          (เฟส 2 ข้อ 1 — ทำใน session แรก + Playwright 18 assert ผ่าน)
+================================================================================
+
+code-review xhigh
+
+ตรวจสอบ correctness bugs ทุกประเภท + จุดที่ควร reuse/simplify/เพิ่มประสิทธิภาพ
+เฉพาะจอ "ตลาด" ส่วนที่เพิ่มในเฟส 2 เท่านั้น:
+- mobile/app.js:
+    boot data-load L224–248   (market_internals.json + breadth_1y.json +
+      market_stats.json + set_daily_valuation.json + stock_valuation_stats.json
+      เพิ่มใน Promise.allSettled · guard D.internals/D.breadth · missing toast)
+    isPenny L193
+    rsDist() L196–208          (binning RS 7 ช่อง — เทียบ bins ใน renderOverview
+                                dashboard.js:1291 + filter s.rs != null)
+    rsLeaderRow() L353–365
+    renderMarket() L390–516    (เฉพาะบล็อกใหม่: RS distribution histogram +
+                                สรุป RS90+/80+/70+ · RS leaders 10 (กัน penny) ·
+                                กราฟ NH/NL · section ความกว้างตลาด 1 ปี =
+                                adv/dec + กราฟ %เหนือ EMA + กราฟ McClellan)
+    _cvBase L1500 · _kickCanvas L1508 · _xLabels L1521 · drawNHNL L1532 ·
+      drawBreadthEMA L1559 · drawMccBars L1586
+    resize handler L1648–1669  (สาขา curScreen === 'market' -> renderMarket())
+- mobile/app.css L203–233 (.rsd / .rsd-x / .rsd-sum / .rlr)
+
+ข้อมูล: data/market_internals.json { dates[], new_highs[], new_lows[] } (~63 วัน) ·
+data/breadth_1y.json { dates[], adv[], dec[], nh[], nl[], nhnl_ratio[],
+pct_above_ema50[], pct_above_ema200[], mcclellan_osc[], mcclellan_sum[],
+n_universe[] } (252 วัน) — เทียบ dashboard.js drawNewHighChart / drawBreadthCharts
+
+หมายเหตุขอบเขต: _kickCanvas/_xLabels/_cvBase ใช้ต่อในลำดับ 4+7 ด้วย — flag ถ้า
+signature/พฤติกรรมไม่ทั่วไป · boot data-load เพิ่ม 5 ไฟล์ทีเดียว (บางไฟล์เป็นของ
+ลำดับ 4) — เช็ค guard ครบทุกตัว ไม่ใช่แค่ 2 ตัวแรก
+
+<< โฟกัสมาตรฐาน ข้อ 2 >>
+
+
+================================================================================
+ ลำดับ 2: จอ "รายชื่อหุ้น" — view tabs + predicate --- [สถานะ: ⬜ ยังไม่เคยรีวิว]
+          (เฟส 2 ข้อ 2 — พอร์ต predicate มือจาก "หุ้นทั้งหมด" ของเว็บ)
+================================================================================
+
+code-review xhigh
+
+ตรวจสอบ correctness bugs ทุกประเภท + จุดที่ควร reuse/simplify/เพิ่มประสิทธิภาพ
+เฉพาะ view tabs ของจอ "รายชื่อหุ้น" เท่านั้น (mobile/app.js L517–841):
+    state:  stkView L521 · _boSide/_boRS/_boEMA L523 · _momTf L524 · _secBy L525
+    matchesKind() L550 · viewPredicate() L556–571
+    renderStocks() L572–588        (แถบแท็บ + search/filter/sort เดิม)
+    paintStkView() L589–597        (dispatcher ต่อ view + เขียน #scrSub)
+    stockListView() L599–662       (all / rs80 / emerging / stage2 / momentum —
+                                    เทียบ showStocksView dashboard.js)
+    breakoutView() L664–734 + boRow() L718   (ใกล้ high/low 52 สัปดาห์ —
+                                    เทียบ renderBreakout)
+    groupBreadthView() L736–785 + gbRow() L770  (% เหนือ EMA รายกลุ่ม —
+                                    เทียบ renderEMABreadth)
+    sectorRankView() L787–841 + srRow() L822   (จัดอันดับกลุ่มตามผลตอบแทน
+                                    ข้าม 1M/3M/6M/1Y — เทียบ renderSectorRankTable)
+- mobile/app.css L311–356 (.stk-view / group breadth row / sector rank grid)
+
+โฟกัสพิเศษ: (1) predicate แต่ละ view เกณฑ์ตรงกับ dashboard.js บรรทัดต่อบรรทัด
+(rs_score threshold, stage เลข, above_ema* null vs false, %ห่าง 52w high/low,
+เกณฑ์ emerging = rs 35–80 + ret_1m ≥ 3 + above_ema50, momentum _momTf นับ tf บวก
+พร้อมกัน) (2) view "หุ้นไทยเท่านั้น" vs 'all' ที่รวม DR/ETF — matchesKind กรอง
+ถูกทุก view (3) sector/industry aggregate: หาร count = 0, กลุ่ม -mai,
+กลุ่มไม่มีหุ้นเข้าเกณฑ์ (4) โครงสร้าง D.sectors / D.industries จาก set_data.json
+(sd.sectors / sd.industries) ตรงกับที่ code อ่าน — avg_rs? count? ret_*? name?
+
+<< โฟกัสมาตรฐาน ข้อ 2 >>
+
+
+================================================================================
+ ลำดับ 3: nav restructure + เมนู "เพิ่มเติม" + sub-page routing
+          --- [สถานะ: ⬜ ยังไม่เคยรีวิว] (เฟส 2 ข้อ 3 — plumbing ล้วน)
+================================================================================
+
+code-review high
+
+ตรวจสอบ correctness bugs ทุกประเภท + จุดที่ควร reuse/simplify เฉพาะระบบนำทาง
+ที่รื้อใหม่:
+- mobile/index.html L27–66 (screen div 11 อัน: เพิ่ม s-indices/valuation/heatmap/
+  flow/screener · tabbar 5 ปุ่ม market/stocks/watch/rotation/more)
+- mobile/app.js:
+    TITLES L275–288 · SUBPAGES Set L289
+    setScrHeader() L290–301
+    go() L302–320            (navScr = SUBPAGES ? 'more' : scr · backBtn
+                              เงื่อนไข detail || SUBPAGES · เรียก render ต่อจอ ·
+                              scrollTo(0,0) · paintStkView เมื่อ scr==='stocks')
+    openDetail() L321–326 · wireNav() L327–333
+    MORE_MENU L1205–1212 · renderMore() L1213–1232
+    boot render calls L~256 (renderMarket/Stocks/Watch/More — ไม่เรียก Rotation)
+- mobile/app.css L417–434 (.mitem / .mitem.soon / .mi-badge)  · L435–453 (.tabbar)
+
+โฟกัสพิเศษ: (1) back จาก sub-page -> "เพิ่มเติม" เสมอ (ไม่ใช่ detailFrom ค้าง) ·
+back จาก detail ที่เปิดจาก sub-page (แตะหุ้นใน Screener/Valuation) กลับถูกจอไหม
+(detailFrom vs curScreen ตอน openDetail) (2) แตะ "เพิ่มเติม" ตอนอยู่ sub-page อยู่
+แล้ว / แตะแท็บล่างซ้ำหน้าเดิม (3) go(scr) ที่ไม่มี #s-<scr> หรือไม่มีใน TITLES ->
+TITLES[scr]() throw (4) renderMore: MORE_MENU item ที่ตั้ง m.mode -> set _scrMode
+ก่อน go('screener') · TITLES.screener อ่าน _scrMode -> header เพี้ยนถ้าเปิดจาก
+ปุ่มอื่น/ครั้งแรก (5) canvas ในจอที่เปิดครั้งแรกกว้าง 0 — go() เรียก render ซ้ำครบ
+ทุกจอที่มี canvas (rotation/indices/valuation/heatmap/flow)
+
+<< โฟกัสมาตรฐาน ข้อ 2 >>
+
+
+================================================================================
+ ลำดับ 4: ดัชนีกลุ่ม + Valuation + Heatmap ตลาดไทย
+          --- [สถานะ: ⬜ ยังไม่เคยรีวิว] (เฟส 2 ข้อ 4 + 6)
+================================================================================
+
+code-review xhigh
+
+ตรวจสอบ correctness bugs ทุกประเภท + จุดที่ควร reuse/simplify/เพิ่มประสิทธิภาพ
+เฉพาะ 3 จอนี้ (mobile/app.js L1670–2108):
+    heat colors:  heatColor() L1678 · heatColorRS() L1683 · heatTextOn L1688 ·
+                  drawTiny() L1692–1710
+    HEATMAP ตลาดไทย (ข้อ 6):  state _hmMetric/_hmDir L1719 · hmValue() L1721 ·
+                  renderHeatmap() L1727–1782
+    ดัชนีกลุ่ม (ข้อ 4):  state _idxGroup/_idxSort/_idxView/_idxLoading L1795 ·
+                  loadIndicesData() L1801 · renderIndices() L1816 · idxCard() L1850 ·
+                  idxHeatmap() L1871
+    VALUATION (ข้อ 4):  state _valPeriod L1895 · _svMetric/_svScope/_svZone/_svQ
+                  L1896 · valFilterPeriod() L1898 · valStats() L1907 · valZone() L1922 ·
+                  drawValLine() L1931 · valBandCard() L1965 · renderValuation() L1984–2089 ·
+                  svRow() L2090–2108
+- mobile/app.css L475–491 (.heat grid) · L492–509 (idx cards) · L510–533 (valuation)
+
+ข้อมูล: data/indices_data.json (~1.2MB — โหลด lazy) · data/market_stats.json
+(band PE/PBV/ปันผล/มูลค่าตลาด ย้อนหลังยาว) · data/set_daily_valuation.json
+(PE/PBV/ปันผล/EPS SET&mai วันนี้) · data/stock_valuation_stats.json (PE/PBV +
+z-score รายหุ้น) — เทียบ dashboard.js loadIndicesPage / renderValuation / renderHeatmap
+
+โฟกัสพิเศษ: (1) valStats — percentile/ค่าเฉลี่ย/σ: array ว่าง, ค่าติดลบ (PE
+ขาดทุน), NaN, ช่วง period ตัดจนเหลือ < 2 จุด (2) valZone cheapIsHigh — ปันผล
+(สูง=ถูก) vs PE/PBV (สูง=แพง) สลับถูก (3) drawValLine / drawTiny — min == max,
+ทุกค่า null (4) heatColor cap หาร cap, ค่าเกิน range, heatTextOn (5) renderHeatmap
+/ idxHeatmap — กลุ่มไม่มีหุ้น, mkt_cap 0/null, sort dir _hmDir/_idxSort
+(6) indices_data.json 1.2MB โหลดซ้ำทุก go('indices')? (cache D.indices +
+_idxLoading guard) (7) key จริงใน market_stats.json / stock_valuation_stats.json
+ตรง shape ที่ code อ่าน (nesting / ชื่อ field / หน่วย)
+
+<< โฟกัสมาตรฐาน ข้อ 2 >>
+
+
+================================================================================
+ ลำดับ 5: จอ "เงินทุน" — Capital Flow / Short / Insider / Confluence
+          --- [สถานะ: ⬜ ยังไม่เคยรีวิว] (เฟส 2 ข้อ 5 — surface ใหญ่สุด 4 ฟีเจอร์ย่อย)
+================================================================================
+
+code-review xhigh
+
+ตรวจสอบ correctness bugs ทุกประเภท + จุดที่ควร reuse/simplify/เพิ่มประสิทธิภาพ
+เฉพาะจอ "เงินทุน" (4 แท็บย่อย) — mobile/app.js L2109–2632:
+    FLOW_CFG L2117 · state L2129–2134 (_flowTab/_cfMarket/_cfPeriod/_cfView/
+      _shMinPct/_shSort/_shQ/_insDays/_insQ/_cfxFilter/_cfxQ/_flowLoading/_insLoading)
+    _sstk L~2136 · _esc L~2138 (escape ก.ล.ต. — เช็คครอบทุกจุดที่ควร)
+    loadFlowBundle() L2140 · loadInsiderBundle() L2162 (lazy + guard ซ้อน)
+    renderFlow() L2178 · paintFlowTab() L2200
+    [CF]  flowRowsForPeriod() L2210 · drawFlowChart() L2225 · cfView() L2265
+    [SH]  squeezeCandidates() L2316 · shView() L2330 · shRow() L2414
+    [INS] insAccum() L2445 · insView() L2461 · paintInsider() L2475 · insRecRow() L2544
+    [CFX] cfxView() L2567 · cfxRow() L2608
+- mobile/app.css L538–551 (cf legend/ตาราง) · L552–580 (short) · L581–593 (insider) ·
+  L594–611 (confluence)
+
+ข้อมูล: data/market_flow{,_s50,_bond}.json · data/short_sales.json (+ daily_tail) ·
+data/insider_trades_{7,30,90,180}.json · data/major_changes_{7,30,90,180}.json ·
+data/flow_signals.json — เทียบ dashboard.js renderFlowPage / renderShort* /
+renderInsider* / _renderConfluenceTable
+
+โฟกัสพิเศษ: (1) lazy load: กดสลับแท็บ/ปุ่มวัน (7/30/90/180) เร็ว ๆ ระหว่าง fetch
+ยังไม่เสร็จ — race, _insLoading ต่อ days, โหลดซ้ำ (2) insAccum — รวมยอด buy/sell,
+หุ้นมีทั้ง 2 ฝั่ง, record ไม่มีมูลค่า/หุ้น, หาร 0 (3) drawFlowChart — โหมด cum vs
+daily, ทุกค่า 0, period ตัดเหลือ 0 แถว, แกน hasIndex ต่อ market (4) squeezeCandidates
+— เกณฑ์ short % + ราคา/โมเมนตัม ตรงกับเว็บ (5) _esc ครอบ **ทุก** field ชื่อคน/
+บริษัทจาก major_changes/insider ก่อน innerHTML (6) filter/sort/search ของแต่ละแท็บ
+ไม่รั่วข้ามแท็บ (state แยกกัน) (7) shape: flow_signals.json (dir/score),
+short_sales (daily_tail), market_flow_* (fund/foreign/retail keys), major_changes
+(field names)
+
+<< โฟกัสมาตรฐาน ข้อ 2 >>
+
+
+================================================================================
+ ลำดับ 6: จอ "สแกนหุ้น" — Screener + Screener+ --- [สถานะ: ⬜ ยังไม่เคยรีวิว]
+          (เฟส 2 ข้อ 7 — predicate เยอะสุด + กับดัก Yahoo รายปี)
+================================================================================
+
+code-review xhigh
+
+ตรวจสอบ correctness bugs ทุกประเภท + จุดที่ควร reuse/simplify/เพิ่มประสิทธิภาพ
+เฉพาะจอ "สแกนหุ้น" — mobile/app.js L2633–2883:
+    state _scrMode/_scrSort L2642 · _scrF L2644–2651
+    SCR_*_OPTS L2653–2673 · SCR_PRESETS_BASIC/PLUS L2675–2687 ·
+      SCR_SORTS_* L2689 · _sfin L2691 · SCR_SORTF L2692–2700
+    scrPass() L2701–2734          (predicate ทั้งหมด basic + plus)
+    scrClearF() L2735 · scrApplyPreset() L2744 · _scrGrp L2746
+    renderScreener() L2750–2834   (ชิปกดเลือก + สลับ basic/plus)
+    _scrBasicMetric() L2835 · applyScr() L2839 · scrPlusRow() L2857–2883
+- mobile/app.css L612–644
+
+ข้อมูล: set_data.json (D.stocks) + financials_analytics_yahoo.json (D.fin) —
+หุ้นไทย SET+mai เท่านั้น · เทียบ dashboard.js runScreener() + _mergeFinAnalyticsInto
+
+โฟกัสพิเศษ: (1) *** งบ Yahoo "รายปี" *** — ช่อง "เป็นบวกติดกัน" (profitPos/revPos,
+SCR_POSY_OPTS "≥ N ปี") ต้อง label "ปี" ไม่ใช่ "ไตรมาส" (เทียบ
+_patchPosStreakForStatic dashboard.js) · rev_yoy_q / profit_yoy_q / QoQ เป็นราย
+ไตรมาสจริง (2) scrPass แต่ละเกณฑ์: null = "ไม่กรอง" vs 0 = "ต้อง ≥ 0" — SCR_*_OPTS
+มีทั้ง [null,'ไม่กรอง'] และ [0,'≥ 0%'] แยกถูกทุกช่อง (3) หุ้นไม่มี D.fin[symbol]
+ตอนเปิดโหมด plus — ตกกรองเงียบ vs แสดง "ไม่มีงบ" (4) scrApplyPreset -> scrClearF
+เคลียร์ครบก่อน Object.assign (5) SCR_SORTF: field null (?? -1 / ?? -999 ทิศถูก),
+_sfin(sym) คืน {} เมื่อไม่มีงบ (6) renderScreener รีเรนเดอร์ทั้งลิสต์ทุกชิป/
+keystroke — throttle / cap แถว / fragment
+
+<< โฟกัสมาตรฐาน ข้อ 2 >>
+
+
+================================================================================
+ ลำดับ 7: จอ "หมุนเวียน" — RRG canvas + rotation alerts
+          --- [สถานะ: ⬜ ยังไม่เคยรีวิว] (เฟส 2 ข้อ 8 — canvas + hit-test ซับซ้อน)
+================================================================================
+
+code-review xhigh
+
+ตรวจสอบ correctness bugs ทุกประเภท + จุดที่ควร reuse/simplify/เพิ่มประสิทธิภาพ
+เฉพาะจอ "หมุนเวียน" ที่เขียนใหม่ — mobile/app.js L858–1201:
+    state _rotView/_rotTf/_rotSel/_rotAlertsLoading/_rrgHit L865–869 ·
+      ROT_QUAD L871 · _QEN2TH L877
+    rotQuadKey() L878 · _rotColor() L892
+    loadRotAlerts() L899                (fetch rotation_alerts.json + guard)
+    drawRRG() L909–1062                 (พิกัด x/y ต่อ tf, quadrant, trail,
+                                        เก็บ _rrgHit เป็น CSS px)
+    _hexA() L1063 · rrgLegend() L1068 · rotSelCard() L1083 · rotListRow() L1100
+    rotAlertsSection() L1117 · renderRotation() L1147–1201
+- mobile/app.css L234–270 (rotation + RRG)
+
+ข้อมูล: set_data.json .sectors (35) / .industries (16) — ret_1w/1m/3m/6m/1y +
+avg_rs + count · data/rotation_alerts.json (transitions / pending / fast) —
+เทียบ services/rotation.py + rotation canvas ใน dashboard.js
+
+โฟกัสพิเศษ: (1) drawRRG แกน: long = X 3ด / Y 1ด · short = X 1ด / Y 1สัปดาห์ —
+map field ถูก, normalize รอบศูนย์ 100, กลุ่มที่ ret null (2) hit-test: _rrgHit
+เก็บพิกัดหลัง dpr scale — แตะ canvas map กลับเป็นกลุ่มถูกจุด (clientX/Y - rect
+เทียบ r) แม้ resize/scroll (3) drawRRG เรียกซ้ำตอน go('rotation') + resize +
+สลับ view/tf/sel — _rrgHit (L915 reset) ค้างของรอบเก่าไหม, canvas กว้าง 0
+(4) trail (_rotSel) — กลุ่มที่มีแค่ 1 คาบ (5) loadRotAlerts fail / ไฟล์ไม่มี /
+transitions ว่าง — section หายเงียบ vs error (6) _QEN2TH map ค่า quadrant จาก
+alerts (Leading/Improving/Weakening/Lagging) -> ไทย ครบ 4 ค่า
+
+<< โฟกัสมาตรฐาน ข้อ 2 >>
+
+
+================================================================================
+ ลำดับ 8: redirect root -> mobile/ + Service Worker 2 ตัว
+          --- [สถานะ: ⬜ ยังไม่เคยรีวิว]
+          (เฟส 2 ข้อ 9 — เล็ก แต่ BLAST RADIUS สูงสุด: แตะ PWA เว็บเต็มด้วย)
+================================================================================
+
+code-review xhigh
+
+ตรวจสอบ correctness bugs ทุกประเภท + จุดที่ควร reuse/simplify เฉพาะ redirect +
+service worker — อ่านทุกบรรทัด:
+- index.html (root — เขียนใหม่ทั้งไฟล์ 31 บรรทัด L1–31):
+    device sniff (pointer:coarse || min(screen w/h) <= 820) -> location.replace
+    ('mobile/') · ?m บังคับมือถือ · ?full บังคับเต็ม · <body> fallback ลิงก์
+- set_dashboard.html L6–19: head script — เฉพาะ location.hostname.endsWith
+    ('github.io') · ข้าม ?full / ?static · coarse||narrow -> replace('mobile/')
+- sw.js (root) L13 CACHE 'set-dash-v4' (จาก v3) · L29–38 activate:
+    caches.keys().filter(k => k.startsWith('set-dash-') && k !== CACHE)
+- mobile/sw.js L8 'set-mobile-v11' · L25–34 activate: filter startsWith 'set-mobile-'
+- mobile/index.html L18 app.css?v=11 · L79 app.js?v=11
+
+โฟกัสพิเศษ: (1) **redirect loop** — /mobile/ ไม่มีอะไรเด้งกลับ · ?full เปิด
+set_dashboard.html แล้ว head script ไม่เด้งซ้ำ · เปิด root บน desktop ->
+set_dashboard.html ไม่เด้งไป mobile/ (2) **SW 2 ตัว scope ซ้อน**: เครื่องที่เคย
+ติดตั้ง PWA เก่า (start_url = set_dashboard.html ที่ /) แล้วถูก redirect มา
+/mobile/ จะมี SW ทั้ง set-dash-* (scope /) และ set-mobile-* (scope /mobile/)
+พร้อมกัน — activate แต่ละตัวกรอง prefix ตัวเอง -> ไม่ล้าง cache ของกันและกัน ·
+ยืนยัน scope: mobile/sw.js register จาก /mobile/ ไม่ไปคุม / (3) PWA เก่า: คนที่
+กด "เพิ่มไปหน้าจอโฮม" ตอนเป็นเว็บเต็ม เปิดแอปต้องเด้งเข้า mobile/ (navigate ผ่าน
+SW — cache set_dashboard.html เก่ายังเสิร์ฟ head script ใหม่ไหม, network-first
+ช่วย) (4) ?static ยังใช้เทส static บน desktop ได้ (5) matchMedia / screen ใน
+try-catch ครบ (Safari เก่า / no-JS) (6) bump ครบทุกจุด · sw.js root PRECACHE
+ยังชี้ set_dashboard.html (ถูก — เว็บเต็มยังต้องใช้ได้)
+
+<< โฟกัสมาตรฐาน ข้อ 2 >>
+
+################################################################################
+ หลังรีวิวครบทุกลำดับ: อัปเดต [สถานะ] ในไฟล์นี้ + memory
+ mobile-viewer-redesign-2026-08-30 · แก้ที่เจอ -> bump ?v= + commit + push (มือ)
+################################################################################

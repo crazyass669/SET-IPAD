@@ -1210,14 +1210,6 @@ const MORE_MENU = [
   { ic: '🔍', t: 'สแกนหุ้น (Screener)', s: 'กรอง RS / สเตจ / ราคา / มูลค่าตลาด / ปันผล', scr: 'screener', mode: 'basic' },
   { ic: '🔬', t: 'สแกนด้วยงบการเงิน', s: 'กรองด้วย F-Score / ROE / มาร์จิ้น / การเติบโต', scr: 'screener', mode: 'plus' },
 ];
-const MORE_LOCKED = [
-  ['🎯', 'DCF / Fair Value P·B·P/E ทั้งตลาด'],
-  ['📈', 'แนวโน้มตลาด · เทียบเพื่อน · Tearsheet'],
-  ['🌍', 'หุ้นต่างประเทศ US / HK / JP'],
-  ['📰', 'ข่าวรายตัว · รายงานทางการ · Val. Band'],
-  ['🐋', 'Hedge Holdings (13F) · Data Health'],
-  ['✏️', 'เพิ่ม / ลบ วอทช์ลิสต์'],
-];
 function renderMore() {
   const c = $('#s-more'); c.innerHTML = '';
 
@@ -1236,16 +1228,6 @@ function renderMore() {
   c.appendChild(box);
   c.appendChild(el('div', 'note',
     'เวอร์ชันมือถือเน้นดูสรุปหุ้นไทย / DR / ETF รายวัน + งบย้อนหลัง — แตะที่หลักทรัพย์เพื่อดูกราฟ ผลตอบแทน และงบรายไตรมาสในแท็บ “งบการเงิน”'));
-
-  c.appendChild(secHead('มีเฉพาะเวอร์ชันบนเครื่อง'));
-  const box2 = el('div');
-  MORE_LOCKED.forEach(([ic, t]) => {
-    const row = el('div', 'mitem locked');
-    row.innerHTML = `<span class="mi-ic">${ic}</span><span class="mi-body"><span class="mi-t">${t}</span></span>`;
-    box2.appendChild(row);
-  });
-  c.appendChild(box2);
-  c.appendChild(el('div', 'note', 'เครื่องมือกลุ่มนี้ต้องดึงข้อมูลสด / ใช้ฐานข้อมูลเต็มบนโน้ตบุ๊ก'));
 }
 
 /* ---------------- DETAIL ---------------- */
