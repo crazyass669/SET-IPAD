@@ -2262,7 +2262,8 @@ let _cfMarket = 'set', _cfPeriod = 3, _cfView = 'cum';
 let _shMinPct = 0, _shSort = 'pos', _shQ = '';
 let _insDays = 30, _insQ = '';
 let _cfxFilter = 'all', _cfxQ = '';
-let _flowLoading = false, _insLoading = null;
+let _flowLoading = false;
+const _insLoading = new Set();   // days ที่กำลังโหลดอยู่ — เป็น Set กันกดปุ่มวันหลายครั้งเร็ว ๆ แล้ว fetch ซ้ำ / เคลียร์ flag ข้ามกัน
 
 const _sstk = sym => D.byId['set:' + sym] || null;
 // ชื่อผู้บริหาร/ผู้ถือหุ้นใหญ่มาจากการขูดหน้าเว็บ ก.ล.ต. ดิบ ๆ — escape ก่อนใส่ innerHTML
@@ -2279,20 +2280,20 @@ async function loadFlowBundle() {
     loadJSON('../data/flow_signals.json', 20000),
   ]);
   if (mf.status === 'fulfilled') D.flow = mf.value;
-  if (s50.status === 'fulfilled') D.flowS50 = s50.value;
-  if (bond.status === 'fulfilled') D.flowBond = bond.value;
+  if (s50.status === 'fulfilled') D.flowS50 = s50.value; else if (!D.flowS50) D.flowS50 = { rows: [], _failed: true };
+  if (bond.status === 'fulfilled') D.flowBond = bond.value; else if (!D.flowBond) D.flowBond = { rows: [], _failed: true };
   if (sh.status === 'fulfilled') D.flowShort = sh.value;
   if (sig.status === 'fulfilled') D.flowSig = sig.value;
   _flowLoading = false;
-  if (!D.flow && !D.flowShort && !D.flowSig) {
-    D.flow = { rows: [], _failed: true };   // กันวนโหลดซ้ำไม่จบ
-  }
+  // ต้องมี D.flow เสมอหลัง settle — renderFlow() ใช้ !D.flow เป็น gate เรียก loadFlowBundle
+  // ถ้า market_flow.json ตัวเดียว fail (แต่ short/sig ผ่าน) แล้วไม่ตั้ง sentinel = วนโหลดไม่จบ
+  if (!D.flow) D.flow = { rows: [], _failed: true };
   if (curScreen === 'flow') renderFlow();
 }
 
 async function loadInsiderBundle(days) {
-  if (D.insider[days] || _insLoading === days) return;
-  _insLoading = days;
+  if (D.insider[days] || _insLoading.has(days)) return;
+  _insLoading.add(days);
   const [it, mc] = await Promise.allSettled([
     loadJSON('../data/insider_trades_' + days + '.json', 30000),
     loadJSON('../data/major_changes_' + days + '.json', 20000),
@@ -2302,8 +2303,10 @@ async function loadInsiderBundle(days) {
     r246: (mc.status === 'fulfilled' && Array.isArray(mc.value.records)) ? mc.value.records : [],
     fetched: (it.status === 'fulfilled' && it.value.fetched_at) || '',
   };
-  _insLoading = null;
-  if (curScreen === 'flow' && _flowTab === 'ins') renderFlow();
+  _insLoading.delete(days);
+  // re-render เฉพาะเมื่อผู้ใช้ยังดูช่วงวันนี้อยู่ — กัน response ที่ตอบช้าของช่วงที่ทิ้งไปแล้ว
+  // มา rebuild ทับ (ล้างช่องค้นหา insider / scroll ของช่วงที่กำลังดู)
+  if (curScreen === 'flow' && _flowTab === 'ins' && _insDays === days) renderFlow();
 }
 
 function renderFlow() {
@@ -2414,7 +2417,10 @@ function cfView(body) {
     return;
   }
   const rows = flowRowsForPeriod(src.rows, _cfPeriod);
-  _kickCanvas('cfChart', cv => drawFlowChart(cv, rows, cfg, _cfView));
+  if (rows.length < 2)
+    body.querySelector('.chart-wrap').innerHTML = '<div class="list-cap" style="padding:24px 0;text-align:center">ช่วงที่เลือกมีข้อมูลไม่พอวาดกราฟ — เลือกช่วงยาวขึ้น</div>';
+  else
+    _kickCanvas('cfChart', cv => drawFlowChart(cv, rows, cfg, _cfView));
   const span = rows.length ? `${rows[0].date} – ${rows[rows.length - 1].date}` : '';
   body.querySelector('#cfSrc').textContent = `หน่วย ${cfg.unit} · ${span} · ${cfg.src}`;
 
