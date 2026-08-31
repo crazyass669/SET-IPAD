@@ -931,6 +931,7 @@ let _rotView = 'sector';   // sector = หมวดธุรกิจ (35) · in
 let _rotTf = 'long';       // long = X:3ด Y:1ด · short = X:1ด Y:1สัปดาห์
 let _rotSel = null;        // ชื่อกลุ่มที่แตะเลือก (โชว์เส้นทาง + ไฮไลต์)
 let _rotAlertsLoading = false;
+let _rotAlertsErr = false; // fetch rotation_alerts.json ล้มเหลวรอบล่าสุด (ไม่ค้างถาวร — retry ตอนเปิดหน้าใหม่)
 let _rrgHit = [];          // [{name,x,y,r}] พิกัด CSS px สำหรับ hit-test การแตะ
 
 const ROT_QUAD = {
@@ -964,8 +965,11 @@ const _RCFONT = '"IBM Plex Sans Thai","Noto Sans Thai",sans-serif';
 async function loadRotAlerts() {
   if (D.rotAlerts || _rotAlertsLoading) return;
   _rotAlertsLoading = true;
+  _rotAlertsErr = false;
+  // fail = ปล่อย D.rotAlerts เป็น null (ไม่ตั้ง sentinel truthy) เพื่อให้ guard ข้างบน
+  // ยอมให้ยิงซ้ำตอนเปิดหน้า "หมุนเวียน" ใหม่ — เหมือน loadValuationData/loadIndicesData
   try { D.rotAlerts = await loadJSON('../data/rotation_alerts.json', 20000); }
-  catch (e) { D.rotAlerts = { _failed: true }; }
+  catch (e) { _rotAlertsErr = true; }
   _rotAlertsLoading = false;
   if (curScreen === 'rotation') renderRotation();
 }
@@ -1057,7 +1061,11 @@ function drawRRG(cv, items, tf, sel) {
     let anch = tf === 'short'
       ? [[s.ret_3m, s.ret_1m], [s.ret_1m, s.ret_1w]]
       : [[s.ret_1y, s.ret_6m], [s.ret_6m, s.ret_3m], [s.ret_3m, s.ret_1m]];
-    const T = anch.filter(a => a[0] != null && a[1] != null).map(a => ({ x: toX(a[0]), y: toY(a[1]) }));
+    // แกน x/y คำนวณจาก ret ระยะสั้น (1ด/3ด) — ret 6ด/1ปี ของบางกลุ่มหลุดกรอบไปไกล
+    // ทำให้เส้น trail ทั้งเส้นถูกวาดนอก bitmap (มองไม่เห็น) — clamp เข้าขอบ plot
+    const cX = v => Math.max(PAD.l, Math.min(PAD.l + PW, v));
+    const cY = v => Math.max(PAD.t, Math.min(PAD.t + PH, v));
+    const T = anch.filter(a => a[0] != null && a[1] != null).map(a => ({ x: cX(toX(a[0])), y: cY(toY(a[1])) }));
     T.push({ x: selP.x, y: selP.y });
     for (let i = 1; i < T.length; i++) {
       const a = T[i - 1], b = T[i], t1 = i / (T.length - 1);
@@ -1183,13 +1191,18 @@ function rotAlertsSection() {
   const wrap = el('div');
   wrap.appendChild(secHead('การเปลี่ยนโซนหมุนเวียน'));
   const d = D.rotAlerts;
-  if (!d) { wrap.appendChild(el('div', 'list-cap', 'กำลังโหลดสัญญาณ…')); loadRotAlerts(); return wrap; }
-  if (d._failed) { wrap.appendChild(el('div', 'list-cap', 'โหลดสัญญาณไม่สำเร็จ')); return wrap; }
+  if (!d) {
+    wrap.appendChild(el('div', 'list-cap',
+      _rotAlertsErr ? 'โหลดสัญญาณไม่สำเร็จ — เปิดหน้านี้ใหม่เพื่อลองอีกครั้ง' : 'กำลังโหลดสัญญาณ…'));
+    loadRotAlerts();  // idempotent (guard D.rotAlerts||_loading) — ยิงซ้ำได้เมื่อ re-render/เปิดหน้าใหม่หลัง fail
+    return wrap;
+  }
   const trans = (d.transitions || []).slice(0, 8);
   const pend = (d.pending || []);
   const transF = (d.transitions_fast || []).slice(0, 6);
   const pendF = (d.pending_fast || []).filter(p => p.days >= 2);
-  const tyLbl = t => t === 'industry' ? 'หมวด' : 'กลุ่ม';
+  // sector -> D.sectors = "หมวดธุรกิจ" (35) · industry -> D.industries = "กลุ่มอุตสาหกรรม" (16)
+  const tyLbl = t => t === 'industry' ? 'กลุ่ม' : 'หมวด';
   const tRow = t => `<div class="rot-al"><span class="ra-d">${thaiDate(t.date)}</span>
     <span class="ra-n">${_esc(t.name)}</span><span class="ra-t">${tyLbl(t.type)}</span>
     <span class="ra-q">${_qSpan(t.from)} → ${_qSpan(t.to)}</span></div>`;
@@ -1261,7 +1274,11 @@ function renderRotation() {
     .forEach(s => list.appendChild(rotListRow(s, ax)));
   c.appendChild(list);
 
-  $('#scrSub').textContent = `${items.length} ${_rotView === 'industry' ? 'กลุ่มอุตสาหกรรม' : 'หมวดธุรกิจ'} · แกน ${ax.xl} / ${ax.yl}`;
+  // drawRRG/rrgLegend/list ตัดกลุ่มที่ ret แกนเป็น null ทิ้ง — นับเฉพาะที่แสดงจริง
+  const nShown = items.filter(s => s[ax.xk] != null && s[ax.yk] != null).length;
+  const nHid = items.length - nShown;
+  $('#scrSub').textContent = `${nShown} ${_rotView === 'industry' ? 'กลุ่มอุตสาหกรรม' : 'หมวดธุรกิจ'}`
+    + (nHid ? ` (ซ่อน ${nHid} — ข้อมูลไม่พอ)` : '') + ` · แกน ${ax.xl} / ${ax.yl}`;
 }
 
 /* ---------------- MORE (เมนูจริง) ---------------- */

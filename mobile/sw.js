@@ -5,12 +5,12 @@
    - ../data/*.json  : network-first (เอาของสดก่อน, ล่ม/ช้าเกินค่อยใช้ cache ล่าสุด)
    - หน้า/asset อื่น  : stale-while-revalidate (เปิดเร็ว + อัปเดตตัวเองเงียบ ๆ)
    bump เลข CACHE ทุกครั้งที่ปล่อยของใหม่แล้วอยากล้าง cache เก่าทั้งชุด */
-const CACHE = 'set-mobile-v19';
+const CACHE = 'set-mobile-v20';
 const PRECACHE = [
   './',
   'index.html',
-  'app.css?v=19',
-  'app.js?v=19',
+  'app.css?v=20',
+  'app.js?v=20',
   'manifest.json',
   '../static/icons/icon-192.png',
   '../static/icons/icon-512.png',
