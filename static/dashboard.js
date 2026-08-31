@@ -1097,8 +1097,13 @@ function rvolHtml(s, days = 20) {
   return `<span class="${cls}" style="font-weight:600;cursor:help" title="${tip}">${rv.toFixed(1)}x${icon}</span>`;
 }
 
+// อันดับ RS ในกลุ่มอุตสาหกรรม — ขึ้นกับ DATA เท่านั้น (rs_score ไม่ถูกแก้ฝั่ง client
+// แม้หลัง Quick Update — ต้อง reload /api/data ถึงเปลี่ยน) จึง memoize ตาม identity ของ
+// DATA ได้เลย กันการ group+sort ~900 หุ้นซ้ำทุกครั้งที่กดเรียงคอลัมน์ Screener / export CSV
+let _secRankCache = { data: null, map: null };
 function computeSectorRanks() {
   if (!DATA) return {};
+  if (_secRankCache.data === DATA) return _secRankCache.map;
   const bySector = {};
   DATA.stocks.forEach(s => {
     const sec = s.sector || 'Unknown';
@@ -1112,6 +1117,7 @@ function computeSectorRanks() {
       rankMap[s.symbol] = { rank: i + 1, total: sorted.length };
     });
   });
+  _secRankCache = { data: DATA, map: rankMap };
   return rankMap;
 }
 
@@ -2658,11 +2664,14 @@ function renderEmergingLeaders() {
     const rs = s.rs_score || 0;
     return rs >= 35 && rs < 80 && (s.ret_1m || 0) >= 3 && s.above_ema50 === true && !_dqIsPenny(s);
   });
-  // เรียงตาม rs_momentum ถ้ามี, ไม่มีเรียงตาม ret_1m
+  // เรียงตาม rs_momentum ถ้ามี (ตัวชี้วัดหลัก แม่นกว่า), ไม่มีค่อย fallback ไป ret_1m —
+  // ห้ามผสม rs_momentum (rank-diff, สเกล -99..+99) กับ ret_1m (เปอร์เซ็นต์) ในการเรียงเดียวกัน
+  // เพราะคนละหน่วย ต้องแยกกลุ่มก่อนแล้วค่อยเรียงในกลุ่มตัวเอง
   stocks.sort((a, b) => {
-    const am = a.rs_momentum ?? (a.ret_1m || 0);
-    const bm = b.rs_momentum ?? (b.ret_1m || 0);
-    return bm - am;
+    const aHas = a.rs_momentum != null, bHas = b.rs_momentum != null;
+    if (aHas !== bHas) return aHas ? -1 : 1;
+    if (aHas) return b.rs_momentum - a.rs_momentum;
+    return (b.ret_1m || 0) - (a.ret_1m || 0);
   });
   stocks = stocks.slice(0, 100);
 
@@ -2827,7 +2836,7 @@ function _rankBadge(rank, total, pct) {
 // Heat strip: ช่องสี 5 ช่อง (1Y→1W) ตามโซนอันดับ — สีชุดเดียวกับ _rankBadge
 // เขียว = top 25%, เหลือง = 25-50%, ส้ม = 50-75%, แดง = bottom 25%
 const _TRAJ_LABELS = ['1Y', '6M', '3M', '1M', '1W'];
-function _rankSpark(seq, total) {
+function _rankSpark(seq, totals) {
   if (seq.every(v => v == null)) return '<span style="color:var(--text2)">—</span>';
   const cells = seq.map((v, i) => {
     const lbl = _TRAJ_LABELS[i];
@@ -2835,6 +2844,7 @@ function _rankSpark(seq, total) {
       return `<span title="${lbl}: ไม่มีข้อมูล" style="flex:1;height:16px;border-radius:3px;` +
              `background:rgba(255,255,255,0.05);border:1px solid var(--border)"></span>`;
     }
+    const total = totals[i] || 1;
     const q = v / total;
     const c = q <= 0.25 ? '#3fb950' : q <= 0.5 ? '#e3b341' : q <= 0.75 ? '#f0883e' : '#f85149';
     // ช่องสุดท้าย (1W = ล่าสุด) แสดงเลขอันดับกำกับ — ช่องอื่นดูจาก hover
@@ -2909,7 +2919,7 @@ function renderSectorRankTable() {
       <td class="r">${_rankBadge(r.r1y, totals.r1y, r.g.ret_1y)}</td>
       <td class="r" style="font-weight:700">${r.avg ?? '—'}</td>
       <td class="r">${momHtml}</td>
-      <td>${_rankSpark(r.seq, Math.max(totals.r1m || 1, totals.r1y || 1))}</td>
+      <td>${_rankSpark(r.seq, [totals.r1y, totals.r6m, totals.r3m, totals.r1m, totals.r1w])}</td>
     </tr>`;
   }).join('');
 }
@@ -2961,7 +2971,7 @@ function _ensureIdxDataLoaded(onLoaded) {
 // เล็กบวก 8% ลากค่าเฉลี่ยให้เป็นบวกทั้งที่ดัชนีจริงติดลบ) ไม่มี mapping/ข้อมูลดัชนี (เช่นกลุ่ม
 // "Mining" ที่ไม่มีดัชนีให้ map) → fallback ใช้ค่าเฉลี่ยหุ้นเดิม
 function _sectorWithIdxOverride(s) {
-  const idxSym = SECTOR_NAME_TO_IDX_SYM[s.name];
+  const idxSym = _getSectorToIdx()[s.name];
   const idx = idxSym ? _idxData?.[idxSym] : null;
   if (!idx) return s;
   return {
@@ -3009,7 +3019,7 @@ function renderSectorTable() {
   document.getElementById("sectors-tbody").innerHTML = data.map((s,i) => {
     const abbr = SECTOR_ABBR[s.name] || "";
     const abbrTag = abbr && abbr !== "—" ? ` <span style="font-size:10px;color:var(--blue);background:#0d2847;padding:1px 5px;border-radius:3px;margin-left:4px">${abbr}</span>` : "";
-    const nhRatio = s.count > 0 ? s.newHighCount / s.count : 0;
+    const nhRatio = s.newHighPct / 100;
     const nhColor = nhRatio >= 0.25 ? 'green' : nhRatio >= 0.1 ? 'yellow' : 'text2';
     return `
     <tr style="cursor:pointer" onclick="openSectorPage('${s.name.replace(/'/g,"\\'")}')">
@@ -3182,7 +3192,7 @@ function renderStocksTable(preservePage) {
     above_ema200_n: s.above_ema200 === true ? 1 : s.above_ema200 === false ? 0 : null,
     _stage: getStage(s),
   }));
-  if (stageFilter !== "ALL") stocks = stocks.filter(s => s._stage === stageFilter || s._stage === Number(stageFilter));
+  if (stageFilter !== "ALL") stocks = stocks.filter(s => s._stage === stageFilter);
   if (stockRsMin) stocks = stocks.filter(s => (s.rs_score||0) >= stockRsMin);
   if (stockEma200Only) stocks = stocks.filter(s => s.above_ema200 === true);
 
@@ -6357,55 +6367,6 @@ function startHedgeFetchMissing() {
 // "Industrial" (มai, ไม่มี suffix) เคยชนกับ SET "Industrials" ปนข้อมูลกัน ตอนนี้แยกกันแล้ว
 // ไม่มี entry สำหรับ "Mining" เพราะ summarize_groups ไม่เคยสร้างกลุ่มนี้ขึ้นมา (หุ้นตัวสุดท้าย
 // ใน sector นี้ถูกเพิกถอนไปแล้ว — ^MINE.BK ก็ตัดออกจาก INDEX_INFO ด้วยเหตุผลเดียวกัน)
-const SECTOR_NAME_TO_IDX_SYM = {
-  // sectors (mainboard)
-  "Agribusiness":                          "^AGRI.BK",
-  "Food & Beverage":                       "^FOOD.BK",
-  "Fashion":                               "^FASHION.BK",
-  "Home & Office Products":                "^HOME.BK",
-  "Personal Products & Pharmaceuticals":   "^PERSON.BK",
-  "Banking":                               "^BANK.BK",
-  "Finance & Securities":                  "^FIN.BK",
-  "Insurance":                             "^INSUR.BK",
-  "Automotive":                            "^AUTO.BK",
-  "Industrial Materials & Machinery":      "^IMM.BK",
-  "Paper & Printing Materials":            "^PAPER.BK",
-  "Petrochemicals & Chemicals":            "^PETRO.BK",
-  "Packaging":                             "^PKG.BK",
-  "Steel and Metal Products":              "^STEEL.BK",
-  "Construction Materials":                "^CONMAT.BK",
-  "Construction Services":                 "^CONS.BK",
-  "Property Development":                  "^PROP.BK",
-  "Property Fund & REITs":                 "^PFREIT.BK",
-  "Energy & Utilities":                     "^ENERG.BK",
-  "Commerce":                              "^COMM.BK",
-  "Health Care Services":                  "^HELTH.BK",
-  "Media & Publishing":                    "^MEDIA.BK",
-  "Professional Services":                 "^PROF.BK",
-  "Tourism & Leisure":                     "^TOURISM.BK",
-  "Transportation & Logistics":            "^TRANS.BK",
-  "Electronic Components":                 "^ETRON.BK",
-  "Information & Communication Technology":"^ICT.BK",
-  // industry groups
-  "Agro & Food Industry":                  "^AGRO.BK",
-  "Consumer Products":                     "^CONSUMP.BK",
-  "Financials":                            "^FINCIAL.BK",
-  "Industrials":                           "^INDUS.BK",
-  "Property & Construction":               "^PROPCON.BK",
-  "Resources":                             "^RESOURC.BK",
-  "Services":                              "^SERVICE.BK",
-  "Technology":                            "^TECH.BK",
-  // mai (sectors ลง -mai ในตาราง แต่ map ไปดัชนีระดับ industry group ของ mai แทน
-  // เพราะ mai ไม่มีดัชนีย่อยระดับ sector)
-  "Agro & Food Industry -mai":             "^AGRO-M.BK",
-  "Consumer Products -mai":                "^CONSUMP-M.BK",
-  "Financials -mai":                       "^FINCIAL-M.BK",
-  "Industrial -mai":                       "^INDUS-M.BK",
-  "Property & Construction -mai":          "^PROPCON-M.BK",
-  "Resources -mai":                        "^RESOURC-M.BK",
-  "Services -mai":                         "^SERVICE-M.BK",
-  "Technology -mai":                       "^TECH-M.BK",
-};
 
 const SECTOR_ABBR = {
   "Agro & Food Industry":                  "AGRO",
@@ -7177,7 +7138,8 @@ function _scrComputeSorted() {
     });
     return { ...s, fromHigh, fromLow, rvol, sec_rank: sr?.rank ?? null, sec_total: sr?.total ?? null, ...extra };
   });
-  return [...withRange].sort((a, b) => {
+  // withRange เป็น array ใหม่จาก .map() อยู่แล้ว — sort ในตัวได้เลย ไม่ต้อง spread ซ้ำ
+  return withRange.sort((a, b) => {
     const col = _scrSortCol;
     if (_SCR_BOOL.has(col)) return ((b[col]?1:0) - (a[col]?1:0)) * _scrSortDir;
     if (_SCR_STR.has(col))  return ((a[col]??'').localeCompare(b[col]??'')) * _scrSortDir;
@@ -8292,6 +8254,8 @@ async function _loadScrInsider() {
 // promise ของ /api/dr ที่กำลังโหลดอยู่ (ถ้ามี) — กันยิงซ้ำซ้อนเมื่อกดค้นหาซ้ำๆ
 // ระหว่างที่โหลดครั้งแรกยังไม่เสร็จ (เดิมยิง fetch ใหม่ทุกครั้งที่กด ทั้งที่ตัวแรกยังค้างอยู่)
 let _drFetchPromise = null;
+// กัน _enrichTechSignals/_mergeFinAnalyticsInto รันซ้ำบน _drData ชุดเดิมทุกครั้งที่กดค้นหา
+let _scrDrEnriched = { data: null, fin: null };
 
 async function runScreener() {
   if (!DATA) return;
@@ -8321,10 +8285,15 @@ async function runScreener() {
   // ต้นทุนคำนวณต่ำ ~280 หุ้น ไม่คุ้มจะเก็บ state แยก) — merge growth/PEG/FCF เข้าไปด้วยทุก
   // ครั้งเช่นกัน เพราะ _drData อาจถูกตั้งค่าไว้ก่อนแล้วจากหน้าอื่น (เช่น drQuickUpdate)
   // โดยยังไม่เคย merge เลย ถ้า merge แค่ตอน fetch เอง (!_drData) จะพลาดกรณีนี้ไปเงียบๆ
-  if (includeDR && _drData) {
+  // enrich ซ้ำเฉพาะเมื่อ _drData เป็น array ใหม่ (fetch/Quick Update ตลาดต่างประเทศ) หรือ
+  // _finAnalyticsData เพิ่งโหลดเสร็จ (async มาทีหลัง) — กดค้นหาซ้ำๆ ด้วยชุดข้อมูลเดิมจะข้าม
+  // ทั้ง _enrichTechSignals (EMA200 reclaim loop) และ _mergeFinAnalyticsInto ~280 หุ้น
+  if (includeDR && _drData &&
+      (_scrDrEnriched.data !== _drData || _scrDrEnriched.fin !== _finAnalyticsData)) {
     _drData.forEach(s => { if (s.ret_1d == null) s.ret_1d = s.chg; });
     _mergeFinAnalyticsInto(_drData, s => s.sym, 'dr');
     _enrichTechSignals(_drData);
+    _scrDrEnriched = { data: _drData, fin: _finAnalyticsData };
   }
   saveScreenerSettings();
   // ตัวกรองไหนถูกตั้งค่าไว้ (ไม่ว่าง) ให้โผล่เป็นคอลัมน์เสริมในตารางผลลัพธ์อัตโนมัติ —
@@ -14140,7 +14109,26 @@ function setEMABreadthView(v, btn) {
 let _breadthData = null;
 let _breadthRange = '1y';
 let _breadthCacheByRange = {};
-let _breadthLoading = false;
+// promise ที่กำลังยิงอยู่ต่อ range — ให้ loadBreadthCharts/loadRegimeLight ที่ขอ range
+// เดียวกันพร้อมกัน (เช่นตอนโหลดหน้าแรก renderAll->renderEMABreadth กับ loadRegimeLight
+// ยิงเกือบพร้อมกันก่อนใครจะ cache เสร็จ) รอ fetch เดียวกันแทนที่จะยิงซ้ำ
+let _breadthFetchInflight = {};
+
+function _fetchBreadthRange(rng) {
+  if (_breadthCacheByRange[rng]) return Promise.resolve(_breadthCacheByRange[rng]);
+  if (_breadthFetchInflight[rng]) return _breadthFetchInflight[rng];
+  const p = _fetchTimeout('/api/breadth?range=' + encodeURIComponent(rng), 30000,
+      'หมดเวลารอ Market Breadth หุ้นไทย (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) throw new Error(d.error);
+      _breadthCacheByRange[rng] = d;
+      return d;
+    })
+    .finally(() => { delete _breadthFetchInflight[rng]; });
+  _breadthFetchInflight[rng] = p;
+  return p;
+}
 
 function setBreadthRange(range, btn) {
   if (_breadthRange === range) return;
@@ -14167,20 +14155,16 @@ async function loadBreadthCharts() {
     }
     return;
   }
-  if (_breadthLoading) return;
-  _breadthLoading = true;
-  ['bc-ema', 'bc-nhnl', 'bc-mcc'].forEach(id => {
-    const loading = document.getElementById(id + '-loading');
-    const canvas  = document.getElementById(id);
-    if (loading) { loading.style.display = 'block'; loading.textContent = 'กำลังโหลด...'; }
-    if (canvas)  canvas.style.display = 'none';
-  });
+  if (!_breadthFetchInflight[rng]) {
+    ['bc-ema', 'bc-nhnl', 'bc-mcc'].forEach(id => {
+      const loading = document.getElementById(id + '-loading');
+      const canvas  = document.getElementById(id);
+      if (loading) { loading.style.display = 'block'; loading.textContent = 'กำลังโหลด...'; }
+      if (canvas)  canvas.style.display = 'none';
+    });
+  }
   try {
-    const r = await _fetchTimeout('/api/breadth?range=' + encodeURIComponent(rng), 30000,
-      'หมดเวลารอ Market Breadth หุ้นไทย (เกิน 30 วิ) — ลองใหม่อีกครั้ง');
-    const d = await r.json();
-    if (d.error) throw new Error(d.error);
-    _breadthCacheByRange[rng] = d;
+    const d = await _fetchBreadthRange(rng);
     if (rng === _breadthRange) {   // user ยังอยู่ range เดิม — วาดได้
       _breadthData = d;
       drawBreadthCharts();
@@ -14191,7 +14175,6 @@ async function loadBreadthCharts() {
       if (el) el.textContent = 'โหลดไม่สำเร็จ: ' + e.message;
     });
   } finally {
-    _breadthLoading = false;
     // ถ้าระหว่างโหลด user สลับไป range อื่นที่ยังไม่มี cache — โหลดต่อให้เลย
     if (_breadthRange !== rng && !_breadthCacheByRange[_breadthRange]) loadBreadthCharts();
   }
@@ -14309,9 +14292,9 @@ function drawBreadthCharts() {
     const toY = _bcAxes(c, -m, m, d.dates, [-70, 0, 70]);
     _bcBars(c, osc, toY, 0);
     const cur = osc[n-1], sum = d.mcclellan_sum[n-1];
-    document.getElementById('bc-mcc-now').innerHTML =
+    document.getElementById('bc-mcc-now').innerHTML = cur == null ? '' :
       ` — <span style="color:${cur >= 0 ? '#3fb950' : '#f85149'}">${cur}</span>` +
-      ` · summation ${sum >= 0 ? '+' : ''}${sum}`;
+      (sum != null ? ` · summation ${sum >= 0 ? '+' : ''}${sum}` : '');
   }
 }
 
@@ -14326,10 +14309,7 @@ async function loadRegimeLight() {
   if (!wrap || !light) return;
   try {
     if (!_breadthData) {
-      const r = await fetch('/api/breadth');
-      const d = await r.json();
-      if (d.error) return;
-      _breadthData = d;
+      _breadthData = await _fetchBreadthRange('1y');   // coalesced กับ loadBreadthCharts — ไม่ fetch ซ้ำ
     }
     const arr = _breadthData.pct_above_ema200;
     const val = arr[arr.length - 1];
@@ -14413,12 +14393,29 @@ function renderEMABreadth() {
 // ============================================================
 // BREAKOUT RADAR
 // ============================================================
+// คอลัมน์ string/bool ที่ต้องเทียบต่างจากตัวเลขปกติ — ใช้ร่วมกันทั้ง Breakout Radar
+// และ Momentum Alignment (โครงตาราง/คอลัมน์เหมือนกัน) ผ่าน _stockSortCompare/_stockSortTh
+const _STOCK_SORT_STR  = new Set(['symbol','name','sector']);
+const _STOCK_SORT_BOOL = new Set(['above_ema50','above_ema200']);
+
+function _stockSortCompare(col, dir) {
+  return (a, b) => {
+    if (_STOCK_SORT_BOOL.has(col)) return ((b[col]?1:0) - (a[col]?1:0)) * dir;
+    if (_STOCK_SORT_STR.has(col))  return ((a[col]??'').localeCompare(b[col]??'')) * dir;
+    return ((b[col]??-Infinity) - (a[col]??-Infinity)) * dir;
+  };
+}
+function _stockSortTh(col, label, sortCol, sortDir, setFn, cls='', tip=null) {
+  const active = sortCol === col;
+  const arrow  = active ? (sortDir === 1 ? '↓' : '↑') : '↕';
+  const c = (cls ? cls+' ' : '') + 'sortable';
+  const icon = tip !== undefined && tip !== null ? _tipIconHtml(tip) : colTipIcon(col);
+  return `<th class="${c}" onclick="${setFn}('${col}')">${label}${icon}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
+}
+
 let _boRS = 70, _boDist = 10, _boEMA = '50';
 let _boSide = 'high';   // 'high' = Breakout/High watch, 'low' = Low watch
 let _boSortCol = 'rs_score', _boSortDir = 1;
-
-const _BO_STR  = new Set(['symbol','name','sector']);
-const _BO_BOOL = new Set(['above_ema50','above_ema200']);
 
 function setBoSort(col) {
   if (_boSortCol === col) _boSortDir *= -1;
@@ -14566,11 +14563,7 @@ function colTipIcon(col) {
 }
 
 function boTh(col, label, cls='', tip=null) {
-  const active = _boSortCol === col;
-  const arrow  = active ? (_boSortDir === 1 ? '↓' : '↑') : '↕';
-  const c = (cls ? cls+' ' : '') + 'sortable';
-  const icon = _tipIconHtml(tip || _COL_TIPS[col]);
-  return `<th class="${c}" onclick="setBoSort('${col}')">${label}${icon}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
+  return _stockSortTh(col, label, _boSortCol, _boSortDir, 'setBoSort', cls, tip);
 }
 
 function setBO(type, val, btn) {
@@ -14607,12 +14600,7 @@ function renderBreakout() {
     if (_boEMA === '50'  && !s.above_ema50)  return false;
     if (_boEMA === '200' && (!s.above_ema50 || !s.above_ema200)) return false;
     return true;
-  }).sort((a, b) => {
-    const col = _boSortCol;
-    if (_BO_BOOL.has(col)) return ((b[col]?1:0) - (a[col]?1:0)) * _boSortDir;
-    if (_BO_STR.has(col))  return ((a[col]??'').localeCompare(b[col]??'')) * _boSortDir;
-    return ((b[col]??-Infinity) - (a[col]??-Infinity)) * _boSortDir;
-  });
+  }).sort(_stockSortCompare(_boSortCol, _boSortDir));
 
   const parts = [`${stocks.length} หุ้น`, isHigh ? 'ใกล้ 52W High' : 'ใกล้ 52W Low'];
   if (_boRS > 0)     parts.push(`RS ≥ ${_boRS}`);
@@ -14671,9 +14659,6 @@ function renderBreakout() {
 let _momFilter = 'all4';
 let _momSortCol = 'rs_score', _momSortDir = 1;
 
-const _MOM_STR  = new Set(['symbol','name','sector']);
-const _MOM_BOOL = new Set(['above_ema50','above_ema200']);
-
 function setMomSort(col) {
   if (_momSortCol === col) _momSortDir *= -1;
   else { _momSortCol = col; _momSortDir = 1; }
@@ -14681,10 +14666,7 @@ function setMomSort(col) {
 }
 
 function momTh(col, label, cls='') {
-  const active = _momSortCol === col;
-  const arrow  = active ? (_momSortDir === 1 ? '↓' : '↑') : '↕';
-  const c = (cls ? cls+' ' : '') + 'sortable';
-  return `<th class="${c}" onclick="setMomSort('${col}')">${label}${colTipIcon(col)}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
+  return _stockSortTh(col, label, _momSortCol, _momSortDir, 'setMomSort', cls);
 }
 
 function setMomFilter(val, btn) {
@@ -14705,12 +14687,7 @@ function renderMomentum() {
   }).map(s => {
     const sr = secRanks[s.symbol];
     return { ...s, sec_rank: sr?.rank ?? null, sec_total: sr?.total ?? null };
-  }).sort((a, b) => {
-    const col = _momSortCol;
-    if (_MOM_BOOL.has(col)) return ((b[col]?1:0) - (a[col]?1:0)) * _momSortDir;
-    if (_MOM_STR.has(col))  return ((a[col]??'').localeCompare(b[col]??'')) * _momSortDir;
-    return ((b[col]??-Infinity) - (a[col]??-Infinity)) * _momSortDir;
-  });
+  }).sort(_stockSortCompare(_momSortCol, _momSortDir));
 
   const tfLabel = { all4: 'ทุก 4 Timeframe (1D·1W·1M·3M)', '3tf': '3 Timeframe (1W·1M·3M)', '2tf': '2 Timeframe (1M·3M)' };
   document.getElementById('mom-count').textContent = `${stocks.length} หุ้น — ${tfLabel[_momFilter]}`;

@@ -60,7 +60,11 @@ def compute_breadth(base_dir, days=DISPLAY_DAYS, store=None):
     pct200 = (close > ema200).sum(axis=1) / n_universe * 100
 
     # ---- Advances / Declines + McClellan ----
-    chg = close.diff()
+    # ffill ก่อน diff — กันหุ้นที่กลับมาเทรดหลังหยุดพัก (SP/H) หายไปจาก adv/dec วันแรกที่กลับมา:
+    # close.diff() เทียบกับแถวก่อนหน้าตรงๆ ซึ่งเป็น NaN ช่วงหยุดพัก ทำให้ diff ของวันกลับมาเทรด
+    # เป็น NaN ไปด้วย (ทั้งที่ราคาวันนั้นเปลี่ยนจริงเทียบกับราคาก่อนหยุดพัก) ffill ทำให้ diff วันที่
+    # หยุดพักเป็น 0 (ถูกต้อง ไม่ใช่ adv/dec เพราะไม่ได้เทรด) แล้ววันกลับมาเทรดได้ diff จริง
+    chg = close.ffill().diff()
     adv = (chg > 0).sum(axis=1)
     dec = (chg < 0).sum(axis=1)
     denom = (adv + dec).replace(0, np.nan)
@@ -69,8 +73,11 @@ def compute_breadth(base_dir, days=DISPLAY_DAYS, store=None):
     mcc_osc = rana.ewm(span=19, adjust=False).mean() - rana.ewm(span=39, adjust=False).mean()
 
     # ---- 52W New High / New Low (เทียบ max/min 252 แท่งก่อนหน้า) ----
-    prior_max = close.shift(1).rolling(252, min_periods=100).max()
-    prior_min = close.shift(1).rolling(252, min_periods=100).min()
+    # min_periods=252 (เท่ากับ window เต็ม) — หุ้นที่มีประวัติสั้นกว่า 1 ปียังไม่เข้าเงื่อนไข
+    # NH/NL เลย กัน false positive ที่ราคาทำ "จุดสูงสุด/ต่ำสุดใหม่" เทียบกับ window สั้นกว่า 52
+    # สัปดาห์จริง (เช่นหุ้นเพิ่งเข้าใหม่มีประวัติแค่ 100-251 วัน)
+    prior_max = close.shift(1).rolling(252, min_periods=252).max()
+    prior_min = close.shift(1).rolling(252, min_periods=252).min()
     nh = (close >= prior_max).sum(axis=1)
     nl = (close <= prior_min).sum(axis=1)
 

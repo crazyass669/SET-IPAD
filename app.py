@@ -579,21 +579,35 @@ def _resolve_data_bytes():
     คืน (None, None, None) ถ้าไม่มีไฟล์ใช้ได้เลย"""
     import gzip as _gzip
     for path in (DATA_FILE, BACKUP_FILE):
-        try:
-            mtime = os.path.getmtime(path)
-        except OSError:
-            continue
         with _data_gz_lock:
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
             if _data_gz_cache["path"] == path and _data_gz_cache["mtime"] == mtime:
                 return _data_gz_cache["raw"], _data_gz_cache["gz"], f'"{path == BACKUP_FILE}-{mtime}"'
             try:
                 with open(path, "rb") as f:
                     raw = f.read()
                 json.loads(raw)  # validate ครั้งเดียวต่อ mtime
+                # เช็ค mtime ซ้ำหลังอ่าน — กัน race: ถ้าไฟล์ถูกเขียนทับระหว่างอ่าน raw จะไม่ตรง
+                # กับ mtime ที่ cache ไว้แล้ว ต้องอ่านใหม่แทนที่จะ cache bytes ใหม่คู่กับ mtime เก่า
+                mtime2 = os.path.getmtime(path)
+                if mtime2 != mtime:
+                    raw = None
             except Exception:
-                print(f"[Data] ไฟล์เสียหาย: {os.path.basename(path)} — "
-                      f"{'ลองใช้ backup แทน' if path == DATA_FILE else 'backup ก็เสียหาย'}")
-                continue
+                raw = None
+            if raw is None:
+                # ลองอ่านซ้ำอีกครั้งด้วย mtime ล่าสุด แทนที่จะข้ามไป backup ทั้งที่ไฟล์หลักไม่ได้เสีย
+                try:
+                    mtime = os.path.getmtime(path)
+                    with open(path, "rb") as f:
+                        raw = f.read()
+                    json.loads(raw)
+                except Exception:
+                    print(f"[Data] ไฟล์เสียหาย: {os.path.basename(path)} — "
+                          f"{'ลองใช้ backup แทน' if path == DATA_FILE else 'backup ก็เสียหาย'}")
+                    continue
             _data_gz_cache.update(path=path, mtime=mtime, raw=raw,
                                   gz=_gzip.compress(raw, compresslevel=6))
             if path == BACKUP_FILE:
@@ -10786,7 +10800,10 @@ def insider_trades():
         # ถือว่ายังไม่มีข้อมูลตอนนี้แทน 500 (pattern เดียวกับ /api/calendar-events) — กัน
         # Tearsheet ที่ยิง endpoint นี้พร้อมกันหลายหุ้นผ่าน Watchlist ทั้งหน้าล้มเพราะ lock ชั่วคราว
         records = []
-        last_synced = sec_store._get_meta(BASE_DIR, "insider_last_synced_at")
+        try:
+            last_synced = sec_store._get_meta(BASE_DIR, "insider_last_synced_at")
+        except Exception:
+            last_synced = None
     return jsonify({
         "records": records,
         "days": days,
@@ -10819,7 +10836,10 @@ def major_changes():
     except Exception:
         # เหตุผลเดียวกับ /api/insider-trades — sqlite lock ชั่วคราวไม่ควรทำให้ Tearsheet 500
         records = []
-        last_synced = sec_store._get_meta(BASE_DIR, "major_last_synced_at")
+        try:
+            last_synced = sec_store._get_meta(BASE_DIR, "major_last_synced_at")
+        except Exception:
+            last_synced = None
     return jsonify({
         "records": records,
         "days": days,
