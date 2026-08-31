@@ -311,7 +311,7 @@ function go(scr) {
   else if (scr === 'market' && D.mkt) renderMarket();
   else if (scr === 'rotation') renderRotation();
   else if (scr === 'indices') renderIndices();
-  else if (scr === 'valuation') renderValuation();
+  else if (scr === 'valuation') { renderValuation(); loadValuationData(); }
   else if (scr === 'heatmap') renderHeatmap();
   else if (scr === 'flow') renderFlow();
   else if (scr === 'screener') renderScreener();
@@ -1818,26 +1818,37 @@ function renderHeatmap() {
   bar.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _hmMetric = b.dataset.k; renderHeatmap(); } });
   dir.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { _hmDir = +b.dataset.d; renderHeatmap(); } });
 
+  // cache ค่า metric ต่อ row ครั้งเดียว — sort / สีพื้น / label / ค่าเฉลี่ย ใช้ค่าเดียวกัน
+  // (เดิม hmValue ถูกเรียกซ้ำหลายพันครั้งใน comparator)
+  const vOf = new Map();
   const groups = {};
   D.stocks.forEach(r => {
+    vOf.set(r, hmValue(r, _hmMetric));
     const g = (r.raw && r.raw.sector) || 'ไม่ระบุ';
     (groups[g] || (groups[g] = [])).push(r);
   });
-  const secAvg = arr => {
-    const vs = arr.map(r => hmValue(r, _hmMetric)).filter(v => v != null);
-    return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
+  // null อยู่ท้ายเสมอไม่ว่าเรียงทิศไหน (เทียบ _hmCmp ของ dashboard.js) — สลับทิศเฉพาะค่าที่มีจริง
+  const cmp = (va, vb) => {
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    return (vb - va) * _hmDir;
   };
-  const secList = Object.entries(groups).sort((a, b) =>
-    _hmDir * ((secAvg(b[1]) ?? -999) - (secAvg(a[1]) ?? -999)));
+  const secAvgMap = new Map();
+  for (const [sec, arr] of Object.entries(groups)) {
+    let sum = 0, k = 0;
+    arr.forEach(r => { const v = vOf.get(r); if (v != null) { sum += v; k++; } });
+    secAvgMap.set(sec, k ? sum / k : null);
+  }
+  const secList = Object.entries(groups).sort((a, b) => cmp(secAvgMap.get(a[0]), secAvgMap.get(b[0])));
 
   grid.innerHTML = secList.map(([sec, arr]) => {
-    const sorted = [...arr].sort((a, b) =>
-      _hmDir * ((hmValue(b, _hmMetric) ?? -999) - (hmValue(a, _hmMetric) ?? -999)));
-    const avg = secAvg(arr);
+    const sorted = [...arr].sort((a, b) => cmp(vOf.get(a), vOf.get(b)));
+    const avg = secAvgMap.get(sec);
     const avgCls = avg == null ? 'flat' : isRS ? (avg >= 50 ? 'up' : 'down') : (avg >= 0 ? 'up' : 'down');
     const avgTxt = avg == null ? '–' : isRS ? 'avg RS ' + Math.round(avg) : pct(avg, 1);
     const cells = sorted.map(r => {
-      const v = hmValue(r, _hmMetric);
+      const v = vOf.get(r);
       const bg = isRS ? heatColorRS(v) : heatColor(v, cap);
       const tc = isRS ? rsTextOn(v) : heatTextOn(v, cap);
       const lbl = v == null ? '–' : isRS ? 'RS ' + Math.round(v) : (v > 0 ? '+' : '') + nf(v, 1) + '%';
@@ -1970,6 +1981,15 @@ const VAL_PERIODS = [['ALL', 'ทั้งหมด'], ['20Y', '20 ปี'], ['1
 let _valPeriod = 'ALL';
 let _svMetric = 'pe', _svScope = 'mkt', _svZone = 'all', _svQ = '';
 
+// ตัด null หัว-ท้ายออกก่อน filter ช่วงเวลา (ซีรีส์ mai เริ่มมีข้อมูลช้ากว่า SET หลายร้อยเดือน —
+// ถ้าไม่ตัด กราฟ ALL จะบีบเส้นไปกองครึ่งขวา) — พอร์ตจาก _trimNulls ของ dashboard.js
+function valTrimNulls(dates, vals) {
+  if (!dates || !vals) return { dates: dates || [], vals: vals || [] };
+  let lo = 0, hi = vals.length - 1;
+  while (lo <= hi && vals[lo] == null) lo++;
+  while (hi >= lo && vals[hi] == null) hi--;
+  return { dates: dates.slice(lo, hi + 1), vals: vals.slice(lo, hi + 1) };
+}
 function valFilterPeriod(dates, vals, period) {
   if (!dates || !vals) return { dates: [], vals: [] };
   if (period === 'ALL') return { dates, vals };
@@ -2037,12 +2057,14 @@ function drawValLine(cv, vals, avg) {
   x.fillText(nf(last, last >= 100 ? 0 : 1), w - pr + 5, ly);
 }
 
-function valBandCard(title, stat, cheapIsHigh, unit, series) {
+function valBandCard(title, stat, cheapIsHigh, unit, series, key) {
   if (!stat || stat.current == null) return el('div', 'note', title + ' — ข้อมูลไม่พอ');
   const [zl, zc] = valZone(stat.zscore, cheapIsHigh);
   const u = unit || 'x';
   const d = el('div', 'vcard');
-  const sid = 'vc_' + title.replace(/[^A-Za-z0-9]/g, '');
+  // key มาจาก caller (เช่น "SET_pe") — อย่า derive จาก title เพราะชื่อไทยล้วน ("เงินปันผล SET")
+  // จะเหลือ "vc_" เปล่า ๆ ชนกันได้
+  const sid = 'vc_' + (String(key || title).replace(/[^A-Za-z0-9]/g, '') || 'band');
   const hasChart = series && Array.isArray(series.vals) && series.vals.filter(v => v != null).length >= 8;
   d.innerHTML = `
     <div class="vc-head"><span class="vc-t">${title}</span>
@@ -2058,28 +2080,33 @@ function valBandCard(title, stat, cheapIsHigh, unit, series) {
 
 // market_stats (77KB) + set_daily_valuation + stock_valuation_stats (184KB) — โหลดตอนเปิดจอ
 // Valuation ครั้งแรก (ไม่โหลดตอน boot) เหมือน loadIndicesData
-let _valLoading = false, _valLoaded = false;
+// 3 ไฟล์แยกอิสระ — โหลดเฉพาะที่ยังขาด, retry ทุกครั้งที่เปิดจอใหม่ (ดู go('valuation'))
+// จนครบทั้ง 3 ไฟล์ (ไฟล์ที่พังไม่ทำให้ section อื่นค้างถาวร)
+let _valLoading = false, _valComplete = false;
+const _VAL_FILES = [
+  ['mstats', '../data/market_stats.json', 20000],
+  ['dailyVal', '../data/set_daily_valuation.json', 15000],
+  ['stockVal', '../data/stock_valuation_stats.json', 20000],
+];
+const _valHasAny = () => !!(D.mstats || D.dailyVal || D.stockVal);
 async function loadValuationData() {
-  if (_valLoaded || _valLoading) return;
+  if (_valComplete || _valLoading) return;
   _valLoading = true;
-  const [mst, dval, sval] = await Promise.allSettled([
-    loadJSON('../data/market_stats.json', 20000),
-    loadJSON('../data/set_daily_valuation.json', 15000),
-    loadJSON('../data/stock_valuation_stats.json', 20000),
-  ]);
-  if (mst.status === 'fulfilled') D.mstats = mst.value;
-  if (dval.status === 'fulfilled') D.dailyVal = dval.value;
-  if (sval.status === 'fulfilled') D.stockVal = sval.value;
+  const jobs = _VAL_FILES.filter(([k]) => !D[k]);
+  const res = await Promise.allSettled(jobs.map(([, url, to]) => loadJSON(url, to)));
+  let gained = false;
+  res.forEach((r, i) => { if (r.status === 'fulfilled') { D[jobs[i][0]] = r.value; gained = true; } });
   _valLoading = false;
-  _valLoaded = !!(D.mstats || D.dailyVal || D.stockVal);   // ล้มเหลวหมด = เปิดหน้าใหม่ให้ retry
+  _valComplete = !!(D.mstats && D.dailyVal && D.stockVal);
   if (curScreen !== 'valuation') return;
-  if (_valLoaded) renderValuation();
-  else $('#s-valuation').innerHTML = '<div class="list-cap">โหลดข้อมูลมูลค่าไม่สำเร็จ — เปิดหน้านี้อีกครั้งเพื่อลองใหม่</div>';
+  if (gained) renderValuation();
+  else if (!_valHasAny())
+    $('#s-valuation').innerHTML = '<div class="list-cap">โหลดข้อมูลมูลค่าไม่สำเร็จ — เปิดหน้านี้อีกครั้งเพื่อลองใหม่</div>';
 }
 
 function renderValuation() {
   const c = $('#s-valuation'); if (!c) return;
-  if (!_valLoaded) {
+  if (!_valHasAny()) {
     c.innerHTML = '<div class="list-cap">กำลังโหลดข้อมูลมูลค่า…</div>';
     loadValuationData();
     return;
@@ -2115,14 +2142,16 @@ function renderValuation() {
     const mkBand = (mkKey, label) => {
       const wrap = el('div', 'vband');
       wrap.appendChild(el('div', 'vband-h', label));
-      const defs = [['P/E', ms.pe, false, 'x'], ['P/BV', ms.pbv, false, 'x']];
-      if (mkKey === 'SET' && ms.div_yield) defs.push(['เงินปันผล', ms.div_yield, true, '%']);
-      defs.forEach(([t, stat, cheapHigh, u]) => {
+      const defs = [['pe', 'P/E', ms.pe, false, 'x'], ['pbv', 'P/BV', ms.pbv, false, 'x']];
+      if (mkKey === 'SET' && ms.div_yield) defs.push(['divyield', 'เงินปันผล', ms.div_yield, true, '%']);
+      defs.forEach(([mk, t, stat, cheapHigh, u]) => {
         const raw = stat.series && stat.series[mkKey];
         if (!raw) return;
-        const f = valFilterPeriod(stat.dates, raw, _valPeriod);
+        // ตัด null หัว-ท้ายก่อน (mai เริ่มช้า) แล้วค่อย filter ช่วง — กราฟ ALL ไม่บีบไปกองครึ่งขวา
+        const trimmed = valTrimNulls(stat.dates, raw);
+        const f = valFilterPeriod(trimmed.dates, trimmed.vals, _valPeriod);
         const st = (_valPeriod === 'ALL' && stat.stats && stat.stats[mkKey]) ? stat.stats[mkKey] : valStats(f.vals);
-        wrap.appendChild(valBandCard(t + ' ' + mkKey, st, cheapHigh, u, f));
+        wrap.appendChild(valBandCard(t + ' ' + mkKey, st, cheapHigh, u, f, mkKey + '_' + mk));
       });
       return wrap;
     };
@@ -2186,6 +2215,7 @@ function renderValuation() {
   }
 
   if (!c.children.length) c.appendChild(el('div', 'list-cap', 'ข้อมูล Valuation ยังโหลดไม่ครบ — ลองรีเฟรช'));
+  else if (!_valComplete) c.appendChild(el('div', 'list-cap', 'บางส่วนยังโหลดไม่สำเร็จ — เปิดจอนี้อีกครั้งเพื่อลองใหม่'));
 }
 
 function svRow(s, zf) {
