@@ -1287,7 +1287,7 @@ function renderMore() {
       <span class="mi-ic">${m.ic}</span>
       <span class="mi-body"><span class="mi-t">${m.t}</span><span class="mi-s">${m.s}</span></span>
       ${nav ? '<span class="chev">›</span>' : '<span class="mi-badge">เร็ว ๆ นี้</span>'}`;
-    if (nav) row.addEventListener('click', () => { if (m.mode) _scrMode = m.mode; go(m.scr); });
+    if (nav) row.addEventListener('click', () => { if (m.mode) { _scrMode = m.mode; _scrSort = 'rs'; } go(m.scr); });
     box.appendChild(row);
   });
   c.appendChild(box);
@@ -2778,7 +2778,7 @@ function cfxRow(r) {
    ================================================================ */
 let _scrMode = 'basic';           // 'basic' | 'plus'
 let _scrSort = 'rs';
-const _scrF = {
+const SCR_DEFAULTS = {
   rsMin: null, stage: null, r1m: null, r3m: null, priceMin: null, priceMax: null,
   capMin: null, dyMin: null, peMax: null, pbvMax: null,
   ema20: false, ema50: false, ema200: false, mkt: 'ALL',
@@ -2786,6 +2786,7 @@ const _scrF = {
   fScore: null, zSafe: false, roeMin: null, gmMin: null, nmMin: null, deMax: null,
   fcfMin: null, growthMin: null, revYoyq: null, profitYoyq: null, profitPos: null, revPos: null,
 };
+const _scrF = { ...SCR_DEFAULTS };
 
 const SCR_RS_OPTS    = [[null, 'ไม่กรอง'], [50, '50+'], [60, '60+'], [70, '70+'], [80, '80+']];
 const SCR_STAGE_OPTS = [[null, 'ไม่กรอง'], [2, '2 · ขาขึ้น'], [1, '1 · สะสมฐาน'], [3, '3 · แจกของ'], [4, '4 · ขาลง']];
@@ -2810,13 +2811,13 @@ const SCR_PRESETS_BASIC = [
   ['เริ่มโมเมนตัม', { rsMin: 50, r1m: 3, ema50: true }],
   ['โมเมนตัมแรง', { rsMin: 70, r1m: 5, r3m: 10, ema50: true, ema200: true }],
   ['ปันผลสูง + RS', { rsMin: 60, dyMin: 3 }],
-  ['P/BV ต่ำ ฟื้นตัว', { pbvMax: 1.5, rsMin: 45, r1m: 0 }],
+  ['P/BV ต่ำ ฟื้นตัว', { pbvMax: 1.5, rsMin: 50, r1m: 0 }],
 ];
 const SCR_PRESETS_PLUS = [
   ['CANSLIM', { rsMin: 80, ema200: true, profitYoyq: 25, revYoyq: 0 }],
   ['คุณภาพ ROE สูง', { roeMin: 15, nmMin: 10, deMax: 1 }],
   ['งบแข็งแรง', { fScore: 7, zSafe: true, deMax: 1 }],
-  ['กำไรโตเด่น', { profitYoyq: 25, revYoyq: 15, growthMin: 5 }],
+  ['กำไรโตเด่น', { profitYoyq: 25, revYoyq: 10, growthMin: 5 }],
 ];
 
 const SCR_SORTS_BASIC = [['rs', 'RS'], ['pct', '% วันนี้'], ['ret_1m', '% 1 เดือน'], ['cap', 'มูลค่าตลาด'], ['dy', 'ปันผล']];
@@ -2845,8 +2846,8 @@ function scrPass(r) {
   if (f.priceMax != null && f.priceMax > 0 && (r.price ?? 0) > f.priceMax) return false;
   if (f.capMin != null && (!r.mkt_cap || r.mkt_cap < f.capMin)) return false;
   if (f.dyMin != null && (raw.div_yield == null || raw.div_yield < f.dyMin)) return false;
-  if (f.peMax != null && (raw.pe == null || raw.pe > f.peMax)) return false;
-  if (f.pbvMax != null && (raw.pbv == null || raw.pbv > f.pbvMax)) return false;
+  if (f.peMax != null && (raw.pe == null || raw.pe <= 0 || raw.pe > f.peMax)) return false;
+  if (f.pbvMax != null && (raw.pbv == null || raw.pbv <= 0 || raw.pbv > f.pbvMax)) return false;
   if (f.ema20 && !r.above_ema20) return false;
   if (f.ema50 && !r.above_ema50) return false;
   if (f.ema200 && !r.above_ema200) return false;
@@ -2870,13 +2871,7 @@ function scrPass(r) {
 }
 
 function scrClearF() {
-  Object.assign(_scrF, {
-    rsMin: null, stage: null, r1m: null, r3m: null, priceMin: null, priceMax: null,
-    capMin: null, dyMin: null, peMax: null, pbvMax: null,
-    ema20: false, ema50: false, ema200: false, mkt: 'ALL',
-    fScore: null, zSafe: false, roeMin: null, gmMin: null, nmMin: null, deMax: null,
-    fcfMin: null, growthMin: null, revYoyq: null, profitYoyq: null, profitPos: null, revPos: null,
-  });
+  Object.assign(_scrF, SCR_DEFAULTS);
 }
 function scrApplyPreset(obj) { scrClearF(); Object.assign(_scrF, obj); renderScreener(); }
 
@@ -2890,6 +2885,7 @@ function renderScreener() {
   const wrap = el('div');   // handler ผูกกับ wrap ที่สร้างใหม่ทุกครั้ง — ไม่สะสม listener บน #s-screener
   const presets = _scrMode === 'plus' ? SCR_PRESETS_PLUS : SCR_PRESETS_BASIC;
   const sorts   = _scrMode === 'plus' ? SCR_SORTS_PLUS   : SCR_SORTS_BASIC;
+  if (!sorts.some(([k]) => k === _scrSort)) _scrSort = 'rs';   // กัน sort ค้างข้ามโหมด
 
   let h = `<div class="seg">
       <button data-mode="basic" class="${_scrMode === 'basic' ? 'on' : ''}">พื้นฐาน</button>
@@ -2944,8 +2940,10 @@ function renderScreener() {
 
   const pmin = $('#scrPMin'), pmax = $('#scrPMax');
   pmin.value = _scrF.priceMin ?? ''; pmax.value = _scrF.priceMax ?? '';
-  pmin.addEventListener('input', e => { _scrF.priceMin = parseFloat(e.target.value) || null; applyScr(); });
-  pmax.addEventListener('input', e => { _scrF.priceMax = parseFloat(e.target.value) || null; applyScr(); });
+  let _pxT;
+  const pxDeb = () => { clearTimeout(_pxT); _pxT = setTimeout(applyScr, 160); };
+  pmin.addEventListener('input', e => { _scrF.priceMin = parseFloat(e.target.value) || null; pxDeb(); });
+  pmax.addEventListener('input', e => { _scrF.priceMax = parseFloat(e.target.value) || null; pxDeb(); });
 
   const sibsOn = b => [...b.parentElement.children].forEach(x => x.classList && x.classList.toggle('on', x === b));
   wrap.addEventListener('click', e => {
