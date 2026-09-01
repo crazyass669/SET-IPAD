@@ -4,6 +4,7 @@ SET Dashboard — Flask Web Server
 หรือดับเบิ้ลคลิก start.bat
 """
 
+import html
 import json
 import math
 import os
@@ -5082,22 +5083,75 @@ def _screener_mirror_cache_key(uni):
 
 
 def _get_screener_mirror_rows(uni):
-    """cache rows ของ Screener+ US/HK หลัง overlay technical แล้ว ต่อ universe — เดิมไม่มี
-    cache เลย ทุก request (สลับตลาด/ติ๊ก filter/เรียงคอลัมน์) ยิง scan+overlay ใหม่ทั้งก้อน
+    """คืนเฉพาะ rows จาก _get_screener_mirror_data() — ดู docstring ที่นั่น"""
+    return _get_screener_mirror_data(uni)[0]
+
+
+def _get_screener_mirror_data(uni):
+    """cache (rows, meta) ของ Screener+ US/HK/JP หลัง overlay technical แล้ว ต่อ universe —
+    เดิมไม่มี cache เลย ทุก request (สลับตลาด/ติ๊ก filter/เรียงคอลัมน์) ยิง scan+overlay ใหม่ทั้งก้อน
     วัดจริง US ~0.3-1.7 วิ/ครั้ง ทั้งที่ผลลัพธ์เหมือนเดิมทุกครั้งจนกว่าข้อมูลต้นทางจะเปลี่ยนจริง
     (build_mirror_snapshot/Index Sync) — key ตาม _screener_mirror_cache_key() auto-bust ตรงจุด
     ไม่ต้องเดา TTL (ต่างจาก _sector_compare_cache ที่ไม่มีตัวบอกเวอร์ชันชัดเจนแบบนี้)
 
-    return list เดียวกันข้ามหลาย request ได้อย่างปลอดภัย — filter/sort ท้าย factor_screener()
+    meta (factor_snapshot.mirror_snapshot_meta — เปิด connection + query GROUP BY) เดิมถูกเรียก
+    สดทุก request ใน factor_screener() แม้ rows จะ cache hit แล้วก็ตาม (code review 2026-09-02)
+    เลยย้ายมาคำนวณคู่กับ rows ครั้งเดียวตอน cache miss แทน
+
+    return list/dict เดียวกันข้ามหลาย request ได้อย่างปลอดภัย — filter/sort ท้าย factor_screener()
     อ่านอย่างเดียว ไม่เคยเขียนทับ field ของ row ที่ cache ไว้"""
     key = _screener_mirror_cache_key(uni)
     with _screener_mirror_lock:
         cached = _screener_mirror_cache.get(uni)
         if cached and cached[0] == key:
-            return cached[1]
+            return cached[1], cached[2]
         rows = _build_screener_mirror_rows(uni)
-        _screener_mirror_cache[uni] = (key, rows)
-        return rows
+        meta = factor_snapshot.mirror_snapshot_meta(BASE_DIR)
+        _screener_mirror_cache[uni] = (key, rows, meta)
+        return rows, meta
+
+
+def _overlay_mirror_technicals(rows, index_stocks, suffix="", override_name=False):
+    """overlay technical (rs/EMA200/52W high/rvol/stage/fcf_yield) + ซ่อน Z-Score กลุ่มการเงิน
+    ให้ rows ของ mirror universe หนึ่งตัว จาก index_stocks (list จาก us/hk/jp_index_metrics.json)
+    — เดิมก็อปวางทั้งก้อนนี้ 3 รอบต่อ US/HK/JP ใน _build_screener_mirror_rows จนเริ่ม drift จริง
+    (JP มี name-override ที่ US/HK ไม่มี) รวมเป็นฟังก์ชันเดียวกันไม่ให้แก้ที่หนึ่งแล้วลืมอีกสองที่
+    (code review 2026-09-02)
+
+    suffix: symbol ในชุด mirror เป็นรหัสดิบ (เช่น "0700"/"7203") ส่วน hk/jp_index_metrics ใช้
+    รูปแบบ yfinance ("0700.HK"/"7203.T") — ต่อ suffix ก่อน lookup (US ไม่มี suffix)
+    override_name: เอาชื่อจาก index_stocks มาทับ r['name'] — เฉพาะ JP ที่ไม่มี mirror_names.json
+    ให้ (Finnomena ไม่มีข้อมูลตลาดนี้เลย) US/HK มีชื่อจากช่องทางอื่น (/api/mirror-names) แล้ว"""
+    by_sym = {s["symbol"]: s for s in index_stocks}
+    for r in rows:
+        lookup = r["symbol"] + suffix if suffix else r["symbol"]
+        s = by_sym.get(lookup)
+        if override_name and s and s.get("name"):
+            r["name"] = s["name"]
+        r["rs"] = s.get("rs_score") if s else None
+        r["pct_vs_ema200"] = (round((s["price"] / s["ema200"] - 1) * 100, 2)
+                               if s and s.get("price") and s.get("ema200") else None)
+        r["pct_off_high52"] = (round((s["price"] / s["high_52w"] - 1) * 100, 2)
+                                if s and s.get("price") and s.get("high_52w") else None)
+        r["rvol"] = (round(s["vol_today"] / s["vol_avg20"], 4)
+                     if s and s.get("vol_today") and s.get("vol_avg20") else None)
+        r["stage"] = s.get("stage") if s else None
+        # fcf_yield ต้องใช้ mkt_cap สด — us/hk/jp_index_metrics.json ไม่เก็บ mkt_cap เลย
+        # (ยืนยันแล้วเหมือนที่ /api/tearsheet เจอ) คำนวณเองจาก price สด × shares_out ล่าสุด
+        # (งบ Yahoo annual, มาจาก factor_snapshot อยู่แล้วใน r) แทน — มีค่าเฉพาะหุ้นในดัชนีหลัก
+        # ที่มี price สด ตัวนอกดัชนียังเป็น None
+        mc = s.get("mkt_cap") if s else None
+        if mc is None and s and s.get("price") and r.get("shares_out"):
+            mc = s["price"] * r["shares_out"]
+        r["fcf_yield"] = (r["fcf"] / mc * 100) if (r.get("fcf") is not None and mc) else None
+        # ซ่อน Z-Score ของกลุ่มการเงิน (แบงก์/ประกัน) เหมือนที่ /api/tearsheet และ
+        # /api/peer-compare ทำไว้แล้ว (เจอตอนรีวิว 2026-08-01 ว่า Screener+ ยังไม่ซ่อน
+        # ทำให้ JPM/BAC ฯลฯ ที่มีงบ Yahoo sync แล้วโชว์ Z-Score หลอกตาในตาราง ทั้งที่
+        # สูตร Altman ใช้ไม่ได้กับงบดุลสถาบันการเงิน) — เช็คได้เฉพาะสมาชิกดัชนีหลักที่มี
+        # sector จาก index_metrics.json เท่านั้น (ตัวนอกดัชนีไม่มี sector ให้เช็ค)
+        if s and s.get("sector") in factor_snapshot.FINANCIAL_SECTOR_NAMES:
+            r["z_score"], r["z_zone"] = None, None
+            r["z_excluded_reason"] = "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"
 
 
 def _build_screener_mirror_rows(uni):
@@ -5110,92 +5164,17 @@ def _build_screener_mirror_rows(uni):
     # รายวันเก็บไว้ เลยยังเป็น None เหมือนเดิม
     if uni == "us":
         from sources import us_index_metrics
-        _us_by_sym = {s["symbol"]: s for s in us_index_metrics.load_local(BASE_DIR).get("stocks", [])}
-        for r in rows:
-            s = _us_by_sym.get(r["symbol"])
-            r["rs"] = s.get("rs_score") if s else None
-            r["pct_vs_ema200"] = (round((s["price"] / s["ema200"] - 1) * 100, 2)
-                                   if s and s.get("price") and s.get("ema200") else None)
-            r["pct_off_high52"] = (round((s["price"] / s["high_52w"] - 1) * 100, 2)
-                                    if s and s.get("price") and s.get("high_52w") else None)
-            r["rvol"] = (round(s["vol_today"] / s["vol_avg20"], 4)
-                         if s and s.get("vol_today") and s.get("vol_avg20") else None)
-            r["stage"] = s.get("stage") if s else None
-            # fcf_yield ต้องใช้ mkt_cap สด — us_index_metrics.json ไม่เก็บ mkt_cap เลย
-            # (ยืนยันแล้ว 0/518 ตัวมีค่า เหมือนที่ /api/tearsheet เจอ — ดูคอมเมนต์
-            # "us/hk_index_metrics.json ไม่เก็บ mkt_cap" ในฟังก์ชัน tearsheet) คำนวณเองจาก
-            # price สด × shares_out ล่าสุด (งบ Yahoo annual, มาจาก factor_snapshot อยู่แล้ว
-            # ใน r) แทน — มีค่าเฉพาะหุ้นในดัชนีหลักที่มี price สด ตัวนอกดัชนียังเป็น None
-            mc = s.get("mkt_cap") if s else None
-            if mc is None and s and s.get("price") and r.get("shares_out"):
-                mc = s["price"] * r["shares_out"]
-            r["fcf_yield"] = (r["fcf"] / mc * 100) if (r.get("fcf") is not None and mc) else None
-            # ซ่อน Z-Score ของกลุ่มการเงิน (แบงก์/ประกัน) เหมือนที่ /api/tearsheet และ
-            # /api/peer-compare ทำไว้แล้ว (เจอตอนรีวิว 2026-08-01 ว่า Screener+ ยังไม่ซ่อน
-            # ทำให้ JPM/BAC ฯลฯ ที่มีงบ Yahoo sync แล้วโชว์ Z-Score หลอกตาในตาราง ทั้งที่
-            # สูตร Altman ใช้ไม่ได้กับงบดุลสถาบันการเงิน) — เช็คได้เฉพาะสมาชิกดัชนีหลักที่มี
-            # sector จาก us_index_metrics.json เท่านั้น (ตัวนอกดัชนีไม่มี sector ให้เช็ค)
-            if s and s.get("sector") in factor_snapshot.FINANCIAL_SECTOR_NAMES:
-                r["z_score"], r["z_zone"] = None, None
-                r["z_excluded_reason"] = "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"
+        _overlay_mirror_technicals(rows, us_index_metrics.load_local(BASE_DIR).get("stocks", []))
     elif uni == "hk":
         from sources import hk_index_metrics
-        # symbol ในชุด mirror เป็นรหัสดิบ (เช่น "0700") ส่วน hk_index_metrics ใช้
-        # รูปแบบ yfinance "0700.HK" — ต่อ ".HK" ก่อน lookup
-        _hk_by_sym = {s["symbol"]: s for s in hk_index_metrics.load_local(BASE_DIR).get("stocks", [])}
-        for r in rows:
-            s = _hk_by_sym.get(f"{r['symbol']}.HK")
-            r["rs"] = s.get("rs_score") if s else None
-            r["pct_vs_ema200"] = (round((s["price"] / s["ema200"] - 1) * 100, 2)
-                                   if s and s.get("price") and s.get("ema200") else None)
-            r["pct_off_high52"] = (round((s["price"] / s["high_52w"] - 1) * 100, 2)
-                                    if s and s.get("price") and s.get("high_52w") else None)
-            r["rvol"] = (round(s["vol_today"] / s["vol_avg20"], 4)
-                         if s and s.get("vol_today") and s.get("vol_avg20") else None)
-            r["stage"] = s.get("stage") if s else None
-            mc = s.get("mkt_cap") if s else None
-            if mc is None and s and s.get("price") and r.get("shares_out"):
-                mc = s["price"] * r["shares_out"]
-            r["fcf_yield"] = (r["fcf"] / mc * 100) if (r.get("fcf") is not None and mc) else None
-            # ซ่อน Z-Score ของกลุ่มการเงิน — เหตุผลเดียวกับ branch US ด้านบน (HK มีทั้ง
-            # "Financials"/"Finance" แยกกัน ดู FINANCIAL_SECTOR_NAMES — ครอบ HSBC/HKEX/
-            # AIA/BOCHK ด้วย ไม่ใช่แค่แบงก์จีน)
-            if s and s.get("sector") in factor_snapshot.FINANCIAL_SECTOR_NAMES:
-                r["z_score"], r["z_zone"] = None, None
-                r["z_excluded_reason"] = "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"
+        _overlay_mirror_technicals(rows, hk_index_metrics.load_local(BASE_DIR).get("stocks", []), suffix=".HK")
     elif uni == "jp":
         from sources import jp_index_metrics
         # rows ทั้งหมดเป็นสมาชิก Nikkei225 อยู่แล้ว (build_mirror_snapshot_yahoo_only รับ
         # เฉพาะ universe ที่ curate มาแล้ว ไม่ใช่ raw universe หมื่นตัวแบบ US/HK) เลย overlay
-        # ราคา/technical ได้ครบ 225/225 ไม่มีตัวนอกดัชนีเหมือน US/HK ที่ทำได้แค่บางส่วน ·
-        # symbol ในชุด mirror เป็นรหัสดิบ (เช่น "7203") ส่วน jp_index_metrics ใช้รูปแบบ
-        # yfinance "7203.T" — ต่อ ".T" ก่อน lookup (เหมือน pattern .HK ด้านบน)
-        _jp_by_sym = {s["symbol"]: s for s in jp_index_metrics.load_local(BASE_DIR).get("stocks", [])}
-        for r in rows:
-            s = _jp_by_sym.get(f"{r['symbol']}.T")
-            # ชื่อบริษัทจาก mirror snapshot เป็นแค่ตัวเลขรหัส (ไม่มี mirror_names.json ให้ JP
-            # เหมือน US/HK เพราะ Finnomena ไม่มีข้อมูลตลาดนี้) — ใช้ชื่อจาก jp_index_metrics
-            # ที่มีอยู่แล้วแทน (ดึงจาก ja.wikipedia/Yahoo ตอน build)
-            if s and s.get("name"):
-                r["name"] = s["name"]
-            r["rs"] = s.get("rs_score") if s else None
-            r["pct_vs_ema200"] = (round((s["price"] / s["ema200"] - 1) * 100, 2)
-                                   if s and s.get("price") and s.get("ema200") else None)
-            r["pct_off_high52"] = (round((s["price"] / s["high_52w"] - 1) * 100, 2)
-                                    if s and s.get("price") and s.get("high_52w") else None)
-            r["rvol"] = (round(s["vol_today"] / s["vol_avg20"], 4)
-                         if s and s.get("vol_today") and s.get("vol_avg20") else None)
-            r["stage"] = s.get("stage") if s else None
-            mc = s.get("mkt_cap") if s else None
-            if mc is None and s and s.get("price") and r.get("shares_out"):
-                mc = s["price"] * r["shares_out"]
-            r["fcf_yield"] = (r["fcf"] / mc * 100) if (r.get("fcf") is not None and mc) else None
-            # ซ่อน Z-Score ของกลุ่มการเงิน — เหตุผลเดียวกับ US/HK ด้านบน (ja.wikipedia sector
-            # ภาษาญี่ปุ่น 4 กลุ่ม 銀行/証券/保険/その他金融 ถูกแปลรวมเป็น "Financial Services"
-            # ตรงกับ FINANCIAL_SECTOR_NAMES อยู่แล้ว ดู sources/jp_index_membership.py)
-            if s and s.get("sector") in factor_snapshot.FINANCIAL_SECTOR_NAMES:
-                r["z_score"], r["z_zone"] = None, None
-                r["z_excluded_reason"] = "สถาบันการเงิน — สูตร Altman ไม่ valid กับงบดุลกลุ่มนี้"
+        # ราคา/technical ได้ครบ 225/225 ไม่มีตัวนอกดัชนีเหมือน US/HK ที่ทำได้แค่บางส่วน
+        _overlay_mirror_technicals(rows, jp_index_metrics.load_local(BASE_DIR).get("stocks", []),
+                                    suffix=".T", override_name=True)
     return rows
 
 
@@ -5219,7 +5198,7 @@ def factor_screener():
     if uni in ("us", "hk", "jp"):
         # ชุด mirror ใหญ่มาก (US ~17k) — กรองฝั่ง server ส่งเฉพาะผลลัพธ์ (≤ limit) — JP เล็กกว่า
         # มาก (225 ตัว) แต่ใช้ path เดียวกันเพราะ shape ข้อมูลเหมือนกันทุกอย่าง
-        rows = _get_screener_mirror_rows(uni)
+        rows, mirror_meta = _get_screener_mirror_data(uni)
 
         try:
             filters = json.loads(request.args.get("filters") or "[]")
@@ -5278,7 +5257,7 @@ def factor_screener():
             non_null.sort(key=lambda r: str(r.get(sort_key)), reverse=(sort_dir < 0))
         matched = non_null + null_rows
         return jsonify({"rows": matched[:limit], "total": total, "returned": min(total, limit),
-                        "meta": factor_snapshot.mirror_snapshot_meta(BASE_DIR)})
+                        "meta": mirror_meta})
 
     rows = factor_snapshot.get_snapshot(BASE_DIR)
     if not rows:
@@ -7828,6 +7807,22 @@ def _dh_age_hours(dt):
         return None
     return (_dh_dt.now() - dt).total_seconds() / 3600
 
+def _dh_esc(s):
+    """escape ตัวแปรภายนอก (ticker/ชื่อบริษัทจาก scrape) ก่อนปนกับ HTML literal ใน note —
+    ป้องกัน XSS ถ้าแหล่งข้อมูล (Wikipedia/SET.or.th) มี &<>"' ปนในชื่อ (code review 2026-09-02
+    กลุ่ม A) — escape rule เดียวกับ _escHtml ฝั่ง dashboard.js"""
+    return html.escape(str(s), quote=True)
+
+def _dh_pct_color(pct, ok=99.5, warn=90):
+    """สูตร %→สี ใช้ร่วม 3 จุด (financials_coverage_by_source/financials_quarter_freshness/
+    us_index_coverage_by_index) — เดิมพิมพ์ if/else ซ้ำทั้ง 3 ที่ (code review 2026-09-02 กลุ่ม
+    B2) threshold ต่าง default ได้ต่อ call site (financials_quarter_freshness ใช้ 95/50)"""
+    return "var(--green)" if pct >= ok else ("var(--yellow)" if pct >= warn else "var(--red)")
+
+def _dh_pct_status(pct, ok=99.5, warn=90):
+    """สูตร %→status (ok/warn/red) คู่กับ _dh_pct_color threshold เดียวกัน"""
+    return "ok" if pct >= ok else ("warn" if pct >= warn else "red")
+
 def _dh_business_age_hours(dt):
     """อายุแบบตัดชั่วโมงวันเสาร์-อาทิตย์ออก — ใช้เทียบ threshold เท่านั้น (ไม่ใช่ตัวที่
     แสดงผลให้ผู้ใช้เห็น) กันไม่ให้ prices/flow ขึ้น warn/red หลอกทุกวันจันทร์เช้าหรือช่วง
@@ -7950,12 +7945,12 @@ def _dh_drift_item(key, label, status_map):
         parts = []
         if d.get("new_count"):
             new_sample = d.get("new_sample") or []
-            sample = ', '.join(new_sample[:8])
+            sample = ', '.join(_dh_esc(s) for s in new_sample[:8])
             more = '…' if d["new_count"] > len(new_sample) else ''
             parts.append(f"ใหม่ {d['new_count']} ตัว ({sample}{more})")
         if d.get("removed_count"):
             rem_sample = d.get("removed_sample") or []
-            sample = ', '.join(rem_sample[:8])
+            sample = ', '.join(_dh_esc(s) for s in rem_sample[:8])
             more = '…' if d["removed_count"] > len(rem_sample) else ''
             parts.append(f"หายไป {d['removed_count']} ตัว ({sample}{more})")
         status, note = "warn", "พบการเปลี่ยนแปลง — " + " · ".join(parts) + " (ต้อง sync มือให้ตรง)"
@@ -8023,19 +8018,37 @@ def _dh_index_quality_item(key, label, market_code, membership_path, metrics_pat
     if missing:
         _dh_bump("warn")
         more = '…' if len(missing) > 8 else ''
-        problems.append(f"หายจาก metrics {len(missing)} ตัว ({', '.join(missing[:8])}{more})")
+        problems.append(f"หายจาก metrics {len(missing)} ตัว ({', '.join(_dh_esc(s) for s in missing[:8])}{more})")
 
     unknown = [s.get("symbol") for s in stocks if not s.get("sector") or s.get("sector") == "Unknown"]
     if unknown:
         _dh_bump("red" if len(unknown) > 3 else "warn")
         more = '…' if len(unknown) > 8 else ''
-        problems.append(f"sector Unknown {len(unknown)} ตัว ({', '.join(unknown[:8])}{more})")
+        problems.append(f"sector Unknown {len(unknown)} ตัว ({', '.join(_dh_esc(s) for s in unknown[:8])}{more})")
 
     note = " · ".join(problems) if problems else f"{len(union)} ตัว ({market_code}) ครบ ไม่มี sector Unknown"
     return _dh_quality_item(key, label, status, note)
 
 
-_dh_th_universe_cache = {"mtime": None, "tickers": None}
+_dh_th_universe_cache = {"mtime": None, "tickers": None, "stocks": None, "data_as_of": None}
+
+
+def _dh_th_universe_data():
+    """โหลด+cache set_data.json ทั้งก้อนตาม mtime (tickers derive แล้ว + stocks ดิบ +
+    data_as_of) — ใช้ร่วมกันระหว่าง _dh_th_universe_tickers() กับ block q_set_data กัน parse
+    JSON ~12MB ซ้ำ 2 รอบต่อการ compute data health 1 ครั้ง (code review 2026-09-02 กลุ่ม B3)
+    raise เมื่ออ่าน/parse ไฟล์ไม่ได้ (caller ที่ต้องรายละเอียด error จัดการเอง — ดู block
+    q_set_data) หรือไฟล์หาย (os.path.getmtime OSError)"""
+    mtime = os.path.getmtime(DATA_FILE)
+    if _dh_th_universe_cache["mtime"] == mtime:
+        return _dh_th_universe_cache
+    with open(DATA_FILE, encoding="utf-8") as f:
+        d = json.load(f)
+    stocks = d.get("stocks") or []
+    tickers = {s["ticker"] for s in stocks if s.get("ticker")}
+    _dh_th_universe_cache.update(mtime=mtime, tickers=tickers, stocks=stocks,
+                                  data_as_of=d.get("data_as_of"))
+    return _dh_th_universe_cache
 
 
 def _dh_th_universe_tickers():
@@ -8046,19 +8059,10 @@ def _dh_th_universe_tickers():
     DW พวกนี้เทรดเบาบางมาก ราคานิ่งซ้ำกันหลายวันเป็นเรื่องปกติ ถ้าไม่กรองออกจะ false-positive
     ชนกับเช็ค 'ราคาซ้ำผิดปกติ' ด้านล่างทันที) คืน None ถ้าอ่านไม่ได้ (caller ควร skip filter)"""
     try:
-        mtime = os.path.getmtime(DATA_FILE)
-    except OSError:
-        return None
-    if _dh_th_universe_cache["mtime"] == mtime:
-        return _dh_th_universe_cache["tickers"]
-    try:
-        with open(DATA_FILE, encoding="utf-8") as f:
-            d = json.load(f)
-        tickers = {s["ticker"] for s in d.get("stocks", []) if s.get("ticker")}
+        data = _dh_th_universe_data()
     except Exception:
         return None
-    _dh_th_universe_cache.update(mtime=mtime, tickers=tickers)
-    return tickers
+    return data["tickers"]
 
 
 def _dh_stale_close_check(key, label, db_path, dup_threshold=20, min_universe=30, universe=None,
@@ -8184,6 +8188,33 @@ _data_health_lock  = threading.Lock()
 _DATA_HEALTH_TTL   = 300   # 5 นาที — หน้านี้วัด "ความสดของข้อมูล" หน่วยชั่วโมง/วัน
                             # ไม่ต้อง real-time ระดับวินาที (ปุ่มรีเฟรชใช้ ?fresh=1 ข้าม cache ได้)
 
+_dh_cc_cache = {"cc": None, "ts": 0}
+_dh_cc_lock  = threading.Lock()
+
+
+def _get_cash_cycle_crosscheck_cached(fresh=False):
+    """cache ผลดิบของ _compute_cash_cycle_crosscheck() แยกจาก _data_health_cache (TTL เดียวกัน
+    คือ _DATA_HEALTH_TTL) — ทั้ง _compute_data_health (badge สรุปใน /api/data-health) และ route
+    /api/data-health/cash-cycle-crosscheck-full (ตารางเต็มตอนกด "และอีก N ตัว") เรียกผ่าน
+    ฟังก์ชันนี้แทนเรียก _compute_cash_cycle_crosscheck() ตรงๆ กันคำนวณ full-table scan +
+    JSON deserialize ~900 แถวซ้ำสิ่งที่เพิ่งคำนวณไปหมาดๆ ภายในไม่กี่วินาที (code review
+    2026-09-02 กลุ่ม B5) — ใช้ cache เดียวกันทั้งสองจุดเพื่อไม่ให้ badge สรุปกับตารางเต็มเห็น
+    ตัวเลขไม่ตรงกัน (invalidate cache เดียวกัน ไม่ใช่คนละ TTL แยกอิสระ) fresh=True (จาก
+    /api/data-health?fresh=1) บังคับคำนวณใหม่เสมอ"""
+    if not fresh:
+        cached = _dh_cc_cache.get("cc")
+        if cached is not None and (time.time() - _dh_cc_cache.get("ts", 0) < _DATA_HEALTH_TTL):
+            return cached
+    with _dh_cc_lock:
+        if not fresh:
+            cached = _dh_cc_cache.get("cc")
+            if cached is not None and (time.time() - _dh_cc_cache.get("ts", 0) < _DATA_HEALTH_TTL):
+                return cached
+        cc = _compute_cash_cycle_crosscheck()
+        _dh_cc_cache["cc"] = cc
+        _dh_cc_cache["ts"] = time.time()
+        return cc
+
 
 @app.route("/api/data-health")
 def data_health():
@@ -8203,7 +8234,7 @@ def data_health():
             cached = _data_health_cache.get("result")
             if cached and (time.time() - _data_health_cache.get("ts", 0) < _DATA_HEALTH_TTL):
                 return jsonify(cached)
-        result = _compute_data_health()
+        result = _compute_data_health(fresh=fresh)
         _data_health_cache["result"] = result
         _data_health_cache["ts"] = time.time()
         return jsonify(result)
@@ -8214,9 +8245,11 @@ def data_health_cash_cycle_crosscheck_full():
     """รายชื่อคู่หุ้นวงจรเงินสด SET vs Yahoo ที่ต่างกันเกิน threshold ครบทุกตัว (ไม่ตัดโชว์
     12 ตัวแรกเหมือน note ใน /api/data-health) — แยก route ต่างหากเพราะ /api/data-health
     ถูกเรียกบ่อยมาก (badge เช็คทุกครั้งเปิดแอป/หลัง Quick Update) ไม่อยากยัดตารางเต็ม
-    (~470+ แถว) เข้าไปทุกครั้งทั้งที่แทบไม่มีใครกดดู โหลดเฉพาะตอนกด "และอีก N ตัว" จริงๆ"""
+    (~470+ แถว) เข้าไปทุกครั้งทั้งที่แทบไม่มีใครกดดู โหลดเฉพาะตอนกด "และอีก N ตัว" จริงๆ —
+    เรียกผ่าน _get_cash_cycle_crosscheck_cached() แทนเรียกตรง กัน compute ซ้ำสิ่งที่
+    /api/data-health เพิ่งคำนวณไปหมาดๆ (code review 2026-09-02 กลุ่ม B5)"""
     try:
-        cc = _compute_cash_cycle_crosscheck()
+        cc = _get_cash_cycle_crosscheck_cached()
         rows = [{"symbol": s, "yahoo": y, "set": t, "diff": round(abs(y - t), 1)}
                 for s, y, t in cc["diverge"]]
         return jsonify({"diff_days": cc["diff_days"], "rows": rows})
@@ -8273,7 +8306,7 @@ def _compute_cash_cycle_crosscheck():
     }
 
 
-def _compute_data_health():
+def _compute_data_health(fresh=False):
     items = []
 
     # ราคา/เทคนิค — auto 3 รอบ/วัน (จ-ศ), gap วันหยุดสุดสัปดาห์ ~59.5 ชม.
@@ -8435,9 +8468,9 @@ def _compute_data_health():
         elif _ipo_missing:
             _ipo_status = "warn"
             _ipo_rows = "".join(
-                f'<tr><td style="padding:2px 10px 2px 0"><b>{_m[0]}</b></td>'
-                f'<td style="color:var(--text2)">{(_m[2] or "")[:38]}</td>'
-                f'<td style="color:var(--text2);padding-left:8px;white-space:nowrap">เข้าตลาด {_m[1] or "?"}</td></tr>'
+                f'<tr><td style="padding:2px 10px 2px 0"><b>{_dh_esc(_m[0])}</b></td>'
+                f'<td style="color:var(--text2)">{_dh_esc((_m[2] or "")[:38])}</td>'
+                f'<td style="color:var(--text2);padding-left:8px;white-space:nowrap">เข้าตลาด {_dh_esc(_m[1] or "?")}</td></tr>'
                 for _m in _ipo_missing[:20])
             _ipo_note = (f'{_ipo_tip} <b>{len(_ipo_missing)}</b> ตัวเทรดแล้วแต่ยังไม่มีในฐานราคาหุ้นไทย:'
                          f'<table style="border-collapse:collapse;margin-top:4px">{_ipo_rows}</table>'
@@ -8472,10 +8505,6 @@ def _compute_data_health():
     except Exception as e:
         items.append(_dh_error_item("us_prices", "ราคาหุ้นดัชนี US (us_prices.db)", "ราคา/เทคนิค", str(e)[:160]))
 
-    items.append(_dh_stale_close_check(
-        "us_prices_stale_dup", "ราคาซ้ำแท่งก่อนหน้าผิดปกติ (หุ้น US)",
-        os.path.join(BASE_DIR, _us_store.DB_FILE)))
-
     try:
         items.append(_dh_item(
             "hk_prices", "ราคาหุ้นดัชนี HK (hk_prices.db)", "ราคา/เทคนิค",
@@ -8483,10 +8512,6 @@ def _compute_data_health():
             missing_note="ยังไม่เคยอัพเดทหุ้น HK ในเครื่องนี้", optional=True))
     except Exception as e:
         items.append(_dh_error_item("hk_prices", "ราคาหุ้นดัชนี HK (hk_prices.db)", "ราคา/เทคนิค", str(e)[:160]))
-
-    items.append(_dh_stale_close_check(
-        "hk_prices_stale_dup", "ราคาซ้ำแท่งก่อนหน้าผิดปกติ (หุ้น HK)",
-        os.path.join(BASE_DIR, _hk_store.DB_FILE)))
 
     try:
         items.append(_dh_item(
@@ -8496,9 +8521,12 @@ def _compute_data_health():
     except Exception as e:
         items.append(_dh_error_item("jp_prices", "ราคาหุ้นดัชนี JP (jp_prices.db)", "ราคา/เทคนิค", str(e)[:160]))
 
-    items.append(_dh_stale_close_check(
-        "jp_prices_stale_dup", "ราคาซ้ำแท่งก่อนหน้าผิดปกติ (หุ้น JP)",
-        os.path.join(BASE_DIR, _jp_store.DB_FILE)))
+    # dup-close check 3 ตลาดรวมเป็น loop เดียว (เดิมก็อป 3 บล็อกเกือบเหมือนกัน — code review
+    # 2026-09-02 กลุ่ม B1) ต่างกันแค่ key/label/DB_FILE ต่อตลาด
+    for _mkt, _store in (("US", _us_store), ("HK", _hk_store), ("JP", _jp_store)):
+        items.append(_dh_stale_close_check(
+            f"{_mkt.lower()}_prices_stale_dup", f"ราคาซ้ำแท่งก่อนหน้าผิดปกติ (หุ้น {_mkt})",
+            os.path.join(BASE_DIR, _store.DB_FILE)))
 
     items.append(_dh_item(
         "us_index_metrics", "Metrics หุ้นดัชนี US (us_index_metrics.json)", "ราคา/เทคนิค",
@@ -8555,14 +8583,13 @@ def _compute_data_health():
             _pct = (_c["covered"] / _total * 100) if _total else 0.0
             if _k not in _fin_cov_informational:
                 _fin_cov_worst_pct = min(_fin_cov_worst_pct, _pct)
-            _color = "var(--green)" if _pct >= 99.5 else ("var(--yellow)" if _pct >= 90 else "var(--red)")
+            _color = _dh_pct_color(_pct)
             _note_mark = ' *' if _k in _fin_cov_informational else ''
             _fin_cov_rows.append(
                 f'<tr><td style="padding:2px 10px 2px 0">{_label}{_note_mark}</td>'
                 f'<td style="text-align:right;color:{_color};font-weight:600">'
                 f'{_c["covered"]}/{_total} ({_pct:.1f}%)</td></tr>')
-        _fin_cov_status = ("ok" if _fin_cov_worst_pct >= 99.5
-                            else "warn" if _fin_cov_worst_pct >= 90 else "red")
+        _fin_cov_status = _dh_pct_status(_fin_cov_worst_pct)
         _fin_cov_extra = ('<div style="margin-top:6px;color:var(--text2);font-size:11px">'
                            '* SET Financial Health ไม่ครอบกลุ่มการเงิน/ประกัน/REIT (~30-40% ของตลาด) '
                            'เพดาน coverage ต่ำกว่า 100% ถาวรโดยไม่ใช่บั๊ก — ไม่นับรวมในสถานะข้างบน</div>')
@@ -8601,7 +8628,7 @@ def _compute_data_health():
             _pct = (_c["fresh"] / _total * 100) if _total else 0.0
             _finq_worst_pct = min(_finq_worst_pct, _pct)
             _finq_missing_total += _c["stale"]
-            _color = "var(--green)" if _pct >= 99.5 else ("var(--yellow)" if _pct >= 90 else "var(--red)")
+            _color = _dh_pct_color(_pct)
             _finq_rows.append(
                 f'<tr><td style="padding:2px 10px 2px 0">{_finq_labels[_k]}</td>'
                 f'<td style="text-align:right;color:{_color};font-weight:600">'
@@ -8610,8 +8637,7 @@ def _compute_data_health():
         # threshold หลวมกว่า item 'มีข้อมูล' ด้านบนมาก (99.5/90) เพราะบริษัทมีสิทธิ์ยื่นงบช้าได้
         # ถึง 45-60 วันหลังปิดไตรมาส (_target_period ไม่รอ deadline ถือว่า 'ควรมีแล้ว' ทันทีที่
         # ไตรมาสปฏิทินปิด) — % ต่ำตอนไตรมาสเพิ่งปิดใหม่ๆ เป็นเรื่องปกติ ไม่ใช่ sync ล้มเหลว
-        _finq_status = ("ok" if _finq_worst_pct >= 95
-                         else "warn" if _finq_worst_pct >= 50 else "red")
+        _finq_status = _dh_pct_status(_finq_worst_pct, ok=95, warn=50)
         items.append({
             "key": "financials_quarter_freshness",
             "label": "งบการเงิน — เช็คงวดล่าสุด (financials.db)",
@@ -8739,19 +8765,18 @@ def _compute_data_health():
             _gcovered = _gtotal - len(_gmissing)
             _gpct = (_gcovered / _gtotal * 100) if _gtotal else 0.0
             _uim_worst_pct = min(_uim_worst_pct, _gpct)
-            _gcolor = "var(--green)" if _gpct >= 99.5 else ("var(--yellow)" if _gpct >= 90 else "var(--red)")
+            _gcolor = _dh_pct_color(_gpct)
             _uim_rows.append(
                 f'<tr><td style="padding:2px 10px 2px 0">{_glabel}</td>'
                 f'<td style="text-align:right;color:{_gcolor};font-weight:600">'
                 f'{_gcovered}/{_gtotal} ({_gpct:.1f}%)</td></tr>')
             if _gmissing:
                 _uim_missing_by_group[_glabel] = [name for _, name in _gmissing]
-        _uim_status = ("ok" if _uim_worst_pct >= 99.5
-                        else "warn" if _uim_worst_pct >= 90 else "red")
+        _uim_status = _dh_pct_status(_uim_worst_pct)
         _uim_extra = ""
         if _uim_missing_by_group:
             _uim_missing_html = "".join(
-                f'<div style="margin-top:4px"><b>{lbl}</b> ({len(syms)}): {", ".join(syms)}</div>'
+                f'<div style="margin-top:4px"><b>{lbl}</b> ({len(syms)}): {", ".join(_dh_esc(s) for s in syms)}</div>'
                 for lbl, syms in _uim_missing_by_group.items())
             _uim_extra = (f'<details style="margin-top:6px"><summary style="cursor:pointer">'
                            f'ตัวที่ยังไม่มีงบ</summary>{_uim_missing_html}</details>')
@@ -8927,14 +8952,15 @@ def _compute_data_health():
     # ทุก item ข้างบนวัดแค่ "ถูกเขียนล่าสุดเมื่อไหร่" — ไฟล์ที่ถูกเขียนทับด้วยข้อมูล
     # ว่าง/พร่อง (source เปลี่ยนรูปแบบ, parser คืน list ว่าง) จะยังขึ้นเขียวสนิท
     try:
-        with open(os.path.join(BASE_DIR, "set_data.json"), encoding="utf-8") as f:
-            _sd = json.load(f)
-        _n_stocks = len(_sd.get("stocks") or [])
+        # ใช้ cache เดียวกับ _dh_th_universe_tickers() (เรียกไปแล้วก่อนหน้านี้ในฟังก์ชัน) กัน
+        # parse set_data.json ~12MB ซ้ำรอบสอง (code review 2026-09-02 กลุ่ม B3)
+        _sd_cache = _dh_th_universe_data()
+        _n_stocks = len(_sd_cache["stocks"])
         _q_status = "ok" if _n_stocks >= 800 else ("warn" if _n_stocks >= 500 else "red")
         items.append(_dh_quality_item(
             "q_set_data", "จำนวนหุ้นใน set_data.json", _q_status,
             f"{_n_stocks} ตัว (ปกติ ~900-950 · <800 = เริ่มผิดปกติ, <500 = พร่องชัดเจน)",
-            last_at=_sd.get("data_as_of")))
+            last_at=_sd_cache["data_as_of"]))
     except Exception as e:
         items.append(_dh_quality_item(
             "q_set_data", "จำนวนหุ้นใน set_data.json", "red", f"อ่านไฟล์ไม่ได้: {str(e)[:120]}"))
@@ -9029,7 +9055,7 @@ def _compute_data_health():
     # ค่าฝั่ง Yahoo "เพี้ยนชัด" (|cash cycle| > 1000 วัน = รายได้/ต้นทุนใกล้ 0 หารระเบิด) เยอะ
     # ผิดปกติ ซึ่งแปลว่า compute_cash_cycle พังจริง ไม่ใช่แค่ต่างสูตร
     try:
-        _cc = _compute_cash_cycle_crosscheck()
+        _cc = _get_cash_cycle_crosscheck_cached(fresh=fresh)
         _CC_DIFF_DAYS = _cc["diff_days"]
         _cc_pairs = _cc["pairs"]
         _cc_absurd = _cc["absurd"]

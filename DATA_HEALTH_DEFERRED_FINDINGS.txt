@@ -1,5 +1,15 @@
 Data Health (ลำดับ 14B) — finding ที่ตั้งใจไม่แก้ในรอบ code review 2026-09-02
 ===============================================================================
+[แก้ครบแล้ว 2026-09-02] ทั้งกลุ่ม A (4 จุด) และกลุ่ม B (5 จุด) ด้านล่างถูกหยิบมาแก้ในรอบถัดมา
+วันเดียวกัน — เพิ่ม html.escape helper (_dh_esc) ครบ 4 จุด A1-A4, รวม loop US/HK/JP stale-dup
+check (B1), รวม helper _dh_pct_color/_dh_pct_status (B2), แชร์ cache set_data.json ผ่าน
+_dh_th_universe_data() (B3), รวม helper ปุ่ม _dhBtn ฝั่ง dashboard.js (B4), cache ผลดิบ
+_compute_cash_cycle_crosscheck() ผ่าน _get_cash_cycle_crosscheck_cached() แชร์ระหว่าง
+/api/data-health กับ /api/data-health/cash-cycle-crosscheck-full (B5) — restart server +
+bump ?v=20260902d + ทดสอบ Playwright จริงผ่าน (0 console error, ตรวจ note/status ทุก item
+ที่แก้แล้วถูกต้อง, cash-cycle-full modal โหลด 486 แถวถูกต้อง + fetch รอบสองเร็วขึ้นจาก cache)
+เนื้อหาด้านล่างเก็บไว้เป็นบริบท/เหตุผลของแต่ละจุดเท่านั้น ไม่ใช่ backlog ที่ยังค้างแล้ว
+===============================================================================
 สร้างเมื่อ: 2026-09-02 — บันทึกจากรอบ /code-review xhigh เมนู Data Health
 (app.py /api/data-health* + /api/set-universe-check-updates + /api/mirror-check-updates
 + dashboard.js DATA HEALTH divider)

@@ -8892,13 +8892,22 @@ function _fsApplyUniverseUI() {
     const isNever = FS_MIRROR_NEVER.has(f.k), isPrice = FS_PRICE_ONLY.has(f.k);
     if (!isNever && !isPrice) return;
     const off = isNever ? offNever : offPrice;
-    const el = document.getElementById('fsin-' + f.k) || document.getElementById('fsen-' + f.k);
-    if (!el) return;
-    el.disabled = off;
-    if (off) { if (el.value) el.value = ''; if (el.checked) el.checked = false; }
+    // filter แบบช่วง (range:true) มี 2 ช่อง (min id หลัก + max fsin-{k}-alt) ต้องปิด/เคลียร์ทั้งคู่
+    // เหมือนกัน — เดิมเช็คแค่ id เดียว (fsin-{k}/fsen-{k}) ช่องคู่ -alt เลยค้างเปิด/มีค่าเก่าตอนสลับ
+    // universe (เจอกับ free_float/foreign_room_used_pct — code review 2026-09-02)
+    const ids = f.range ? Object.values(_fsRangeIds(f)) : ['fsin-' + f.k, 'fsen-' + f.k];
+    let grpEl = null;
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      grpEl = grpEl || el;
+      el.disabled = off;
+      if (off) { if (el.value) el.value = ''; if (el.checked) el.checked = false; }
+    });
+    if (!grpEl) return;
     // เปิดกลับ (us/hk -> th/dr/ทั้งหมด): ปล่อยว่างไว้เหมือนเดิม — placeholder จางแสดง
     // ตัวเลขแนะนำอยู่แล้ว ไม่ต้องเติมค่าจริงให้
-    const grp = el.closest('.scr-group');
+    const grp = grpEl.closest('.scr-group');
     // ทำให้ตัวหนังสือ 'จาง' แทน opacity — เพราะ opacity บน group จะส่งผลถึง tip box
     // ที่เป็นลูกด้วย (ทำให้ tip box โปร่งใส พื้นหลังทะลุขึ้นมา อ่านไม่ออก)
     // tip box มีสี/พื้นหลังของตัวเองใน CSS จึงไม่โดนสี label ที่ตั้งจาง
@@ -9313,10 +9322,14 @@ function _fsAllCols() {
 // chart modal} — JP เหมือน HK ทุกอย่าง (225/225 อยู่ในดัชนีหลักหมด ต่างจาก US/HK มิเรอร์ที่ส่วน
 // ใหญ่อยู่นอกดัชนี) เลย found แทบจะเป็น true เสมอสำหรับ JP
 const _FS_MIRROR_IDX = {
-  us: { get: () => _usData, set: v => { _usData = v; }, endpoint: '/api/us-index-metrics', suffix: '', open: openUsChartModal },
-  hk: { get: () => _hkData, set: v => { _hkData = v; }, endpoint: '/api/hk-index-metrics', suffix: '.HK', open: openHkChartModal },
-  jp: { get: () => _jpData, set: v => { _jpData = v; }, endpoint: '/api/jp-index-metrics', suffix: '.T', open: openJpChartModal },
+  us: { get: () => _usData, set: v => { _usData = v; }, endpoint: '/api/us-index-metrics', suffix: '', open: openUsChartModal, rebuild: () => _rebuildUsSectorFilter() },
+  hk: { get: () => _hkData, set: v => { _hkData = v; }, endpoint: '/api/hk-index-metrics', suffix: '.HK', open: openHkChartModal, rebuild: () => _rebuildHkSectorFilter() },
+  jp: { get: () => _jpData, set: v => { _jpData = v; }, endpoint: '/api/jp-index-metrics', suffix: '.T', open: openJpChartModal, rebuild: () => _rebuildJpSectorFilter() },
 };
+
+// fetch ที่กำลังทำอยู่ต่อตลาด — กันสองคลิกซ้อนกันก่อน fetch แรกจะเสร็จยิงซ้ำ/แข่งกันเขียนทับ
+// _usData/_hkData/_jpData (code review 2026-09-02)
+const _fsMirrorInflight = {};
 
 // เปิดหน้ารายละเอียดหุ้น mirror US/HK/JP — ใช้ร่วมกัน (Growth Screener / Screener+ / Peer Compare):
 //  โหมด "🗗 แท็บใหม่" → deep-link หน้างบการเงินในแท็บใหม่
@@ -9333,7 +9346,18 @@ function _openMirrorStock(sym, mkt) {
     else openInternalHash(deep);
   };
   if (idx.get()) { go(); return; }
-  _fetchTimeout(idx.endpoint, 30000).then(r => r.json()).then(d => idx.set(d)).catch(() => {}).finally(go);
+  if (!_fsMirrorInflight[mkt]) {
+    // เช็ค d.error/d.stocks ก่อน cache เสมอ — เหมือน loadUsStocksPage/loadHkStocksPage/loadJpStocksPage
+    // (เดิมจุดนี้ set(d) ดิบไม่เช็คอะไรเลย ถ้า index metrics ยังไม่เคย sync response จะเป็น
+    // {error:...} ไม่มี .stocks พอ cache เข้า _usData แล้วไปเปิดหน้า US/HK/JP จริงทีหลัง หน้านั้น
+    // เห็น _usData truthy ข้าม fetch/เช็คของตัวเอง แล้ว throw TypeError ตอน .filter(.stocks))
+    // แล้ว rebuild sector filter dropdown ให้ด้วย — ไม่งั้น dropdown ค้างว่างจนกว่าจะสลับ index เอง
+    _fsMirrorInflight[mkt] = _fetchTimeout(idx.endpoint, 30000).then(r => r.json())
+      .then(d => { if (d && !d.error && d.stocks) { idx.set(d); idx.rebuild(); } })
+      .catch(() => {})
+      .finally(() => { delete _fsMirrorInflight[mkt]; });
+  }
+  _fsMirrorInflight[mkt].then(go);
 }
 
 // deep-link หน้ารายละเอียดหุ้นของแถว Screener+ (ตาม fs-universe) — ใช้เป็น href ให้ Ctrl/กลางคลิก
@@ -9378,6 +9402,16 @@ function fsOpenFin(sym, isDr) {
   searchFinancials();
 }
 
+// id หลัก fsin-{k} คงเป็นฝั่ง 'ทิศทางเดิม' ของ filter (gte -> ช่องซ้าย/ขั้นต่ำ, lte -> ช่องขวา/
+// ไม่เกิน) เพื่อให้ preset เก่า/โค้ดเดิมที่อ้าง fsin-{k} ทำงานเหมือนเดิมทุกอย่าง — อีกฝั่งคือ
+// fsin-{k}-alt · เดิม ternary นี้ก็อปแยกกัน 3 จุด (buildFsFilterUI/applyFsPreset/_fsRangeWarnings)
+// รวมเป็น helper เดียว (code review 2026-09-02)
+function _fsRangeIds(f) {
+  const minId = f.cmp === 'gte' ? `fsin-${f.k}` : `fsin-${f.k}-alt`;
+  const maxId = f.cmp === 'gte' ? `fsin-${f.k}-alt` : `fsin-${f.k}`;
+  return { minId, maxId };
+}
+
 function buildFsFilterUI() {
   if (_fsBuilt) return;
   const box = document.getElementById('fs-filters');
@@ -9408,11 +9442,8 @@ function buildFsFilterUI() {
     }
     if (f.range) {
       // filter แบบช่วง (min-max): ช่องซ้าย = ขั้นต่ำ (≥), ช่องขวา = ไม่เกิน (≤) เสมอ
-      // id หลัก fsin-{k} คงเป็นฝั่ง 'ทิศทางเดิม' ของ filter (gte -> ช่องซ้าย, lte -> ช่องขวา)
-      // เพื่อให้ preset เก่า/โค้ดเดิมที่อ้าง fsin-{k} ทำงานเหมือนเดิมทุกอย่าง — อีกฝั่งคือ fsin-{k}-alt
       const lbl = f.label.replace(/\s*[≥≤]\s*$/, '');
-      const minId = f.cmp === 'gte' ? `fsin-${f.k}` : `fsin-${f.k}-alt`;
-      const maxId = f.cmp === 'gte' ? `fsin-${f.k}-alt` : `fsin-${f.k}`;
+      const { minId, maxId } = _fsRangeIds(f);
       return `<div class="scr-group"><label class="scr-label" for="fsin-${f.k}">${lbl} (ช่วง)${tip}</label>
       <div style="display:flex;gap:6px;align-items:center">
         <input class="scr-input" type="number" step="any" id="${minId}" placeholder="ขั้นต่ำ" onkeydown="if(event.key==='Enter')runFscreener()">
@@ -9522,10 +9553,8 @@ function applyFsPreset(i) {
   Object.entries(p.set || {}).forEach(([k, v]) => {
     if (v !== null && typeof v === 'object') {
       // ค่าแบบช่วง {min, max} — ใช้กับ filter ที่มี range: true
-      // (id หลัก fsin-{k} = ฝั่งทิศทางเดิมของ filter, fsin-{k}-alt = ฝั่งตรงข้าม)
       const f = FS_FILTERS.find(x => x.k === k);
-      const minId = (f && f.cmp === 'lte') ? `fsin-${k}-alt` : `fsin-${k}`;
-      const maxId = (f && f.cmp === 'lte') ? `fsin-${k}` : `fsin-${k}-alt`;
+      const { minId, maxId } = f ? _fsRangeIds(f) : { minId: `fsin-${k}`, maxId: `fsin-${k}-alt` };
       if (v.min != null) { const el = document.getElementById(minId); if (el) el.value = v.min; }
       if (v.max != null) { const el = document.getElementById(maxId); if (el) el.value = v.max; }
       return;
@@ -9767,8 +9796,7 @@ function _fsRangeWarnings() {
   const warns = [];
   FS_FILTERS.forEach(f => {
     if (!f.range) return;
-    const minId = f.cmp === 'gte' ? `fsin-${f.k}` : `fsin-${f.k}-alt`;
-    const maxId = f.cmp === 'gte' ? `fsin-${f.k}-alt` : `fsin-${f.k}`;
+    const { minId, maxId } = _fsRangeIds(f);
     const minEl = document.getElementById(minId), maxEl = document.getElementById(maxId);
     const minV = (minEl && minEl.value !== '') ? parseFloat(minEl.value) : null;
     const maxV = (maxEl && maxEl.value !== '') ? parseFloat(maxEl.value) : null;
@@ -9922,13 +9950,16 @@ function _fsColHtml(r, c) {
 // (r.symbol ที่นี่คือ 'sym' ของ DR universe ซึ่งเป็นคนละค่ากับ 'yf' เสมอสำหรับหุ้น HK/EU เช่น
 // sym='GIGA' แต่ yf='3986.HK' — ต้อง lookup หา yf ก่อนค่อยแปลงเป็น TradingView symbol) ถ้ายังไม่
 // เคยโหลด _drData (ยังไม่เคยเปิดหน้า DR ในเซสชันนี้) โหลด background แล้ว re-render ทับให้เอง
-function _fsSymTvLink(r, uni) {
+// drSymToYf: Map sym->yf ที่ renderFsTable สร้างครั้งเดียวก่อน render (เดิม .find() เชิงเส้นบน
+// _drData ต่อแถว DR ทุกแถว — O(rows×|_drData|) พอ _drData มี ~290 ตัวกับผลลัพธ์เต็มหน้า ~300
+// แถวก็หลักหมื่นครั้งเทียบต่อ render — code review 2026-09-02)
+function _fsSymTvLink(r, uni, drSymToYf) {
   if (uni === 'us') return _usTvLink(r.symbol);
   if (uni === 'hk') return _hkTvLink(r.symbol);
   if (uni === 'jp') return _jpTvLink(r.symbol);
   if (r.is_dr) {
-    const d = (_drData || []).find(x => x.sym === r.symbol);
-    return d ? `<a class="tv-link" href="https://www.tradingview.com/chart/?symbol=${yfToTVSym(d.yf)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="ดูใน TradingView">↗</a>` : '';
+    const yf = drSymToYf ? drSymToYf.get(r.symbol) : null;
+    return yf ? `<a class="tv-link" href="https://www.tradingview.com/chart/?symbol=${yfToTVSym(yf)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="ดูใน TradingView">↗</a>` : '';
   }
   return tvLink(r.symbol);   // หุ้นไทย (uni='th' หรือ 'all' ไม่ใช่ DR)
 }
@@ -9944,6 +9975,7 @@ function renderFsTable(rows) {
       .then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; renderFsTable(rows); } })
       .catch(() => {});
   }
+  const drSymToYf = _drData ? new Map(_drData.map(x => [x.sym, x.yf])) : null;
   // ต่อท้ายด้วยคอลัมน์เสริมจากตัวกรองที่ตั้งไว้รอบนี้ (_fsExtraCols) — field ที่ยังไม่มี
   // คอลัมน์ตายตัวใน FS_COLS จะโผล่ให้เห็น/เรียงลำดับได้โดยไม่ต้องเปิด popup รายละเอียดทีละตัว
   const cols = _fsAllCols();
@@ -9960,7 +9992,7 @@ function renderFsTable(rows) {
       if (c.k === 'symbol') {
         const sub = name ? `<div style="font-size:10px;color:var(--text2);font-weight:400;max-width:150px;overflow:hidden;text-overflow:ellipsis">${name}</div>` : '';
         v = `<a href="${_fsDeepLink(r.symbol, r.is_dr)}" onclick="fsOpenDetail('${r.symbol}', ${r.is_dr ? 'true' : 'false'}); return false"
-               style="color:var(--blue);font-weight:700;text-decoration:none" title="ดูรายละเอียด ${r.symbol}">${r.symbol}</a>${_fsSymTvLink(r, uni)}${sub}`;
+               style="color:var(--blue);font-weight:700;text-decoration:none" title="ดูรายละเอียด ${r.symbol}">${r.symbol}</a>${_fsSymTvLink(r, uni, drSymToYf)}${sub}`;
       } else {
         v = _fsColHtml(r, c);
       }
@@ -24830,23 +24862,29 @@ function _dhRunLocalCheck(fnName) {
   if (typeof fn === 'function') fn();
 }
 
+// ปุ่ม filter-btn ขนาดเล็กใน source cell — เดิมพิมพ์ style/class ซ้ำ 5 จุดใน _dhSourceCell
+// (code review 2026-09-02 กลุ่ม B4) รวมเป็น helper เดียว
+function _dhBtn(label, onclick) {
+  return `<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="${onclick}">${label}</button>`;
+}
+
 function _dhSourceCell(key) {
   const src = DH_SOURCE_MAP[key];
   if (!src) return '—';
   const btns = [];
   if (src.driftMarket) {
-    btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhCheckIndexDrift('${src.driftMarket}', this)">${src.fnLabel || 'เช็ค'}</button>`);
+    btns.push(_dhBtn(src.fnLabel || 'เช็ค', `_dhCheckIndexDrift('${src.driftMarket}', this)`));
   } else if (src.fn) {
     // _dhRunLocalCheck ไม่รับ btn (จัดการ element จริงของมันเองผ่าน scroll แล้ว) ส่วน
     // _dhRunAction ต้องรับ `this` เพื่อรู้ว่าปุ่มไหนถูกกดจริง (ดูคอมเมนต์ใน _dhRunAction)
     const call = _DH_LOCAL_SCROLL_TARGET[src.fn] ? `_dhRunLocalCheck('${src.fn}')` : `_dhRunAction('${src.fn}', this)`;
-    btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="${call}">${src.fnLabel || 'อัพเดท'}</button>`);
+    btns.push(_dhBtn(src.fnLabel || 'อัพเดท', call));
   }
-  if (src.gotoPage) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhGoto('${src.gotoPage}')">${src.gotoLabel || 'ไปหน้านั้น'}</button>`);
+  if (src.gotoPage) btns.push(_dhBtn(src.gotoLabel || 'ไปหน้านั้น', `_dhGoto('${src.gotoPage}')`));
   // fn2/gotoPage2: ใช้กับ key ที่มีมากกว่า 1 หน้า/ปุ่มเขียนลงไฟล์เดียวกัน (เช่น financials.db
   // ที่ทั้งหน้า "งบการเงิน" และปุ่มงบ DR ในหน้า DR/DRx ต่างก็เขียนทับ)
-  if (src.fn2) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhRunAction('${src.fn2}', this)">${src.fnLabel2 || 'อัพเดท'}</button>`);
-  if (src.gotoPage2) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhGoto('${src.gotoPage2}')">${src.gotoLabel2 || 'ไปหน้านั้น'}</button>`);
+  if (src.fn2) btns.push(_dhBtn(src.fnLabel2 || 'อัพเดท', `_dhRunAction('${src.fn2}', this)`));
+  if (src.gotoPage2) btns.push(_dhBtn(src.gotoLabel2 || 'ไปหน้านั้น', `_dhGoto('${src.gotoPage2}')`));
   const btnRow = btns.length ? `<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">${btns.join('')}</div>` : '';
   const resultBox = src.driftMarket ? `<div id="dh-drift-result-${src.driftMarket.toLowerCase()}" style="display:none;margin-top:6px;font-size:11px"></div>` : '';
   return `<span>${src.text}</span>${btnRow}${resultBox}`;

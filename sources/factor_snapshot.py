@@ -781,6 +781,14 @@ def get_snapshot(base_dir, is_dr=None):
 
 
 def snapshot_meta(base_dir):
+    count = 0
+    if fs.db_exists(base_dir):
+        con = _connect(base_dir)
+        try:
+            con.execute(f"CREATE TABLE IF NOT EXISTS {TABLE}(symbol TEXT, is_dr INTEGER, market TEXT, name TEXT, factors TEXT, computed_at TEXT, PRIMARY KEY(symbol, is_dr))")
+            count = con.execute(f"SELECT COUNT(*) FROM {TABLE}").fetchone()[0]
+        finally:
+            con.close()
     return {"computed_at": fs._get_meta(base_dir, "factor_snapshot_at"),
-            "count": len(get_snapshot(base_dir)),
+            "count": count,
             "stale": fs.snapshot_stale_vs_sync(base_dir, "factor_snapshot_at")}
