@@ -2310,19 +2310,58 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
                     except Exception:
                         return tick, None
 
+                def _prev_price(tick):
+                    pc = data.get(tick, {}).get("close")
+                    return float(pc.iloc[-1]) if pc is not None and len(pc) else None
+
+                # โพรบก่อนยิงทั้ง batch: region_expected_trading_date ไม่รู้จักปฏิทินวันหยุด
+                # ตลาด เลยคืน "วันนี้" (วันหยุดที่เป็นวันธรรมดา) ทำให้ทุก ticker ถูกมองว่า stale
+                # ทั้งกระดาน จากนั้นเดิมยิง yf.Ticker().history(1m) ครบ ~500 req — ได้ราคาปิด
+                # ของ session ก่อนวันหยุด (= ราคาปิดเดิมเป๊ะ chg~0) มาเขียนทับ live_price ทำให้
+                # มุมมอง "👁 Live" โชว์ทั้งดัชนีที่ 0.00% เหมือนเป็นราคาสด ทั้งที่วันนั้นไม่มีเทรด
+                # ถ้าหุ้นตัวอย่างชุดแรกได้ราคา intraday = ราคาปิดเดิมทั้งหมด = วันหยุด ข้ามทั้ง batch
+                # (เคส Yahoo ค้าง Close ของ "วันเทรดจริง" — เช่น JP 28 ก.ค. 2026 — จะมีราคาขยับ
+                # จาก session จริง โพรบไม่ผ่านเงื่อนไข flat ก็ยิงต่อทั้ง batch ตามเดิม)
+                probe = stale[:8]
+                probe_res = {}
+                with ThreadPoolExecutor(max_workers=8) as ex:
+                    for f in as_completed([ex.submit(_intraday_last_close, t) for t in probe]):
+                        tick, lp = f.result()
+                        if lp is not None:
+                            probe_res[tick] = lp
+
+                def _is_flat(tick, lp):
+                    pp = _prev_price(tick)
+                    return pp is not None and pp > 0 and abs(lp - pp) / pp < 0.0005
+
+                if len(probe_res) >= 4 and all(_is_flat(t, lp) for t, lp in probe_res.items()):
+                    print(f"[{label}] intraday โพรบ {len(probe_res)} ตัวได้ราคา = ราคาปิดเดิมทั้งหมด "
+                          f"(chg~0) — วันนี้เป็นวันหยุดตลาด ข้าม intraday fallback ทั้ง batch")
+                    stale = []
+
+            if stale:
+                fb_map = {}
                 with ThreadPoolExecutor(max_workers=8) as ex:
                     futures = [ex.submit(_intraday_last_close, t) for t in stale]
                     for f in as_completed(futures):
                         tick, live_price = f.result()
                         if live_price is None:
                             continue
-                        prev_close = data.get(tick, {}).get("close")
-                        prev_price = float(prev_close.iloc[-1]) if prev_close is not None and len(prev_close) else None
+                        prev_price = _prev_price(tick)
                         if prev_price:
-                            live_map[tick] = {
+                            fb_map[tick] = {
                                 "live_price": round(live_price, 4),
                                 "live_chg": round((live_price - prev_price) / prev_price * 100, 2),
                             }
+                # กันเคสที่โพรบข้างบนหลุด (ได้ผลโพรบ <4 ตัวเพราะ Yahoo 1m ก็ไม่ให้ข้อมูล) แล้วยิง
+                # ทั้ง batch บนวันหยุด — ถ้าผลรวมแทบทุกตัว chg~0 = re-read session เดิม ทิ้งทั้งชุด
+                if fb_map:
+                    flat = sum(1 for v in fb_map.values() if abs(v["live_chg"]) < 0.05)
+                    if len(fb_map) >= 10 and flat >= len(fb_map) * 0.9:
+                        print(f"[{label}] intraday fallback: {flat}/{len(fb_map)} ตัว chg~0 "
+                              f"— วันหยุดตลาด ทิ้งผล fallback ทั้งชุด")
+                    else:
+                        live_map.update(fb_map)
 
     # advanced — True ถ้ามีอย่างน้อย 1 ticker ได้แท่งปิดของวันใหม่จริง (วันที่มากกว่า
     # last_dates เดิมก่อนรอบนี้) ต่างจาก n (จำนวน ticker ที่ "เช็ค" รอบนี้ ซึ่ง fetch_gap_batch
@@ -6724,7 +6763,10 @@ def _index_metrics_ts(data):
         try:
             import datetime as _dt
             return _dt.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").timestamp()
-        except ValueError:
+        except (ValueError, TypeError):
+            # ValueError = สตริงผิดฟอร์แมต · TypeError = updated_at ไม่ใช่สตริง (ไฟล์ถูกแก้มือ/
+            # เสียหายจนเป็นตัวเลข/None-in-list) — /api/us-index-heatmap กับ /api/jp-index-heatmap
+            # ไม่มี try/except ครอบ route จึงกลายเป็น 500 ทั้งหน้าแทนที่จะ fallback เป็นเวลาปัจจุบัน
             pass
     return time.time()
 
@@ -6803,10 +6845,14 @@ def us_index_heatmap():
 # _run_heatmap_live_update) ต่างจาก Quick Update ประจำวันที่ลากทำทุกอย่าง (insider/
 # indices/short sales ฯลฯ) ตัวนี้ทำแค่ตลาดเดียวที่ผู้ใช้กำลังดูอยู่ — เร็วกว่ามาก
 # ============================================================
+# n_fetched/n_live ตั้ง key ไว้ตั้งแต่ต้น (ค่า None) แม้ยังไม่เคยรันสักรอบ — เดิม POST รอบแรก
+# ต่อ region จะ state.update(...) เพิ่ม key จาก 3 เป็น 5 ตัว ระหว่างที่ GET /heatmap-live-status
+# อีก request กำลัง jsonify dict ก้อนเดียวกันอยู่ ชนกันเป็น "dictionary changed size during
+# iteration" (RuntimeError 500) ทำให้ poll loop ฝั่ง frontend พังทั้งที่ live-update เดินต่อได้
 _HM_LIVE_STATE = {
-    "US": {"running": False, "error": None, "done": False},
-    "HK": {"running": False, "error": None, "done": False},
-    "JP": {"running": False, "error": None, "done": False},
+    "US": {"running": False, "error": None, "done": False, "n_fetched": None, "n_live": None},
+    "HK": {"running": False, "error": None, "done": False, "n_fetched": None, "n_live": None},
+    "JP": {"running": False, "error": None, "done": False, "n_fetched": None, "n_live": None},
 }
 # กัน race check-then-set ต่อ region (เดิมไม่มี lock — กดปุ่ม Live ซ้ำเร็วๆ/หลายแท็บ
 # พร้อมกันในภูมิภาคเดียวกันชนกันยิง Yahoo ซ้อนได้ ก่อน running ถูกตั้งจริง) — ใช้ _lock ตัว
@@ -6876,14 +6922,22 @@ def _run_heatmap_live_update(region, index_key=None):
         # ทั้งหมด — ต้อง surface เป็น error ให้ผู้ใช้เห็นแทนที่จะเงียบ (เกณฑ์ <20% ของที่ดึงได้จริง
         # กันเคส false-positive ตอนตลาดเพิ่งเปิดไม่กี่นาทีที่บาง ticker ยังไม่มีแท่งของวันนี้)
         if not is_latest_bar_stable(region):
-            if n == 0:
-                state["error"] = ("ตลาดยังเปิดอยู่แต่ดึงราคาจาก Yahoo ไม่ได้เลยสักตัว — Yahoo Finance "
-                                   "อาจ rate-limit ชั่วคราว (กดถี่เกินไป) หรือเน็ตมีปัญหา "
-                                   "ลองรอสัก 1-2 นาทีแล้วกดใหม่")
-            elif len(live_map) < n * 0.2:
+            scope_n = len(scope) or 1
+            if n < scope_n * 0.5:
+                # ดึงข้อมูลกลับมาได้ไม่ถึงครึ่งของ scope ที่ขอ — fetch_gap_batch เงียบๆ ข้าม
+                # หุ้นจำนวนมาก (แค่ print error ไม่ raise) = Yahoo rate-limit/บล็อกจริง
+                state["error"] = ("ตลาดยังเปิดอยู่แต่ดึงราคาจาก Yahoo ได้ไม่ถึงครึ่ง "
+                                   f"({n}/{scope_n} ตัว) — Yahoo Finance อาจ rate-limit ชั่วคราว "
+                                   "(กดถี่เกินไป) หรือเน็ตมีปัญหา ลองรอสัก 1-2 นาทีแล้วกดใหม่")
+            elif live_map and len(live_map) < n * 0.2:
                 state["error"] = (f"ตลาดยังเปิดอยู่แต่ได้ราคา Live แค่ {len(live_map)}/{n} ตัว — "
                                    "Yahoo Finance น่าจะ rate-limit บางส่วน หุ้นที่เหลือจะโชว์ % ปิด"
                                    "เมื่อวานแทนราคาสด ลองรอสัก 1-2 นาทีแล้วกดใหม่")
+            # live_map ว่างเปล่าทั้งที่ n เกือบเต็ม scope = วันนี้ตลาดไม่ได้เปิดเทรด (เสาร์-อาทิตย์
+            # หรือวันหยุดตลาด — is_latest_bar_stable ไม่รู้จักปฏิทินวันหยุด เลยยังนับว่าเป็นเวลา
+            # ทำการ) Yahoo ไม่มีแท่งของ "วันนี้" ให้สักตัว ราคาปิดล่าสุดถูกต้องอยู่แล้ว — ไม่ใช่
+            # rate-limit ไม่ต้อง error (เดิม len(live_map) < n*0.2 → 0 < ~100 เป็นจริงเสมอ
+            # เด้ง error หลอกทุกวันหยุดตลาดที่ผู้ใช้เผลอกดปุ่มช่วงเวลาทำการ)
     except Exception as e:
         state["error"] = str(e)
         print(f"[Heatmap live] {region} ERROR: {e}")

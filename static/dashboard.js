@@ -18620,7 +18620,7 @@ function loadHeatmapPage(forceRefresh = false, targetIndex) {
     box.innerHTML = `<div id="hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
     note.textContent = '';
   }
-  return fetch(`/api/us-index-heatmap?index=${idx}`)
+  return _fetchTimeout(`/api/us-index-heatmap?index=${idx}`, 30000, 'หมดเวลารอ heatmap หุ้น US (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -18700,8 +18700,10 @@ function _squarify(data, x, y, w, h) {
 }
 
 // สเกลสีแบบ diverging เขียว/แดง — ใช้คู่สีเดียวกับทั้งแอป (var(--green)/var(--red)) ไล่ความเข้ม
-// จากเทากลาง (0%) ไปเข้มสุดที่ ±3% (คลิปไว้กันหุ้นข่าวช็อตทำให้กล่องอื่นดูจืดหมด) — ใช้ร่วมกัน
-// ทั้ง heatmap US/HK/JP และ Hedge Holdings 13F heatmap
+// จากเทากลาง (0%) ไปเข้มสุดที่ ±3% (คลิปไว้กันหุ้นข่าวช็อตทำให้กล่องอื่นดูจืดหมด)
+// หมายเหตุ: heatmap US/HK/JP ไม่ได้ใช้ตัวนี้แล้ว (ใช้ HM_CFG[*].clr = _heatColor/_heatColorRS/
+// _heatColorVol) — เหลือ caller เดียวคือ renderHedgeHeatmap (Hedge Holdings 13F) เท่านั้น
+// อยู่ในโซน US HEATMAP เพราะประวัติศาสตร์ ไม่ใช่เพราะ heatmap หน้านี้เรียกใช้
 function _hmColor(chg) {
   if (chg == null) return '#30363d';
   const clamp = Math.max(-3, Math.min(3, chg));
@@ -18854,7 +18856,7 @@ function loadHkHeatmapPage(forceRefresh = false, targetIndex) {
     box.innerHTML = `<div id="hk-hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
     note.textContent = '';
   }
-  return fetch(`/api/hk-index-heatmap?index=${idx}`)
+  return _fetchTimeout(`/api/hk-index-heatmap?index=${idx}`, 30000, 'หมดเวลารอ heatmap หุ้น HK (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -18930,7 +18932,7 @@ function loadJpHeatmapPage(forceRefresh = false) {
   if (forceRefresh && btn) { btn.disabled = true; btn.textContent = '⚡ กำลังอัพเดท...'; }
   box.innerHTML = `<div id="jp-hm-loading" class="text2" style="font-size:13px">กำลังโหลด heatmap...</div>`;
   note.textContent = '';
-  return fetch('/api/jp-index-heatmap')
+  return _fetchTimeout('/api/jp-index-heatmap', 30000, 'หมดเวลารอ heatmap หุ้น JP (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
