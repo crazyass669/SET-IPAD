@@ -419,6 +419,16 @@ def check_dr_diff(base_dir=None):
       ไว้สั้นๆ ว่า 'CN') ทำให้ _normalize_underlying(...) ไม่ตรงกันทั้งที่ DR ticker เดียวกันยังซื้อขาย
       อยู่จริงทั้งคู่ — ไม่ต้องแก้อะไร แค่โชว์แยกไว้ให้เห็นว่าไม่ใช่ของใหม่/ของหาย"""
     live = fetch_live_dr_list()
+    if not live:
+        # SET API ตอบว่าง/ไม่ตอบ (ไม่ throw) — ถ้าปล่อยต่อ ทุก underlying ในลิสต์เราจะตก
+        # ไปอยู่ removed (norm not in live_map) กลายเป็น false mass-delisting ~283 ตัว
+        # แล้วถูก cache ไว้ 6 ชม. ที่ dr_check_updates — เหมือน guard ของ sync_dr_universe()
+        return {
+            "live_underlying_count": 0,
+            "our_count": len(load_dr_universe(base_dir) if base_dir else _DR_STATIC),
+            "new": [], "removed": [], "renamed_new": [], "renamed_removed": [],
+            "error": "SET API ไม่ตอบ — ข้ามการเช็ครอบนี้ (ลองใหม่อีกครั้ง)",
+        }
 
     live_map = {}
     for e in live:

@@ -1248,7 +1248,13 @@ def _dr_do_rebuild():
 
             # YTD%
             try:
-                close_ytd  = close[close.index >= pd.Timestamp(f"{cur_year}-01-01")]
+                # close.index อาจเป็น tz-aware (Yahoo บางเวอร์ชัน/ตลาด) — เทียบกับ Timestamp
+                # tz-naive ตรงๆ จะ raise TypeError แล้ว except ด้านล่างกลืนเป็น ret_ytd=None
+                # ทั้ง ~283 ตัว (quick-update path ที่ line ~2050 ใช้ string เทียบ เลยไม่โดน)
+                _ytd_idx = close.index
+                if getattr(_ytd_idx, "tz", None) is not None:
+                    _ytd_idx = _ytd_idx.tz_localize(None)
+                close_ytd  = close[_ytd_idx >= pd.Timestamp(f"{cur_year}-01-01")]
                 if len(close_ytd) > 0:
                     first_ytd = float(close_ytd.iloc[0])
                     ret_ytd   = round((price - first_ytd) / first_ytd * 100, 2) if first_ytd else None
@@ -1816,8 +1822,11 @@ def dr_check_updates():
     try:
         from sources.dr_universe import check_dr_diff
         result = check_dr_diff(BASE_DIR)
-        _dr_diff_cache["result"] = result
-        _dr_diff_cache["ts"] = time.time()
+        # ไม่ cache ผลที่เป็น error (เช่น SET API ไม่ตอบ) — ไม่งั้นค้าง 6 ชม. ทั้งที่รอบหน้า
+        # อาจเช็คได้ปกติ
+        if not result.get("error"):
+            _dr_diff_cache["result"] = result
+            _dr_diff_cache["ts"] = time.time()
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1836,14 +1845,18 @@ def dr_quick_update():
             return jsonify({"status": "running"})
         _dr_refresh_state["running"] = True
 
-    cached = _dr_cache.get("result")
+    # snapshot ครั้งเดียว — เดิมอ่าน _dr_cache["result"] กับ ["ts"] แยก 2 จังหวะ ถ้า
+    # background full rebuild (_dr_do_rebuild, ดู _kick_dr_rebuild) .update() คั่นกลางพอดี
+    # จะได้ `cached` เป็น object เก่า คู่กับ `_ts_at_start` เป็น ts ใหม่ → ท้ายฟังก์ชัน
+    # เช็ค `_dr_cache["ts"] != _ts_at_start` เป็น False (ts ตรงกัน) แล้วเขียนทับผล rebuild
+    # สดด้วยผล quick-update ที่ mutate มาจาก `cached` เก่า → ข้อมูลชุดใหม่หายยาว 4 ชม.
+    # (torn read — เหมือนที่แก้ใน get_dr_data ด้วย snap = dict(_dr_cache))
+    _snap = dict(_dr_cache)
+    cached = _snap.get("result")
     if not cached or not cached.get("stocks"):
         _dr_refresh_state["running"] = False
         return jsonify({"error": "ยังไม่มี DR cache — กรุณาโหลดหน้า DR ก่อน"}), 400
-    # เก็บ ts ของ cache ตอนเริ่ม — ถ้า background full rebuild (_dr_do_rebuild, ดู
-    # _kick_dr_rebuild) แทนที่ _dr_cache["result"] ด้วย object ใหม่เสร็จก่อนเราเขียนจบ
-    # ต้องรู้ตัวและไม่ทับมันด้วย `cached` ที่เรามัวแต่ mutate อยู่ (ของเก่ากว่า) ทิ้งไป
-    _ts_at_start = _dr_cache.get("ts")
+    _ts_at_start = _snap.get("ts")
 
     def _do_quick():
         # running ตั้งเป็น True แล้วตอนเช็ค TOCTOU ด้านบน (atomic ใต้ _dr_refresh_lock) —
@@ -1865,7 +1878,14 @@ def dr_quick_update():
                 # ทั้งหมด → ราคา DR ไม่อัพเดทเลยไม่ว่าจะกดกี่รอบ (นี่คือสาเหตุที่ผู้ใช้รายงานว่า
                 # DR/DRx กดอัพเดทแล้วข้อมูลเดิม) ดู logic เดียวกันใน _run_index_gap_update (app.py)
                 # ที่ทำถูกอยู่แล้วสำหรับ Heatmap US/HK/JP
-                min_last_dr = min(last_dates_dr)
+                # ตัดตัวที่ค้างเก่ากว่าแท่งใหม่สุดมาก (หุ้นพักเทรด/เพิกถอน/ETF VN เทรดเบา)
+                # ออกจากการหา start — เดิม min() ตรงๆ ทำให้ 1 ตัวที่ค้าง 3 เดือนบังคับให้
+                # quick-update ดาวน์โหลดย้อนหลังทั้ง universe (~283 ตัว) หลายเดือนทุกครั้งที่กด
+                # (ตัวที่ค้างจริงจะได้ข้อมูลกลับตอน full rebuild period=max รอบ 4 ชม. ถัดไป)
+                _newest_dt = pd.to_datetime(max(last_dates_dr))
+                _recent = [d for d in last_dates_dr
+                           if (_newest_dt - pd.to_datetime(d)).days <= 10]
+                min_last_dr = min(_recent) if _recent else max(last_dates_dr)
                 start_dr = pd.to_datetime(min_last_dr).strftime("%Y-%m-%d")
                 dl_kwargs = {"start": start_dr}
                 print(f"[DR quick] gap fetch from {start_dr}")
@@ -10947,14 +10967,20 @@ def insider_sync():
     _sec_first_sync_lock เดียวกับ auto-sync ครั้งแรก (_ensure_sec_db_ready) กันแข่งกัน
     เขียน sec_filings.db พร้อมกัน (เช่น 2 แท็บเปิดพร้อมกัน หรือกดปุ่มระหว่าง auto-sync
     รอบแรกกำลัง backfill 180 วันอยู่) ซึ่งเคยชนกันจน sqlite throw 'database is locked'"""
+    # กันยิงซ้อน — 2 แท็บกดปุ่มพร้อมกัน หรือกดระหว่าง auto-sync ครั้งแรกกำลัง backfill
+    # 180 วันอยู่ เดิม with _sec_first_sync_lock บล็อกเฉยๆ ทำให้แต่ละ request รอคิวแล้ว
+    # ดึง SEC ซ้ำอีกรอบเต็มๆ ต่อกัน (หลายนาที) — ถ้ามีงาน sync อยู่แล้ว ตอบกลับทันที
+    if not _sec_first_sync_lock.acquire(blocking=False):
+        return jsonify({"ok": False, "error": "มีงาน sync SEC กำลังทำงานอยู่ ลองใหม่อีกครั้ง"}), 429
     try:
-        with _sec_first_sync_lock:
-            n1 = sec_store.sync_insider_trades(BASE_DIR)
-            n2 = sec_store.sync_major_changes(BASE_DIR)
+        n1 = sec_store.sync_insider_trades(BASE_DIR)
+        n2 = sec_store.sync_major_changes(BASE_DIR)
         _invalidate_flow_signals()   # insider เป็น 1 ใน 3 ชั้นของสัญญาณรวม
         return jsonify({"ok": True, "insider_fetched": n1, "major_fetched": n2})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        _sec_first_sync_lock.release()
 
 
 @app.route("/api/sync-esg", methods=["POST"])

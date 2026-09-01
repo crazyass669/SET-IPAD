@@ -1,0 +1,108 @@
+DR/DRx (ลำดับ 21) — finding ที่ตั้งใจไม่แก้ในรอบ code review 2026-09-01
+===============================================================================
+>>> สถานะล่าสุด (2026-09-01): แก้ 12/14 finding · เหลือ 2 ข้อนี้ค้าง (+ ครึ่งหลังของข้อ 2)
+    ทั้งหมดเป็น code-quality (reuse/simplification) ล้วน ไม่ใช่ correctness bug — ไม่ทำให้
+    route 500 / JS throw / ค่าที่โชว์ผิด
+
+รอบนั้นเจอ 14 finding แก้+เทสต์ (syntax + unit python) ผ่าน 12 ข้อ:
+  #1 check_dr_diff guard live ว่าง (false mass-delisting) · #2 dr_quick_update torn read ·
+  #3 loadDRPage guard [] truthy · #4 confirmRefresh POST ไม่ await race · #5 gap anchor min() ·
+  #6 _dr_do_rebuild YTD tz-aware TypeError · #7 s.chg null ทาสีแดง · #8 _renderDRDiff XSS ·
+  #10(ครึ่งแรก) _drBadgesHtml สกัด badge dup · #12 _drLogoFallback param ทิ้ง ·
+  #13 reloadDRPage dead code · #14 _DR_LOGO_DOMAIN คีย์ซ้ำ
+  (ดู memory dr-drx-code-review-2026-09-01.md + CODE_REVIEW_MENU_TEMPLATES.txt ลำดับ 21)
+
+===============================================================================
+วิธีใช้ไฟล์นี้: ปิดลำดับ 21 ใน CODE_REVIEW_MENU_TEMPLATES.txt เป็น ✅ ไม่ได้จนกว่าจะเคลียร์
+2 ข้อนี้ (แก้จริง หรือตัดสินใจไม่แก้ถาวรแล้วบันทึกเหตุผล) · ทั้ง 2 ข้อทำแยกกันได้อิสระ
+ขอบเขตจริง = "เมนู DR/DRx (หน้า render + sub-tab Heatmap) + ปุ่ม ⚡ อัปเดตราคา DR (ลำดับ A1)"
+เท่านั้น — grep แล้วไม่มีเมนู/route อื่นเรียก _do_quick / _drWarningsHtml / _etfWarningsHtml
+===============================================================================
+
+
+─── ข้อ 9: _drWarningsHtml / _etfWarningsHtml byte-identical (dashboard.js:25373, 25947) ───
+
+ที่อยู่:
+```
+function _drWarningsHtml(d) {
+  if (!d.warnings || !d.warnings.length) return '';
+  return `<br><span style="color:var(--yellow)">⚠ ${d.warnings.join(' · ')}</span>`;
+}
+function _etfWarningsHtml(d) {                     // เหมือนกันทุกตัวอักษร
+  if (!d.warnings || !d.warnings.length) return '';
+  return `<br><span style="color:var(--yellow)">⚠ ${d.warnings.join(' · ')}</span>`;
+}
+```
+เรียกจาก: _drWarningsHtml → loadDRPage + _drPollRefresh (2 จุด, เมนู DR) ·
+          _etfWarningsHtml → loadETFPage + _etfPollRefresh (2 จุด, เมนู ETF ลำดับ 16A)
+
+ควรแก้เพราะ: 2 สำเนาต้อง sync มือ · ควรเป็น helper เดียว (เช่น _warnBannerHtml(d))
+
+ไม่แก้ในรอบนี้เพราะ: _etfWarningsHtml อยู่เมนู ETF (ลำดับ 16A) — นอกขอบเขตรีวิว DR/DRx
+รอบนี้ · แตะแล้วต้องเทสต์เมนู ETF ด้วย · finding เล็กมาก (7 บรรทัด) ไม่คุ้มขยายขอบเขต
+
+แนะนำ: หยิบไปทำตอนรีวิวลำดับ 16A (ETF) หรือรวบ 2 เมนูพร้อมกัน — สร้าง _warnBannerHtml(d)
+กลาง แล้วให้ทั้ง _drWarningsHtml/_etfWarningsHtml เป็น alias หรือลบทิ้งทั้งคู่แล้วเรียก
+helper ตรง (4 call site) · priority ต่ำสุด
+
+
+─── ข้อ 11: _do_quick re-implement metric math ~60 บรรทัดของ _dr_do_rebuild (app.py:1861) ───
+
+ที่อยู่: _do_quick (inner ของ dr_quick_update, app.py ~L1861-2075) คำนวณ returns / EMA50-200 /
+52W / ATH / YTD / vol_avg20 / price_history / rs_raw ซ้ำกับ _dr_do_rebuild (app.py ~L1198-1290)
+แต่คนละรูปแบบ:
+  - _dr_do_rebuild ใช้ pandas Series: _dr_ret(close,days) / calc_ema(close,N) / close.tail(21) /
+    close[_ytd_idx >= ...] / close.iloc[-252:]
+  - _do_quick ใช้ list ล้วน: _ret_q(arr,n) / calc_ema(pd.Series(old_closes),N) /
+    sum(old_vols[-21:-1])/20 / next(i for i,d in enumerate(old_dates) if d >= f"{cur_year}-01-01") /
+    max(closes_arr[-252:])
+
+หลักฐานว่าเคย drift จริง: รอบนี้เจอ 2 จุดที่ 2 path ไม่ตรงกัน —
+  • #6 YTD: _dr_do_rebuild เทียบ close.index (tz-aware ได้) → TypeError กลืนเป็น None ·
+    _do_quick เทียบ string ปลอดภัยอยู่แล้ว
+  • closes rounding: full rebuild เก็บ closes ละเอียด 6 ตำแหน่ง (closes_all) · quick เก็บ 4
+    ตำแหน่ง (new_closes_raw) — ประวัติเดียวกันความละเอียดต่างกันตามว่าอัปเดตด้วย path ไหน
+
+ควรแก้เพราะ: ลดความเสี่ยง "แก้สูตรจุดเดียวลืมอีกจุด" อย่างเป็นระบบ — ทำ helper กลาง เช่น
+`_compute_dr_metrics(closes, dates, vols, prev_close_for_live=None) -> dict` แล้วให้ทั้ง full
+rebuild และ quick-update เรียกตัวเดียวกัน (ทั้งคู่มี closes/dates/vols เป็น list อยู่แล้วตอน
+ท้าย — full rebuild แปลง Series → list ก่อนเก็บลง result อยู่แล้ว)
+
+ไม่แก้ในรอบนี้เพราะ: refactor ใหญ่ (~60-80 บรรทัด) แตะ 2 path หลักของ pipeline DR ที่ยิง
+อัตโนมัติทุกวันคู่ Quick Update — เสี่ยง regression กับพฤติกรรมที่เพิ่งทดสอบผ่าน (live_price
+cut / overlap dedupe close100+ohlc30 / appended_count / RS rank ทั้ง universe) · ต้องเทสต์
+browser จริง + เทียบ output full-vs-quick ให้ตรงกันเป๊ะก่อน merge — ไม่ใช่งานท้าย session
+เป็น deferral เดียวกับ `_dr/_etf_do_rebuild` ใน memory stock-rotation-code-review-2026-09-01
+
+แนะนำ: ทำตอนมีเวลาเต็ม session · เขียน helper รับ list ล้วน (positional) คืน dict ของทุก
+metric field · full rebuild: แปลง close/vol_s เป็น list ก่อนเรียก · quick: เรียกด้วย
+old_closes/old_dates/old_vols หลัง merge overlap แล้ว · เทสต์: เก็บ result เมนู DR ก่อน refactor
+→ รัน full rebuild + quick 1 รอบหลัง refactor → diff ทุก field ต่อ sym ต้อง identical (ยกเว้น
+ที่ตั้งใจแก้ให้ตรงกัน เช่น rounding 6dp)
+
+
+─── ข้อ 10 (ครึ่งหลัง): logo HTML ใน _drCardGrid / _drRows ยังซ้ำ (dashboard.js:25682, 25797) ───
+
+ครึ่งแรก (badge TradingView) แก้แล้วรอบนี้ → _drBadgesHtml(drs) · เหลือส่วน logo:
+```
+    const color   = _drSymColor(s.sym);      // หรือ _drSymColor ต่างชื่อตัวแปร
+    const initials = s.yf.slice(0, 4);
+    const logoUrl  = _drLogoUrl(s.yf);
+    const logoHtml = logoUrl
+      ? `<img src="${logoUrl}" class="dr-(card-)logo-img" onerror="_drLogoFallback(this)"><div class="dr-(card-)logo" style="background:${color};display:none">${initials}</div>`
+      : `<div class="dr-(card-)logo" style="background:${color}">${initials}</div>`;
+```
+ต่างกันแค่ prefix class: การ์ดใช้ `dr-card-logo` / `dr-card-logo-img` · ตารางใช้ `dr-logo` /
+`dr-logo-img`
+
+ไม่แก้ในรอบนี้เพราะ: class ต่างกันทำให้ helper ต้องรับ param mode ('card'|'row') แล้ว build
+ชื่อ class — อ่านยากกว่าเดิมนิดหน่อย แลกกับลดซ้ำ ~4 บรรทัด · คุ้มก็ต่อเมื่อทำพร้อมข้อ 11
+(ตอนนั้นแตะ 2 ฟังก์ชันนี้อยู่แล้ว) · priority ต่ำสุด
+
+แนะนำ: `_drLogoHtml(s, cls)` โดย cls = 'dr-logo' หรือ 'dr-card-logo' แล้วต่อ '-img' เอง —
+ทำรวมกับข้อ 11 ในคราวเดียว
+===============================================================================
+สร้างเมื่อ: 2026-09-01 — บันทึกจากรอบ /code-review xhigh เมนู DR/DRx
+(app.py /api/dr* + sources/dr_universe.py + dashboard.js บล็อก DR L24425-24582 + L25199-25835
+ + set_dashboard.html page-dr)
+===============================================================================

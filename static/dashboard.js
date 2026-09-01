@@ -504,12 +504,15 @@ function confirmRefresh(period) {
     // ต้องรอ /api/refresh ยืนยันว่างานเริ่มได้จริงและรันจนจบก่อน ไม่งั้นถ้า
     // /api/refresh ตอบ 409 (มีงานรันอยู่แล้ว) DR cache จะถูกล้างฟรีโดยไม่มีอะไร
     // มาสร้างใหม่ให้ ทำให้เปิดหน้า DR ครั้งถัดไปต้องดึงใหม่ทั้ง 266 ตัวโดยไม่จำเป็น
-    fetch('/api/dr-full-refresh', { method: 'POST' }).catch(() => {});
     _drLoaded = false;
     _drData   = null;
     const statusEl = document.getElementById('dr-status');
     if (statusEl) statusEl.textContent = 'กำลังอัปเดตข้อมูลหุ้นต่างประเทศ...';
-    _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000)
+    // ต้องรอ POST ตั้ง ts=0 ให้เสร็จก่อนยิง GET /api/dr — ไม่งั้น GET อาจถึง get_dr_data
+    // ก่อน (คนละ worker thread) เห็น cache ยังไม่หมดอายุ แล้วตอบของเก่าโดยไม่ rebuild
+    fetch('/api/dr-full-refresh', { method: 'POST' })
+      .catch(() => {})
+      .then(() => _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000))
       .then(r => r.json())
       .then(d => {
         if (d.stocks) {
@@ -24549,7 +24552,6 @@ const _DR_LOGO_DOMAIN = {
   'TEL':'te.com','TER':'teradyne.com','TME':'tencentmusic.com','TCOM':'trip.com',
   'TRV':'travelers.com','TSLA':'tesla.com','UBER':'uber.com','UNH':'unitedhealthgroup.com',
   'V':'visa.com','VRT':'vertiv.com','VT':'vanguard.com','WMT':'walmart.com',
-  'GSUS':'goldmansachs.com','ANET':'arista.com','GEV':'gevernova.com',
   // HK / China
   '1299.HK':'aia.com','2020.HK':'antagroup.com','9988.HK':'alibaba.com',
   '9888.HK':'baidu.com','9626.HK':'bilibili.com','6082.HK':'biren.com',
@@ -24568,7 +24570,7 @@ const _DR_LOGO_DOMAIN = {
   '9868.HK':'xpeng.com','2513.HK':'zailaboratory.com','2899.HK':'zijinmining.com',
   '0175.HK':'geely.com','1772.HK':'ganfengligroup.com','6690.HK':'haier.com',
   '3692.HK':'hansoh.com','600900.SS':'cypc.com.cn','2238.HK':'en.gac.com.cn',
-  '002230.SZ':'iflytek.com','3888.HK':'kingsoft.com','6181.HK':'laopugold.com',
+  '002230.SZ':'iflytek.com','6181.HK':'laopugold.com',
   '6809.HK':'montagemi.com','002371.SZ':'naura.com','688256.SS':'cambricon.com',
   '000625.SZ':'changan.com.cn','159682.SZ':'csop.com.hk','6680.HK':'jlmag.com',
   '300308.SZ':'giglight.com',
@@ -24602,7 +24604,7 @@ function _drLogoUrl(yf) {
   const d = _DR_LOGO_DOMAIN[yf];
   return d ? `https://www.google.com/s2/favicons?domain=${d}&sz=64` : null;
 }
-function _drLogoFallback(img, color, initials) {
+function _drLogoFallback(img) {
   img.style.display = 'none';
   const fb = img.nextElementSibling;
   if (fb) { fb.style.display = 'flex'; }
@@ -25319,10 +25321,10 @@ function _renderDRDiff(d) {
         <thead><tr><th>Symbol (เดา)</th><th>ชื่อ</th><th>ตลาด</th><th>DR Tickers บน SET</th></tr></thead>
         <tbody>${d.new.map(x => `
           <tr>
-            <td><strong>${x.symbol_guess}</strong></td>
-            <td style="font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.name || '—'}</td>
-            <td style="font-size:11px;color:var(--text2)">${x.exchange || '—'}</td>
-            <td style="font-size:11px">${x.dr_tickers.join(', ')}</td>
+            <td><strong>${_escHtml(x.symbol_guess)}</strong></td>
+            <td style="font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escHtml(x.name || '—')}</td>
+            <td style="font-size:11px;color:var(--text2)">${_escHtml(x.exchange || '—')}</td>
+            <td style="font-size:11px">${_escHtml(x.dr_tickers.join(', '))}</td>
           </tr>`).join('')}</tbody>
       </table></div>
     </div>` : '';
@@ -25334,10 +25336,10 @@ function _renderDRDiff(d) {
         <thead><tr><th>Symbol</th><th>ชื่อ</th><th>Region</th><th>DR Tickers เดิม</th></tr></thead>
         <tbody>${d.removed.map(x => `
           <tr>
-            <td><strong>${x.symbol}</strong></td>
-            <td style="font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.name || '—'}</td>
-            <td style="font-size:11px;color:var(--text2)">${x.region || '—'}</td>
-            <td style="font-size:11px">${(x.drs || []).join(', ')}</td>
+            <td><strong>${_escHtml(x.symbol)}</strong></td>
+            <td style="font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escHtml(x.name || '—')}</td>
+            <td style="font-size:11px;color:var(--text2)">${_escHtml(x.region || '—')}</td>
+            <td style="font-size:11px">${_escHtml((x.drs || []).join(', '))}</td>
           </tr>`).join('')}</tbody>
       </table></div>
     </div>` : '';
@@ -25348,11 +25350,11 @@ function _renderDRDiff(d) {
       <div style="font-size:10.5px;color:var(--text2);margin:8px 0">SET.or.th เปลี่ยนสตริงระบุ underlying ของกองทุน/ตราสารบางตัว (เช่น underlying โค้ด "CAMCSI300" ขณะที่ลิสต์เรา curate ไว้สั้นๆ ว่า "CN") ทำให้เทียบชื่อไม่ตรง ทั้งที่ DR ticker เดียวกันซื้อขายอยู่จริงทั้งคู่ (มีข้อมูลราคาในหน้า DR ปกติ) — เกิดจากตัวเช็คนี้เทียบด้วยชื่อ ไม่ใช่ข้อมูลหายจริง</div>
       ${d.renamed_new?.length ? `<div style="overflow-x:auto;margin-bottom:8px"><table class="tbl" style="min-width:500px">
         <thead><tr><th>SET เรียกว่า</th><th>DR Tickers</th><th>เรามีอยู่แล้วในชื่อ</th></tr></thead>
-        <tbody>${d.renamed_new.map(x => `<tr><td>${x.symbol_guess}</td><td style="font-size:11px">${x.dr_tickers.join(', ')}</td><td><strong>${x.already_tracked_as.join(', ')}</strong></td></tr>`).join('')}</tbody>
+        <tbody>${d.renamed_new.map(x => `<tr><td>${_escHtml(x.symbol_guess)}</td><td style="font-size:11px">${_escHtml(x.dr_tickers.join(', '))}</td><td><strong>${_escHtml(x.already_tracked_as.join(', '))}</strong></td></tr>`).join('')}</tbody>
       </table></div>` : ''}
       ${d.renamed_removed?.length ? `<div style="overflow-x:auto"><table class="tbl" style="min-width:500px">
         <thead><tr><th>เราเรียกว่า</th><th>DR Tickers เดิม</th><th>ยังเทรดอยู่จริง</th></tr></thead>
-        <tbody>${d.renamed_removed.map(x => `<tr><td>${x.symbol}</td><td style="font-size:11px">${(x.drs||[]).join(', ')}</td><td style="font-size:11px"><strong>${x.still_trading_as.join(', ')}</strong></td></tr>`).join('')}</tbody>
+        <tbody>${d.renamed_removed.map(x => `<tr><td>${_escHtml(x.symbol)}</td><td style="font-size:11px">${_escHtml((x.drs||[]).join(', '))}</td><td style="font-size:11px"><strong>${_escHtml(x.still_trading_as.join(', '))}</strong></td></tr>`).join('')}</tbody>
       </table></div>` : ''}
     </details>` : '';
 
@@ -25376,7 +25378,9 @@ function _drWarningsHtml(d) {
 }
 
 function loadDRPage() {
-  if (_drLoaded && _drData) { renderDRTable(); return; }
+  // ต้องเช็ค .length ด้วย — ถ้ารอบก่อน /api/dr ตอบ stocks:[] (Yahoo ล่ม) _drData = []
+  // ซึ่ง truthy ทำให้เข้าเงื่อนไขนี้แล้ว return ทันที ไม่ยอม refetch ทั้ง session
+  if (_drLoaded && _drData && _drData.length) { renderDRTable(); return; }
   document.getElementById('dr-status').textContent = 'กำลังดึงข้อมูล...';
   document.getElementById('dr-table-wrap').innerHTML =
     '<div class="dr-loading"><span class="dr-load-spin"></span>กำลังโหลดข้อมูล DR/DRx... (ช้าเฉพาะการรันครั้งแรกสุดของเครื่อง ~1 นาที — ปกติขึ้นทันที)</div>';
@@ -25442,13 +25446,6 @@ function _drPollRefresh(attempt) {
       if (document.getElementById('page-stock-rotation')?.classList.contains('active') && _srMarket === 'TH') renderDRRotation();
     }).catch(() => _drPollRefresh(attempt + 1));
   }, 30000);
-}
-
-function reloadDRPage() {
-  fetch('/api/dr-full-refresh', { method: 'POST' }).catch(() => {});
-  _drLoaded = false;
-  _drData   = null;
-  loadDRPage();
 }
 
 function drQuickUpdate() {
@@ -25674,9 +25671,17 @@ function _drExchBadge(yf) {
   return '🇺🇸 US';
 }
 
+// badge ลิงก์ TradingView ต่อ DR ticker — ใช้ร่วมกันทั้งมุมมองตาราง (_drRows) และการ์ด
+// (_drCardGrid) เดิม copy-paste เหมือนกัน 2 ที่
+function _drBadgesHtml(drs) {
+  return (drs || []).map(d =>
+    `<a class="dr-badge${d.endsWith('X') ? ' dr-badge-x' : ''}" href="https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(d)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="เปิด ${d} ใน TradingView">${d}</a>`
+  ).join('');
+}
+
 function _drCardGrid(stocks) {
   return stocks.map(s => {
-    const chgCls  = s.chg >= 0 ? 'green' : 'red';
+    const chgCls  = s.chg == null ? '' : (s.chg >= 0 ? 'green' : 'red');
     const chgStr  = s.chg != null ? (s.chg >= 0 ? '+' : '') + s.chg.toFixed(2) + '%' : '—';
     const color   = _drSymColor(s.sym);
     const initials = s.yf.slice(0, 4);
@@ -25684,9 +25689,7 @@ function _drCardGrid(stocks) {
     const logoHtml = logoUrl
       ? `<img src="${logoUrl}" class="dr-card-logo-img" onerror="_drLogoFallback(this)"><div class="dr-card-logo" style="background:${color};display:none">${initials}</div>`
       : `<div class="dr-card-logo" style="background:${color}">${initials}</div>`;
-    const badges = s.drs.map(d =>
-      `<a class="dr-badge${d.endsWith('X') ? ' dr-badge-x' : ''}" href="https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(d)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="เปิด ${d} ใน TradingView">${d}</a>`
-    ).join('');
+    const badges = _drBadgesHtml(s.drs);
     const cPct = v => v != null ? `<span class="${v>=0?'green':'red'}">${v>=0?'+':''}${v.toFixed(2)}%</span>` : '—';
     const rsDisp = s.rs_score != null ? `<span class="${rsColor(s.rs_score)}" style="font-weight:700">RS ${s.rs_score}</span>` : '';
     return `<div class="dr-card" onclick="openDRChartModal('${s.sym}')" style="cursor:pointer">
@@ -25793,13 +25796,11 @@ function renderDRTable() {
 
 function _drRows(stocks) {
   return stocks.map(s => {
-    const chgCls   = s.chg >= 0 ? 'green' : 'red';
+    const chgCls   = s.chg == null ? '' : (s.chg >= 0 ? 'green' : 'red');
     const chgStr   = s.chg != null ? (s.chg >= 0 ? '+' : '') + s.chg.toFixed(2) + '%' : '—';
     const color    = _drSymColor(s.sym);
     const initials = s.yf.slice(0, 4);
-    const badges   = s.drs.map(d =>
-      `<a class="dr-badge${d.endsWith('X') ? ' dr-badge-x' : ''}" href="https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(d)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="เปิด ${d} ใน TradingView">${d}</a>`
-    ).join('');
+    const badges   = _drBadgesHtml(s.drs);
 
     const logoUrl = _drLogoUrl(s.yf);
     const logoHtml = logoUrl
@@ -29413,8 +29414,9 @@ function buildInsAccum() {
       if (val != null) { a.sellValue += val; a.sellValuedQty += rec.qty; }
       if (!a.lastSell || rec.trade_date > a.lastSell) a.lastSell = rec.trade_date;
     }
-    a.net = a.buys - a.sells;
   });
+  // net = จำนวนครั้งซื้อ − ขาย — คิดครั้งเดียวหลังรวมครบ (เดิมคิดซ้ำทุก record)
+  Object.values(_insAccum).forEach(a => { a.net = a.buys - a.sells; });
 }
 
 // ฝั่งเด่นของ insider ต่อหุ้น (>0 = ซื้อ, <0 = ขาย) — ใช้ "มูลค่าบาทสุทธิ" เป็นหลัก
@@ -29424,7 +29426,10 @@ function buildInsAccum() {
 // ทุกที่ที่ตัดสินฝั่ง insider ต้องเรียกตัวนี้ ไม่ใช่อ่าน a.net ตรงๆ
 function _insDominant(a) {
   if (!a) return 0;
-  return (a.buyValue > 0 || a.sellValue > 0) ? (a.buyValue - a.sellValue) : a.net;
+  // มีราคาให้คิดมูลค่า -> ใช้มูลค่าบาทสุทธิ · แต่ถ้าบังเอิญซื้อ=ขายพอดี (net บาท = 0)
+  // ทั้งที่มีธุรกรรมสองฝั่ง ให้ falls back ไปนับครั้ง แทนที่จะคืน 0 แล้วโดนกรองหายทั้งแถว
+  if (a.buyValue > 0 || a.sellValue > 0) return (a.buyValue - a.sellValue) || a.net;
+  return a.net;
 }
 
 // มูลค่าบาทแบบอ่านง่าย: ฿1.2B / ฿34.5M / ฿890K
@@ -29479,7 +29484,7 @@ function renderInsAccumTable() {
     .sort((a,b) => b.dominant - a.dominant);
 
   if (!rows.length) {
-    el.innerHTML = `<div class="card" style="padding:14px;margin-bottom:14px;color:var(--muted);font-size:12px">ไม่พบหุ้นที่ตรงกับ "${q}" ในสะสม Insider Activity ${_insDays} วัน</div>`;
+    el.innerHTML = `<div class="card" style="padding:14px;margin-bottom:14px;color:var(--muted);font-size:12px">ไม่พบหุ้นที่ตรงกับ "${_insEsc(q)}" ในสะสม Insider Activity ${_insDays} วัน</div>`;
     return;
   }
 
@@ -29587,12 +29592,12 @@ function _accumRow(r) {
   }
 
   return `
-    <div onclick="openChartModal('${r.sym}')"
+    <div onclick="openChartModal('${_escJsAttr(r.sym)}')"
          style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;
                 cursor:pointer;margin-bottom:3px;transition:background .15s;flex-wrap:wrap"
          onmouseover="this.style.background='rgba(255,255,255,0.04)'"
          onmouseout="this.style.background=''">
-      <span style="font-weight:700;font-size:13px;color:#5ab4ff;min-width:50px">${r.sym}${tvLink(r.sym)}</span>
+      <span style="font-weight:700;font-size:13px;color:#5ab4ff;min-width:50px">${_insEsc(r.sym)}${tvLink(r.sym)}</span>
       ${clusterBadge}
       ${unusualBadge}
       <span style="font-size:10px;color:var(--muted);flex:1;min-width:60px">${sector}</span>
@@ -30146,9 +30151,13 @@ let _insDays   = 30;
 let _insFilter = 'all';   // 'all' | 'buy' | 'sell'
 let _insSrc    = {r59: true, r246: true};
 let _insData   = null;   // {r59:[...], r246:[...]}
+let _insReqSeq = 0;      // กัน race: กดปุ่มช่วงเวลารัวๆ (7→90) แล้ว response ช้ากว่ามาทีหลังทับผลใหม่
 
 async function loadInsiderPage() {
-  if (_insData) {
+  // ต้องเช็คว่ามีรายการจริงด้วย — ถ้ารอบก่อน SEC ล่ม/ยัง sync ไม่เสร็จ endpoint ตอบ
+  // 200 {records:[]} ทำให้ _insData = {r59:[],r246:[],...} ซึ่ง truthy แล้ว return
+  // ทันทีทุกครั้งที่กลับมาหน้านี้ ไม่ยอม refetch ทั้ง session (pattern เดียวกับ loadDRPage)
+  if (_insData && (_insData.r59.length || _insData.r246.length)) {
     renderInsAccumTable();
     renderInsiderSummary();
     renderInsiderTable();
@@ -30159,6 +30168,7 @@ async function loadInsiderPage() {
 }
 
 async function fetchInsiderData() {
+  const seq = ++_insReqSeq;
   document.getElementById('ins-table-wrap').innerHTML =
     '<div style="padding:20px;color:var(--muted);font-size:13px;text-align:center">กำลังโหลดข้อมูลจาก SEC...</div>';
   try {
@@ -30175,11 +30185,17 @@ async function fetchInsiderData() {
       _fetchTimeout(`/api/insider-trades?days=${_insDays}`, timeoutMs, syncMsg).then(r => r.json()),
       _fetchTimeout(`/api/major-changes?days=${_insDays}`, timeoutMs, syncMsg).then(r => r.json()),
     ]);
+    // กดปุ่มช่วงเวลาอื่นระหว่างรอ response นี้ -> มี request ใหม่กว่าแล้ว ทิ้งผลนี้ไป
+    // ไม่งั้น response ที่ช้ากว่าจะมาเขียนทับ _insData ของ request ที่ผู้ใช้เลือกล่าสุด
+    if (seq !== _insReqSeq) return false;
     // เวอร์ชันเว็บ (static) เก็บข้อมูลไว้ที่ 180 วันคงที่ ไม่สนใจ query string
     // days= ที่ส่งไป -> กรองซ้ำฝั่ง client ด้วยวันที่จริง กันปุ่ม 7/30/90 วัน
     // แสดงข้อมูล 180 วันผิดๆ บนเวอร์ชันเว็บ (เดสก์ท็อป/Flask กรองมาแล้วพอดี ไม่กระทบ)
+    // ใช้วันที่ตามเขตเวลาเครื่อง (ไม่ใช่ toISOString ที่เป็น UTC) — trade_date จาก SEC
+    // เป็นวันที่ไทย ถ้าเทียบกับ UTC date จะคลาดได้ 1 วันช่วงเช้า (บน static viewer
+    // client filter นี้เป็นตัวกรองเดียว จึงเห็นผลจริง)
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - _insDays);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`;
     const withinDays = x => !x.trade_date || x.trade_date >= cutoffStr;
     _insData = {
       r59:   (r59res.records  || []).filter(withinDays),
@@ -30196,9 +30212,13 @@ async function fetchInsiderData() {
     if (window._currentStockList && document.getElementById('page-stocks')?.classList.contains('active')) {
       renderStocksTable(true);
     }
+    return true;
   } catch(e) {
+    if (seq !== _insReqSeq) return false;
     document.getElementById('ins-table-wrap').innerHTML =
       `<div style="padding:20px;color:var(--red);font-size:13px">เกิดข้อผิดพลาด: ${e.message}</div>`;
+    document.getElementById('ins-status').textContent = '✗ โหลดข้อมูลไม่สำเร็จ';
+    return false;
   }
 }
 
@@ -30213,8 +30233,12 @@ async function syncInsiderData() {
     const r = await _fetchTimeout('/api/insider-sync', 200000, 'หมดเวลารอ sync ข้อมูล SEC', { method: 'POST' }).then(r => r.json());
     if (!r.ok) throw new Error(r.error || 'sync ไม่สำเร็จ');
     _insData = null;
-    await fetchInsiderData();   // เขียนทับ ins-status ด้วยข้อความ "อัพเดท ..." — ต่อท้ายผลสรุป sync ให้เห็นด้วย
-    status.textContent += ` · ✓ sync ดึงใหม่: ผู้บริหาร +${r.insider_fetched} รายการ · ผู้ถือหุ้นใหญ่ +${r.major_fetched} รายการ`;
+    // ต่อท้ายผลสรุป sync เฉพาะตอน refetch สำเร็จจริง — ไม่งั้น ins-status จะกลายเป็น
+    // "✗ โหลดข้อมูลไม่สำเร็จ · ✓ sync ดึงใหม่..." ที่ขัดกันเอง
+    const okRefetch = await fetchInsiderData();
+    status.textContent = okRefetch
+      ? status.textContent + ` · ✓ sync ดึงใหม่: ผู้บริหาร +${r.insider_fetched} รายการ · ผู้ถือหุ้นใหญ่ +${r.major_fetched} รายการ`
+      : `✓ sync สำเร็จ (ผู้บริหาร +${r.insider_fetched} · ผู้ถือหุ้นใหญ่ +${r.major_fetched}) — แต่โหลดข้อมูลใหม่ไม่สำเร็จ ลองโหลดหน้านี้ใหม่`;
   } catch (e) {
     status.textContent = '✗ sync ไม่สำเร็จ: ' + e.message;
   } finally {
@@ -30309,10 +30333,8 @@ function _insiderSortArrow(key) {
 // scraping ดิบๆ (pandas.read_html อ่าน text content ของ <td> มา) ไม่ผ่าน sanitize เลย
 // ถ้าหลุดอักขระ <, >, " มาในชื่อ จะทำให้ตาราง/popup insider ทั้งก้อนเพี้ยน (เหมือนปัญหา
 // ที่หน้า Hedge Holdings เจอมาก่อนจนต้องมี _hedgeEsc — หน้า Insider ไม่เคยมีมาก่อน)
-function _insEsc(s) {
-  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
+// ใช้ตัว escape กลาง (_escHtml — จัดการ ' ด้วย) ไม่ทำสำเนา regex ที่ 4 ในไฟล์
+function _insEsc(s) { return _escHtml(s); }
 
 function renderInsiderTable() {
   if (!_insData) return;
@@ -30347,7 +30369,10 @@ function renderInsiderTable() {
     rows.sort((a, b) => {
       const va = get(a), vb = get(b);
       if (isStr) return dir === 1 ? String(vb).localeCompare(String(va)) : String(va).localeCompare(String(vb));
-      return dir === 1 ? vb - va : va - vb;
+      // เทียบแบบไม่พึ่งการลบ — va-vb เป็น NaN เมื่อทั้งคู่เป็น -Infinity (r246 ที่ pct_change
+      // ว่าง) ทำให้ลำดับของกลุ่มนั้นสุ่มไม่แน่นอน
+      const d = va === vb ? 0 : (va < vb ? -1 : 1);
+      return dir === 1 ? -d : d;
     });
   } else {
     rows.sort((a,b) => (b.trade_date||'').localeCompare(a.trade_date||''));
@@ -30378,21 +30403,26 @@ function renderInsiderTable() {
       <tbody>
         ${rows.map(row => {
           const isR59  = row.src === 'r59';
+          // pct_before/pct_after อาจเป็น null (SEC ไม่ได้กรอกช่อง "ก่อน") ทั้งที่ pct_change มี
+          // -> โชว์วงเล็บช่วง before→after เฉพาะตอนมีครบทั้งคู่ ไม่งั้นได้สตริง "undefined"
           const detail = isR59
             ? `${(row.qty||0).toLocaleString()} หุ้น`
-            : row.pct_change != null ? `${row.pct_change.toFixed(2)}% (${row.pct_before?.toFixed(2)}→${row.pct_after?.toFixed(2)}%)` : '—';
+            : row.pct_change != null
+              ? `${row.pct_change.toFixed(2)}%` + (row.pct_before != null && row.pct_after != null
+                  ? ` (${row.pct_before.toFixed(2)}→${row.pct_after.toFixed(2)}%)` : '')
+              : '—';
           const price = isR59 && row.price ? `฿${row.price.toFixed(2)}` : '—';
           const srcBadge = isR59
             ? '<span style="font-size:9px;background:#1a3060;color:#5ab4ff;border-radius:3px;padding:1px 4px">ผู้บริหาร</span>'
             : '<span style="font-size:9px;background:#2a1a40;color:#c06bff;border-radius:3px;padding:1px 4px">ผู้ถือหุ้นใหญ่</span>';
           const who = _insEsc(isR59 ? (row.name||'') : (row.holder||''));
           return `<tr style="border-bottom:1px solid rgba(255,255,255,0.04);cursor:pointer"
-                      onclick="openChartModal('${row.symbol}')"
+                      onclick="openChartModal('${_escJsAttr(row.symbol)}')"
                       onmouseover="this.style.background='rgba(255,255,255,0.03)'"
                       onmouseout="this.style.background=''">
-            <td style="padding:7px 10px;color:var(--muted)">${row.trade_date||'—'}</td>
+            <td style="padding:7px 10px;color:var(--muted)">${_insEsc(row.trade_date||'—')}</td>
             <td style="padding:7px 10px">
-              <strong style="color:#5ab4ff">${row.symbol}</strong>${tvLink(row.symbol)}
+              <strong style="color:#5ab4ff">${_insEsc(row.symbol)}</strong>${tvLink(row.symbol)}
             </td>
             <td style="padding:7px 10px">${srcBadge}</td>
             <td style="padding:7px 10px;color:#c8d0dc;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
@@ -30442,7 +30472,10 @@ async function loadInsiderForStock(symbol) {
         const isR59 = row.src === 'r59';
         const detail = isR59
           ? `${(row.qty||0).toLocaleString()} หุ้น${row.price ? ' @ ฿'+row.price.toFixed(2) : ''}`
-          : row.pct_change != null ? `${row.pct_change.toFixed(2)}% (${row.pct_before?.toFixed(2)}%→${row.pct_after?.toFixed(2)}%)` : '';
+          : row.pct_change != null
+            ? `${row.pct_change.toFixed(2)}%` + (row.pct_before != null && row.pct_after != null
+                ? ` (${row.pct_before.toFixed(2)}%→${row.pct_after.toFixed(2)}%)` : '')
+            : '';
         const who = _insEsc(isR59 ? (row.name||'') : (row.holder||''));
         const badge = isR59
           ? '<span style="font-size:9px;background:#1a3060;color:#5ab4ff;border-radius:3px;padding:1px 4px">บริหาร</span>'
