@@ -7513,7 +7513,8 @@ def _any_job_running():
     """เช็คว่ามี background job (Refresh/Quick Update/Heatmap Live/Indices ฯลฯ) กำลังรันอยู่ไหม
     — ใช้ก่อน restart กัน os._exit(0) ตัดงานหนัก (Full Refresh ใช้เวลา 20 นาที - 1.5 ชม.)
     ทิ้งกลางคันโดยผู้ใช้ไม่รู้ตัว (เดิม /api/restart ไม่เช็คอะไรเลย)"""
-    if _state["running"] or _dr_refresh_state["running"] or _indices_job_state["running"]:
+    if (_state["running"] or _dr_refresh_state["running"] or _indices_job_state["running"]
+            or _flow_fetch_state["running"]):
         return True
     return any(s["running"] for s in _HM_LIVE_STATE.values())
 
@@ -9782,12 +9783,24 @@ def _run_refresh(period="max"):
             print(f"[FullRefresh] Indices error: {e}")
             warnings.append(f"Indices ล้มเหลว: {e}")
 
-        # อัพเดท Capital Flow
+        # อัพเดท Capital Flow (SET + S50 Futures + Thai Bond — เดิม Full Refresh ดึงแค่ SET
+        # ตัวเดียว ต่างจาก Quick Update ที่ดึงครบ 3 ตลาด ทำให้กด Full Refresh แล้วแท็บ S50/Bond
+        # ยังโชว์ข้อมูลค้างนานสุด 4 ชม. (TTL cache) ทั้งที่หน้าเว็บบอกว่าเพิ่งอัพเดทเสร็จ)
         try:
             _fetch_flow_data()
         except Exception as e:
             print(f"[FullRefresh] Capital Flow error: {e}")
             warnings.append(f"Capital Flow ล้มเหลว: {e}")
+        try:
+            _fetch_flow_s50_data()
+        except Exception as e:
+            print(f"[FullRefresh] S50 Futures Flow error: {e}")
+            warnings.append(f"S50 Futures Flow ล้มเหลว: {e}")
+        try:
+            _fetch_flow_bond_data()
+        except Exception as e:
+            print(f"[FullRefresh] Bond Flow error: {e}")
+            warnings.append(f"Bond Flow ล้มเหลว: {e}")
 
         # Sync งบ Yahoo annual mirror US/HK ทั้ง universe (~5,108 ตัว, ขยายจากเดิมที่จำกัดแค่
         # สมาชิกดัชนีหลัก ~623 ตัว) — limit=300/รอบกัน Full Refresh ยืดยาวเกินไป resume เองรอบ
@@ -11352,6 +11365,10 @@ def short_sales_daily_update():
 _flow_cache: dict = {}
 _FLOW_CACHE_TTL = 4 * 3600
 _MARKET_FLOW_FILE = os.path.join(BASE_DIR, "market_flow_data.json")
+# background refresh ของ /api/market-flow (stale-while-revalidate) — ลงทะเบียนเข้า
+# _any_job_running() ด้วย ไม่งั้นกด "↺ Restart" ตอนกำลัง fetch อยู่จะตัดทิ้งเงียบๆ
+_flow_fetch_state = {"running": False}
+_flow_fetch_lock = threading.Lock()
 
 
 def _fetch_flow_siamchart():
@@ -11445,6 +11462,51 @@ def _fetch_flow_market_github_fallback():
     return (data or {}).get("rows") or []
 
 
+def _load_flow_accumulator(file_path, github_fallback_fn, tag, fields=None):
+    """โหลดไฟล์สะสม flow (market/s50/bond) + เติมวันที่ขาดจาก GitHub fallback —
+    คืน dict {date: row} · fields != None = เก็บเฉพาะ key พวกนั้น (SET flow กรอง;
+    S50/Bond เก็บ dict ดิบทั้งก้อน) · ไม่ทับของเดิมจาก fallback (ไฟล์ local อาจแก้มือไว้)
+    (สกัดจากส่วนต้นที่ 3 pipeline ทำเหมือนกัน — ดู CAPITAL_FLOW_DEFERRED_FINDINGS ข้อ 3)"""
+    def _norm(r0):
+        return r0 if fields is None else {k: r0.get(k) for k in fields}
+    rows_by_date = {}
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            for r0 in (json.load(f).get("rows") or []):
+                if r0.get("date"):
+                    rows_by_date[r0["date"]] = _norm(r0)
+    except Exception:
+        pass
+    try:
+        for r0 in github_fallback_fn():
+            if r0.get("date") and r0["date"] not in rows_by_date:
+                rows_by_date[r0["date"]] = _norm(r0)
+    except Exception as e:
+        print(f"[{tag}] GitHub fallback ไม่ได้ ({e})")
+    return rows_by_date
+
+
+def _finalize_flow_result(rows_by_date, sources, file_path, cache, post_sort=None,
+                          stale_source_label="ไฟล์สะสม (ดึงใหม่ไม่สำเร็จ)"):
+    """sort by date → (optional) post_sort hook (SET flow คำนวณ chg) → build result dict
+    {rows, fetched_at, latest_date, sources} → เขียนไฟล์สะสม (atomic) เฉพาะตอนรันบน GitHub
+    Actions + มี source ใหม่จริง (เจ้าของไฟล์เดียว กัน auto-push ชน commit ของ Actions) →
+    อัพเดท cache ในหน่วยความจำ · latest_date = วันที่ของแถวจริงล่าสุด (ต่างจาก fetched_at ที่
+    เป็นเวลา "ตอนนี้" เสมอ — ใช้เช็คว่าข้อมูลค้างจริงไหม)
+    (สกัดจากส่วนท้ายที่ 3 pipeline ทำเหมือนกัน — ดู CAPITAL_FLOW_DEFERRED_FINDINGS ข้อ 3)"""
+    rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
+    if post_sort:
+        post_sort(rows)
+    result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
+              "latest_date": rows[-1]["date"] if rows else None,
+              "sources": sources or [stale_source_label]}
+    if sources and _IS_GITHUB_ACTIONS:
+        _atomic_write_json(file_path, {"rows": rows, "updated_at": result["fetched_at"]})
+    cache["data"] = result
+    cache["ts"]   = time.time()
+    return result
+
+
 def _fetch_flow_data():
     """รวมข้อมูล Capital Flow จากไฟล์สะสม + GitHub fallback + siamchart + SET API —
     คำนวณ chg แล้วอัพเดท _flow_cache เสมอ · บันทึกไฟล์สะสม (atomic) เฉพาะตอนรันบน GitHub
@@ -11452,28 +11514,25 @@ def _fetch_flow_data():
     กัน auto-push ยิงทับ/ชน commit ของ Actions (ดู _IS_GITHUB_ACTIONS) เครื่อง local ยังได้
     ข้อมูลสดครบเหมือนเดิมผ่าน _flow_cache ในหน่วยความจำ แค่ไม่ persist ลงไฟล์ที่ push ขึ้น repo
     ล้มเฉพาะเมื่อไม่มีข้อมูลเลยจริงๆ"""
-    rows_by_date = {}
-    try:
-        with open(_MARKET_FLOW_FILE, encoding="utf-8") as f:
-            for r0 in (json.load(f).get("rows") or []):
-                if r0.get("date"):
-                    rows_by_date[r0["date"]] = {k: r0.get(k) for k in
-                                                ("date", "fund", "foreign", "retail", "set")}
-    except Exception:
-        pass
-
-    # เติมเฉพาะวันที่ขาดบนเครื่อง (ไม่ทับของเดิม — ไฟล์ local อาจถูกแก้ไขมือไว้แล้ว)
-    try:
-        for r0 in _fetch_flow_market_github_fallback():
-            if r0.get("date") and r0["date"] not in rows_by_date:
-                rows_by_date[r0["date"]] = {k: r0.get(k) for k in
-                                            ("date", "fund", "foreign", "retail", "set")}
-    except Exception as e:
-        print(f"[Flow] GitHub fallback ไม่ได้ ({e})")
+    rows_by_date = _load_flow_accumulator(
+        _MARKET_FLOW_FILE, _fetch_flow_market_github_fallback, "Flow",
+        fields=("date", "fund", "foreign", "retail", "set"))
 
     sources = []
     try:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZoneInfo
+        now_th = _dt.now(_ZoneInfo("Asia/Bangkok"))
+        today_th = now_th.strftime("%Y-%m-%d")
+        market_closed_today = (now_th.hour, now_th.minute) >= (17, 45)
         for r0 in _fetch_flow_siamchart():
+            if not r0.get("date"):
+                continue   # กัน str(None)[:10] == 'None' หลุดเข้า rows_by_date เป็น key ปลอม
+            if r0["date"] == today_th and not market_closed_today:
+                # ตลาดยังไม่ปิดวันนี้ — เลขของ siamchart ยังไม่นิ่ง (ไหลระหว่างวัน) ข้ามไปก่อน
+                # กันเขียนทับ SET-official ที่นิ่งแล้วจาก run รอบหลัง (SET-official เอง gate
+                # ด้วยเวลาเดียวกันนี้อยู่แล้ว — ดู _fetch_flow_set_official)
+                continue
             rows_by_date[r0["date"]] = r0        # siamchart เป็นแหล่งหลัก — ทับได้
         sources.append("siamchart")
     except Exception as e:
@@ -11489,36 +11548,66 @@ def _fetch_flow_data():
     if not rows_by_date:
         raise RuntimeError("ไม่มีข้อมูล Capital Flow จากทุกแหล่ง (siamchart + SET API + ไฟล์สะสม)")
 
-    rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
-    for i in range(1, len(rows)):
-        prev, curr = rows[i - 1].get("set"), rows[i].get("set")
-        rows[i]["chg"] = round(curr - prev, 2) if prev and curr else None
-    rows[0]["chg"] = None
+    def _add_chg(rows):
+        for i in range(1, len(rows)):
+            prev, curr = rows[i - 1].get("set"), rows[i].get("set")
+            rows[i]["chg"] = round(curr - prev, 2) if prev and curr else None
+        rows[0]["chg"] = None
 
-    # latest_date คือวันที่ของแถวข้อมูลจริงล่าสุด (ต่างจาก fetched_at ที่เป็นเวลา "ตอนนี้" เสมอ
-    # แม้ทุกแหล่งดึงสดจะล้มหมดและใช้ไฟล์สะสมเก่า — ใช้ latest_date เช็คว่าข้อมูลค้างจริงหรือไม่)
-    result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
-              "latest_date": rows[-1]["date"] if rows else None,
-              "sources": sources or ["ไฟล์สะสม (ดึงใหม่ไม่สำเร็จทั้งสองแหล่ง)"]}
-    if sources and _IS_GITHUB_ACTIONS:   # ได้ของใหม่จริง + รันบน Actions ค่อยเขียนไฟล์ (เจ้าของไฟล์เดียว)
-        _atomic_write_json(_MARKET_FLOW_FILE,
-                           {"rows": rows, "updated_at": result["fetched_at"]})
-    _flow_cache["data"] = result
-    _flow_cache["ts"]   = time.time()
-    return result
+    return _finalize_flow_result(
+        rows_by_date, sources, _MARKET_FLOW_FILE, _flow_cache, post_sort=_add_chg,
+        stale_source_label="ไฟล์สะสม (ดึงใหม่ไม่สำเร็จทั้งสองแหล่ง)")
+
+
+def _kick_flow_refresh():
+    """refresh _flow_cache ของ /api/market-flow ใน background thread — stale-while-revalidate
+    เหมือน _kick_dr_rebuild ของหน้า DR · เดิม route เรียก _fetch_flow_data() ตรงๆ ใน request
+    path ซึ่ง _fetch_flow_siamchart() retry 3 ครั้ง x timeout 20s + sleep 3s = บล็อค worker
+    thread ของ waitress ได้สูงสุด ~70s ตอน siamchart ช้า/ล่ม
+    (S50/Bond ไม่ต้องมี — ดึงครั้งเดียวจบ ไม่มี retry loop แบบนี้)"""
+    if not _flow_fetch_lock.acquire(blocking=False):
+        return
+    _flow_fetch_state["running"] = True
+
+    def _bg():
+        try:
+            # thread อื่น (หรือ Quick Update/Full Refresh) เพิ่ง refresh เสร็จระหว่างรอ lock
+            if _flow_cache.get("data") and time.time() - _flow_cache.get("ts", 0) < _FLOW_CACHE_TTL:
+                return
+            _fetch_flow_data()
+            print("[Flow] background refresh เสร็จ")
+        except Exception as e:
+            print(f"[Flow] background refresh ล้มเหลว: {e}")
+        finally:
+            _flow_fetch_state["running"] = False
+            _flow_fetch_lock.release()
+
+    threading.Thread(target=_bg, daemon=True).start()
 
 
 @app.route("/api/market-flow")
 def market_flow():
-    """ดึงข้อมูล net buy/sell รายวัน จาก siamchart.com"""
-    now = time.time()
-    if _flow_cache.get("data") and now - _flow_cache.get("ts", 0) < _FLOW_CACHE_TTL:
-        return jsonify(_flow_cache["data"])
+    """ดึงข้อมูล net buy/sell รายวัน จาก siamchart.com
+
+    cache หมดอายุ: ตอบ cache เก่าทันที + refresh เบื้องหลัง (stale-while-revalidate) — ผู้ใช้
+    ไม่ต้องรอ siamchart retry ~70s บน worker thread (frontend มี timeout 90s เป็นตาข่ายกันไว้
+    ชั้นสุดท้ายอยู่แล้ว) · ?fresh=1 = บังคับดึงสดแบบ blocking (ใช้ตอน bake static — ห้ามได้ของเก่า)"""
+    fresh = request.args.get("fresh") == "1"
+    cached = _flow_cache.get("data")
+    if not fresh and cached:
+        if time.time() - _flow_cache.get("ts", 0) >= _FLOW_CACHE_TTL:
+            _kick_flow_refresh()   # หมดอายุ — refresh เบื้องหลัง แล้วคืนของเก่าไปก่อน
+        return jsonify(cached)
     try:
         return jsonify(_fetch_flow_data())
     except Exception as e:
         import traceback
         traceback.print_exc()
+        # ทุกแหล่งล้มพร้อมกัน (ไฟล์สะสม+GitHub fallback+siamchart+SET API) แต่ยังมี cache
+        # เดิมที่ valid ตอนนี้ (แค่ TTL หมดอายุ) ค้างอยู่ในหน่วยความจำ — คืนของเก่านั้นแทน 500
+        # ดีกว่าคืน error ทั้งที่มีข้อมูลใช้ได้จริงอยู่แล้ว
+        if _flow_cache.get("data"):
+            return jsonify(_flow_cache["data"])
         return jsonify({"error": str(e)}), 500
 
 
@@ -11590,22 +11679,8 @@ def _fetch_flow_s50_github_fallback():
 def _fetch_flow_s50_data():
     """รวมข้อมูล S50 Futures flow จากไฟล์สะสม + GitHub fallback + TFEX (วันล่าสุด) — เหมือน SET flow
     (เขียนไฟล์สะสมเฉพาะตอนรันบน Actions เท่านั้น — ดู _fetch_flow_data)"""
-    rows_by_date = {}
-    try:
-        with open(_S50_FLOW_FILE, encoding="utf-8") as f:
-            for r0 in (json.load(f).get("rows") or []):
-                if r0.get("date"):
-                    rows_by_date[r0["date"]] = r0
-    except Exception:
-        pass
-
-    # เติมเฉพาะวันที่ขาดบนเครื่อง (ไม่ทับของเดิม — ไฟล์ local อาจถูกแก้ไขมือไว้แล้ว)
-    try:
-        for r0 in _fetch_flow_s50_github_fallback():
-            if r0.get("date") and r0["date"] not in rows_by_date:
-                rows_by_date[r0["date"]] = r0
-    except Exception as e:
-        print(f"[S50 Flow] GitHub fallback ไม่ได้ ({e})")
+    rows_by_date = _load_flow_accumulator(
+        _S50_FLOW_FILE, _fetch_flow_s50_github_fallback, "S50 Flow")
 
     sources = []
     try:
@@ -11618,15 +11693,7 @@ def _fetch_flow_s50_data():
     if not rows_by_date:
         raise RuntimeError("ไม่มีข้อมูล S50 Futures flow (TFEX ไม่ได้ + ไม่มีไฟล์สะสม)")
 
-    rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
-    result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
-              "latest_date": rows[-1]["date"] if rows else None,
-              "sources": sources or ["ไฟล์สะสม (ดึงใหม่ไม่สำเร็จ)"]}
-    if sources and _IS_GITHUB_ACTIONS:
-        _atomic_write_json(_S50_FLOW_FILE, {"rows": rows, "updated_at": result["fetched_at"]})
-    _flow_s50_cache["data"] = result
-    _flow_s50_cache["ts"] = time.time()
-    return result
+    return _finalize_flow_result(rows_by_date, sources, _S50_FLOW_FILE, _flow_s50_cache)
 
 
 @app.route("/api/market-flow-s50")
@@ -11640,6 +11707,8 @@ def market_flow_s50():
     except Exception as e:
         import traceback
         traceback.print_exc()
+        if _flow_s50_cache.get("data"):
+            return jsonify(_flow_s50_cache["data"])
         return jsonify({"error": str(e)}), 500
 
 
@@ -11662,8 +11731,14 @@ def _fetch_flow_bond_data():
     """รวมข้อมูล Thai Bond flow จากไฟล์สะสม + GitHub fallback + ThaiBMA (merge by date
     เหมือน SET/S50 flow — เดิมเขียนทับไฟล์ทั้งไฟล์ด้วยผลลัพธ์ ThaiBMA ตรงๆ ถ้าวันไหน ThaiBMA
     ส่งประวัติสั้นลง (เช่นเหลือแค่ YTD) ข้อมูลย้อนหลังที่สะสมไว้จะหายถาวร — ตอนนี้ merge เข้าไฟล์เดิมแทน
-    เขียนไฟล์สะสมเฉพาะตอนรันบน Actions เท่านั้น — ดู _fetch_flow_data)"""
+    เขียนไฟล์สะสมเฉพาะตอนรันบน Actions เท่านั้น — ดู _fetch_flow_data)
+
+    ThaiBMA เสิร์ฟแถว "วันนี้" ตั้งแต่ก่อนตลาดปิด (เจอจริง 2026-09-01: โผล่มาตั้งแต่ ~09:00
+    ICT) ด้วยตัวเลข NetFlow ชั่วคราวที่ยังแกว่งทั้งวัน (-4331 ตอนเช้า -> -4569 ตอนบ่าย) —
+    gate แถววันปัจจุบันไว้จนพ้น 17:45 เวลาไทยเหมือน _fetch_flow_set_official ที่ gate SET"""
     import urllib.request as _ur
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZoneInfo
     ctx = ssl_context()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -11672,33 +11747,41 @@ def _fetch_flow_bond_data():
         "Referer": "https://www.thaibma.or.th/EN/Market/NR/NRDaily.aspx",
         "X-Requested-With": "XMLHttpRequest",
     }
-    rows_by_date = {}
-    try:
-        with open(_BOND_FLOW_FILE, encoding="utf-8") as f:
-            for r0 in (json.load(f).get("rows") or []):
-                if r0.get("date"):
-                    rows_by_date[r0["date"]] = r0
-    except Exception:
-        pass
+    now_th = _dt.now(_ZoneInfo("Asia/Bangkok"))
+    today_th = now_th.strftime("%Y-%m-%d")
+    bond_final_today = (now_th.hour, now_th.minute) >= (17, 45)
 
-    # เติมเฉพาะวันที่ขาดบนเครื่อง (ไม่ทับของเดิม)
-    try:
-        for r0 in _fetch_flow_bond_github_fallback():
-            if r0.get("date") and r0["date"] not in rows_by_date:
-                rows_by_date[r0["date"]] = r0
-    except Exception as e:
-        print(f"[Bond Flow] GitHub fallback ไม่ได้ ({e})")
+    rows_by_date = _load_flow_accumulator(
+        _BOND_FLOW_FILE, _fetch_flow_bond_github_fallback, "Bond Flow")
+    if not bond_final_today:
+        # เคลียร์แถววันนี้ที่รอบก่อนหน้า (ก่อนมี gate นี้) เผลอ commit ไว้ในไฟล์สะสม/GitHub
+        # fallback — ตัวเลขยังไม่นิ่ง ยังไม่ควรโชว์เลยจนกว่าจะสิ้นวัน
+        rows_by_date.pop(today_th, None)
 
     sources = []
     try:
         req = _ur.Request("https://www.thaibma.or.th/nrdaily/GetNR/", headers=headers)
         with _ur.urlopen(req, context=ctx, timeout=20) as r:
             raw = json.loads(r.read().decode("utf-8", "ignore"))
+        bad = 0
         for item in raw:
-            date = str(item.get("Asof") or "")[:10]
-            net = item.get("NetFlow")
-            if date and net is not None:
+            try:
+                date = str(item.get("Asof") or "")[:10]
+                net = item.get("NetFlow")
+                if not date or net is None:
+                    continue
+                if date == today_th and not bond_final_today:
+                    continue   # ตัวเลข NetFlow ของวันนี้ยังไหลอยู่ — ข้ามจนพ้น 17:45
                 rows_by_date[date] = {"date": date, "foreign": round(float(net), 2)}
+            except (ValueError, TypeError):
+                # กัน 1 แถวข้อมูลผิดรูปทำให้ทั้ง loop แตกก่อนถึง sources.append ด้านล่าง —
+                # เดิมไม่มี try/except รายแถว exception เดียวหลุดออกจาก for ทำให้ทั้งรอบ
+                # ThaiBMA ถูกนับเป็น "ล่มทั้งแหล่ง" ทั้งที่ merge แถวอื่นเข้า rows_by_date
+                # ไปแล้วบางส่วน (เหมือน siamchart loop ที่กันเคสนี้อยู่แล้ว)
+                bad += 1
+                continue
+        if bad:
+            print(f"[Bond Flow] ThaiBMA ข้าม {bad} แถวข้อมูลผิดรูป")
         sources.append("thaibma.or.th")
     except Exception as e:
         print(f"[Bond Flow] ThaiBMA ไม่ได้ ({e}) — ใช้ไฟล์สะสม")
@@ -11706,15 +11789,7 @@ def _fetch_flow_bond_data():
     if not rows_by_date:
         raise RuntimeError("ไม่มีข้อมูล Thai Bond flow (ThaiBMA ไม่ได้ + ไม่มีไฟล์สะสม)")
 
-    rows = sorted(rows_by_date.values(), key=lambda r: r["date"])
-    result = {"rows": rows, "fetched_at": time.strftime("%Y-%m-%d %H:%M"),
-              "latest_date": rows[-1]["date"] if rows else None,
-              "sources": sources or ["ไฟล์สะสม (ดึงใหม่ไม่สำเร็จ)"]}
-    if sources and _IS_GITHUB_ACTIONS:
-        _atomic_write_json(_BOND_FLOW_FILE, {"rows": rows, "updated_at": result["fetched_at"]})
-    _flow_bond_cache["data"] = result
-    _flow_bond_cache["ts"] = time.time()
-    return result
+    return _finalize_flow_result(rows_by_date, sources, _BOND_FLOW_FILE, _flow_bond_cache)
 
 
 @app.route("/api/market-flow-bond")
@@ -11728,6 +11803,8 @@ def market_flow_bond():
     except Exception as e:
         import traceback
         traceback.print_exc()
+        if _flow_bond_cache.get("data"):
+            return jsonify(_flow_bond_cache["data"])
         return jsonify({"error": str(e)}), 500
 
 
@@ -11859,6 +11936,14 @@ def nvdr_daily_update():
                 s = stocks.setdefault(sym, {"nvdr_pct": 0, "nvdr_shares": 0,
                                              "paid_up_shares": 0, "daily": []})
                 _merge_daily_tail(s.setdefault("daily", []), tail, ["nvdr_pct", "nvdr_shares"])
+                # ถ้าหุ้นตัวนี้ยังไม่เคยอยู่ในไฟล์เดิม (เพิ่งสร้างจาก fallback ล้วนๆ) top-level
+                # nvdr_pct/nvdr_shares จะค้างที่ 0 จนกว่าจะโผล่ในชุด live ของวันนี้ (items ด้านล่าง)
+                # ทั้งที่ .daily มีค่าจริงอยู่แล้ว — sync top-level ให้ตรงกับ snapshot ล่าสุดของ
+                # daily ทันที กันบั๊ก nvdr_pct=0 ค้างถาวรตอนหุ้นนั้นหายจาก live batch วันนี้พอดี
+                if s["daily"]:
+                    last = s["daily"][-1]
+                    s["nvdr_pct"]    = last.get("nvdr_pct", 0)
+                    s["nvdr_shares"] = last.get("nvdr_shares", 0)
         except Exception as e:
             print(f"[nvdr] GitHub fallback ไม่ได้ ({e})")
 
@@ -11869,7 +11954,13 @@ def nvdr_daily_update():
                 sym  = item.get("symbol")
                 if not sym:
                     continue
-                pct  = item.get("percentOfPaidUpCapital") or 0
+                pct_raw = item.get("percentOfPaidUpCapital")
+                if pct_raw is None:
+                    # field หายจาก SET API วันนั้น (เจอจริง) — ห้ามเดาเป็น 0 (`or 0` เดิม
+                    # เขียนค่า 0% ปลอมถาวรลง daily history) ปล่อยให้ except ด้านล่างข้าม
+                    # หุ้นตัวนี้ไปแทน ค่าเดิมของ stocks[sym] จะไม่ถูกแตะ
+                    raise ValueError(f"missing percentOfPaidUpCapital for {sym!r}")
+                pct  = pct_raw
                 shr  = int(item.get("nvdrInvestment") or 0)
                 paid = int(item.get("paidUpCapitalShares") or 0)
                 snap = {"date": trade_date, "nvdr_pct": round(pct, 4), "nvdr_shares": shr}
@@ -12014,6 +12105,25 @@ def flow_signals_endpoint():
         return jsonify({"error": str(e)}), 500
 
 
+def _nvdr_stock_view(v):
+    """แปลง record ดิบ {nvdr_pct, nvdr_shares, paid_up_shares, daily} เป็น shape ที่ frontend
+    ใช้จริง {nvdr_pct, nvdr_shares, daily_count, last_snap, prev_snap, daily_tail} — ใช้ร่วมกัน
+    ทั้ง nvdr_summary และ nvdr_symbol กันสอง route คืน shape ต่างกัน (เดิม nvdr_symbol คืน record
+    ดิบตรงๆ ไม่มี daily_count/last_snap/prev_snap/daily_tail ที่ทุกจุดอื่นในแอปคาดหวัง)"""
+    daily = v.get("daily", [])
+    return {
+        "nvdr_pct":    v.get("nvdr_pct", 0),
+        "nvdr_shares": v.get("nvdr_shares", 0),
+        "daily_count": len(daily),
+        "last_snap":   daily[-1] if daily else None,
+        "prev_snap":   daily[-2] if len(daily) >= 2 else None,
+        # 21 snapshots ล่าสุดแบบ compact [date, pct, shares] —
+        # ให้ frontend คำนวณ delta สะสม 5/20 snapshots ได้
+        "daily_tail":  [[d.get("date"), d.get("nvdr_pct"), d.get("nvdr_shares", 0)]
+                        for d in daily[-21:]],
+    }
+
+
 @app.route("/api/nvdr")
 def nvdr_summary():
     """คืน NVDR% ทุกหุ้น (compact) + prev/last snap"""
@@ -12023,33 +12133,31 @@ def nvdr_summary():
         try:
             trade_date, items = _fetch_nvdr_outstanding()
             out = {}
+            skipped = 0
             for item in items:
-                sym = item.get("symbol")
-                if not sym: continue
-                pct = item.get("percentOfPaidUpCapital") or 0
-                out[sym] = {"nvdr_pct": round(pct, 4),
-                            "nvdr_shares": int(item.get("nvdrInvestment") or 0),
-                            "daily_count": 0, "last_snap": None, "prev_snap": None,
-                            "daily_tail": []}
+                try:
+                    sym = item.get("symbol")
+                    if not sym: continue
+                    pct_raw = item.get("percentOfPaidUpCapital")
+                    if pct_raw is None:
+                        raise ValueError(f"missing percentOfPaidUpCapital for {sym!r}")
+                    out[sym] = {"nvdr_pct": round(pct_raw, 4),
+                                "nvdr_shares": int(item.get("nvdrInvestment") or 0),
+                                "daily_count": 0, "last_snap": None, "prev_snap": None,
+                                "daily_tail": []}
+                except Exception as e:
+                    # กันหุ้นตัวเดียว field ผิดรูปทำให้ทั้ง response ว่างเปล่า (เหมือน
+                    # nvdr_daily_update) — เดิมไม่มี try/except รายตัวตรงนี้
+                    skipped += 1
+                    print(f"[nvdr] bootstrap skip {item.get('symbol')!r}: {type(e).__name__}: {e}")
+            if skipped:
+                print(f"[nvdr] bootstrap skipped {skipped} malformed item(s)")
             return jsonify({"updated_at": trade_date, "stocks": out})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
     stocks = data.get("stocks", {})
-    out = {}
-    for sym, v in stocks.items():
-        daily = v.get("daily", [])
-        out[sym] = {
-            "nvdr_pct":    v.get("nvdr_pct", 0),
-            "nvdr_shares": v.get("nvdr_shares", 0),
-            "daily_count": len(daily),
-            "last_snap":   daily[-1] if daily else None,
-            "prev_snap":   daily[-2] if len(daily) >= 2 else None,
-            # 21 snapshots ล่าสุดแบบ compact [date, pct, shares] —
-            # ให้ frontend คำนวณ delta สะสม 5/20 snapshots ได้
-            "daily_tail":  [[d.get("date"), d.get("nvdr_pct"), d.get("nvdr_shares", 0)]
-                            for d in daily[-21:]],
-        }
+    out = {sym: _nvdr_stock_view(v) for sym, v in stocks.items()}
     return jsonify({"updated_at": data.get("updated_at"), "stocks": out})
 
 
@@ -12063,7 +12171,7 @@ def nvdr_symbol(symbol):
     v = data.get("stocks", {}).get(sym)
     if not v:
         return jsonify({"error": "not found"}), 404
-    return jsonify({**v, "symbol": sym, "updated_at": data.get("updated_at")})
+    return jsonify({**_nvdr_stock_view(v), "symbol": sym, "updated_at": data.get("updated_at")})
 
 
 # ============================================================

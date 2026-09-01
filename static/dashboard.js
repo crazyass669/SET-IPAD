@@ -7872,7 +7872,12 @@ function _staleTradeDateBadge(dateStr, maxDays = 4) {
     span.textContent = ' ⚠ ไม่มีข้อมูล';
     return span;
   }
-  const ageDays = (Date.now() - new Date(dateStr).getTime()) / 86400000;
+  // dateStr เป็นวันที่ปฏิทินไทย (ICT/UTC+7) แต่ new Date(dateStr) parse เป็น UTC midnight
+  // (= 07:00 ICT ของวันนั้น) เทียบตรงกับ Date.now() (absolute UTC) ทำให้ ageDays คลาดเคลื่อน
+  // ได้ถึง 7 ชม. — ผู้ใช้โซนเวลาไทยเห็น badge "ข้อมูลค้าง" โผล่ช้ากว่าจริง ต้องเลื่อน UTC
+  // midnight กลับ 7 ชม. ให้ตรงกับ ICT midnight จริงก่อนเทียบ
+  const ictMidnight = new Date(dateStr).getTime() - 7 * 3600000;
+  const ageDays = (Date.now() - ictMidnight) / 86400000;
   if (ageDays <= maxDays) return null;
   span.textContent = ' ⚠ ข้อมูลค้าง';
   return span;
@@ -31031,20 +31036,43 @@ function exportNvdrCSV() {
   a.click(); URL.revokeObjectURL(a.href);
 }
 
+const _flowFetchInFlight = {};   // { set: Promise, s50: Promise, bond: Promise } — กันยิง fetch
+// ซ้ำตอน loadFlowPage()/loadFlowSummaryCards() เรียก market เดียวกันเกือบพร้อมกันตอนเปิดหน้า
+// (ตัวแรกยังไม่ resolve ตัวสอง cache ใน _flowDataByMarket จึงยังว่าง เห็นเป็น cache miss ทั้งคู่)
+
 async function _fetchFlowMarket(market) {
   if (_flowDataByMarket[market]) return _flowDataByMarket[market];
+  if (_flowFetchInFlight[market]) return _flowFetchInFlight[market];
   const cfg = FLOW_MARKETS[market];
-  // endpoint นี้มี fallback ดึงสดจาก siamchart/SET API/TFEX/ThaiBMA เมื่อ cache
-  // หมดอายุ (retry 3 ครั้ง x 20s ของ siamchart รวมแล้วอาจถึง ~70s) — ต้องมี
-  // timeout กันหน้าค้าง "กำลังโหลด..." ไม่มีกำหนดเมื่อแหล่งต้นทางช้า/ล่ม
-  const res = await _fetchTimeout(cfg.endpoint + '?t=' + Date.now(), 90000,
-    `หมดเวลารอข้อมูล Capital Flow (${cfg.label}) — แหล่งข้อมูลต้นทางอาจช้าหรือล่มอยู่ ลองใหม่อีกครั้ง`);
-  if (!res.ok) throw new Error(`โหลดข้อมูลไม่สำเร็จ (HTTP ${res.status})`);
-  const d = await res.json();
-  if (d.error) throw new Error(d.error);
-  if (!d.rows) throw new Error('ข้อมูลที่ได้ไม่มี rows');
-  _flowDataByMarket[market] = d;
-  return d;
+  const p = (async () => {
+    // endpoint นี้มี fallback ดึงสดจาก siamchart/SET API/TFEX/ThaiBMA เมื่อ cache
+    // หมดอายุ (retry 3 ครั้ง x 20s ของ siamchart รวมแล้วอาจถึง ~70s) — ต้องมี
+    // timeout กันหน้าค้าง "กำลังโหลด..." ไม่มีกำหนดเมื่อแหล่งต้นทางช้า/ล่ม
+    const res = await _fetchTimeout(cfg.endpoint + '?t=' + Date.now(), 90000,
+      `หมดเวลารอข้อมูล Capital Flow (${cfg.label}) — แหล่งข้อมูลต้นทางอาจช้าหรือล่มอยู่ ลองใหม่อีกครั้ง`);
+    if (!res.ok) {
+      // เดิม throw HTTP-status เฉยๆ ก่อนอ่าน body เลย ทำให้ error message ละเอียดที่ backend
+      // ส่งมาจริง (เช่น "ไม่มีข้อมูล Capital Flow จากทุกแหล่ง") ไม่เคยไปถึงผู้ใช้ — ลองอ่าน
+      // {error} จาก body ก่อน ถ้าอ่านไม่ได้ค่อย fallback เป็น HTTP status
+      let msg = `โหลดข้อมูลไม่สำเร็จ (HTTP ${res.status})`;
+      try {
+        const errBody = await res.json();
+        if (errBody && errBody.error) msg = errBody.error;
+      } catch {}
+      throw new Error(msg);
+    }
+    const d = await res.json();
+    if (d.error) throw new Error(d.error);
+    if (!d.rows) throw new Error('ข้อมูลที่ได้ไม่มี rows');
+    _flowDataByMarket[market] = d;
+    return d;
+  })();
+  _flowFetchInFlight[market] = p;
+  try {
+    return await p;
+  } finally {
+    delete _flowFetchInFlight[market];
+  }
 }
 
 async function loadFlowPage() {

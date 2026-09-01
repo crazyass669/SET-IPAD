@@ -1,0 +1,219 @@
+Capital Flow (ลำดับ 11) — 3 finding ที่ตั้งใจไม่แก้ในรอบ code review 2026-09-01
+===============================================================================
+>>> สถานะล่าสุด (2026-09-01): ข้อ 1 ✅ แก้แล้ว · ข้อ 3 ✅ แก้แล้ว · ข้อ 2 ❌ ตัดสินใจไม่แก้ถาวร
+    - ข้อ 1: /api/market-flow เป็น stale-while-revalidate แล้ว (คืน cache เก่าทันที + _kick_flow_refresh()
+      รีเฟรชใน background thread) · ลงทะเบียน _flow_fetch_state เข้า _any_job_running() แล้ว ·
+      เพิ่ม ?fresh=1 (blocking) + run_static_update.py ใช้ /api/market-flow?fresh=1 ตอน bake ·
+      Quick Update/Full Refresh เรียก _fetch_flow_data() ตรงยังบล็อกเหมือนเดิม (ถูกต้อง)
+    - ข้อ 3: สกัด _load_flow_accumulator() (โหลดไฟล์สะสม + merge GitHub fallback) และ
+      _finalize_flow_result() (sort + build result dict + atomic write เฉพาะ Actions + update cache)
+      ให้ 3 ฟังก์ชันเรียกร่วม · ส่วน "ดึงสดจริง" ยังแยกต่อฟังก์ชัน (SET 2-tier, S50/Bond แหล่งเดียว) ·
+      เทสต์ curl 3 route เทียบ response ก่อน/หลัง = rows/keys/ค่าเหมือนเป๊ะ (1223/1579/2442 แถว)
+    - ข้อ 2: **ปิดถาวร — ไม่แก้ (เลือกแนวทาง A, 2026-09-01 รอบ 2)** — ขุดสาเหตุเพิ่มแล้วสรุปว่า
+      ไม่คุ้มแก้และไม่มีปัญหาจริงต้องแก้:
+        • "ฐานข้อมูลสะสม" ที่ต้องเก็บเก่าสุด+เติมทุกวัน = ไฟล์ accumulator ที่ root
+          (market_flow_data.json / s50_flow_data.json / bond_flow_data.json) — **ไม่มีข้อเสนอ trim
+          ไหนแตะไฟล์พวกนี้เลย** merge เฉพาะวันขาด ไม่เขียนทับเก่า + single-writer + backup GitHub
+          (ครบตามที่ผู้ใช้ต้องการอยู่แล้ว) · bond ย้อนถึง 2016 อยู่ครบ
+        • ขนาดจริง: market 134KB/1223 แถว · s50 125KB/1579 · bond 106KB/2441 — โตรวม ~30KB/ปี
+          (bond ~10KB/ปี) → ไม่มีปัญหาขนาดไปอีกหลายสิบปี · "ยิ่งสะสมยิ่งช้า" จริงแต่ magnitude จิ๊บจ๊อย
+        • หลังแก้ข้อ 1 (SWR) แล้ว _fetch_flow_data() (parse+siamchart+sort) รันใน background thread —
+          request path ที่ cache valid เหลือแค่ jsonify(cached dict ~130KB) = sub-millisecond
+        • mobile ไม่เคยเรียก /api/market-flow — mobile/app.js:2293 โหลด ../data/market_flow.json ตรง ๆ
+          (ไฟล์ bake) ไม่มี fallback ไป API · การผูกกับ route เป็นทางอ้อมผ่าน run_static_update.py:203
+          (bake จาก /api/market-flow?fresh=1) — ถ้าจะ trim route จริงต้องเพิ่ม ?full=1 ให้ baker
+        • desktop (live + static) ปุ่มยาวสุด 3Y เท่านั้น (set_dashboard.html:2866-2869) — ไม่กระทบ
+        • ผู้ใช้ >3Y ตัวจริงมีตัวเดียว: ปุ่ม "ทั้งหมด" ของ mobile (flowRowsForPeriod(rows,0)) เป็นฟีเจอร์จริง
+      สิ่งที่จะประหยัดได้ = ~50KB/response ของ Flask server ที่ผู้ใช้คนเดียวเปิด cache 4 ชม. — ไม่คุ้ม
+      เพิ่ม magic number 3Y ให้ sync client/server (เสี่ยง drift ที่ boundary) · แนวทาง B (bake 2 ไฟล์
+      recent+full + mobile lazy-load ตอนกด "ทั้งหมด") เก็บไว้เผื่อวันที่ bond โตเกิน ~500KB หรือย้าย
+      mobile ไปเสิร์ฟจาก CDN ที่คิดค่า transfer — ตอนนี้ไม่ทำ
+===============================================================================
+สร้างเมื่อ: 2026-09-01 — บันทึกจากรอบ /code-review xhigh เมนู Capital Flow
+(app.py /api/market-flow* + /api/nvdr* + dashboard.js CAPITAL FLOW/NVDR RANKING)
+รอบนั้นเจอ 15 finding, แก้+ทดสอบผ่านแล้ว 12 ข้อ (ดู CODE_REVIEW_MENU_TEMPLATES.txt ลำดับ 11
+สำหรับสถานะล่าสุด) เหลือ 3 ข้อนี้ที่ตั้งใจไม่แก้ตอนนั้น เพราะเป็น efficiency/simplification
+ล้วนๆ ไม่ใช่ correctness bug (ไม่ทำให้ route 500 / ค่าที่โชว์ผิด) และแต่ละข้อมีเหตุผลเชิง
+ความเสี่ยง/ผลตอบแทนที่ควรอ่านก่อนตัดสินใจแก้ ไม่ใช่แค่ "ยังไม่มีเวลา"
+
+วิธีใช้ไฟล์นี้: ถ้าจะหยิบมาแก้ต่อ ให้ปิดลำดับ 11 ในไฟล์ CODE_REVIEW_MENU_TEMPLATES.txt เป็น ✅
+ไม่ได้จนกว่าจะแก้ครบทั้ง 3 ข้อ (หรือถ้าตัดสินใจไม่แก้ถาวรบางข้อ ให้บันทึกเหตุผลไว้แล้วเปลี่ยน
+เกณฑ์ปิดของลำดับ 11 เอง — ไฟล์ template ไม่ได้เผื่อเคส "ปิดทั้งที่มี finding ค้างโดยตั้งใจ")
+===============================================================================
+
+ผลกระทบโดยรวมถ้าจะแก้ทั้ง 3 ข้อ (คุยกับผู้ใช้เพิ่ม 2026-09-01): ทั้ง 3 ข้อแตะแค่ 3 ฟังก์ชันใน
+app.py (_fetch_flow_data/_fetch_flow_s50_data/_fetch_flow_bond_data) + route ของมันเอง —
+grep แล้วไม่มีเมนู/route อื่นในแอปเรียกใช้ 3 ฟังก์ชันนี้เลย นอกจาก 3 route Capital Flow ตรงๆ
+กับสเต็ป "Capital Flow" ใน Quick Update (_sub_step) และ Full Refresh (_run_refresh) —
+**ไม่กระทบเมนูอื่นหรือ .db ใดๆ ทั้งสิ้น** ขอบเขตจริงคือ "เมนู Capital Flow + สเต็ป Capital
+Flow ใน Quick Update/Full Refresh" เท่านั้น ทำแยกกันได้อิสระทั้ง 3 ข้อ ไม่ต้องพึ่งกัน
+===============================================================================
+
+
+─── ข้อ 1: Synchronous retry+sleep บล็อก worker thread ~70s (app.py:11369) ─────
+
+ที่อยู่: _fetch_flow_siamchart() — app.py L11369-11392
+```
+    for attempt in range(3):
+        try:
+            req = _ur.Request("https://siamchart.com/stock-summary/", headers=headers)
+            with _ur.urlopen(req, context=ctx, timeout=20) as r:
+                html = r.read().decode("utf-8", "ignore")
+            break
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(3)
+```
+เกิดอะไรขึ้น: รันอยู่ตรงๆ ใน request path ของ /api/market-flow (ผ่าน _fetch_flow_data ตอน
+cache หมดอายุ) — 3 attempt x timeout 20s + sleep(3) คั่นกลาง 2 ครั้ง = สูงสุด ~70s ที่ worker
+thread ของ waitress ถูกยึดครองทั้งก้อน ระหว่างนั้นรับ request อื่นบน thread นั้นไม่ได้เลย
+ทางแก้ปัจจุบันเป็นการ "รับมือ" ปลายทางแทนที่จะแก้ต้นตอ: frontend (_fetchFlowMarket,
+dashboard.js) มี timeout 90s รอ symptom นี้ตรงๆ (มีคอมเมนต์ในโค้ดชี้ตรงมาที่พฤติกรรมนี้)
+
+ควรแก้เพราะ: waitress มี worker thread จำกัด (default เดี่ยว/ไม่กี่ตัวสำหรับแอป local เดี่ยว
+นี้) — ถ้ามี 2 คนเปิดพร้อมกัน (หรือแท็บเดียวแต่ browser ยิง preflight/retry ซ้อน) ตอน cache
+หมดอายุพอดีกับ siamchart ล่ม/ช้า คนที่สองรอเต็ม 70s เหมือนกันโดยไม่มี indicator ว่ากำลังรอ
+คิวอยู่หรือเปล่า และ endpoint อื่นที่ใช้ worker เดียวกันก็ค้างไปด้วยถ้า thread pool เล็ก
+
+ไม่ควรแก้ทันทีเพราะ: ต้อง redesign เป็น async/background fetch จริงๆ ถึงจะได้ผล ไม่ใช่แค่ลด
+sleep/retry ลง (ลดจำนวน retry เฉยๆ แค่ลดเวลาบล็อกสูงสุด แต่ไม่ตัดปัญหาที่ต้นตอ) ตัวเลือกที่
+ถูกต้องกว่า (เช่น เปลี่ยนเป็น fetch ใน background thread แล้ว poll ผลจาก endpoint เดิม
+เหมือน pattern ที่แอปนี้ใช้กับ job อื่น เช่น Full Refresh/_state) เป็นการเปลี่ยน control flow
+ของ route ทั้งเส้น เสี่ยง regression กับ cache/TTL logic ที่พันกันอยู่แล้ว (_flow_cache ts/data)
+ควรทำแยกเป็นงานของตัวเองพร้อมเทสต์ concurrent requests จริง ไม่ใช่แก้ผ่านๆ ในรอบ code-review
+เดียว
+
+แนะนำ: ถ้าจะแก้ ให้ทำเป็นงานแยก scope ชัดเจน (เช่น "ทำให้ Capital Flow fetch เป็น background
+job") ไม่ใช่ patch เล็กๆ ในไฟล์นี้ — ประเมิน priority ต่ำ เพราะแอปนี้เป็น local-only เดี่ยวคน
+เดียวเปิดเป็นหลัก โอกาสชนจริงต่ำ
+
+แผนถ้าจะแก้ (เพิ่ม 2026-09-01): ทำตาม pattern ที่แอปมีอยู่แล้ว เหมือน _dr_cache/
+_kick_dr_rebuild ของหน้า DR — route คืน cache เดิม (แม้หมดอายุ) ให้ผู้ใช้ทันที + ยิง background
+thread ไปรีเฟรชคู่ขนาน แทนที่จะบล็อก request รอ 70s ส่วน Quick Update/Full Refresh ยังต้อง
+"รอจริง" เหมือนเดิม (เป็น background job อยู่แล้ว ไม่ใช่ user-facing route) ต้องมี flag แยก
+โหมด blocking/non-blocking ให้ 2 กลุ่มผู้เรียกนี้
+กระทบ: เฉพาะ route /api/market-flow (ตลาด SET เท่านั้น — S50/TFEX กับ Bond/ThaiBMA ดึงครั้ง
+เดียวจบ ไม่มีปัญหานี้) + ต้องลงทะเบียน state ใหม่ (เช่น _flow_fetch_state) เข้า
+_any_job_running() (app.py ~L7512) ไม่งั้นกด "↺ Restart" ตอนกำลัง background-fetch อยู่จะตัด
+ทิ้งกลางคันแบบเงียบๆ เหมือนเคสที่ _any_job_running() ถูกสร้างมาป้องกันอยู่แล้ว — เป็นจุดเชื่อม
+เดียวที่แตะระบบอื่นนอกเหนือจาก Capital Flow เอง
+
+
+─── ข้อ 2: ไม่มี server-side windowing ของ accumulator (app.py:11460, 11619, 11692) ──
+
+ที่อยู่: _fetch_flow_data() / _fetch_flow_s50_data() / _fetch_flow_bond_data() — คืน
+`rows` ทั้งไฟล์สะสมเสมอ ไม่ตัดตามช่วงเวลา (ThaiBMA ไฟล์ bond_flow_data.json มีประวัติยาว
+ที่สุดย้อนไปถึงปี 2016 ตามคอมเมนต์ L11648 เดิม)
+Client-side มีตัด cutoff อยู่แล้วที่ renderFlowPage() — dashboard.js L31183-31198:
+```
+  const cutoff = new Date();
+  cutoff.setDate(1);
+  cutoff.setMonth(cutoff.getMonth() - _flowPeriod);
+  ...
+  const rows = d.rows.filter(r => r.date >= cutStr)...
+```
+ปุ่มตัวเลือกช่วงเวลายาวสุดคือ 3Y (set_dashboard.html L2869, id="flow-p-36" → _flowPeriod=36
+เดือน) — เท่ากับ backend คำนวณ/serialize ข้อมูลเกิน 3Y ทุกครั้งทั้งที่ไม่มีทางถูกแสดงเลย
+
+เกิดอะไรขึ้น: ทุกครั้งที่ cache หมดอายุ (ทุก 4 ชม. ต่อ 1 ผู้ใช้) เซิร์ฟเวอร์อ่าน+parse JSON
+ทั้งไฟล์ + sort ทั้งก้อน + ส่งกลับทั้งก้อนผ่าน network แม้ frontend จะทิ้งข้อมูลเก่ากว่า 3Y
+ทันทีที่ได้รับ ขนาดไฟล์โตขึ้นเรื่อยๆ แบบไม่มีเพดาน (bond ยาวสุด ~2016-ปัจจุบัน = ผ่านมาแล้ว
+เกิน 3 เท่าของ cap การแสดงผล และจะโตต่อไปเรื่อยๆ ทุกปี)
+
+ควรแก้เพราะ: เป็น waste ที่ชัดเจนและจะแย่ลงเรื่อยๆ ตามเวลา (ยิ่งสะสมนาน ยิ่งช้า) แก้ไม่ยาก
+ในหลักการ — grep แล้วไม่มีจุดอื่นในโค้ด (mobile/, run_static_update.py ฯลฯ) ที่ต้องพึ่งประวัติ
+เกิน 3Y ของ 3 ไฟล์นี้ผ่าน route นี้โดยเฉพาะ (ต้องเช็คซ้ำก่อนแก้จริงว่าไม่มีจุดอื่นแอบใช้)
+
+ไม่ควรแก้ทันทีเพราะ: การใส่ windowing ที่ปลอดภัยต้องตัดสินใจเรื่อง cache-key ก่อน — ตอนนี้
+_flow_cache/_flow_s50_cache/_flow_bond_cache เก็บผลลัพธ์เดียวคงที่ (ไม่ผูกกับ query param
+ใดๆ) ถ้า windowing ทำผ่าน query param (เช่น ?months=36) ต้องแก้ cache ให้แยกตาม param หรือ
+ไม่งั้นแคช TTL 4 ชม. จะเสิร์ฟช่วงเวลาผิดให้คนที่ขอ param อื่นในหน้าต่างเวลาเดียวกัน — ถ้าทำ
+แบบไม่ผูก param (server ตัด cap ตายตัวที่ 3Y เสมอ) frontend ก็ยังต้อง sync ค่า cap ให้ตรงกับ
+ปุ่ม 3Y เอง (magic number ซ้ำ 2 ที่ ฝั่ง client/server) และอนาคตถ้าเพิ่มปุ่มช่วงเวลายาวกว่า 3Y
+(เช่น "ทั้งหมด" สำหรับดู trend ยาวๆ) จะต้องแก้ backend cap ตามด้วย — ไม่ใช่แค่เปลี่ยน 1 บรรทัด
+เดียวอย่างที่ดูตอนแรก
+
+แนะนำ: ทำพร้อมกับตัดสินใจ cache-key design ให้ชัดก่อน ไม่ใช่ patch เดี่ยวๆ — priority ปานกลาง
+(ยังไม่กระทบ UX วันนี้ แต่จะแย่ลงเรื่อยๆ ตามขนาดไฟล์สะสม ควรหยิบมาทำก่อนไฟล์ bond
+โตเกิน ~2-3 เท่าปัจจุบัน)
+
+แผนถ้าจะแก้ (เพิ่ม 2026-09-01 — ทางที่ปลอดภัยกว่าที่กังวลไว้ข้างบน): ไม่ต้องแตะ
+_fetch_flow_data()/_flow_cache เลย ไม่ต้องตัดสินใจเรื่อง cache-key ใดๆ ทั้งสิ้น — full
+history ที่ cache ไว้ในหน่วยความจำปกติอยู่แล้วไม่ใช่ตัวที่แพง (parse ครั้งเดียวทุก 4 ชม.)
+ตัวที่แพงจริงคือ jsonify คืนทั้งก้อนทุก request ทั้งที่ frontend ใช้แค่ 3Y ล่าสุด (ปุ่มยาวสุด
+คือ 3Y, id="flow-p-36") — แค่ตัด `rows` เหลือ 3Y ล่าสุด **ตอนสร้าง response ใน route เท่านั้น**
+(1 บรรทัดก่อน jsonify ต่อ route) ไฟล์สะสมบนดิสก์ (market_flow_data.json ฯลฯ) ไม่แตะเลย ไม่ลด
+ประวัติจริงเด็ดขาด — ตรงกับกฎห้ามทำลายข้อมูลสะสมของโปรเจกต์นี้ (ดู CLAUDE.md)
+กระทบ: เฉพาะ 3 route (response body เล็กลง) frontend ไม่ต้องแก้อะไรเลยเพราะอยู่ในขอบเขต 3Y
+เดิมอยู่แล้ว (setFlowPeriod สลับช่วงเวลาโดยไม่ fetch ใหม่ ใช้ข้อมูลที่มีอยู่แล้วกรองฝั่ง client
+— ข้อมูล ≤3Y ที่ตัดมาจาก server ยังพอสำหรับทุกปุ่มช่วงเวลาที่มี) ความเสี่ยงต่ำมาก เทสต์ง่ายด้วย
+curl เทียบจำนวน rows ก่อน/หลัง
+
+─── อัปเดต 2026-09-01 รอบ 2: ปิดถาวร — เลือกแนวทาง A (ไม่แก้) ───
+ขุดสาเหตุเพิ่มแล้ว (รายละเอียดเต็มอยู่ในบล็อก "สถานะล่าสุด" หัวไฟล์ ข้อ 2) สรุป:
+  • ฐานข้อมูลสะสมจริง = accumulator ที่ root (*_flow_data.json) — เก็บเก่าสุด+เติมทุกวัน+backup
+    ครบตามที่ต้องการอยู่แล้ว ไม่มีข้อเสนอ trim ไหนแตะ (write อยู่ใน _finalize_flow_result ก่อน
+    จุดที่จะ slice) — bond ย้อนถึง 2016 ปลอดภัย
+  • waste จริง ~50KB/response ของ Flask ที่ผู้ใช้คนเดียวเปิด cache 4 ชม. · หลังข้อ 1 (SWR)
+    request path เหลือแค่ jsonify(cached) = sub-ms · ไฟล์โต ~10KB/ปี (bond) → ไม่เร่ง
+  • mobile อ่าน ../data/market_flow.json (ไฟล์ bake) ไม่เรียก route · ปุ่ม "ทั้งหมด" เป็นผู้ใช้
+    >3Y ตัวเดียว · desktop ยาวสุด 3Y — ถ้า trim route ต้องเพิ่ม ?full=1 ให้ baker ไม่ใช่ 1 บรรทัด
+  • ไม่คุ้มเพิ่ม magic number 3Y sync client/server · แนวทาง B (bake recent+full 2 ไฟล์ +
+    mobile lazy-load) เก็บไว้เผื่อ bond > ~500KB หรือย้าย mobile ไป CDN คิดค่า transfer
+=> เกณฑ์ปิดลำดับ 11 ใน CODE_REVIEW_MENU_TEMPLATES.txt: ข้อ 2 นับเป็น "ปิดโดยตั้งใจ ไม่แก้ถาวร"
+
+
+─── ข้อ 3: โค้ดซ้ำ 3 pipeline (SET/S50/Bond merge skeleton) ควรรวมเป็น helper ─────
+
+ที่อยู่: _fetch_flow_data() (app.py L11460) / _fetch_flow_s50_data() (L11619) /
+_fetch_flow_bond_data() (L11692) — ทั้ง 3 ฟังก์ชันทำ pattern เดียวกันซ้ำ: โหลดไฟล์สะสม →
+merge GitHub fallback (เติมเฉพาะวันขาด) → ดึงสด → ถ้าไม่มีข้อมูลเลย raise → sort → build
+result dict {rows, fetched_at, latest_date, sources} → เขียนไฟล์ atomic เฉพาะตอนรันบน
+GitHub Actions → อัพเดท cache ในหน่วยความจำ
+หลักฐานว่าเคย drift มาแล้วจริง: docstring ของ _fetch_flow_bond_data (L11693-11696) เล่าว่า
+เดิมเขียนทับไฟล์ทั้งไฟล์ตรงๆ ด้วยผล ThaiBMA (บั๊กที่ทำให้ประวัติเก่าหายถาวรถ้า ThaiBMA ส่ง
+ประวัติสั้นลงวันไหน) แล้วแก้แค่ในฟังก์ชันนี้ฟังก์ชันเดียว — ไม่มีอะไรการันตีว่า SET/S50 ไม่มี
+ความเสี่ยงคล้ายกันซ่อนอยู่ (แม้ตอนนี้เช็คแล้วไม่มี เพราะ SET/S50 ไม่เคยเขียนทับทั้งไฟล์แบบนั้น
+ตั้งแต่แรก) และรอบ code-review นี้เองก็เจอ 2 บั๊กที่เป็น "แก้จุดเดียวแต่ไม่แก้อีก 2 จุด" ได้แก่
+per-item try/except (ThaiBMA loop ไม่มี, siamchart loop มี — แก้ ThaiBMA ให้ตรงแล้วในรอบนี้)
+กับ date truthiness guard (siamchart loop ไม่มี, ไฟล์สะสม/GitHub fallback loop มี — แก้ตรงนี้
+แล้วในรอบนี้เช่นกัน) — ทั้งคู่คือรูปแบบเดียวกับที่ finding นี้เตือนไว้
+
+ควรแก้เพราะ: ลดความเสี่ยง "แก้บั๊กจุดเดียวลืมอีก 2 จุด" ในอนาคตอย่างเป็นระบบ ไม่ต้องพึ่ง
+code review รอบถัดไปมาจับซ้ำ — ทำเป็น helper กลางเช่น
+`_merge_flow_rows(file_path, cache, key_fields, github_fallback_fn, live_fetch_fn,
+overwrite_on_live=True/False)` แล้วให้ 3 ฟังก์ชันเรียกผ่าน helper เดียว
+
+ไม่ควรแก้ทันทีเพราะ: 3 ฟังก์ชันไม่ได้เหมือนกัน 100% — มีจุดต่างที่ helper ต้องรองรับให้ครบ
+ไม่งั้นจะกลายเป็นบั๊กใหม่จากการ over-abstract แทน:
+  • SET flow กรอง field เฉพาะ (date/fund/foreign/retail/set) ตอนโหลดจากไฟล์+GitHub fallback
+    (L11463-11466, L11475-11478) — S50/Bond เก็บทั้ง dict ดิบไม่กรอง
+  • SET flow คำนวณ `chg` (ผลต่างดัชนี SET) เพิ่มหลัง sort (L11499-11502) — S50/Bond ไม่มี field
+    นี้เลย
+  • SET flow มี live source 2 ชั้น (siamchart แล้วเติมด้วย SET-official แบบ fill-only + เพิ่งแก้
+    ให้ skip ข้อมูลตลาดยังไม่ปิดในรอบนี้) — S50 มีแหล่งเดียว (TFEX) — Bond มีแหล่งเดียว
+    (ThaiBMA) — "live_fetch_fn" ของ SET จริงๆ ต้องเป็น 2 ฟังก์ชันมี priority ต่างกัน ไม่ใช่
+    signature เดียวแบบ S50/Bond
+  • error message ตอนไม่มีข้อมูลเลย (RuntimeError) ใช้ข้อความเฉพาะของแต่ละแหล่งต่างกัน
+    (L11491, L11633, L11729 ปัจจุบัน) — ต้อง parameterize ข้อความด้วย
+ทำ helper ที่ยืดหยุ่นพอสำหรับความต่างทั้งหมดนี้โดยไม่กลายเป็นโค้ดอ่านยากกว่าเดิม (parameter
+เยอะ, conditional ซ้อน) ต้องออกแบบให้ดีก่อนลงมือ ไม่ใช่ copy-paste แล้ว extract ตรงๆ — เสี่ยง
+regression กับพฤติกรรมที่ทดสอบผ่านแล้วในรอบนี้ (SET-official gate เวลาปิดตลาด, atomic write
+เฉพาะ Actions ฯลฯ) ถ้ารีบรวบ
+
+แนะนำ: priority ต่ำสุดใน 3 ข้อนี้ — เป็นการลงทุนป้องกันบั๊กอนาคต ไม่ใช่บั๊กที่มีอยู่จริงตอนนี้
+ควรทำตอนมีเวลาเต็ม session สำหรับออกแบบ helper ให้ดีจริง ไม่ใช่ patch ท้าย session
+
+แผนถ้าจะแก้ (เพิ่ม 2026-09-01): แยก 2 ชั้น ไม่รวบทั้งฟังก์ชันเป็น helper เดียว — สกัดเฉพาะ
+ส่วนที่เหมือนกันจริง 100% เป็น 2 helper เล็ก: (ก) โหลดไฟล์สะสม + merge GitHub fallback
+(ต้นทางของ pipeline) และ (ข) sort + build result dict {rows, fetched_at, latest_date,
+sources} + atomic write (เฉพาะ Actions) + update cache (ปลายทางของ pipeline) ส่วนกลาง (ดึงสด
+จริง) **ปล่อยแยกต่อฟังก์ชันเหมือนเดิม ไม่รวบ** เพราะ SET มี 2-tier priority + gate เวลาปิด
+ตลาดที่เพิ่งแก้/เทสต์ผ่านไปหมาดๆ (ดูข้อ "SET-official fill-only guard" ในรอบแก้บั๊กที่ผ่านมา)
+ส่วน S50/Bond มีแหล่งเดียว — บังคับให้เข้า interface เดียวกันตรงนี้จะเสี่ยง regression กับของ
+ที่เพิ่งทดสอบผ่าน มากกว่าประโยชน์ที่ได้จากการรวบ
+กระทบ: internal refactor ล้วนๆ ใน app.py — shape ที่ route คืนออกไปเหมือนเดิมทุกตัวอักษร ไม่
+กระทบ frontend เลย เทสต์ซ้ำด้วย curl 3 route เดิมพอ (เทียบ response ก่อน/หลัง refactor ให้
+เหมือนกันเป๊ะ)
+===============================================================================

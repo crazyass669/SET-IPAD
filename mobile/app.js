@@ -533,6 +533,14 @@ const STK_VIEWS = [
   ['emaBreadth', 'ความกว้าง EMA'], ['sectorRank', 'จัดอันดับกลุ่ม'],
 ];
 const KIND_FILTERS = [['all', 'ทั้งหมด'], ['SET', 'SET'], ['mai', 'mai'], ['DR', 'DR'], ['ETF', 'ETF']];
+// DR แยกตามตลาดต้นทาง (raw.region ของ dr_data.json: US/HK/JP/VN/CN/SG/EU/TW) —
+// 5 ประเทศหลักโชว์เดี่ยว ที่เหลือ (CN/SG/TW/…) รวมใน "อื่นๆ"
+const DR_REGIONS = [
+  ['all', 'ทั้งหมด'], ['US', '🇺🇸 สหรัฐ'], ['HK', '🇭🇰 ฮ่องกง'], ['JP', '🇯🇵 ญี่ปุ่น'],
+  ['VN', '🇻🇳 เวียดนาม'], ['EU', '🇪🇺 ยุโรป'], ['other', '🌏 อื่นๆ'],
+];
+const DR_REGION_KNOWN = new Set(['US', 'HK', 'JP', 'VN', 'EU']);
+let drRegion = 'all';
 const SORT_OPTS = [['cap', 'มูลค่าตลาด'], ['pct', '% วันนี้'], ['ret_1m', '% 1 เดือน'], ['rs', 'RS'], ['az', 'ก–ฮ']];
 const SORTF = {
   cap: (a, b) => (b.mkt_cap || 0) - (a.mkt_cap || 0),
@@ -552,7 +560,12 @@ const VIEW_NOTE = {
 
 function matchesKind(r) {
   if (listFilter === 'all') return true;
-  if (listFilter === 'DR') return r.kind === 'dr';
+  if (listFilter === 'DR') {
+    if (r.kind !== 'dr') return false;
+    if (drRegion === 'all') return true;
+    const rg = (r.raw && r.raw.region) || '';
+    return drRegion === 'other' ? !DR_REGION_KNOWN.has(rg) : rg === drRegion;
+  }
   if (listFilter === 'ETF') return r.kind === 'etf';
   return r.tag === listFilter; // SET | mai
 }
@@ -624,6 +637,7 @@ function stockListView(main, view) {
   main.innerHTML = `
     <div class="search"><svg class="mag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="stkSearch" placeholder="ค้นหาชื่อย่อ / ชื่อบริษัท"></div>
     ${isAll ? `<div class="seg" id="stkKind">${KIND_FILTERS.map(([k, t]) => `<button data-k="${k}" class="${listFilter === k ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}
+    ${isAll && listFilter === 'DR' ? `<div class="sortbar" id="drRegion">${DR_REGIONS.map(([k, t]) => `<button class="sortchip ${drRegion === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('')}</div>` : ''}
     ${view === 'momentum' ? `<div class="seg" id="momTf">${[['all4', '1D·1W·1M·3M'], ['3tf', '1W·1M·3M'], ['2tf', '1M·3M']].map(([k, t]) => `<button data-k="${k}" class="${_momTf === k ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}
     <div class="sortbar" id="stkSort">${sortOpts.map(([k, t]) => `<button class="sortchip ${listSort === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('')}</div>
     ${!isAll ? `<div class="note" id="viewNote"></div>` : ''}
@@ -660,8 +674,18 @@ function stockListView(main, view) {
   const kindEl = $('#stkKind');
   if (kindEl) kindEl.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
+    const wasDr = listFilter === 'DR';
     listFilter = b.dataset.k;
+    // เข้า/ออก DR: ต้อง re-render เพื่อโชว์/ซ่อนแถบเลือกประเทศ
+    if (wasDr !== (listFilter === 'DR')) return paintStkView();
     kindEl.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    paint();
+  });
+  const drEl = $('#drRegion');
+  if (drEl) drEl.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    drRegion = b.dataset.k;
+    drEl.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
     paint();
   });
   const tfEl = $('#momTf');

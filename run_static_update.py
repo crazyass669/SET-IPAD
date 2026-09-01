@@ -198,7 +198,9 @@ SNAPSHOTS = [
     ("/api/short-sales",                   "short_sales.json",           False),
     ("/api/market-stats",                  "market_stats.json",          False),
     ("/api/market-stats-meta",             "market_stats_meta.json",     False),
-    ("/api/market-flow",                   "market_flow.json",           False),
+    # fresh=1: endpoint ปกติเป็น stale-while-revalidate (ตอบ cache เก่า + refresh เบื้องหลัง)
+    # ซึ่งใช้ bake static ไม่ได้ — ต้องบังคับดึงสดแบบ blocking (เหมือน /api/dr?fresh=1)
+    ("/api/market-flow?fresh=1",            "market_flow.json",           False),
     ("/api/market-flow-s50",               "market_flow_s50.json",       False),
     ("/api/market-flow-bond",              "market_flow_bond.json",      False),
     ("/api/market-internals",              "market_internals.json",      False),
