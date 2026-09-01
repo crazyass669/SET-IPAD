@@ -958,18 +958,22 @@ def get_npdata(symbol):
         return jsonify({"error": str(e)}), 500
 
 
-def _dr_light(result, refreshing=False):
-    """ตัด dates/closes (ประวัติราคาเต็มทุกวัน — ~98% ของ payload 33MB) ออกจาก response
-    /api/dr — frontend ใช้แค่ close100 (sparkline) + ohlc30 (แท่งเทียนย่อ) ส่วนกราฟ
-    full history ดึงแยกรายตัวจาก /api/dr-history ซึ่งอ่านจาก _dr_cache ฝั่ง server
+def _strip_history_light(result, drop_keys, refreshing=False):
+    """ตัด field ประวัติราคาเต็ม (dates/closes/... — ~98% ของ payload) ออกจาก response
+    ของ /api/dr และ /api/etf — frontend ใช้แค่ close100 (sparkline) + ohlc30 (แท่งเทียนย่อ)
+    กราฟ full history ดึงแยกรายตัวจาก /api/{dr,etf}-history ซึ่งอ่านจาก cache ฝั่ง server
     (cache ในหน่วยความจำ/ไฟล์ยังเก็บเต็มเหมือนเดิม — quick-update ก็ใช้ dates ต่อได้)"""
-    out = {"stocks": [{k: v for k, v in s.items() if k not in ("dates", "closes", "_full_vols")}
+    out = {"stocks": [{k: v for k, v in s.items() if k not in drop_keys}
                       for s in result.get("stocks", [])],
            "ts": result.get("ts"),
            "warnings": result.get("warnings") or []}
     if refreshing:
         out["refreshing"] = True   # ให้ UI ติดป้าย 'กำลังอัพเดทเบื้องหลัง' แล้ว poll ซ้ำ
     return out
+
+
+def _dr_light(result, refreshing=False):
+    return _strip_history_light(result, ("dates", "closes", "_full_vols"), refreshing)
 
 
 _dr_rebuild_lock = threading.Lock()
@@ -1332,28 +1336,31 @@ def _dr_do_rebuild():
 
 def _etf_light(result, refreshing=False):
     """ตัด dates/closes เต็มออกเหมือน _dr_light — ใช้ /api/etf-history แยกตอนเปิดกราฟเต็ม"""
-    out = {"stocks": [{k: v for k, v in s.items() if k not in ("dates", "closes")}
-                      for s in result.get("stocks", [])],
-           "ts": result.get("ts"),
-           "warnings": result.get("warnings") or []}
-    if refreshing:
-        out["refreshing"] = True
-    return out
+    return _strip_history_light(result, ("dates", "closes"), refreshing)
 
 
 _etf_rebuild_lock = threading.Lock()
 
 
 def _kick_etf_rebuild():
-    if _etf_rebuild_lock.locked():
+    """rebuild ETF cache ใน background — acquire(blocking=False) กัน TOCTOU เหมือน
+    _kick_dr_rebuild (เดิมเช็ค .locked() เฉยๆ 2 request ที่มาพร้อมกันหลัง cache หมดอายุ
+    อาจเห็น locked()==False ทั้งคู่ แล้วสปอน thread รีบิลด์ซ้อนกัน 2 ชุด yfinance ซ้ำเปล่าๆ
+    ตัวที่ 2 ยังไปบล็อกรอ lock ใน _rebuild_etf_cache กิน worker thread ทิ้งด้วย)"""
+    if not _etf_rebuild_lock.acquire(blocking=False):
         return
 
     def _bg():
         try:
-            _rebuild_etf_cache()
+            # เช็คซ้ำเผื่อมี rebuild อื่น (blocking path จาก request คนละตัว) เพิ่งเสร็จ
+            if not (_etf_cache.get("result") and _etf_cache.get("ts") is not None
+                    and time.time() - _etf_cache["ts"] < 120):
+                _etf_do_rebuild()
             print("[ETF] background refresh เสร็จ")
         except Exception as e:
             print(f"[ETF] background refresh ล้มเหลว: {e}")
+        finally:
+            _etf_rebuild_lock.release()
 
     threading.Thread(target=_bg, daemon=True).start()
 
@@ -2399,7 +2406,11 @@ def us_index_metrics_route():
     set_data_fetcher.process_stock() + core.metrics.rank_rs() — เหมือนหุ้นไทยทุกประการ
     ต่างแค่ field เสริม in_sp500/in_dow/in_ndx สำหรับกรองตามดัชนี"""
     from sources import us_index_metrics
-    return jsonify(us_index_metrics.load_local(BASE_DIR))
+    try:
+        return jsonify(us_index_metrics.load_local(BASE_DIR))
+    except Exception as e:
+        print(f"[USIndexMetrics] {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/us-sector-ranks")
@@ -2632,7 +2643,11 @@ def jp_index_metrics_route():
     set_data_fetcher.process_stock() + core.metrics.rank_rs() — เหมือนหุ้นไทย/US/HK ทุกประการ
     ต่างแค่ field เสริม in_nikkei225 สำหรับกรองตามดัชนี"""
     from sources import jp_index_metrics
-    return jsonify(jp_index_metrics.load_local(BASE_DIR))
+    try:
+        return jsonify(jp_index_metrics.load_local(BASE_DIR))
+    except Exception as e:
+        print(f"[JPIndexMetrics] {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/jp-sector-ranks")

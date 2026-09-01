@@ -1941,6 +1941,27 @@ function _rotAvg(pool, field) {
   return v.length ? v.reduce((a, s) => a + s[field], 0) / v.length : 0;
 }
 
+// suffix บรรทัด info ของ RRG (ค่าเฉลี่ย benchmark ตามแกนของโหมดที่เลือก) — เดิมก็อป
+// ternary เดียวกันเป๊ะ 3 renderer (DR / US-HK-JP / ETF) เสี่ยงแก้ format ที่เดียวลืมอีกสอง
+function _rotInfoSuffix(isShort, { a1m, a1w, a3m }) {
+  const sgn = v => (v >= 0 ? '+' : '') + v.toFixed(1);
+  return isShort
+    ? ` (1M ${sgn(a1m)}% · 1W ${sgn(a1w)}%)`
+    : ` (3M ${sgn(a3m)}% · 1M ${sgn(a1m)}%)`;
+}
+
+// cohort ว่าง (ทุกตัวใน sector/ภูมิภาค/ดัชนีที่เลือกไม่มี return ครบกรอบเวลา) — เดิมแต่ละ
+// renderer แค่ return เงียบๆ ทำให้ chart+legend+info ของตลาด/ฟิลเตอร์ก่อนหน้าค้างจอ
+function _rotRenderEmpty(canvasId, legendId, infoId, msg) {
+  const cv = document.getElementById(canvasId);
+  if (cv) { const cx = cv.getContext('2d'); if (cx) cx.clearRect(0, 0, cv.width, cv.height); }
+  delete _rotLastDraw[canvasId];   // กัน resize handler วาดชุดเก่าซ้ำ
+  const lg = document.getElementById(legendId);
+  if (lg) lg.innerHTML = '';
+  const inf = document.getElementById(infoId);
+  if (inf) inf.textContent = msg || 'ไม่มีข้อมูลในกลุ่มที่เลือก';
+}
+
 // คำนวณ relative return ทุก timeframe (หุ้น − benchmark) จาก getter ของแต่ละ field — ใช้
 // ร่วมกันทั้ง DR/US-HK-JP/ETF rotation เดิมแต่ละหน้าคัดลอกสูตรเดียวกันแยกกัน 3 ที่ (เคยพลาด
 // มาแล้วรอบแก้ bug 6M/1Y average + null-vs-0 exclusion ที่ต้องไล่แก้ให้ครบทุกที่) คืน
@@ -2022,6 +2043,7 @@ async function loadDRRotation() {
 
 function renderDRRotation() {
   if (!_drData || !_drData.length) return;
+  _drData = _drData.filter(s => s && typeof s === 'object');   // กัน entry null จาก JSON เพี้ยน
   // benchmark = ค่าเฉลี่ยเท่าน้ำหนักของ DR ทั้งกลุ่ม (เฉพาะตัวที่มีค่าแกนของโหมด
   // ที่เลือกครบ · ตัด ETF) — เดิมบังคับ ret_3m เสมอ ทำให้โหมดเร็ว (1M/1W) ตัด DR
   // ออกใหม่ที่มีข้อมูลแค่ 1-2 เดือนทิ้งทั้งที่แกนโหมดนั้นไม่ได้ใช้ 3M เลย
@@ -2029,7 +2051,11 @@ function renderDRRotation() {
   const valid = _drData.filter(s => !s.etf && (isShort
     ? (s.ret_1m != null && s.ret_1w != null)
     : (s.ret_3m != null && s.ret_1m != null)));
-  if (!valid.length) return;
+  if (!valid.length) {
+    _rotRenderEmpty('dr-rotation-map', 'dr-rot-legend', 'drrot-info',
+      'ไม่มี DR ที่มีผลตอบแทนครบตามกรอบเวลาที่เลือก');
+    return;
+  }
   const region = document.getElementById('drrot-region')?.value || 'all';
   const shown = region === 'all' ? valid : valid.filter(s => s.region === region);
   // ปุ่ม "เทียบภูมิภาค" ไม่มีผลตอนยังเลือก "ทุกภูมิภาค" — disable พร้อม hint กันเข้าใจผิด
@@ -2043,7 +2069,6 @@ function renderDRRotation() {
   const bmRegion = _drRotBenchmark === 'region' && region !== 'all';
   const bmSet = bmRegion ? shown : valid;
   const R = _rotRelative(bmSet);
-  const { a3m, a1m, a1w, a6m, a1y } = R;
   const items = shown.map(s => ({
     name: s.sym, region: s.region, ind: s.ind,
     ...R.apply(s),
@@ -2052,8 +2077,7 @@ function renderDRRotation() {
   const info = document.getElementById('drrot-info');
   const bmLabel = bmRegion ? `ค่าเฉลี่ยภูมิภาค ${region}` : 'ค่าเฉลี่ย DR ทั้งกลุ่ม';
   if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmLabel} (${bmSet.length} ตัว)` +
-    (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
-             : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
+    _rotInfoSuffix(isShort, R);
   drawRotationScatter(items, { canvasId: 'dr-rotation-map', legendId: 'dr-rot-legend', tf: _drRotTf, onOpen: openDRChartModal, relative: true, relativeLabel: bmLabel });
 }
 
@@ -2111,7 +2135,14 @@ function drawRotationScatter(sectors, opts = {}) {
     : (s.ret_3m != null && s.ret_1m != null);
   const _rotExcluded = sectors.filter(s => !_hasAxes(s)).map(s => s.name);
   sectors = sectors.filter(_hasAxes);
-  if (sectors.length === 0) return;
+  if (sectors.length === 0) {
+    // ไม่มีจุดให้ plot — canvas ถูกล้างจากการ set canvas.width ข้างบนแล้ว เหลือแค่ legend
+    // เก่าที่ยังค้าง (เดิม return เฉยๆ ทิ้ง chip ของชุดก่อนหน้าไว้ข้างแผนที่ว่าง)
+    const le = document.getElementById(legendId);
+    if (le) le.innerHTML = '';
+    delete _rotLastDraw[canvasId];
+    return;
+  }
   const getX = s => isShort ? (s.ret_1m || 0) : (s.ret_3m || 0);
   const getY = s => isShort ? (s.ret_1w || 0) : (s.ret_1m || 0);
   const xs = sectors.map(getX);
@@ -17583,8 +17614,9 @@ function _rotRebuildSectorFilter(mkt) {
   const c = _ROT_CFG[mkt];
   const data = c.getData();
   if (!data || !data.stocks) return;
+  const stocks = data.stocks.filter(s => s && typeof s === 'object');   // กัน entry null จาก JSON เพี้ยน
   const flag = c.idxFlag ? c.idxFlag()[c.getIndex()] : null;
-  const inIdx = flag ? data.stocks.filter(s => s[flag]) : data.stocks;
+  const inIdx = flag ? stocks.filter(s => s[flag]) : stocks;
   const sectors = ['ALL', ...[...new Set(inIdx.map(s => s.sector || 'Unknown'))].sort()];
   const sel = document.getElementById(`${c.prefix}-sector`);
   if (!sel) return;
@@ -17597,13 +17629,18 @@ function _rotRender(mkt) {
   const c = _ROT_CFG[mkt];
   const data = c.getData();
   if (!data || !data.stocks) return;
+  const stocks = data.stocks.filter(s => s && typeof s === 'object');   // กัน entry null จาก JSON เพี้ยน
   const flag = c.idxFlag ? c.idxFlag()[c.getIndex()] : null;
-  const universe = flag ? data.stocks.filter(s => s[flag]) : data.stocks;
+  const universe = flag ? stocks.filter(s => s[flag]) : stocks;
   const isShort = c.getTf() === 'short';
   const valid = universe.filter(s => isShort
     ? (s.ret_1m != null && s.ret_1w != null)
     : (s.ret_3m != null && s.ret_1m != null));
-  if (!valid.length) return;
+  if (!valid.length) {
+    _rotRenderEmpty(c.canvasId, c.legendId, `${c.prefix}-info`,
+      'ไม่มีหุ้นที่มีผลตอบแทนครบตามกรอบเวลาที่เลือก');
+    return;
+  }
   const sector = document.getElementById(`${c.prefix}-sector`)?.value || 'ALL';
   const shown = sector === 'ALL' ? valid : valid.filter(s => (s.sector || 'Unknown') === sector);
   // ปุ่ม "เทียบ Sector" ไม่มีผลตอนยังเลือก "ทุก Sector" (bmSet ถอยไปใช้ทั้งดัชนีเงียบๆ)
@@ -17618,7 +17655,6 @@ function _rotRender(mkt) {
   const bmSector = c.getBenchmark() === 'sector' && sector !== 'ALL';
   const bmSet = bmSector ? shown : valid;
   const R = _rotRelative(bmSet);
-  const { a3m, a1m, a1w, a6m, a1y } = R;
   const items = shown.map(s => ({
     name: s.symbol, sector: s.sector,
     ...R.apply(s),
@@ -17631,8 +17667,7 @@ function _rotRender(mkt) {
   // label เลยกลายเป็น 'เฉลี่ย sector "ALL"' ทั้งที่ยังไม่ได้เทียบ sector เลย
   const bmLabel = bmSector ? `เฉลี่ย sector "${sector}"` : 'เฉลี่ยทั้งดัชนี';
   if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmLabel} (${bmSet.length} ตัว)` +
-    (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
-             : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
+    _rotInfoSuffix(isShort, R);
   drawRotationScatter(items, { canvasId: c.canvasId, legendId: c.legendId, tf: c.getTf(), onOpen: c.onOpen, relative: true, relativeLabel: bmLabel });
 }
 
@@ -26388,6 +26423,7 @@ async function loadEtfRotation() {
 
 function renderEtfRotation() {
   if (!_etfData || !_etfData.length) return;
+  _etfData = _etfData.filter(s => s && typeof s === 'object');   // กัน entry null จาก JSON เพี้ยน
   const isShort = _etfRotTf === 'short';
   const useTdex = _etfRotBenchmark === 'tdex';
   const tdex = useTdex ? _etfData.find(s => s.symbol === 'TDEX') : null;
@@ -26396,11 +26432,14 @@ function renderEtfRotation() {
   const valid = _etfData.filter(s => !s.is_lna && (!useTdex || s.symbol !== 'TDEX') && (isShort
     ? (s.ret_1m != null && s.ret_1w != null)
     : (s.ret_3m != null && s.ret_1m != null)));
-  if (!valid.length) return;
+  if (!valid.length) {
+    _rotRenderEmpty('etf-rotation-map', 'etf-rot-legend', 'etfrot-info',
+      'ไม่มี ETF ที่มีผลตอบแทนครบตามกรอบเวลาที่เลือก');
+    return;
+  }
   // ใช้ TDEX เป็นเส้นฐานแทนค่าเฉลี่ยกลุ่ม ถ้าเลือกโหมด 'tdex' — fallback ไปค่าเฉลี่ยกลุ่ม
   // ถ้าหา TDEX ไม่เจอหรือ TDEX เองไม่มีค่าตอนนั้น (กันหน้าจอว่างเปล่าไปเลย)
   const R = _rotRelativeFromBm(f => useTdex && tdex && tdex[f] != null ? tdex[f] : _rotAvg(valid, f));
-  const { a3m, a1m, a1w, a6m, a1y } = R;
   const items = valid.map(s => {
     const lowLiq = s.value_avg20 != null && s.value_avg20 < ETF_LOW_LIQ_BAHT;
     const catLbl = ETF_CATEGORY_LABEL[s.category] || s.category || '';
@@ -26415,8 +26454,7 @@ function renderEtfRotation() {
   const bmName = useTdex && tdex ? 'TDEX (SET50)' : 'ค่าเฉลี่ยกลุ่ม';
   const tsLabel = _etfTs ? _etfTs.replace('T', ' ').slice(0, 16) : '—';
   if (info) info.textContent = `${valid.length} ETF (ไม่รวม L&I) · benchmark = ${bmName} · ข้อมูล ณ ${tsLabel}` +
-    (isShort ? ` (1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}% · 1W ${a1w >= 0 ? '+' : ''}${a1w.toFixed(1)}%)`
-             : ` (3M ${a3m >= 0 ? '+' : ''}${a3m.toFixed(1)}% · 1M ${a1m >= 0 ? '+' : ''}${a1m.toFixed(1)}%)`);
+    _rotInfoSuffix(isShort, R);
   drawRotationScatter(items, {
     canvasId: 'etf-rotation-map', legendId: 'etf-rot-legend', tf: _etfRotTf, onOpen: openETFChartModal, relative: true,
     relativeLabel: bmName, rsLabel: 'RS', showCount: false,
