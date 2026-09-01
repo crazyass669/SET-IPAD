@@ -3926,8 +3926,11 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
         # ผ่านแล้ว (get_coverage เช็คแค่ "แถวมีอยู่" ไม่เช็คเนื้อหา) ทั้งที่ไม่มีข้อมูลจริง และ
         # skip_up_to_date จะไม่ retry ให้อีกเลย — เหมือน guard ที่ sync_set_cashflow_series/
         # sync_set_balance_series/sync_set_health มีอยู่แล้ว (`if fresh: upsert(...)`) แค่ยังไม่เคยมีใน
-        # bulk sync path นี้ (code review 2026-08-26, ขยายครอบ set_health ด้วยหลัง code review ต่อ)
-        _empty = ((src in ("set_cashflow", "set_balance") and not payload.get("quarters"))
+        # bulk sync path นี้ (code review 2026-08-26, ขยายครอบ set_health ด้วยหลัง code review ต่อ) ·
+        # set_qpl ใช้โครง {"quarters": {...}} เดียวกับ set_cashflow/set_balance (fetch_set_qpl_series
+        # ก็ silent-fail คืน {} เหมือนกัน — ดู comment ใน fetch_set_qpl_series) แต่ตกหล่นจาก guard นี้
+        # มาตลอด เพิ่มเข้าด้วย (code review 2026-09-02)
+        _empty = ((src in ("set_qpl", "set_cashflow", "set_balance") and not payload.get("quarters"))
                   or (src == "set_health" and not payload.get("themes"))
                   or (src == "set_factsheet" and not any(payload.get(k) for k in _FACTSHEET_KEYS)))
         if not _empty:

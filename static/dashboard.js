@@ -13831,6 +13831,7 @@ function _ownershipCardHtml(d) {
     <tr>
       <td style="text-align:center;color:var(--text2)">${m.seq}</td>
       <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap${m.is_nvdr ? ';color:#e8a33d;font-weight:600' : ''}" title="${(m.name||'').replace(/"/g,'&quot;')}${m.is_nvdr ? ' (บัญชี NVDR — ตัวแทนถือหุ้นแทนต่างชาติ ไม่ใช่เจ้าของจริง)' : ''}">${(m.name||'').replace(/</g,'&lt;')}${m.is_nvdr ? ' 🌐' : ''}</td>
+      <td style="text-align:right;color:var(--text2)">${m.shares != null ? m.shares.toLocaleString() : '—'}</td>
       <td style="text-align:right;font-weight:600">${m.pct != null ? m.pct.toFixed(2)+'%' : '—'}</td>
       <td style="width:120px"><div style="height:6px;background:var(--card2);border-radius:3px;overflow:hidden"><div style="height:100%;width:${Math.min((m.pct||0)*4,100)}%;background:var(--blue)"></div></div></td>
     </tr>`).join('');
@@ -13846,7 +13847,7 @@ function _ownershipCardHtml(d) {
         `<strong>โควตาต่างชาติ (Foreign Room)</strong><br>กฎหมายไทยจำกัดสัดส่วนที่ต่างชาติถือได้ (ปกติ 49% บางกลุ่มต่ำกว่านั้น) — ค่านี้คือสัดส่วนที่ใช้ไปแล้วเทียบเพดาน ${d.foreign_limit ?? '—'}%<hr><span style="color:var(--text2)">ใกล้เต็ม (≥95%) = ต่างชาติต้องซื้อผ่าน NVDR แทน มักดัน NVDR premium ขึ้น</span>`, usedClr)}
     </div>
     ${rows ? `<div style="overflow-x:auto"><table class="tbl" style="min-width:400px;font-size:12px">
-      <thead><tr><th>#</th><th style="text-align:left">ผู้ถือหุ้น</th><th style="text-align:right">%</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th style="text-align:left">ผู้ถือหุ้น</th><th style="text-align:right">จำนวนหุ้น</th><th style="text-align:right">%</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>` : ''}
     <div style="font-size:10.5px;color:var(--text2);margin-top:8px">ผู้ถือหุ้น ณ วันปิดสมุด ${d.book_close_date || '—'} · ห้องต่างชาติ ณ ${d.foreign_as_of || '—'} — ไม่ใช่รายวัน อัพเดทเมื่อมีรอบ sync ถัดไป</div>`;
 }
@@ -24738,6 +24739,17 @@ const DH_SOURCE_MAP = {
   ipo_not_in_universe:  { text: 'รัน ⟳ Full Refresh (ปุ่มแถบเมนูบนสุด) เพื่อดึงราคา+งบของหุ้น IPO ใหม่เข้าระบบ — Quick Update ดึงแค่รายชื่อ ไม่ backfill ราคา · ดูราคาจอง vs ปัจจุบันที่ปฏิทิน → 🆕 IPO', fn: 'startRefresh', fnLabel: '⟳ Full Refresh', gotoPage: 'calendar', gotoLabel: 'ดูปฏิทิน IPO' },
   q_cash_cycle_crosscheck: { text: 'ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างในหน้านี้ (sync SET Financial Health + งบ Yahoo ให้ครบก่อนเทียบ)', fn: 'startFinancialsUpdateAll', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด' },
   set_daily_valuation:  { text: 'สะสมอัตโนมัติทุก ⚡ Quick Update (staleness gate — วันที่ sync ไปแล้วข้ามเอง) · ใช้เป็นเส้นตรวจสอบในหน้า Valuation Band · กดปุ่มเพื่อบังคับ sync รอบเต็มตอนนี้', fn: 'startSetDailyValSync', fnLabel: '📈 สะสม PE/PBV รายวันตอนนี้', gotoPage: 'band', gotoLabel: 'ไปหน้า Valuation Band' },
+  // เพิ่ม 7 key ที่ตกหล่นจาก map นี้มาตลอด (code review 2026-09-02) — เดิมแถวพวกนี้โชว์แค่ "—"
+  // ไม่มีปุ่ม/คำอธิบายเลย ทั้งที่คอมเมนต์ด้านบนบอกไว้ชัดว่า "เพิ่ม key ใหม่ที่นี่ทุกครั้งที่เพิ่ม
+  // item ใหม่ฝั่ง backend" — 3 ตัวแรกคู่กับ _dh_index_quality_item (app.py), ตัวถัดมาคู่กับ
+  // us_index_coverage_by_index item, 3 ตัวสุดท้ายคู่กับ _dh_gap_check_item (Capital Flow)
+  q_us_index:           { text: '⚡ Quick Update (รายวัน) หรือหน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม US → "ดึงเฉพาะที่ขาด/เก่า" (sync membership+metrics ใหม่)', fn: 'startUSIndexSync', fnLabel: '🔄 Sync ดัชนี US', gotoPage: 'financials' },
+  q_hk_index:           { text: '⚡ Quick Update (รายวัน) หรือหน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม HK → "ดึงเฉพาะที่ขาด/เก่า" (sync membership+metrics ใหม่)', fn: 'startHKIndexSync', fnLabel: '🔄 Sync ดัชนี HK', gotoPage: 'financials' },
+  q_jp_index:           { text: '⚡ Quick Update (รายวัน) หรือหน้า งบการเงิน → แท็บต่างประเทศ (DR) → ปุ่ม JP → "ดึงเฉพาะที่ขาด/เก่า" (sync membership+metrics ใหม่)', fn: 'startJPIndexSync', fnLabel: '🔄 Sync ดัชนี JP', gotoPage: 'financials' },
+  us_index_coverage_by_index: { text: 'ปุ่ม "🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างในหน้านี้ (sync งบดัชนีหลัก US/HK/JP ผ่าน Yahoo ให้ครบตามสมาชิกแต่ละดัชนี)', fn: 'startFinancialsUpdateAll', fnLabel: '🔄 อัพเดทงบการเงินทั้งหมด' },
+  q_market_flow_gap:    { text: 'เปิดหน้า Flow จะดึงสดให้อัตโนมัติ (cache 4 ชม.) หรือรอ GitHub Actions (3 รอบ/วัน — เครื่องนี้ต้อง git pull)', gotoPage: 'flow', gotoLabel: 'ไปหน้า Flow' },
+  q_s50_flow_gap:       { text: 'เปิดหน้า Flow จะดึงสดให้อัตโนมัติ (cache 4 ชม.) หรือรอ GitHub Actions (3 รอบ/วัน — เครื่องนี้ต้อง git pull)', gotoPage: 'flow', gotoLabel: 'ไปหน้า Flow' },
+  q_bond_flow_gap:      { text: 'เปิดหน้า Flow จะดึงสดให้อัตโนมัติ (cache 4 ชม.) หรือรอ GitHub Actions (3 รอบ/วัน — เครื่องนี้ต้อง git pull)', gotoPage: 'flow', gotoLabel: 'ไปหน้า Flow' },
 };
 
 // พาไปหน้าต้นทาง — หา nav-btn ที่ onclick อ้างถึง pageId นั้นแล้วสั่ง showPage ให้
@@ -24747,9 +24759,30 @@ function _dhGoto(pageId) {
   showPage(pageId, btn);
 }
 
-function _dhRunAction(fnName) {
+let _dhActBtnSeq = 0;
+function _dhRunAction(fnName, btn) {
   const fn = window[fnName];
-  if (typeof fn === 'function') fn();
+  if (typeof fn !== 'function') return;
+  // เดิมเรียก fn() เฉยๆ ไม่ส่ง btnId เลย — ฟังก์ชันปลายทางหลายตัว (startUSIndexSync/
+  // startHedgeRefresh/startFinancialsSync/startDRDescriptionSync ฯลฯ) รับ btnId เป็น optional
+  // param ที่ default ไปที่ id ปุ่มบนหน้า "บ้าน" ของมันเอง (เช่น us-idx-sync-btn บนหน้างบการเงิน)
+  // ถ้าไม่ได้สลับไปหน้านั้นจริง element ปลายทางจะซ่อนอยู่ มองไม่เห็นการเปลี่ยนแปลงเลย — ส่ง id
+  // ของปุ่มที่กดจริงในตาราง Data Health เข้าไปแทนเสมอ (code review 2026-09-02)
+  if (btn && !btn.id) btn.id = `dh-act-btn-${++_dhActBtnSeq}`;
+  // ให้ feedback ทันทีที่จุดที่กดเสมอ ไม่ว่าฟังก์ชันปลายทางจะรองรับ btnId ด้านบนหรือมี progress
+  // overlay กลางของตัวเองหรือไม่ — เคสที่แย่สุด (เช่น refreshMarketStats ของหน้า Valuation ไม่รับ
+  // btnId เลยและไม่มี overlay กลาง เขียนสถานะไปที่ element บนหน้า Valuation ที่ซ่อนอยู่ล้วนๆ) กด
+  // แล้วไม่มีอะไรเกิดขึ้นให้เห็นบนหน้า Data Health เลย — ล้างเองใน 2 วิถ้าไม่มีใครมาเขียนทับก่อน
+  // (ฟังก์ชันที่รับ btnId จริงจะเขียนทับข้อความนี้เกือบทันทีตอน _startJob เริ่มงานอยู่แล้ว)
+  if (btn) {
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '...';
+    setTimeout(() => {
+      if (btn.textContent === '...') { btn.disabled = false; btn.textContent = orig; }
+    }, 2000);
+  }
+  fn(btn ? btn.id : undefined);
 }
 
 // เช็ค drift ดัชนี US/HK/JP ตรงๆ ในหน้า Data Health (ไม่ต้องเด้งไปหน้างบการเงิน) — ยิง endpoint
@@ -24778,7 +24811,7 @@ async function _dhCheckIndexDrift(market, btn, boxId) {
     if (d.error) throw new Error(d.error);
     if (box) _renderIndexDiff(box.id, cfg.keys, cfg.labels, d);
   } catch (e) {
-    if (box) box.innerHTML = `<span style="color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</span>`;
+    if (box) box.innerHTML = `<span style="color:var(--red)">⚠ เช็คไม่สำเร็จ: ${_escHtml(e.message)}</span>`;
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -24804,13 +24837,15 @@ function _dhSourceCell(key) {
   if (src.driftMarket) {
     btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhCheckIndexDrift('${src.driftMarket}', this)">${src.fnLabel || 'เช็ค'}</button>`);
   } else if (src.fn) {
-    const runner = _DH_LOCAL_SCROLL_TARGET[src.fn] ? '_dhRunLocalCheck' : '_dhRunAction';
-    btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="${runner}('${src.fn}')">${src.fnLabel || 'อัพเดท'}</button>`);
+    // _dhRunLocalCheck ไม่รับ btn (จัดการ element จริงของมันเองผ่าน scroll แล้ว) ส่วน
+    // _dhRunAction ต้องรับ `this` เพื่อรู้ว่าปุ่มไหนถูกกดจริง (ดูคอมเมนต์ใน _dhRunAction)
+    const call = _DH_LOCAL_SCROLL_TARGET[src.fn] ? `_dhRunLocalCheck('${src.fn}')` : `_dhRunAction('${src.fn}', this)`;
+    btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="${call}">${src.fnLabel || 'อัพเดท'}</button>`);
   }
   if (src.gotoPage) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhGoto('${src.gotoPage}')">${src.gotoLabel || 'ไปหน้านั้น'}</button>`);
   // fn2/gotoPage2: ใช้กับ key ที่มีมากกว่า 1 หน้า/ปุ่มเขียนลงไฟล์เดียวกัน (เช่น financials.db
   // ที่ทั้งหน้า "งบการเงิน" และปุ่มงบ DR ในหน้า DR/DRx ต่างก็เขียนทับ)
-  if (src.fn2) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhRunAction('${src.fn2}')">${src.fnLabel2 || 'อัพเดท'}</button>`);
+  if (src.fn2) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhRunAction('${src.fn2}', this)">${src.fnLabel2 || 'อัพเดท'}</button>`);
   if (src.gotoPage2) btns.push(`<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="_dhGoto('${src.gotoPage2}')">${src.gotoLabel2 || 'ไปหน้านั้น'}</button>`);
   const btnRow = btns.length ? `<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">${btns.join('')}</div>` : '';
   const resultBox = src.driftMarket ? `<div id="dh-drift-result-${src.driftMarket.toLowerCase()}" style="display:none;margin-top:6px;font-size:11px"></div>` : '';
@@ -24827,15 +24862,24 @@ function _dhAgeText(item) {
   return `${(h / 24).toFixed(1)} วันก่อน`;
 }
 
-async function loadDataHealth() {
+async function loadDataHealth(fresh) {
   if (IS_STATIC) return;
   const wrap = document.getElementById('dh-table-wrap');
   const summaryEl = document.getElementById('dh-summary');
   const checkedEl = document.getElementById('dh-checked-at');
   wrap.innerHTML = '<div class="empty" style="padding:16px">กำลังเช็ค...</div>';
   loadFinUpdateAllStatus();
+  // ยิงพร้อมกับ fetch หลักด้านล่างเลย (ไม่รอ) — ไม่มีตัวไหนอ่านผลจาก /api/data-health เอง
+  // (code review 2026-09-02: เดิมเรียกหลัง try{...} จบแล้ว ทำให้ 4 คำขอนี้เรียงกันซีเรียล)
+  loadBackupFilesStatus();
+  loadLastRuns();
+  loadUpdateHistory();
   try {
-    const r = await fetch('/api/data-health');
+    // ปุ่ม "🔄 เช็คใหม่" ส่ง fresh=true เพื่อข้าม cache 5 นาทีฝั่ง backend จริง (เดิม route มีคอมเมนต์
+    // ว่าปุ่มนี้ใช้ ?fresh=1 ได้ แต่ฝั่งนี้ไม่เคยส่งจริง กดเช็คใหม่/รีเฟรชหลัง sync เสร็จเลยยังเห็น
+    // ค่าเดิมค้างได้ถึง 5 นาที — code review 2026-09-02) ใช้ _fetchTimeout ตาม pattern endpoint อื่น
+    // ที่มี live fallback (fetch_ipo_recently ยิงสดถ้า cache ว่าง)
+    const r = await _fetchTimeout(`/api/data-health${fresh ? '?fresh=1' : ''}`, 30000);
     const d = await r.json();
     _dhApplyBadge(d);
     checkedEl.textContent = `เช็คล่าสุด: ${d.checked_at}`;
@@ -24865,11 +24909,8 @@ async function loadDataHealth() {
         </table></div>
       </div>`).join('');
   } catch (e) {
-    wrap.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</div>`;
+    wrap.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${_escHtml(e.message)}</div>`;
   }
-  loadBackupFilesStatus();
-  loadLastRuns();
-  loadUpdateHistory();
 }
 
 // ตาราง "วงจรเงินสด SET vs Yahoo" เต็ม (ไม่ตัด 12 ตัวแรกเหมือนตารางใน note ของ item
@@ -24877,15 +24918,21 @@ async function loadDataHealth() {
 // /api/data-health/cash-cycle-crosscheck-full แยกต่างหาก ไม่ผูกกับ /api/data-health หลัก
 // ที่ถูกเรียกบ่อย (badge เช็คทุกครั้งเปิดแอป) กันยัดตารางเต็ม ~470+ แถวเข้าไปทุกครั้ง
 let _dhCcFullRows = null;
+// request-seq guard กัน response เก่ามาทับผลใหม่กว่า (code review 2026-09-02) — เดิมไม่มี ถ้าเปิด/
+// ปิด/เปิดซ้ำ modal เร็วๆ (หรือ fetch แรกช้าผิดปกติ) response เก่าที่มาทีหลัง response ใหม่จะทับ
+// _dhCcFullRows + ตารางด้วยข้อมูลเก่า เหมือน pattern _insReqSeq ของหน้า Insider
+let _dhCcReqSeq = 0;
 async function _dhShowCashCycleFull() {
   const body = document.getElementById('dh-cc-body');
   if (!body) return;
+  const mySeq = ++_dhCcReqSeq;
   body.innerHTML = '<div class="empty" style="padding:16px">กำลังโหลด...</div>';
   document.getElementById('dh-cc-modal').classList.add('open');
   document.body.style.overflow = 'hidden';
   try {
     const r = await _fetchTimeout('/api/data-health/cash-cycle-crosscheck-full', 20000, 'หมดเวลาโหลด (เกิน 20 วิ)');
     const d = await r.json();
+    if (mySeq !== _dhCcReqSeq) return;   // มีคำขอใหม่กว่าแซงไปแล้ว — ทิ้ง response นี้
     if (d.error) { body.innerHTML = `<div class="empty" style="color:var(--red)">⚠ ${_escHtml(d.error)}</div>`; return; }
     _dhCcFullRows = d.rows || [];
     body.innerHTML = `
@@ -24896,6 +24943,7 @@ async function _dhShowCashCycleFull() {
       <div id="dh-cc-table-wrap" style="max-height:60vh;overflow-y:auto"></div>`;
     _dhCcRenderRows(_dhCcFullRows);
   } catch (e) {
+    if (mySeq !== _dhCcReqSeq) return;
     body.innerHTML = `<div class="empty" style="color:var(--red)">⚠ โหลดไม่สำเร็จ: ${_escHtml(e.message)}</div>`;
   }
 }
@@ -24965,9 +25013,9 @@ function _dhLastRunItemHtml(label, v) {
   if (!v) return `<div><b>${label}</b><br><span style="color:var(--text2)">ยังไม่เคยกด</span></div>`;
   const at = new Date(v.at.replace(' ', 'T'));
   const hAgo = (Date.now() - at.getTime()) / 3600000;
-  const ageTxt = hAgo < 1 ? `${Math.round(hAgo * 60)} นาทีก่อน`
-    : hAgo < 48 ? `${hAgo.toFixed(1)} ชม.ก่อน`
-    : `${(hAgo / 24).toFixed(1)} วันก่อน`;
+  // ใช้ _dhAgeText กลางแทนสำเนากฎ format เดิม (h<1 นาที / h<48 ชม. / อื่นๆ วัน) — เดิม copy-paste
+  // ไว้ 2 ที่ ถ้าเกณฑ์เปลี่ยนจุดหนึ่งจะลืมแก้อีกจุด (code review 2026-09-02)
+  const ageTxt = _dhAgeText({ age_hours: hAgo });
   const color = !v.ok ? 'var(--red)' : hAgo >= 48 ? 'var(--yellow)' : 'var(--green)';
   const statusIcon = v.ok ? '🟢' : '🔴';
   const msgColor = !v.ok ? 'var(--red)' : 'var(--text2)';
@@ -25022,7 +25070,7 @@ async function loadUpdateHistory() {
         </tr>`).join('')}</tbody>
       </table></div>`;
   } catch (e) {
-    wrap.innerHTML = `<div class="empty" style="padding:12px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</div>`;
+    wrap.innerHTML = `<div class="empty" style="padding:12px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${_escHtml(e.message)}</div>`;
   }
 }
 
@@ -25059,7 +25107,7 @@ async function loadBackupFilesStatus() {
         }).join('')}</tbody>
       </table></div>`;
   } catch (e) {
-    wrap.innerHTML = `<div class="empty" style="padding:12px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</div>`;
+    wrap.innerHTML = `<div class="empty" style="padding:12px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${_escHtml(e.message)}</div>`;
   }
 }
 
@@ -25083,7 +25131,10 @@ function _dhApplyBadge(d) {
 async function checkDataHealthBadge() {
   if (IS_STATIC) return;
   try {
-    const r = await fetch('/api/data-health');
+    // /api/data-health มี live fallback ได้ (เช่น fetch_ipo_recently ยิงสดถ้า cache ว่าง) — ต้องมี
+    // timeout กัน UI ค้าง (pattern เดียวกับ endpoint network อื่นในไฟล์นี้ ดู pingDataSources,
+    // memory frontend-fetch-timeout-pattern, code review 2026-09-02)
+    const r = await _fetchTimeout('/api/data-health', 15000);
     const d = await r.json();
     _dhApplyBadge(d);
   } catch (e) { /* เงียบ — ไม่ใช่ฟีเจอร์หลัก */ }
@@ -25145,7 +25196,7 @@ async function pingDataSources() {
         </table></div>
       </div>`;
   } catch (e) {
-    box.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ ปิงไม่สำเร็จ: ${e.message}</div>`;
+    box.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ ปิงไม่สำเร็จ: ${_escHtml(e.message)}</div>`;
   } finally {
     btn.disabled = false;
     btn.textContent = '📡 ปิงแหล่งข้อมูลภายนอก';
@@ -25175,7 +25226,7 @@ async function checkSetUniverseUpdates() {
         <div style="font-size:12px;font-weight:600;color:var(--green);margin-bottom:6px">🆕 มีบน SET.or.th แต่ยังไม่มีในเครื่อง (${d.new.length} ตัว)</div>
         <div style="overflow-x:auto"><table class="tbl" style="min-width:400px">
           <thead><tr><th>Symbol</th><th>ชื่อ</th><th>ตลาด</th></tr></thead>
-          <tbody>${d.new.map(x => `<tr><td><strong>${x.symbol}</strong></td><td style="font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.name}</td><td style="font-size:11px;color:var(--text2)">${x.market}</td></tr>`).join('')}</tbody>
+          <tbody>${d.new.map(x => `<tr><td><strong>${_escHtml(x.symbol)}</strong></td><td style="font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escHtml(x.name)}</td><td style="font-size:11px;color:var(--text2)">${_escHtml(x.market)}</td></tr>`).join('')}</tbody>
         </table></div>
       </div>` : '';
     // removed: {symbol, renamed_to} — renamed_to มาจาก oldSymbols ของ SET (ดู
@@ -25202,15 +25253,15 @@ async function checkSetUniverseUpdates() {
         <div style="overflow-x:auto"><table class="tbl" style="min-width:360px">
           <thead><tr><th>เดิม</th><th></th><th>ชื่อใหม่</th><th>คำสั่ง</th></tr></thead>
           <tbody>${renamedRows.map(x => `<tr>
-            <td><strong>${x.symbol}</strong></td><td style="color:var(--text2)">→</td><td><strong>${x.renamed_to}</strong></td>
-            <td><button class="filter-btn" style="font-size:10.5px;padding:3px 8px" onclick="_dhCopyRenameCmd('${x.symbol}','${x.renamed_to}',this)" title="คัดลอกคำสั่ง rename_symbol.py ไปวางใน terminal — ย้ายราคา/งบ/ปันผลไปชื่อใหม่ให้ต่อเนื่อง">📋 คัดลอกคำสั่ง</button></td>
+            <td><strong>${_escHtml(x.symbol)}</strong></td><td style="color:var(--text2)">→</td><td><strong>${_escHtml(x.renamed_to)}</strong></td>
+            <td><button class="filter-btn" style="font-size:10.5px;padding:3px 8px" onclick="_dhCopyRenameCmd('${_escJsAttr(x.symbol)}','${_escJsAttr(x.renamed_to)}',this)" title="คัดลอกคำสั่ง rename_symbol.py ไปวางใน terminal — ย้ายราคา/งบ/ปันผลไปชื่อใหม่ให้ต่อเนื่อง">📋 คัดลอกคำสั่ง</button></td>
           </tr>`).join('')}</tbody>
         </table></div>
       </div>` : '';
     const remHtml = delistedRows.length ? `
       <div>
         <div style="font-size:12px;font-weight:600;color:var(--red);margin-bottom:6px">🗑 น่าจะเพิกถอนจริง — ไม่พบชื่อใหม่ (${delistedRows.length} ตัว)</div>
-        <div style="font-size:11.5px">${delistedRows.map(x => x.symbol).join(', ')}</div>
+        <div style="font-size:11.5px">${delistedRows.map(x => _escHtml(x.symbol)).join(', ')}</div>
         <div style="font-size:10.5px;color:var(--text2);margin-top:4px">ไม่เจอใน oldSymbols ของ SET — อาจเพิกถอน/ควบรวมหายไปเลย (เช่น BPP→BANPU) ตรวจก่อนสรุปว่าเป็นเพิกถอนจริง (เช่นเช็คข่าว SET.or.th)<br>
           ถ้ายืนยันแล้ว: <code>python mark_delisted.py &lt;symbol&gt; "เหตุผล"</code> — มี .bat ให้ดับเบิลคลิกที่ root โปรเจกต์</div>
       </div>` : '';
@@ -25219,7 +25270,7 @@ async function checkSetUniverseUpdates() {
   } catch (e) {
     note.textContent = '';
     box.style.display = 'block';
-    box.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</div>`;
+    box.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${_escHtml(e.message)}</div>`;
   } finally {
     btn.disabled = false;
   }
@@ -25260,7 +25311,7 @@ async function checkMirrorUpdates() {
       box.innerHTML = ['US', 'HK'].filter(ex => d.new_counts[ex]).map(ex => `
         <div style="margin-bottom:6px">
           <div style="font-size:12px;font-weight:600;color:var(--green)">🆕 ${ex} ตัวใหม่ (${d.new_counts[ex]} ตัว)</div>
-          <div style="font-size:11.5px;color:var(--text2)">${(d.new_samples[ex] || []).join(', ')}${d.new_counts[ex] > (d.new_samples[ex] || []).length ? ', …' : ''}</div>
+          <div style="font-size:11.5px;color:var(--text2)">${(d.new_samples[ex] || []).map(_escHtml).join(', ')}${d.new_counts[ex] > (d.new_samples[ex] || []).length ? ', …' : ''}</div>
         </div>`).join('');
       syncBtn.style.display = 'inline-block';
     } else {
@@ -25269,7 +25320,7 @@ async function checkMirrorUpdates() {
   } catch (e) {
     note.textContent = '';
     box.style.display = 'block';
-    box.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${e.message}</div>`;
+    box.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ เช็คไม่สำเร็จ: ${_escHtml(e.message)}</div>`;
   } finally {
     btn.disabled = false;
   }
@@ -25282,7 +25333,7 @@ function startMirrorSyncNew() {
     document.getElementById('dh-mirror-diff-note').textContent = '';
     document.getElementById('dh-mirror-diff-result').style.display = 'none';
     document.getElementById('dh-mirror-sync-btn').style.display = 'none';
-    loadDataHealth();
+    loadDataHealth(true);   // ข้าม cache 5 นาที — sync เพิ่งเสร็จ ต้องเห็นผลใหม่ทันที ไม่ใช่ค่าค้าง
   });
 }
 

@@ -1,0 +1,222 @@
+Data Health (ลำดับ 14B) — finding ที่ตั้งใจไม่แก้ในรอบ code review 2026-09-02
+===============================================================================
+สร้างเมื่อ: 2026-09-02 — บันทึกจากรอบ /code-review xhigh เมนู Data Health
+(app.py /api/data-health* + /api/set-universe-check-updates + /api/mirror-check-updates
++ dashboard.js DATA HEALTH divider)
+รอบนั้นเจอ 19 finding (14 correctness + 5 reuse/efficiency), แก้+ทดสอบผ่านแล้ว 17 ข้อ correctness
+(ดู memory data-health-code-review-2026-09-02.md และ CODE_REVIEW_MENU_TEMPLATES.txt ลำดับ 14B
+สำหรับสถานะล่าสุด) เหลือ 2 กลุ่มนี้ที่ตั้งใจไม่แก้ตอนนั้น:
+  - กลุ่ม A (4 ข้อ): XSS แบบเดียวกับที่แก้ไปแล้วใน checkSetUniverseUpdates/checkMirrorUpdates
+    แต่เป็น correctness/security จริง ไม่ใช่แค่ efficiency — ความเสี่ยงต่ำกว่าที่แก้แล้วเพราะ
+    ไม่ใช่ path ที่กดบ่อย แต่ยังนับเป็นบั๊กค้าง
+  - กลุ่ม B (5 ข้อ): efficiency/simplification ล้วนๆ ไม่ใช่ correctness bug (ไม่ทำให้ route 500 /
+    ค่าที่โชว์ผิด)
+
+วิธีใช้ไฟล์นี้: ถ้าจะหยิบมาแก้ต่อ ให้ปิดลำดับ 14B ในไฟล์ CODE_REVIEW_MENU_TEMPLATES.txt เป็น ✅
+ได้เลยแม้จะยังไม่แก้ 9 ข้อนี้ (บั๊ก correctness ที่กระทบค่าที่โชว์/route พังทุกจุดแก้ครบแล้ว —
+9 ข้อนี้เป็น hardening/cleanup เพิ่มเติม) แต่ถ้าจะให้ครบ 100% (0 finding เหลือจริง) ต้องแก้ทั้ง
+9 ข้อนี้ด้วย — บันทึกเหตุผลไว้แล้วผู้ใช้ตัดสินใจเองว่าจะปิดแบบไหน (ไฟล์ template ไม่ได้เผื่อเคส
+"ปิดทั้งที่มี finding ค้างโดยตั้งใจ")
+===============================================================================
+
+
+===============================================================================
+กลุ่ม A: XSS จาก external string ที่ยังไม่ escape (correctness/security, 4 จุด)
+===============================================================================
+บริบทร่วม: `it.note` (ค่าที่ /api/data-health ส่งกลับต่อ item) ถูก backend สร้างเป็น HTML string
+โดยตรง แล้วฝั่ง frontend (loadDataHealth, dashboard.js) ใส่ผ่าน `${it.note || '—'}` ลง innerHTML
+"แบบไม่ escape ทั้งก้อน" เพราะ note หลายจุดตั้งใจมี HTML tag (`<table>`/`<a onclick>`/`<div>`) ปน
+อยู่ในสตริงเดียวกันโดยเจตนา (ใช้แสดงตารางย่อย/ลิงก์ในหน้า Data Health) — ต่างจาก
+checkSetUniverseUpdates/checkMirrorUpdates (แก้ไปแล้วในรอบนี้) ที่ตัวมันเองสร้าง HTML ทั้งก้อน
+ฝั่ง frontend ล้วนๆ เลย escape ตัวแปรภายนอกทั้งหมดในฟังก์ชันเดียวได้ตรงไปตรงมา — 4 จุดนี้ต้อง
+escape เฉพาะ "ตัวแปรที่มาจากภายนอก" ในสตริงที่ปนกับ HTML literal ของเราเอง (ผสมกันในบรรทัด
+เดียวกัน) ซึ่งเสี่ยง escape ผิดจุด/ลืมบางจุดมากกว่า ต้องทำทีละจุดอย่างระมัดระวังแทนที่จะ escape
+รวดเดียวทั้งฟังก์ชัน
+
+ความเสี่ยงจริง: ทั้ง 4 จุดต้องพึ่งข้อมูลจาก Wikipedia (index membership scrape)/SET.or.th (IPO
+list) มีอักขระ HTML พิเศษ (`<`, `>`, `&`, `'`) ปนอยู่ในชื่อหุ้น/บริษัท ถึงจะ trigger ได้จริง —
+ยังไม่เคยเจอเคสจริงในข้อมูลปัจจุบัน (ต่างจาก checkSetUniverseUpdates ที่มีจุดเสี่ยง onclick
+attribute breakout ชัดเจนกว่า จึงแก้ก่อน) แต่หลักการเดียวกัน: แหล่งข้อมูลเป็น scrape จากเว็บ
+ภายนอกที่ไม่ควบคุมได้ 100%
+
+─── A1: _dh_drift_item ใส่ ticker ดิบใน note ─────────────────────────────────
+
+ที่อยู่: app.py L7953, L7958 (ฟังก์ชัน _dh_drift_item, L7930-7965)
+```
+        if d.get("new_count"):
+            new_sample = d.get("new_sample") or []
+            sample = ', '.join(new_sample[:8])          # L7953 — ไม่ escape
+            ...
+        if d.get("removed_count"):
+            rem_sample = d.get("removed_sample") or []
+            sample = ', '.join(rem_sample[:8])           # L7958 — ไม่ escape
+```
+`new_sample`/`removed_sample` มาจาก `index_drift.read_status()` (เขียนโดย
+`_run_index_drift_checks` ท้าย Quick Update สัปดาห์ละครั้ง เทียบสมาชิกดัชนีสดจาก
+Wikipedia/SET.or.th) — ใช้กับทั้ง 4 ตลาด (TH/US/HK/JP) ผ่าน item key `drift_th`/`drift_us`/
+`drift_hk`/`drift_jp`
+
+ทางแก้: `sample = ', '.join(_escHtml_py(s) for s in new_sample[:8])` — ต้องมี helper escape
+ฝั่ง Python ก่อน (ยังไม่มีในไฟล์นี้ ดูหมายเหตุท้ายไฟล์)
+
+
+─── A2: _dh_index_quality_item ใส่ ticker ดิบใน note (2 จุดในฟังก์ชันเดียว) ──
+
+ที่อยู่: app.py L8026, L8032 (ฟังก์ชัน _dh_index_quality_item, L7968-8035)
+```
+        problems.append(f"หายจาก metrics {len(missing)} ตัว ({', '.join(missing[:8])}{more})")     # L8026
+        ...
+        problems.append(f"sector Unknown {len(unknown)} ตัว ({', '.join(unknown[:8])}{more})")      # L8032
+```
+`missing`/`unknown` เป็น symbol ที่ดึงจาก `us_index_membership.json`/`hk_index_membership.json`/
+`jp_index_membership.json` (Wikipedia scrape) เทียบกับ `*_index_metrics.json` — ใช้กับ item key
+`q_us_index`/`q_hk_index`/`q_jp_index`
+
+ทางแก้: escape แต่ละ symbol ก่อน join เหมือน A1
+
+
+─── A3: รายการ IPO ใหม่ใส่ symbol/ชื่อบริษัทดิบใน note ──────────────────────
+
+ที่อยู่: app.py L8438-8439 (block `ipo_not_in_universe`)
+```
+            _ipo_rows = "".join(
+                f'<tr><td style="padding:2px 10px 2px 0"><b>{_m[0]}</b></td>'                        # L8438 — symbol ดิบ
+                f'<td style="color:var(--text2)">{(_m[2] or "")[:38]}</td>'                           # L8439 — ชื่อบริษัทดิบ
+                f'<td style="color:var(--text2);padding-left:8px;white-space:nowrap">เข้าตลาด {_m[1] or "?"}</td></tr>'
+                for _m in _ipo_missing[:20])
+```
+`_m[0]`/`_m[2]` มาจาก `fetch_ipo_recently()` (SET.or.th, ดึงสด) — เป็นจุดเสี่ยงสูงสุดใน 4 จุดนี้
+เพราะข้อมูลใหม่ทุกครั้งที่มี IPO เข้าตลาด (ไม่ใช่ scrape ที่นิ่งเหมือน Wikipedia membership)
+
+ทางแก้: escape `_m[0]` และ `_m[2]` ก่อนใส่ f-string
+
+
+─── A4: ตาราง coverage งบ US แยกตามดัชนี ใส่รายชื่อหุ้นดิบ ───────────────────
+
+ที่อยู่: app.py L8754 (block `us_index_coverage_by_index`)
+```
+            _uim_missing_html = "".join(
+                f'<div style="margin-top:4px"><b>{lbl}</b> ({len(syms)}): {", ".join(syms)}</div>'   # L8754 — syms ดิบ
+                for lbl, syms in _uim_missing_by_group.items())
+```
+`syms` มาจาก `_gmissing` (ชื่อหุ้นที่ยังไม่มีงบ ต่อดัชนีย่อย S&P500/Dow/Nasdaq100) — ที่มาสุดท้าย
+คือ US index membership scrape เดียวกับ A2
+
+ทางแก้: escape แต่ละชื่อใน `syms` ก่อน join — `lbl` (ชื่อ label ภายใน เช่น "S&P500") ไม่ต้อง
+escape เพราะเป็น string คงที่ในโค้ด ไม่ใช่ข้อมูลภายนอก
+
+
+─── หมายเหตุรวมกลุ่ม A: ยังไม่มี escape helper ฝั่ง Python ในไฟล์นี้ ────────
+
+app.py ยังไม่มีฟังก์ชัน escape HTML ทั่วไปแบบ `_escHtml` ของฝั่ง dashboard.js (ที่ escape
+`&<>"'` ครบ) — ก่อนแก้ 4 จุดนี้ต้องเพิ่ม helper เล็กๆ ก่อน (เช่น
+`import html; _esc = html.escape` หรือเขียนเองสั้นๆ ให้ตรงกับ escape rule เดียวกับฝั่ง JS)
+แล้วค่อย wrap ตัวแปรภายนอกทั้ง 4 จุดข้างต้น — งานเล็ก แต่ต้องทำเป็นจุดเริ่มก่อน ไม่ใช่ patch
+แยกกัน 4 ที่โดยแต่ละที่เขียน escape logic เอง (เสี่ยง inconsistent)
+
+
+===============================================================================
+กลุ่ม B: โค้ดซ้ำ/ไม่มีประสิทธิภาพ (efficiency/simplification ล้วนๆ, 5 จุด)
+===============================================================================
+
+─── B1: US/HK/JP stale-dup price check เป็น 3 บล็อกก็อปเกือบเหมือนกัน ──────
+
+ที่อยู่: app.py L8475 (US), L8487 (HK), L8499 (JP) — เรียก `_dh_stale_close_check(...)` ต่อกัน
+3 ครั้ง ต่างกันแค่ key/label/`_us_store.DB_FILE` vs `_hk_store.DB_FILE` vs `_jp_store.DB_FILE`
+
+เกิดอะไรขึ้น: ไม่ใช่บั๊ก — ผลลัพธ์ถูกต้องทั้ง 3 บล็อก แค่เป็นโค้ดซ้ำ 3 ชุด (~4 บรรทัด/บล็อก) ที่
+ควรทำเป็น loop เดียว เช่น
+`for mkt, store in (("US", _us_store), ("HK", _hk_store), ("JP", _jp_store)): ...`
+
+ควรแก้เพราะ: ถ้ามีตลาดที่ 4 ในอนาคต (เช่น VN/EU ตามที่เห็นในบาง memory อื่นของโปรเจกต์) ต้อง
+copy-paste เพิ่มอีกชุด — ทุกครั้งที่แก้ logic (เช่น เปลี่ยน dup_threshold default) ต้องแก้ 3 จุด
+พร้อมกันให้ตรง เสี่ยง drift
+
+ไม่ควรแก้ทันทีเพราะ: ความเสี่ยง regression ต่ำมาก (เป็นแค่ shape เดียวกัน) แต่ก็ไม่ใช่ bug ที่
+กระทบผู้ใช้เลยสักนิด — priority ต่ำสุดในกลุ่ม B ทั้งหมด
+
+แนะนำ: ทำพร้อมกับ B2 (อยู่ใกล้กันในไฟล์ ทั้งคู่เป็น "3 ตลาดซ้ำ" pattern เดียวกัน) ในรอบ cleanup
+เดียวกัน
+
+
+─── B2: สูตร pct→สี/status ซ้ำ 3 จุด ──────────────────────────────────────
+
+ที่อยู่: app.py L8558 (financials_coverage_by_source), L8604 (financials_quarter_freshness),
+L8742 (us_index_coverage_by_index)
+```
+_color = "var(--green)" if _pct >= 99.5 else ("var(--yellow)" if _pct >= 90 else "var(--red)")
+```
+(ตัวแปรชื่อต่างกันเล็กน้อยต่อจุด แต่สูตรเหมือนกันเป๊ะ)
+
+เกิดอะไรขึ้น: threshold 99.5/90 ถูก hardcode ซ้ำ 3 ที่ — ถ้าจะปรับ threshold ในอนาคต (เช่น
+financials_quarter_freshness ที่จริงมี threshold ต่างจาก 2 ตัวอื่นอยู่แล้วคือ 95/50 ตาม
+docstring ข้างเคียง — จุดนี้ "ต่าง" อยู่แล้ว 1 จุดจาก 3 แต่ไม่มี comment ชี้ชัดว่าทำไมถึงต่าง
+ถ้าไม่ไล่อ่าน 3 จุดเทียบกันเองจะไม่รู้)
+
+ควรแก้เพราะ: ทำ helper `_dh_pct_color(pct, ok=99.5, warn=90)` / `_dh_pct_status(pct, ...)`
+แล้วให้ 3 จุดเรียกผ่าน parameter — threshold ที่ต่างกันจะเห็นชัดที่ call site แทนที่จะซ่อนอยู่ใน
+ตัวเลขที่พิมพ์ซ้ำ
+
+ไม่ควรแก้ทันทีเพราะ: เหมือน B1 — ต่ำ priority, ไม่กระทบผู้ใช้
+
+แนะนำ: ทำพร้อม B1
+
+
+─── B3: set_data.json ถูก parse 2 รอบต่อการ compute 1 ครั้ง ──────────────
+
+ที่อยู่: app.py L8041 (`_dh_th_universe_tickers()`) + block `q_set_data` (~L8935)
+
+เกิดอะไรขึ้น: `_dh_th_universe_tickers()` เปิด+parse `set_data.json` (~12MB) แล้ว cache แค่
+"ticker set ที่ derive แล้ว" (ผ่าน `_dh_th_universe_cache`) ไม่ได้ cache dict ที่ parse มาทั้งก้อน
+— block `q_set_data` (เช็คจำนวนหุ้นใน set_data.json) เปิดไฟล์เดียวกันซ้ำจาก scratch อีกรอบ
+ระหว่าง `_compute_data_health()` เดียวกัน
+
+ควรแก้เพราะ: parse JSON 12MB ซ้ำ 2 รอบทุกครั้งที่ cache miss (ทุก 5 นาที หรือกด fresh=1) — เสีย
+เวลา CPU/memory โดยไม่จำเป็น
+
+ไม่ควรแก้ทันทีเพราะ: ต้องปรับ `_dh_th_universe_cache` ให้เก็บทั้ง parsed dict ไม่ใช่แค่ tickers
+set (เปลี่ยน shape ของ cache) แล้วให้ block `q_set_data` อ่านจาก cache นี้แทน — เสี่ยงกระทบจุดอื่น
+ที่อาจอ้างอิง `_dh_th_universe_cache` โดยตรง (ยังไม่ได้ grep เช็คครบ) เป็น refactor ที่ควรทำแยก
+ต่างหากพร้อมเทสต์เทียบผลลัพธ์ก่อน/หลังให้ตรงกันเป๊ะ
+
+แนะนำ: priority ปานกลาง (12MB parse ซ้ำมีผลจริงต่อเวลา compute ทุก 5 นาที ไม่ใช่แค่ cosmetic
+เหมือน B1/B2) — ควรทำเมื่อจะแก้ B5 (cash-cycle-crosscheck-full) ไปด้วย เพราะทั้งคู่คือ "ข้อมูล
+เดียวกันถูกคำนวณ/parse ซ้ำในคนละ endpoint"
+
+
+─── B4: dashboard.js _dhSourceCell ปุ่ม HTML literal ซ้ำ 5 จุด ───────────
+
+ที่อยู่: static/dashboard.js ~L24826-24838 (ฟังก์ชัน `_dhSourceCell`)
+
+เกิดอะไรขึ้น: `<button class="filter-btn" style="font-size:10.5px;padding:2px 8px" onclick="...">
+...</button>` ถูกพิมพ์ซ้ำ 5 ครั้ง (driftMarket/fn/gotoPage/fn2/gotoPage2) ต่างกันแค่ onclick กับ
+label
+
+ควรแก้เพราะ: ปรับ style ปุ่มพวกนี้ในอนาคตต้องแก้ 5 จุดพร้อมกัน
+
+ไม่ควรแก้ทันทีเพราะ: cosmetic ล้วนๆ ไม่กระทบ behavior เลย priority ต่ำสุด
+
+แนะนำ: ทำ helper `_dhBtn(label, onclick)` คืน HTML string เดียว แล้วเรียก 5 ที่ — เป็น diff
+เล็กมาก ทำเมื่อไหร่ก็ได้ไม่มีความเสี่ยง
+
+
+─── B5: cash-cycle-crosscheck-full คำนวณใหม่จากศูนย์ แทนที่จะ reuse cache ──
+
+ที่อยู่: app.py L8213 (`data_health_cash_cycle_crosscheck_full`, route
+`/api/data-health/cash-cycle-crosscheck-full`)
+
+เกิดอะไรขึ้น: ทุกครั้งที่กด "และอีก N ตัว" ในหน้า Data Health, route นี้เรียก
+`_compute_cash_cycle_crosscheck()` ใหม่ทั้งหมด (full-table scan + JSON deserialize ของ
+`financials` source='set_health' และ `factor_snapshot` ~900 แถวหุ้นไทย) — ทั้งที่ตัวเลขเดียวกัน
+เพิ่งถูกคำนวณไปแล้วตอน `/api/data-health` compute (cache 5 นาที, item `q_cash_cycle_crosscheck`
+มี list เต็มอยู่แล้วในผลลัพธ์ ก่อนจะถูกตัดเหลือ 12 แถวแรกตอนสร้าง note)
+
+ควรแก้เพราะ: คำนวณซ้ำสิ่งที่เพิ่งคำนวณไปหมาดๆ ภายในไม่กี่วินาที — waste ชัดเจน
+
+ไม่ควรแก้ทันทีเพราะ: ต้อง cache ผลดิบของ `_compute_cash_cycle_crosscheck()` แยกจาก
+`_data_health_cache` (คนละ TTL/lock ก็ได้ แต่ต้องคิดเรื่อง invalidation ให้ตรงกัน — ถ้า
+`/api/data-health` compute ใหม่แล้วแต่ cache ของ cash-cycle ยังเก่ากว่า จะได้ตัวเลขไม่ตรงกันระหว่าง
+badge สรุปกับตารางเต็ม) เป็นงาน caching design เล็กๆ ที่ควรทำแยกจาก patch ด่วน
+
+แนะนำ: ทำพร้อม B3 (ทั้งคู่คือปัญหา "คำนวณ/parse ข้อมูลเดียวกันซ้ำ")
+===============================================================================

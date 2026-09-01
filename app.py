@@ -7874,6 +7874,24 @@ def _dh_quality_item(key, label, status, note, last_at=None):
             "last_at": last_at, "age_hours": None, "status": status, "note": note}
 
 
+def _dh_recent_business_day_cutoff(today, n=2):
+    """คืนวันที่ก่อนหน้า "วันทำการล่าสุด n วัน" (จ-ศ เท่านั้น ไม่รู้จักวันหยุดนักขัตฤกษ์ เหมือน
+    เกณฑ์อื่นในไฟล์นี้) — ใช้ตัดวันทำการล่าสุดออกจากการเช็ค "รูขาดข้อมูล" ของ _dh_gap_check_item
+    (code review 2026-09-02): เดิมใช้ `today - timedelta(days=2)` ตรงๆ ซึ่งเป็น calendar days
+    ไม่ใช่ business days — เช็คเช้าวันจันทร์จะตัดออกแค่เสาร์-อาทิตย์ (ที่ถูกกรองทิ้งอยู่แล้วโดย
+    weekday<5) ทำให้วันศุกร์ (วันทำการล่าสุดจริง) ยังโดนเช็คอยู่ ทั้งที่ตั้งใจยกเว้น 2 วันทำการ
+    ล่าสุดเสมอไม่ว่าจะมีวันหยุดสุดสัปดาห์คั่นหรือไม่"""
+    d = today
+    seen = 0
+    while seen < n:
+        if d.weekday() < 5:
+            seen += 1
+            if seen == n:
+                return d - timedelta(days=1)
+        d -= timedelta(days=1)
+    return d
+
+
 def _dh_gap_check_item(key, label, path, lookback_days=60, warn_n=4, red_n=10):
     """เช็คจำนวน "วันทำการ (จ-ศ)" ที่หายไปกลางช่วง lookback_days วันล่าสุดในไฟล์ rows-by-date
     (market/s50/bond flow) — เกณฑ์อื่นในหน้านี้เช็คแค่ mtime/จำนวนแถวรวม ไม่จับ "รูขาดกลางชุด"
@@ -7890,7 +7908,7 @@ def _dh_gap_check_item(key, label, path, lookback_days=60, warn_n=4, red_n=10):
         return _dh_quality_item(key, label, "red", "ไม่มีข้อมูลวันที่ในไฟล์เลย")
 
     today = _dh_dt.now().date()
-    cutoff = today - timedelta(days=2)
+    cutoff = _dh_recent_business_day_cutoff(today, 2)
     d = today - timedelta(days=lookback_days)
     missing = []
     while d <= cutoff:
@@ -7960,6 +7978,15 @@ def _dh_index_quality_item(key, label, market_code, membership_path, metrics_pat
         กับตลาดอื่นได้ ควรมีระบบเฝ้าแทนที่จะรอเจอเอง)"""
     problems = []
     status = "ok"
+    # rank ความรุนแรง ใช้ max แทนการทับตรงๆ (code review 2026-09-02) — เดิม status ถูก
+    # assign ทับตรงๆ ทุกจุด ทำให้ check หลังๆ (missing-from-metrics/sector Unknown ≤3 ตัว)
+    # ลด severity จาก red (membership.json รูปแบบผิดปกติ) ลงมาเป็น warn ได้ ทั้งที่ปัญหาแรก
+    # ยังไม่หาย — ใช้ _dh_bump ไล่เก็บค่าแย่สุดแทน
+    _sev_rank = {"ok": 0, "na": 0, "warn": 1, "red": 2}
+    def _dh_bump(new_status):
+        nonlocal status
+        if _sev_rank.get(new_status, 0) > _sev_rank.get(status, 0):
+            status = new_status
     try:
         with open(membership_path, encoding="utf-8") as f:
             mem = json.load(f)
@@ -7973,14 +8000,14 @@ def _dh_index_quality_item(key, label, market_code, membership_path, metrics_pat
     for k in index_keys:
         members = mem.get(k) or []
         if not isinstance(members, list):
-            status = "red"
+            _dh_bump("red")
             problems.append(f"{k} รูปแบบผิดปกติ ({type(members).__name__} ไม่ใช่ list)")
             continue
         n = len(members)
         union |= set(members)
         lo, hi = bounds.get(k, (0, 10 ** 9))
         if not (lo <= n <= hi):
-            status = "warn"
+            _dh_bump("warn")
             problems.append(f"{k} {n} ตัว (ปกติ {lo}-{hi})")
 
     try:
@@ -7994,13 +8021,13 @@ def _dh_index_quality_item(key, label, market_code, membership_path, metrics_pat
     metric_syms = {s.get("symbol") for s in stocks}
     missing = sorted(sym for sym in (union - metric_syms) if sym is not None)
     if missing:
-        status = "warn"
+        _dh_bump("warn")
         more = '…' if len(missing) > 8 else ''
         problems.append(f"หายจาก metrics {len(missing)} ตัว ({', '.join(missing[:8])}{more})")
 
     unknown = [s.get("symbol") for s in stocks if not s.get("sector") or s.get("sector") == "Unknown"]
     if unknown:
-        status = "red" if len(unknown) > 3 else "warn"
+        _dh_bump("red" if len(unknown) > 3 else "warn")
         more = '…' if len(unknown) > 8 else ''
         problems.append(f"sector Unknown {len(unknown)} ตัว ({', '.join(unknown[:8])}{more})")
 
@@ -8034,7 +8061,8 @@ def _dh_th_universe_tickers():
     return tickers
 
 
-def _dh_stale_close_check(key, label, db_path, dup_threshold=20, min_universe=30, universe=None):
+def _dh_stale_close_check(key, label, db_path, dup_threshold=20, min_universe=30, universe=None,
+                           universe_required=False):
     """เช็คว่า Quick Update 'ดึงราคาจริง' หรือแค่ mtime ขยับแต่ได้ราคาซ้ำแท่งก่อนหน้ามา —
     ต่างจาก _dh_item ด้านบนที่เช็คแค่ mtime (ไฟล์ถูกเขียนทับเวลาไหน) ไม่รู้เนื้อในว่าค่าจริง
     เปลี่ยนหรือเปล่า เจอเคสจริง 11 ส.ค. 2569: Yahoo ยังไม่ปล่อยแท่งปิดทางการ หุ้นส่วนใหญ่เลย
@@ -8056,6 +8084,14 @@ def _dh_stale_close_check(key, label, db_path, dup_threshold=20, min_universe=30
     _dh_th_universe_tickers เหตุผลที่ต้องกรองฝั่งหุ้นไทย) US/HK/JP ไม่ต้องกรอง เพราะ DB
     ของ 3 ตลาดนั้นมีแต่สมาชิกดัชนีล้วนๆ อยู่แล้ว (ไม่ปนกับ DW/DR)
 
+    universe_required — True ถ้า dup_threshold ที่ส่งมาถูก calibrate เฉพาะ universe ที่กรองแล้ว
+    เท่านั้น (เช่น TH dup_threshold=600) — ถ้า universe เป็น None (โหลด set_data.json ไม่สำเร็จ
+    ชั่วคราว) จะข้ามการเช็ครอบนี้เป็น "na" แทนที่จะ fallback ไปสแกนทั้ง DB แบบไม่กรอง (เดิม
+    `if universe else [...]` จะ fallback แบบเงียบๆ กวาดทุก ticker รวม DW/warrant เข้าไปในการ
+    นับ ทั้งที่ threshold=600 ถูก calibrate ไว้เฉพาะ ~929 ตัวหลังกรอง — ปน DW เข้ามาแล้วนับด้วย
+    threshold เดิมจะ false-positive/false-negative ปนกันโดยไม่มีสัญญาณเตือนเลยว่ากำลังใช้ universe
+    ผิดชุด, code review 2026-09-02)
+
     เดิมเคยดึงด้วย ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) รอบเดียวทั้งตาราง
     แต่ prices เป็น WITHOUT ROWID จัดเรียงจริงตาม (ticker, date) ASC — ORDER BY date DESC ในแต่ละ
     partition ทำให้ SQLite ต้อง sort ทั้งตารางลง temp B-tree ก่อน วัดจริงบนเครื่อง 2569-08-13:
@@ -8066,6 +8102,11 @@ def _dh_stale_close_check(key, label, db_path, dup_threshold=20, min_universe=30
     import sqlite3
     if not os.path.exists(db_path):
         return _dh_quality_item(key, label, "na", "ยังไม่มีไฟล์ราคา")
+    if universe_required and universe is None:
+        return _dh_quality_item(key, label, "na",
+            "ข้ามการเช็ครอบนี้ — โหลด universe หุ้นไทยที่กรองแล้วไม่ได้ (set_data.json อ่านไม่ได้"
+            "ชั่วคราว เช่น Quick Update กำลังเขียนทับพอดี) threshold ที่ตั้งไว้ calibrate เฉพาะ"
+            " universe ที่กรองแล้วเท่านั้น — ลองเช็คใหม่อีกครั้ง")
     try:
         con = sqlite3.connect(db_path)
         try:
@@ -8252,7 +8293,7 @@ def _compute_data_health():
         "prices_stale_dup", "ราคาซ้ำแท่งก่อนหน้าผิดปกติ (หุ้นไทย)",
         os.path.join(BASE_DIR, price_store.DB_FILE),
         dup_threshold=600,
-        universe=_dh_th_universe_tickers()))
+        universe=_dh_th_universe_tickers(), universe_required=True))
 
     items.append(_dh_item(
         "indices", "ดัชนีกลุ่ม (TradingView)", "ราคา/เทคนิค",
@@ -8384,7 +8425,11 @@ def _compute_data_health():
                     'Full Refresh รอบถัดไป — เมนูอื่น (Screener/Tearsheet/Valuation) จะยังหาหุ้น'
                     'พวกนี้ไม่เจอ<hr>Quick Update ดึงรายชื่อ listedCompanies ใหม่ให้ แต่ไม่ '
                     'backfill ราคาย้อนหลังของตัวใหม่ — ต้อง ⟳ Full Refresh</div></span>')
-        if not _ipo_recent:
+        if _ipo_recent is None:
+            # None = ดึงจริงล้มเหลว (exception ด้านบน) ต่างจาก [] = ดึงสำเร็จแต่ไม่มี IPO ใหม่
+            # ช่วงนี้ (สถานะปกติส่วนใหญ่) — เดิมใช้ `not _ipo_recent` ปนสองเคสนี้เข้าด้วยกัน
+            # ทำให้วันที่ไม่มี IPO ใหม่เลยรายงานผิดว่า "ดึงจาก SET.or.th ไม่สำเร็จ" (code review
+            # 2026-09-02)
             _ipo_status = "na"
             _ipo_note = _ipo_tip + " ดึงรายชื่อ IPO จาก SET.or.th ไม่สำเร็จ — ลองใหม่ภายหลัง"
         elif _ipo_missing:
@@ -9049,7 +9094,13 @@ def _compute_data_health():
                    'Band · ยิ่งสะสมนาน ยิ่งเทียบย้อนหลังได้ไกล · โตอัตโนมัติ ไม่ต้องกดเอง</span>'
                    '</div></span>')
         _dv_ts = _dh_parse(_dv_meta.get("updated_at"))
-        _dv_age_h = _dh_age_hours(_dv_ts)
+        # sources/set_daily_val.py เก็บ synced_at เป็น UTC naive string (datetime.now(timezone.utc))
+        # ต่างจาก _dh_age_hours ที่เทียบกับ local naive datetime.now() ตรงๆ — ถ้าไม่แปลง จะทำให้
+        # อายุที่โชว์เพี้ยนเท่ากับ UTC offset ของเครื่อง (เช่น +7 ชม.ในไทย) ใช้ pattern เดียวกับ
+        # analyst_consensus item ด้านบน (code review 2026-09-02)
+        from datetime import timezone as _tz
+        _dv_age_h = ((_dh_dt.now(_tz.utc).replace(tzinfo=None) - _dv_ts).total_seconds() / 3600
+                     if _dv_ts else None)
         if not _dv_meta.get("row_count"):
             _dv_status = "na"
             _dv_note = (f'{_dv_tip} ยังไม่เคยสะสม — จะเริ่มเก็บเองรอบ Quick Update ถัดไป '
@@ -9087,7 +9138,10 @@ def _compute_data_health():
 
     summary = {"ok": 0, "warn": 0, "red": 0, "na": 0}
     for it in items:
-        summary[it["status"]] += 1
+        # .get(...,0)+1 แทน summary[status] += 1 ตรงๆ (code review 2026-09-02) — เดิมถ้า item
+        # ไหนมี status นอก {ok,warn,red,na} (เช่น typo ในอนาคต) จะ KeyError จนทั้ง /api/data-health
+        # 500 ทันที ทั้งที่ items แต่ละตัวข้างบนถูกครอบ try/except ไว้เพื่อกันแบบนี้อยู่แล้ว
+        summary[it["status"]] = summary.get(it["status"], 0) + 1
 
     return {
         "checked_at": _dh_dt.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -9172,19 +9226,24 @@ def backup_files_status():
         pass
     # เผื่อ record เดิม (ก่อนแก้ให้เก็บ dest_dir เป็น JSON) ยังเป็น plain string อยู่ —
     # ใช้ path เดียวกับที่ task_backup_offsite.bat เรียกจริงเป็น fallback แทนที่จะ
-    # ต้องรอรอบสำรองถัดไปกว่าจะเห็นตารางนี้
+    # ต้องรอรอบสำรองถัดไปกว่าจะเห็นตารางนี้ — ทำเครื่องหมายไว้ (_dest_dir_guessed) เพื่อบอกใน
+    # note ตรงๆ ว่านี่คือค่าเดา ไม่ใช่ dest_dir ที่ยืนยันจาก run_log จริง กันเข้าใจผิดว่า
+    # "เข้าไม่ถึงโฟลเดอร์ปลายทาง" หมายถึงปลายทางจริงพังเสมอ (code review 2026-09-02)
+    _dest_dir_guessed = not dest_dir
     if not dest_dir:
         dest_dir = r"C:\Users\joeki\OneDrive\SET_Dashboard_Backup"
+    _guess_note = (" (เดาจาก path เริ่มต้น — ไม่พบ dest_dir ที่บันทึกไว้จาก run_log จริง)"
+                   if _dest_dir_guessed else "")
 
     if not os.path.isdir(dest_dir):
         return jsonify({"dest_dir": dest_dir, "files": [],
-                         "note": f"เข้าไม่ถึงโฟลเดอร์ปลายทาง{(' ' + dest_dir) if dest_dir else ''} — "
-                                 "external drive ถอดอยู่หรือ OneDrive ยังไม่ sync?"})
+                         "note": f"เข้าไม่ถึงโฟลเดอร์ปลายทาง{(' ' + dest_dir) if dest_dir else ''}"
+                                 f"{_guess_note} — external drive ถอดอยู่หรือ OneDrive ยังไม่ sync?"})
 
     try:
         entries = os.listdir(dest_dir)
     except Exception as e:
-        return jsonify({"dest_dir": dest_dir, "files": [], "note": f"อ่านโฟลเดอร์ไม่ได้: {e}"})
+        return jsonify({"dest_dir": dest_dir, "files": [], "note": f"อ่านโฟลเดอร์ไม่ได้: {e}{_guess_note}"})
 
     files = []
     for fname, label in _OFFSITE_BACKUP_FILES:
@@ -9210,7 +9269,7 @@ def backup_files_status():
             "latest_filename": latest,
         })
 
-    return jsonify({"dest_dir": dest_dir, "files": files, "note": None})
+    return jsonify({"dest_dir": dest_dir, "files": files, "note": _guess_note or None})
 
 
 _UPDATE_STATUS_LABEL = {
@@ -9270,6 +9329,10 @@ def update_history():
 # (คู่แนวเดียวกับ _dr_diff_cache/check_dr_diff แต่ใช้กับหุ้นไทยแทน DR)
 _set_universe_diff_cache: dict = {}
 _SET_UNIVERSE_DIFF_TTL = 6 * 3600
+# lock กัน thundering herd ตอน cache หมดอายุ — เหมือน _data_health_lock (code review 2026-09-02):
+# เดิมไม่มี lock เลย 2 แท็บ/รีเควสต์พร้อมกันตอน cache miss จะยิง SET.or.th+fetch_stock_list ซ้ำ
+# ซ้อนกันทั้งคู่แทนที่ตัวหลังจะรอผลตัวแรก
+_set_universe_diff_lock = threading.Lock()
 
 @app.route("/api/set-universe-check-updates")
 def set_universe_check_updates():
@@ -9281,39 +9344,47 @@ def set_universe_check_updates():
     (sources/set_api.py::fetch_stock_list) ก่อนว่า "เปลี่ยนชื่อย่อ" หรือ "เพิกถอนจริง"
     (ดู PLAN_set_api_expansion.txt งาน #8) — ดึงไม่สำเร็จก็ไม่ทำให้ endpoint พัง แค่ไม่มี
     renamed_to ให้ (เหมือนเดิมก่อนมีฟีเจอร์นี้ ผู้ใช้ยังเช็คมือได้)"""
-    cached = _set_universe_diff_cache.get("result")
-    if cached and (time.time() - _set_universe_diff_cache.get("ts", 0) < _SET_UNIVERSE_DIFF_TTL):
+    def _cached_ok():
+        cached = _set_universe_diff_cache.get("result")
+        return cached if (cached and (time.time() - _set_universe_diff_cache.get("ts", 0)
+                                       < _SET_UNIVERSE_DIFF_TTL)) else None
+    cached = _cached_ok()
+    if cached:
         return jsonify(cached)
-    try:
-        from set_data_fetcher import load_set_symbols
-        live = load_set_symbols(BASE_DIR)
-        live_map = {s["symbol"]: s for s in live}
-        local_syms = set(_financials_universe())
-        new_syms = sorted(set(live_map.keys()) - local_syms)
-        removed_syms = sorted(local_syms - set(live_map.keys()))
-        tracked_delisted = sum(1 for k in delisted_log.read_log(BASE_DIR) if k.startswith("TH:"))
-
-        old_to_new = {}
+    with _set_universe_diff_lock:
+        cached = _cached_ok()
+        if cached:
+            return jsonify(cached)
         try:
-            from sources.set_api import fetch_stock_list
-            for s in fetch_stock_list():
-                for old in s.get("old_symbols") or []:
-                    old_to_new[old] = s["symbol"]
-        except Exception as e:
-            print(f"[set-universe-check] fetch_stock_list (oldSymbols) ไม่สำเร็จ ({e}) — ข้ามการเช็คเปลี่ยนชื่อ")
+            from set_data_fetcher import load_set_symbols
+            live = load_set_symbols(BASE_DIR)
+            live_map = {s["symbol"]: s for s in live}
+            local_syms = set(_financials_universe())
+            new_syms = sorted(set(live_map.keys()) - local_syms)
+            removed_syms = sorted(local_syms - set(live_map.keys()))
+            tracked_delisted = sum(1 for k in delisted_log.read_log(BASE_DIR) if k.startswith("TH:"))
 
-        result = {
-            "live_count": len(live_map), "local_count": len(local_syms),
-            "new": [{"symbol": s, "name": live_map[s]["name"], "market": live_map[s]["market"],
-                     "sector": live_map[s]["sector"]} for s in new_syms],
-            "removed": [{"symbol": s, "renamed_to": old_to_new.get(s)} for s in removed_syms],
-            "tracked_delisted_count": tracked_delisted,
-        }
-        _set_universe_diff_cache["result"] = result
-        _set_universe_diff_cache["ts"] = time.time()
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            old_to_new = {}
+            try:
+                from sources.set_api import fetch_stock_list
+                for s in fetch_stock_list():
+                    for old in s.get("old_symbols") or []:
+                        old_to_new[old] = s["symbol"]
+            except Exception as e:
+                print(f"[set-universe-check] fetch_stock_list (oldSymbols) ไม่สำเร็จ ({e}) — ข้ามการเช็คเปลี่ยนชื่อ")
+
+            result = {
+                "live_count": len(live_map), "local_count": len(local_syms),
+                "new": [{"symbol": s, "name": live_map[s]["name"], "market": live_map[s]["market"],
+                         "sector": live_map[s]["sector"]} for s in new_syms],
+                "removed": [{"symbol": s, "renamed_to": old_to_new.get(s)} for s in removed_syms],
+                "tracked_delisted_count": tracked_delisted,
+            }
+            _set_universe_diff_cache["result"] = result
+            _set_universe_diff_cache["ts"] = time.time()
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
 
 # หุ้น US/HK ตัวใหม่ที่ Finnomena มีแต่ mirror ในเครื่องยังไม่มี — เทียบ /stock/list
@@ -9321,36 +9392,46 @@ def set_universe_check_updates():
 # แยกทีหลังผ่าน /api/mirror-sync-new)
 _mirror_diff_cache: dict = {}
 _MIRROR_DIFF_TTL = 6 * 3600
+# lock กัน thundering herd เหมือน _set_universe_diff_lock ด้านบน (code review 2026-09-02)
+_mirror_diff_lock = threading.Lock()
 
 @app.route("/api/mirror-check-updates")
 def mirror_check_updates():
-    cached = _mirror_diff_cache.get("result")
-    if cached and (time.time() - _mirror_diff_cache.get("ts", 0) < _MIRROR_DIFF_TTL):
+    def _cached_ok():
+        cached = _mirror_diff_cache.get("result")
+        return cached if (cached and (time.time() - _mirror_diff_cache.get("ts", 0)
+                                       < _MIRROR_DIFF_TTL)) else None
+    cached = _cached_ok()
+    if cached:
         return jsonify(cached)
-    try:
-        cands = financials_store.mirror_candidates(("US", "HK"))
-        con = financials_store._connect(BASE_DIR)
+    with _mirror_diff_lock:
+        cached = _cached_ok()
+        if cached:
+            return jsonify(cached)
         try:
-            have = {r[0] for r in con.execute(
-                "SELECT symbol FROM financials WHERE source='finnomena_q' AND symbol LIKE 'FINN:%'")}
-        finally:
-            con.close()
-        new_by_ex = {"US": [], "HK": []}
-        live_counts = {"US": 0, "HK": 0}
-        for ex, name, sid in cands:
-            live_counts[ex] += 1
-            if f"FINN:{ex}:{name}" not in have:
-                new_by_ex[ex].append(name)
-        result = {
-            "live_counts": live_counts,
-            "new_counts": {ex: len(v) for ex, v in new_by_ex.items()},
-            "new_samples": {ex: v[:40] for ex, v in new_by_ex.items()},
-        }
-        _mirror_diff_cache["result"] = result
-        _mirror_diff_cache["ts"] = time.time()
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            cands = financials_store.mirror_candidates(("US", "HK"))
+            con = financials_store._connect(BASE_DIR)
+            try:
+                have = {r[0] for r in con.execute(
+                    "SELECT symbol FROM financials WHERE source='finnomena_q' AND symbol LIKE 'FINN:%'")}
+            finally:
+                con.close()
+            new_by_ex = {"US": [], "HK": []}
+            live_counts = {"US": 0, "HK": 0}
+            for ex, name, sid in cands:
+                live_counts[ex] += 1
+                if f"FINN:{ex}:{name}" not in have:
+                    new_by_ex[ex].append(name)
+            result = {
+                "live_counts": live_counts,
+                "new_counts": {ex: len(v) for ex, v in new_by_ex.items()},
+                "new_samples": {ex: v[:40] for ex, v in new_by_ex.items()},
+            }
+            _mirror_diff_cache["result"] = result
+            _mirror_diff_cache["ts"] = time.time()
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
 
 def _run_mirror_sync_new():
@@ -9584,7 +9665,14 @@ def _run_financials_update_all():
                    + (f" · mirror ค้นบ่อย {refreshed_mirror}/{len(searched)}" if searched else "")
                    + f" · ใช้เวลา {elapsed_min:.0f} นาที")
         _update(done=True, message=summary)
-        run_log.record_run(BASE_DIR, "financials_sync", True, summary)
+        # ระบบต้องมีของให้ sync จริง (total>0) แล้วไม่สำเร็จเลยสักตัว (ok==0) แต่พลาดจริง (fail>0)
+        # ถึงจะนับว่า "ล้มเหลว" — total==0 (ข้ามหมดเพราะสดอยู่แล้ว) ไม่ใช่ความล้มเหลว เดิม record_run
+        # เขียน True เสมอไม่ว่าผลจริงจะเป็นอย่างไร ทำให้ sync ที่พังทั้งกระบวน (เช่น SET.or.th บล็อก IP)
+        # ยังโชว์ "🕐 สถานะ" เขียวเหมือนสำเร็จ (code review 2026-09-02)
+        def _dh_sync_group_ok(r):
+            return not (r.get("total") and not r.get("ok") and r.get("fail"))
+        _fin_sync_ok = _dh_sync_group_ok(r_th) and _dh_sync_group_ok(r_dr) and _dh_sync_group_ok(r_idx)
+        run_log.record_run(BASE_DIR, "financials_sync", _fin_sync_ok, summary)
     except Exception as e:
         # _update(done=True,...) ต้องมาก่อน record_run() เสมอ — กัน SSE ค้างสถานะ
         # "กำลังทำงาน" ตลอดไปถ้า record_run เขียนไฟล์พังกลางทาง
@@ -9633,7 +9721,13 @@ def _run_mirror_finnomena_force_full():
                    + (f" · พลาด {result['fail']}" if result["fail"] else "")
                    + f" · ใช้เวลา {elapsed_min:.0f} นาที")
         _update(done=True, message=summary)
-        run_log.record_run(BASE_DIR, "mirror_finnomena", True, summary)
+        # เหตุผลเดียวกับ financials_sync ด้านบน — total ตัวที่ยิงจริง (ok+empty+fail) > 0 แต่ไม่มี
+        # ok/empty เลยสักตัว มีแต่ fail = ล้มเหลวทั้งกระบวนจริง (เช่น Finnomena บล็อก) ไม่ใช่แค่
+        # "หุ้นกลุ่มนี้ไม่มีงบ" (empty) ซึ่งเป็นสถานะปกติ (code review 2026-09-02)
+        _mirror_total = result.get("ok", 0) + result.get("empty", 0) + result.get("fail", 0)
+        _mirror_sync_ok = not (_mirror_total and not result.get("ok") and not result.get("empty")
+                                and result.get("fail"))
+        run_log.record_run(BASE_DIR, "mirror_finnomena", _mirror_sync_ok, summary)
     except Exception as e:
         run_log.record_run(BASE_DIR, "mirror_finnomena", False, str(e))
         _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
@@ -9680,7 +9774,11 @@ def _run_mirror_finnomena_normal_full():
                    + (f" · พลาด {result['fail']}" if result["fail"] else "")
                    + f" · ใช้เวลา {elapsed_min:.0f} นาที")
         _update(done=True, message=summary)
-        run_log.record_run(BASE_DIR, "mirror_finnomena_normal", True, summary)
+        # เหตุผลเดียวกับ _run_mirror_finnomena_force_full ด้านบน (code review 2026-09-02)
+        _mirror_total = result.get("ok", 0) + result.get("empty", 0) + result.get("fail", 0)
+        _mirror_sync_ok = not (_mirror_total and not result.get("ok") and not result.get("empty")
+                                and result.get("fail"))
+        run_log.record_run(BASE_DIR, "mirror_finnomena_normal", _mirror_sync_ok, summary)
     except Exception as e:
         run_log.record_run(BASE_DIR, "mirror_finnomena_normal", False, str(e))
         _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
