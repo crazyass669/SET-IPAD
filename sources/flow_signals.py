@@ -15,8 +15,8 @@ snapshots ล่าสุด (~1 เดือนทำการ) ไม่ใช
 """
 import json
 import os
-import sqlite3
-from datetime import datetime, timedelta
+
+from sources import sec_store
 
 
 def _load_json(path):
@@ -109,12 +109,16 @@ def nvdr_signal(entry):
     if t is None:
         return 0, None
     chg, recent, early = t
+    lvl = entry.get("nvdr_pct")
     d = 0
     if chg >= 0.1:
         d = 1
     elif chg <= -0.1:
         d = -1
-    return d, {"nvdr_pct": round(recent, 3), "trend_pp": round(chg, 3)}
+    # โชว์ระดับถือครอง "ปัจจุบัน" (top-level nvdr_pct = snapshot ล่าสุด) ไม่ใช่ค่าเฉลี่ย
+    # ช่วงท้าย window — ให้ตรงกับ short_signal และทุกจุดอื่นในแอปที่โชว์ NVDR%
+    return d, {"nvdr_pct": round(lvl, 3) if lvl is not None else round(recent, 3),
+               "trend_pp": round(chg, 3)}
 
 
 # ── รวมทั้งตลาด ──────────────────────────────────────────────
@@ -124,21 +128,16 @@ def build_flow_signals(base_dir, insider_days=90):
     short_data = _load_json(os.path.join(base_dir, "short_sales_data.json")) or {"stocks": {}}
     nvdr_data = _load_json(os.path.join(base_dir, "nvdr_data.json")) or {"stocks": {}}
 
-    # insider: ดึงรายการในหน้าต่างเวลา แล้ว group ตาม symbol
+    # insider: ดึงรายการในหน้าต่างเวลา แล้ว group ตาม symbol — ใช้ sec_store.query_insider_trades
+    # ตัวเดียวกับที่ทั้งแอปใช้ (แปลง sentinel price=-1 [_INSIDER_PRICE_NULL "ราคาไม่เปิดเผย"]
+    # กลับเป็น None ให้แล้ว) เดิม query DB ตรงทำให้ราคา -1 ถูกคูณ qty เป็นมูลค่า "ติดลบ"
+    # ตอน insider_signal (price or 0 → -1 เพราะ -1 เป็น truthy) ดันหุ้นที่ผู้บริหารซื้อ
+    # โดยไม่เปิดราคา ให้กลายเป็น "ขายสุทธิ" ผิดๆ
     insider_by_sym = {}
-    db = os.path.join(base_dir, "sec_filings.db")
-    if os.path.exists(db):
-        con = sqlite3.connect(db)
-        con.execute("PRAGMA busy_timeout=5000")
-        try:
-            cutoff = (datetime.now() - timedelta(days=insider_days)).strftime("%Y-%m-%d")
-            for sym, action, qty, price in con.execute(
-                    "SELECT symbol, action, qty, price FROM insider_trades WHERE trade_date>=?",
-                    (cutoff,)):
-                insider_by_sym.setdefault(sym, []).append(
-                    {"action": action, "qty": qty, "price": price})
-        finally:
-            con.close()
+    for r in sec_store.query_insider_trades(base_dir, insider_days):
+        sym = r.get("symbol")
+        if sym:
+            insider_by_sym.setdefault(sym, []).append(r)
 
     # universe = ทุก symbol ที่ปรากฏในอย่างน้อย 1 แหล่ง
     syms = set(short_data.get("stocks", {})) | set(nvdr_data.get("stocks", {})) | set(insider_by_sym)

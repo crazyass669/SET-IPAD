@@ -17885,7 +17885,10 @@ function loadUsSectorRanks() {
   _fetchTimeout(`/api/us-sector-ranks?index=${idx}`, 30000, 'หมดเวลารอ Sector Ranking หุ้น US (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
-      _usSectorRanks[idx] = d.sectors || [];
+      if (d.error) throw new Error(d.error);
+      const sectors = d.sectors || [];
+      // อย่า cache ก้อนว่าง — ดูเหตุผลใน loadHkSectorRanks
+      if (sectors.length) _usSectorRanks[idx] = sectors;
       if (idx === _usIndex) renderUsSectorTable();
     })
     .catch(e => {
@@ -18051,26 +18054,36 @@ function drawHkBreadthChart() {
   drawIndexBreadthChart('hk', _hkBreadthData);
 }
 
+let _hkStocksLoading = false;
+
 function loadHkStocksPage() {
   if (_hkData) { renderHkTable(); loadHkBreadthChart(); return; }
+  if (_hkStocksLoading) return;   // กัน fetch ซ้ำตอนสลับเข้า-ออกหน้าระหว่างรอ (เหมือน loadJpStocksPage)
   const tbody = document.getElementById('hk-stocks-tbody');
   if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
+  _hkStocksLoading = true;
   _fetchTimeout('/api/hk-index-metrics', 30000, 'หมดเวลารอข้อมูลหุ้น HK (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
-      _hkData = d;
       if (!d.stocks || !d.stocks.length) {
+        // อย่า cache ก้อนว่าง — ไม่งั้น _hkData ค้าง [] แล้วปุ่ม Quick Update/HK Index Max
+        // ที่บอกให้กดจะไม่มีทาง re-fetch จนกว่าจะ F5
         if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">ยังไม่มีข้อมูล — กดปุ่ม <b>📈 HK Index Max</b> หรือ <b>⚡ Quick Update</b> เพื่อดึงราคาและคำนวณ metrics</td></tr>`;
         return;
       }
+      // กัน null entry ใน hk_index_metrics.json (JSON เพี้ยน) ทำให้ s[flag]/s.symbol throw
+      // ทั้งหน้า — hardening แบบเดียวกับ renderer ของ Stock Rotation (commit aeb9dda)
+      if (Array.isArray(d.stocks)) d.stocks = d.stocks.filter(s => s && typeof s === 'object');
+      _hkData = d;
       _rebuildHkSectorFilter();
       renderHkTable();
       loadHkBreadthChart();
     })
     .catch(e => {
       if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
-    });
+    })
+    .finally(() => { _hkStocksLoading = false; });
 }
 
 function _rebuildHkSectorFilter() {
@@ -18207,7 +18220,12 @@ function loadHkSectorRanks() {
   _fetchTimeout(`/api/hk-sector-ranks?index=${idx}`, 30000, 'หมดเวลารอ Sector Ranking หุ้น HK (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
-      _hkSectorRanks[idx] = d.sectors || [];
+      if (d.error) throw new Error(d.error);
+      const sectors = d.sectors || [];
+      // อย่า cache ก้อนว่าง — [] เป็น truthy ทำให้ guard `if (_hkSectorRanks[_hkIndex])`
+      // ข้าม fetch ถาวร (เมนู Sector Ranking ค้าง "ไม่มีข้อมูล" จนกว่าจะ F5) ตอน metrics
+      // ยังไม่ถูก build หรือ response error ชั่วคราว
+      if (sectors.length) _hkSectorRanks[idx] = sectors;
       if (idx === _hkIndex) renderHkSectorTable();
     })
     .catch(e => {
@@ -18537,7 +18555,10 @@ function loadJpSectorRanks() {
   _fetchTimeout('/api/jp-sector-ranks', 30000, 'หมดเวลารอ Sector Ranking หุ้น JP (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
-      _jpSectorRanks = d.sectors || [];
+      if (d.error) throw new Error(d.error);
+      const sectors = d.sectors || [];
+      // อย่า cache ก้อนว่าง — ดูเหตุผลใน loadHkSectorRanks
+      if (sectors.length) _jpSectorRanks = sectors;
       renderJpSectorTable();
     })
     .catch(e => {
@@ -29074,12 +29095,12 @@ let _confluenceSort = null;   // { key, dir: 1=มาก→น้อย, -1=น�
 const _CONFLUENCE_SORT_GETTERS = {
   symbol: r => r.symbol || '',
   sector: r => _stockBySym(r.symbol)?.sector || '',
-  price:  r => _stockBySym(r.symbol)?.price ?? -Infinity,
-  ret_1d: r => _stockBySym(r.symbol)?.ret_1d ?? -Infinity,
-  score:  r => r.score ?? -Infinity,
-  ins_net: r => r.insider?.net_value_mbaht ?? -Infinity,
-  short_pos: r => r.short?.short_pos_pct ?? -Infinity,
-  nvdr_pct: r => r.nvdr?.nvdr_pct ?? -Infinity,
+  price:  r => _stockBySym(r.symbol)?.price ?? null,
+  ret_1d: r => _stockBySym(r.symbol)?.ret_1d ?? null,
+  score:  r => r.score ?? null,
+  ins_net: r => r.insider?.net_value_mbaht ?? null,
+  short_pos: r => r.short?.short_pos_pct ?? null,
+  nvdr_pct: r => r.nvdr?.nvdr_pct ?? null,
 };
 function confluenceSortBy(key) {
   if (_confluenceSort && _confluenceSort.key === key) _confluenceSort.dir *= -1;
@@ -29113,7 +29134,14 @@ function _renderConfluenceTable() {
     const dir = _confluenceSort.dir;
     rows = rows.slice().sort((a, b) => {
       const va = get(a), vb = get(b);
-      if (typeof va === 'string') return dir === 1 ? vb.localeCompare(va) : va.localeCompare(vb);
+      if (typeof va === 'string' || typeof vb === 'string')
+        return dir === 1 ? String(vb).localeCompare(String(va)) : String(va).localeCompare(String(vb));
+      // แถวที่ไม่มีค่า (null/NaN) ลงล่างเสมอไม่ว่าเรียงทางไหน — กัน comparator คืน NaN
+      // (เดิม getter คืน -Infinity ทำให้ -Infinity − (−Infinity) = NaN ตอนทั้งคู่ว่าง เรียงมั่ว)
+      const na = va == null || Number.isNaN(va), nb = vb == null || Number.isNaN(vb);
+      if (na && nb) return 0;
+      if (na) return 1;
+      if (nb) return -1;
       return dir === 1 ? vb - va : va - vb;
     });
   }
