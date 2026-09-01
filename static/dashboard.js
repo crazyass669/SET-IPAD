@@ -5672,11 +5672,25 @@ function _hedgeActMeta(act) {
 // แสดงสรุป 13F ของหุ้นที่กำลังเปิดใน chart-modal (ทุกตลาด) — โหลด _hedgeData แบบ lazy ครั้งเดียว
 // แล้ว cache อันดับ/สถิติของทุกหุ้นไว้ใน _hedgeGlobalStatsCache ไม่ต้องคำนวณซ้ำทุกครั้งที่เปิดโมดัล
 let _hedgeGlobalStatsCache = null;   // sym(raw จาก dataroma) -> {sym,name,nFunds,nBuy,nSell,rank}
+let _hedgeOverlapCache = null;       // { key, list } — memo ของ _hedgeComputeOverlap (ขึ้นกับ _hedgeData + _hedgeSel เท่านั้น)
+
+// เตรียม state ระดับหน้าหลังได้ payload /api/hedge/managers — ใช้ร่วมทั้งตอนเปิดหน้า Hedge
+// ตรงๆ (loadHedgePage) และตอน lazy-load ผ่าน badge 13F ใน chart modal (_hedgeEnsureLoaded)
+// กันสถานะครึ่งๆ กลางๆ ที่ทำให้ Consensus โชว์ "ยังไม่ได้เลือกกอง" + coverage badge ไม่ขึ้นถาวร
+function _hedgeApplyLoaded(d) {
+  _hedgeData = d;
+  _hedgeLoaded = true;
+  _hedgeGlobalStatsCache = null;
+  _hedgeOverlapCache = null;
+  // ค่าเริ่มต้น: เลือกทุกกองที่มี holdings เพื่อให้ consensus มีความหมายทันที
+  _hedgeSel = new Set(Object.values(d.managers || {})
+    .filter(m => (m.holdings || []).length).map(m => m.code));
+}
 function _hedgeEnsureLoaded(cb) {
   if (_hedgeData) { cb(); return; }
   fetch('/api/hedge/managers')
     .then(r => r.ok ? r.json() : Promise.reject())
-    .then(d => { _hedgeData = d; _hedgeLoaded = true; cb(); })
+    .then(d => { _hedgeApplyLoaded(d); cb(); })
     .catch(() => {});
 }
 function _hedgeGlobalStats() {
@@ -5725,18 +5739,19 @@ function _cmRenderHedgeInfo(symbol) {
 
 function loadHedgePage() {
   updateHedgeStatus();
-  if (_hedgeLoaded) { renderHedgeActiveTab(); return; }
+  if (_hedgeLoaded) {
+    renderHedgeActiveTab();
+    // อาจถูก lazy-load มาจาก badge 13F ใน chart modal ซึ่งไม่ได้โหลด coverage — เติมให้ครบ
+    if (_hedgeCovered == null)
+      loadHedgeCoverage().then(() => { if (_hedgeTab === 'overlap') renderHedgeOverlap(); });
+    return;
+  }
   const box = document.getElementById('hedge-overlap-result');
   if (box) box.innerHTML = '<div style="padding:20px;color:var(--text2)">กำลังโหลด...</div>';
   fetch('/api/hedge/managers')
     .then(r => r.ok ? r.json() : r.json().then(e => Promise.reject(e)))
     .then(d => {
-      _hedgeData = d;
-      _hedgeLoaded = true;
-      _hedgeGlobalStatsCache = null;   // ข้อมูลชุดใหม่ — badge 13F ใน chart modal ต้องคำนวณใหม่
-      // ค่าเริ่มต้น: เลือกทุกกองที่มี holdings เพื่อให้ consensus มีความหมายทันที
-      _hedgeSel = new Set(Object.values(d.managers || {})
-        .filter(m => (m.holdings || []).length).map(m => m.code));
+      _hedgeApplyLoaded(d);
       updateHedgeStatus();
       renderHedgeActiveTab();
       // โหลด coverage แล้ว re-render ให้ badge/ตัวนับ "ไม่มีในคลัง" โผล่
@@ -6029,6 +6044,10 @@ function hedgeSelectAll(on) {
 // ----------------------------------------------------------------- OVERLAP tab
 // รวมทุกกองที่ถูกเลือก → นับว่าหุ้นแต่ละตัวถูกกี่กองถือ + ใครถือบ้าง
 function _hedgeComputeOverlap() {
+  // memo: ผลขึ้นกับ _hedgeData + เซ็ตกองที่เลือกเท่านั้น — เดิม re-scan ~83 กอง × holdings
+  // ใหม่ทุก keystroke/คลิกเรียง/เปลี่ยน min-funds และซ้ำอีกครั้งใน _hedgeComputeSoldOut
+  const ck = (_hedgeData?.generated_at || '') + '|' + [..._hedgeSel].sort().join(',');
+  if (_hedgeOverlapCache && _hedgeOverlapCache.key === ck) return _hedgeOverlapCache.list;
   const map = {};   // sym -> {sym,name,funds[],totalValue,totalShares,anyBuy,...}
   let grandTotal = 0;   // ผลรวมมูลค่าพอร์ตของกองที่เลือก (ตัวหารของ % พอร์ตรวม)
   Object.values(_hedgeData.managers || {}).forEach(m => {
@@ -6057,7 +6076,20 @@ function _hedgeComputeOverlap() {
     e.vsCost = (e.avgHold != null && e.current != null && e.avgHold !== 0) ? (e.current - e.avgHold) / e.avgHold * 100 : null;
     e.poolPct = grandTotal > 0 ? e.totalValue / grandTotal * 100 : null;
   });
-  return Object.values(map);
+  const list = Object.values(map);
+  _hedgeOverlapCache = { key: ck, list };
+  return list;
+}
+
+// comparator ตัวเลขกลางของตาราง hedge — ค่าว่าง/ไม่ใช่ตัวเลข (—) ไปท้ายตารางเสมอ ไม่ว่าจะเรียง
+// ขึ้นหรือลง · เดิม getter คืน -Infinity ทำให้ (1) แถว — ลอยขึ้นบนสุดตอนเรียงจากน้อยไปมาก
+// (2) คู่ null-null ได้ -Infinity - (-Infinity) = NaN = comparator ที่ไม่ valid
+function _hedgeNumCmp(va, vb, dir) {
+  const aok = Number.isFinite(va), bok = Number.isFinite(vb);
+  if (!aok && !bok) return 0;
+  if (!aok) return 1;
+  if (!bok) return -1;
+  return dir === 1 ? vb - va : va - vb;
 }
 
 // ผู้ใช้คลิกหัวคอลัมน์เพื่อจัดเรียงเอง — ถ้ายังไม่คลิก (null) จะใช้ลำดับ default ตาม actFilter ด้านล่าง
@@ -6066,10 +6098,10 @@ const _HEDGE_OV_SORT_GETTERS = {
   funds:     e => e.funds.length,
   buy:       e => e.nBuy,
   sell:      e => e.nSell,
-  avgHold:   e => e.avgHold != null ? e.avgHold : -Infinity,
-  current:   e => e.current != null ? e.current : -Infinity,
-  vsCost:    e => e.vsCost != null ? e.vsCost : -Infinity,
-  poolPct:   e => e.poolPct != null ? e.poolPct : -Infinity,
+  avgHold:   e => e.avgHold,
+  current:   e => e.current,
+  vsCost:    e => e.vsCost,
+  poolPct:   e => e.poolPct,
   totalValue: e => e.totalValue,
 };
 function hedgeOvSortBy(key) {
@@ -6103,7 +6135,7 @@ function renderHedgeOverlap() {
     // คลิกหัวคอลัมน์เองแล้ว — เรียงตามคอลัมน์นั้นแทน default
     const get = _HEDGE_OV_SORT_GETTERS[_hedgeOvSort.key];
     const dir = _hedgeOvSort.dir;
-    list.sort((a, b) => dir === 1 ? get(b) - get(a) : get(a) - get(b));
+    list.sort((a, b) => _hedgeNumCmp(get(a), get(b), dir));
   } else if (actFilter === 'sell')      list.sort((a, b) => b.nSell - a.nSell || b.totalValue - a.totalValue);
   else if (actFilter === 'buy')  list.sort((a, b) => b.nBuy - a.nBuy || b.totalValue - a.totalValue);
   else                           list.sort((a, b) => b.funds.length - a.funds.length || b.totalValue - a.totalValue);
@@ -6184,7 +6216,7 @@ let _hedgeMgrDetailSort = null;   // { key, dir } — null = default (pct desc)
 let _hedgeDetailMgrCode = null;   // จำ code ล่าสุดที่เปิดไว้ เพื่อ re-render ตอนคลิกเรียง
 const _HEDGE_MGR_DETAIL_GETTERS = {
   sym: h => (h.sym || '').toLowerCase(),
-  pct: h => h.pct != null ? h.pct : -Infinity,
+  pct: h => h.pct,
   activity: h => (h.activity || '').toLowerCase(),
   value: h => h.value || 0,
 };
@@ -6209,7 +6241,7 @@ function hedgeShowManager(code) {
     holdingsList.sort((a, b) => {
       const va = get(a), vb = get(b);
       if (typeof va === 'string') return dir === 1 ? vb.localeCompare(va) : va.localeCompare(vb);
-      return dir === 1 ? vb - va : va - vb;
+      return _hedgeNumCmp(va, vb, dir);
     });
   } else {
     holdingsList.sort((a, b) => (b.pct || 0) - (a.pct || 0));
@@ -6246,7 +6278,7 @@ let _hedgeStockDetailSort = null;   // { key, dir } — null = default (pct desc
 let _hedgeDetailStockSym = null;    // จำ sym ล่าสุดที่เปิดไว้ เพื่อ re-render ตอนคลิกเรียง
 const _HEDGE_STOCK_DETAIL_GETTERS = {
   name: h => (h.name || '').toLowerCase(),
-  pct: h => h.pct != null ? h.pct : -Infinity,
+  pct: h => h.pct,
   activity: h => (h.activity || '').toLowerCase(),
   value: h => h.value || 0,
 };
@@ -6276,7 +6308,7 @@ function hedgeShowStock(sym) {
     holders.sort((a, b) => {
       const va = get(a), vb = get(b);
       if (typeof va === 'string') return dir === 1 ? vb.localeCompare(va) : va.localeCompare(vb);
-      return dir === 1 ? vb - va : va - vb;
+      return _hedgeNumCmp(va, vb, dir);
     });
   } else {
     holders.sort((a, b) => (b.pct || 0) - (a.pct || 0));
@@ -6349,14 +6381,18 @@ function hedgeOpenDetail(sym) {
 
 function _hedgeRenderDetail(html) {
   const body = document.getElementById('hedge-detail-body');
-  if (!body) return;
+  const modal = document.getElementById('hedge-detail-modal');
+  if (!body || !modal) return;
   body.innerHTML = html;
-  document.getElementById('hedge-detail-modal').classList.add('open');
+  modal.classList.add('open');
   document.body.style.overflow = 'hidden';
 }
 
 function closeHedgeDetailModal() {
-  document.getElementById('hedge-detail-modal').classList.remove('open');
+  // เรียกจาก keydown handler กลาง (Escape) ทุกครั้ง — ต้องกัน null ไม่งั้น Escape ทั้งหน้าพัง
+  // ถ้า element นี้ไม่มีใน DOM (เหมือน closeDhCashCycleModal)
+  const modal = document.getElementById('hedge-detail-modal');
+  if (modal) modal.classList.remove('open');
   document.body.style.overflow = '';
 }
 
@@ -19034,6 +19070,7 @@ function _jpHmOpenModal(ev, sym) {
 let _newsTab = 'set';        // 'set' | 'dr'
 let _newsSource = 'all';     // ตัวกรองแหล่ง: all | set | yahoo | google
 let _newsRows = [];          // ผลล่าสุด (เก็บไว้กรองซ้ำฝั่ง client ไม่ต้องยิงใหม่)
+let _newsReqSeq = 0;         // ตัวนับ request — ทิ้ง response ที่มาช้ากว่าการค้นหาครั้งล่าสุด
 const NEWS_RECENT_KEY = 'newsRecentStocks';
 
 const _NEWS_SRC_META = {
@@ -19065,6 +19102,13 @@ function setNewsTab(tab, btn) {
   _newsTab = tab;
   document.querySelectorAll('#news-tab-set,#news-tab-dr').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
+  // คนละ tab = คนละหุ้น/คนละชุดแหล่งข่าว — ล้างผลของหุ้นตัวก่อนไม่ให้ค้างจอ + ทิ้ง response ที่ยัง in-flight
+  _newsReqSeq++;
+  _newsRows = [];
+  const out = document.getElementById('news-result'); if (out) out.innerHTML = '';
+  const cnt = document.getElementById('news-count'); if (cnt) cnt.textContent = '';
+  const filt = document.getElementById('news-src-filter'); if (filt) filt.style.display = 'none';
+  const hint = document.getElementById('news-hint'); if (hint) hint.textContent = '';
   _newsBuildDatalist();
   // แหล่ง SET.or.th มีเฉพาะหุ้นไทย — ซ่อนปุ่มกรองนั้นตอนดูหุ้นต่างประเทศ
   const setBtn = document.getElementById('news-src-set');
@@ -19135,18 +19179,21 @@ function _newsRelTime(iso) {
 async function searchStockNews() {
   const sym = (document.getElementById('news-sym').value || '').trim().toUpperCase();
   if (!sym) return;
+  const seq = ++_newsReqSeq;   // ค้นใหม่แซง → response เก่าที่มาช้ากว่าจะถูกทิ้ง (กันโชว์ข่าวผิดตัว)
+  const isDr = _newsTab === 'dr';
   const hint = document.getElementById('news-hint');
   const out = document.getElementById('news-result');
   hint.textContent = 'กำลังรวมข่าวจากทุกแหล่ง...';
   out.innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข่าว (ครั้งแรกของหุ้นตัวนี้ ~5-15 วิ)...</div>';
-  const isDr = _newsTab === 'dr';
   const market = isDr ? (typeof _finGuessDrMarket === 'function' ? _finGuessDrMarket(sym) : 'US') : '';
   try {
     const r = await _fetchTimeout(`/api/stock-news/${encodeURIComponent(sym)}${isDr ? `?is_dr=1&market=${market}` : ''}`, 35000);
+    if (seq !== _newsReqSeq) return;
     if (!r.ok || !(r.headers.get('content-type') || '').includes('application/json')) {
       throw new Error('เมนูนี้ต้องรัน Flask server ในเครื่อง — ใช้บนเวอร์ชัน static/GitHub Pages ไม่ได้ (ดึงข่าวสดต่อหุ้น bake ล่วงหน้าไม่ได้)');
     }
     const d = await r.json();
+    if (seq !== _newsReqSeq) return;
     if (d.error) throw new Error(d.error);
     _newsRows = d.rows || [];
     _newsRecentAdd(sym, _newsTab);
@@ -19165,6 +19212,7 @@ async function searchStockNews() {
     }
     _renderNewsRows();
   } catch (e) {
+    if (seq !== _newsReqSeq) return;
     hint.textContent = '';
     out.innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${e.message}</div>`;
   }

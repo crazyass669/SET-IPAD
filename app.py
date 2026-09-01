@@ -7009,6 +7009,8 @@ def _news_resolve_yf(sym, is_dr, market):
         return entry["yf"]
     if market == "HK":
         return sym.zfill(4) + ".HK"
+    if market == "JP":
+        return sym + ".T"   # Yahoo ต้องมี suffix .T ไม่งั้นหาข่าวหุ้นญี่ปุ่นไม่เจอ (ดู fetch_yahoo_full)
     return sym
 
 
@@ -7089,7 +7091,9 @@ def _news_from_google(query, lang_th):
         # Google News ต่อท้าย title ด้วย " - ชื่อสำนัก" — ตัดออกเมื่อรู้ชื่อสำนักจาก tag แล้ว
         publisher = src_el.text if src_el is not None and src_el.text else "Google News"
         if title.endswith(" - " + publisher):
-            title = title[:-(len(publisher) + 3)]
+            stripped = title[:-(len(publisher) + 3)].strip()
+            if stripped:   # กัน title ที่เป็น " - ชื่อสำนัก" ล้วน (ตัดแล้วเหลือ '') → row ว่างคลิกไม่ได้
+                title = stripped
         rows.append({"title": title, "url": it.findtext("link") or "", "ts": ts,
                      "source": "google", "publisher": publisher, "summary": ""})
     return rows
@@ -7163,7 +7167,13 @@ def stock_news(symbol):
     # ทำให้ผู้ใช้กดค้นใหม่ก็ได้ผลว่างเดิมซ้ำๆ ทั้งที่แหล่งข้อมูลกลับมาปกติแล้ว
     # (มีข่าวอย่างน้อย 1 แถว = ถือว่าใช้ได้ cache ตามปกติ)
     if deduped or not errors:
-        _stock_news_cache[cache_key] = result
+        entry = dict(result)
+        if errors:
+            # ผลไม่ครบ (บางแหล่ง rate-limit/ค้างชั่วคราว) — cache สั้นลงเหลือ ~3 นาที
+            # ด้วยการ backdate ts ของ cache (ไม่กระทบ ts ที่ส่งให้ client โชว์ "ณ X ที่แล้ว")
+            # เผื่อแหล่งที่ล่มกลับมาปกติแล้วผู้ใช้จะได้ผลครบโดยไม่ต้องรอเต็ม 15 นาที
+            entry["ts"] = time.time() - (_STOCK_NEWS_CACHE_TTL - 180)
+        _stock_news_cache[cache_key] = entry
     return jsonify(result)
 
 
