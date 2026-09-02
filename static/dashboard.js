@@ -11939,7 +11939,12 @@ function renderTearsheet(d) {
     const canvas = document.getElementById('ts-spark');
     if (canvas && h.sparkline) drawSparkline(canvas, h.sparkline, h.ret_1y);
   });
-  if (mkt === 'TH') { _tsLoadFlow(h.symbol); _tsLoadOwnership(h.symbol); _tsLoadFinHealthMini(h.symbol, d.quality?.cash_cycle); }
+  if (mkt === 'TH') {
+    _tsLoadFlow(h.symbol); _tsLoadOwnership(h.symbol);
+    // SET.or.th Financial Health Check ไม่ครอบกลุ่มธนาคาร/เงินทุน/ประกัน (404 เสมอ เหมือน Z-Score)
+    // — ข้ามไม่ยิงเลยสำหรับหุ้นกลุ่มการเงิน กัน 404 รก console ทั้งที่การ์ดถูกซ่อนอยู่แล้ว
+    if (!d.dcf?.is_financial_sector) _tsLoadFinHealthMini(h.symbol, d.quality?.cash_cycle);
+  }
   if (!lite) {
     _tsLoadCalendarWeek(h.symbol, mkt);
     _loadPriceAnalytics(h.symbol, 'ts-lts', () => _tsData?.symbol === h.symbol, mkt !== 'TH' ? h.symbol : null);
