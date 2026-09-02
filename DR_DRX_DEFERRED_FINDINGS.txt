@@ -1,6 +1,10 @@
 DR/DRx (ลำดับ 21) — finding ที่ตั้งใจไม่แก้ในรอบ code review 2026-09-01
 ===============================================================================
->>> สถานะล่าสุด (2026-09-01): แก้ 12/14 finding · เหลือ 2 ข้อนี้ค้าง (+ ครึ่งหลังของข้อ 2)
+>>> สถานะล่าสุด (2026-09-02): แก้ครบ 14/14 แล้ว — ข้อ 9, 10(ครึ่งหลัง), 11 ที่เคย defer
+    ด้านล่างแก้เสร็จหมด (ดูสรุปท้ายไฟล์) ลำดับ 21 ปิดแล้วใน CODE_REVIEW_MENU_TEMPLATES.txt
+    เนื้อหาด้านล่างเก็บไว้เป็นประวัติ/หลักฐานการตัดสินใจเดิมเท่านั้น
+
+>>> สถานะก่อนหน้า (2026-09-01): แก้ 12/14 finding · เหลือ 2 ข้อนี้ค้าง (+ ครึ่งหลังของข้อ 2)
     ทั้งหมดเป็น code-quality (reuse/simplification) ล้วน ไม่ใช่ correctness bug — ไม่ทำให้
     route 500 / JS throw / ค่าที่โชว์ผิด
 
@@ -101,6 +105,40 @@ old_closes/old_dates/old_vols หลัง merge overlap แล้ว · เท�
 
 แนะนำ: `_drLogoHtml(s, cls)` โดย cls = 'dr-logo' หรือ 'dr-card-logo' แล้วต่อ '-img' เอง —
 ทำรวมกับข้อ 11 ในคราวเดียว
+===============================================================================
+
+>>> แก้แล้ว 2026-09-02 (ทำทั้ง 3 ข้อในรอบเดียว):
+
+ข้อ 9 → `_warnBannerHtml(d)` (dashboard.js เดิมตำแหน่ง _drWarningsHtml) แทน
+_drWarningsHtml/_etfWarningsHtml ทั้งคู่ — ลบ 2 ฟังก์ชันเดิมทิ้ง แก้ตรง 4 call site
+(loadDRPage, _drPollRefresh, loadETFPage, _etfPollRefresh) ตามที่แนะนำไว้พอดี
+
+ข้อ 10 (ครึ่งหลัง) → `_drLogoHtml(s, cls)` (วางถัดจาก _drSymColor) รับ cls='dr-logo'
+(ตาราง) หรือ 'dr-card-logo' (การ์ด) ต่อ '-img' เอง — ใช้แทนใน _drRows/_drCardGrid ทั้งคู่
+
+ข้อ 11 → `_compute_dr_metrics(closes, dates, vols, cur_year)` (app.py ก่อนนิยาม
+_dr_do_rebuild) รับ full history เป็น list ล้วน คืน dict รวม ret_1w..5y/YTD/52W/ATH/RS/
+EMA/price+vol history/close100 — ทั้ง _dr_do_rebuild และ _do_quick (ใน dr_quick_update)
+เรียกตัวเดียวกันแล้ว ลบโค้ดคำนวณซ้ำทั้งคู่ทิ้ง (_dr_ret ใน _dr_do_rebuild, _ret_q ใน
+_do_quick ก็ลบไปด้วยเพราะรวมเข้า helper แล้ว)
+
+ผลข้างเคียงที่ตั้งใจระหว่างรวม (ไม่ใช่บั๊กใหม่ — คือจุดที่ finding นี้ชี้ไว้แต่แรกว่า 2 path
+เคย drift กัน ตอนนี้อ้างสูตรเดียวกันแล้ว):
+  - YTD ใช้สูตรเทียบ string ISO date ของฝั่ง quick (เดิม full ใช้ pd.Timestamp + tz-aware
+    guard ที่ #6 เพิ่งแก้ไปวันก่อน) — ทดสอบแล้วให้ผลตรงกันทุกกรณี ไม่ต้องพึ่ง tz-localize อีก
+  - vol_avg20 เปลี่ยนจาก int() (truncate, ฝั่ง full เดิม) เป็น round() (ฝั่ง quick เดิม) —
+    ต่างกันได้สูงสุด 1 หน่วย ไม่กระทบการแสดงผลจริง
+  - entry["closes"] (full precision history) ที่ต่อเข้าใน quick-update เปลี่ยนจากปัด 4
+    ตำแหน่งเป็น 6 ตำแหน่งให้ตรงกับ full rebuild (closes_all) — แก้ drift ที่ 2 ที่ finding
+    ระบุไว้ตรงๆ
+
+ทดสอบ: (1) unit compare เขียนสคริปต์แยกคำนวณด้วยสูตรเดิมทั้ง 2 path เทียบกับ
+_compute_dr_metrics บนข้อมูลสุ่ม 1400 แท่ง + edge case (n=2,3,5,20,21,22,251,252,253,
+ราคา<1) — ตรงกันหมดยกเว้น vol_avg20 ที่ต่างตามที่ตั้งใจด้านบน (2) รัน dr_quick_update จริง
+ผ่าน Playwright บนเซิร์ฟเวอร์ dev จริง (325 หุ้น, updated 322/325, 0 console/page error)
+(3) เรียก _dr_do_rebuild() ตรงๆ ในโปรเซสแยก (325 หุ้น, 0 warnings, 36 วิ) แล้วเทียบ AAPL
+ระหว่าง full-vs-quick result — ค่าตรงกันเป๊ะทุก field (ret_1w/1m/1y/rs_score/above_ema ฯลฯ)
+· cache bust `?v=20260902h` · ยังไม่ commit
 ===============================================================================
 สร้างเมื่อ: 2026-09-01 — บันทึกจากรอบ /code-review xhigh เมนู DR/DRx
 (app.py /api/dr* + sources/dr_universe.py + dashboard.js บล็อก DR L24425-24582 + L25199-25835

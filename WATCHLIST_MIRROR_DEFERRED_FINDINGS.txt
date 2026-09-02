@@ -1,9 +1,10 @@
-Watchlist B — mirror cache (ลำดับ 2) — finding ที่ตั้งใจไม่แก้ในรอบ code review 2026-09-02
+Watchlist B — mirror cache (ลำดับ 2) — finding ที่เดิมตั้งใจไม่แก้ในรอบ code review 2026-09-02
 ===============================================================================
->>> สถานะล่าสุด (2026-09-02): correctness bug ที่ยืนยันแล้ว (อ่านโค้ดจริงหรือ trace source)
-    แก้ครบ 13 จุด (7 backend app.py + 6 frontend dashboard.js) เหลือรายการด้านล่างค้าง —
-    เป็น code-quality (reuse/simplification/efficiency) + edge-case severity ต่ำล้วน ไม่ใช่
-    correctness bug ที่ทำให้ route 500 / JS throw / หน้าเว็บค้าง / ค่าที่โชว์ผิดในเคสปกติ
+>>> สถานะล่าสุด (2026-09-02): แก้ครบทั้ง 8 ข้อด้านล่างแล้ว (ผู้ใช้ขอให้แก้ทั้งหมดรอบถัดมา)
+    รวมกับ correctness bug 13 จุดที่แก้ไปก่อนหน้า = ปิดเมนู Watchlist B ครบ 100% แล้ว
+    ไฟล์นี้เก็บไว้เป็นบันทึกว่าแก้อะไร/อย่างไรบ้าง (ไม่ใช่ finding ที่ยังค้าง)
+    node --check ผ่าน + Playwright headless test ผ่าน (ดู memory:
+    watchlist-mirror-code-review-2026-09-02) — cache-bust bump เป็น ?v=20260902g
 
 แก้แล้ว (correctness, ยืนยัน syntax ผ่าน py_compile + node --check):
   backend (app.py, tearsheet()+/api/dr):
@@ -28,19 +29,23 @@ Watchlist B — mirror cache (ลำดับ 2) — finding ที่ตั้�
       renderWatchlist ลบ entry เก่าแล้ว retry ใหม่แทนที่จะค้างแถวแดงทั้ง session
     - removeFromWatchlist ไม่เคลียร์ _wlLive[sym] → เพิ่ม delete กันราคาเก่าโผล่ทันทีถ้าเพิ่มกลับมา
 
-ดู memory: (ยังไม่ได้เขียนตอนสร้างไฟล์นี้ — เขียนหลัง browser test ผ่าน)
+ดู memory: watchlist-mirror-code-review-2026-09-02 (อัปเดตแล้วหลัง browser test รอบ 8 finding ผ่าน)
 
 ===============================================================================
-วิธีใช้ไฟล์นี้: ปิดลำดับ 2 (Watchlist B) ใน CODE_REVIEW_MENU_TEMPLATES.txt เป็น ✅ ไม่ได้จนกว่า
-จะเคลียร์รายการด้านล่าง (แก้จริง หรือตัดสินใจไม่แก้ถาวรแล้วบันทึกเหตุผล) — ระหว่างนี้สถานะ
-ค้างที่ 🔶 (รีวิว+แก้ correctness bug เสร็จ, ผ่าน browser test เบื้องต้นแล้ว แต่ยังมี finding
-ค้าง = ปิด ✅ เต็มรูปแบบไม่ได้ตามเงื่อนไขไฟล์ template "0 finding เหลืออยู่")
-ขอบเขตจริง = เมนู "Watchlist" เฉพาะบล็อก mirror cache หลัก (dashboard.js:3255-4054+) +
-/api/tearsheet, /api/us-index-metrics, /api/hk-index-metrics, /api/dr
+สถานะ: ✅ ปิดครบ 8/8 (2026-09-02 รอบสอง) — ผู้ใช้ขอให้แก้ทั้งหมด ทำตามลำดับ
+8→5→1→4→6→7→3→2 (isolated/ความเสี่ยงต่ำก่อน → refactor/เกี่ยวโยงกันทีหลัง) ยืนยันด้วย
+node --check ทุกขั้น + Playwright headless test (localStorage seed + route intercept กัน
+แตะ data/watchlist.json, data/price_alerts.json จริง — ยืนยัน git diff ว่างหลังเทสต์)
+cache-bust bump เป็น dashboard.js?v=20260902g
+ขอบเขตจริง = เมนู "Watchlist" เฉพาะบล็อก mirror cache หลัก (renderWatchlist + helper ที่แยกใหม่) +
+_wlFetchMirror/_wlFetchMirrorGuessMarket, drawSparkline, alert storage helpers (ไม่แตะ app.py)
 ===============================================================================
 
 
 ─── ข้อ 1: แม่แบบแถว DR/US/HK ซ้ำ 2 ชุด (prefixed path vs legacy-migrate path, ~240 บรรทัด) ───
+✅ แก้แล้ว: extract เป็น _wlRenderDrRow/_wlRenderUsRow/_wlRenderHkRow (module-level, รับ
+sym/under-or-data/isMirror) ทั้ง 2 path เรียก helper เดียวกัน — markup เหมือนเดิม 100%
+(diff ตรวจแล้ว) ลด ~240 บรรทัดเหลือ 3 helper + call site บรรทัดเดียวทั้ง 6 จุด
 
 ที่อยู่: DR/US/HK row template ซ้ำกัน — prefixed (~L3730-3843) กับ legacy bare-symbol migrate
 (~L3860-3975) ต่างกันแค่ตัวแปร (d/u/h vs sym/newSym) กับ side-effect การ migrate entry
@@ -55,6 +60,9 @@ Watchlist B — mirror cache (ลำดับ 2) — finding ที่ตั้�
 
 
 ─── ข้อ 2: renderWatchlist() ไม่มี memoization — rebuild map/filter เต็มทุกครั้งที่เรียก ───
+✅ แก้แล้ว: _wlBuildMaps() memoize stockMap/drMap/usMap/hkMap ด้วย reference-identity check
+(เลียนแบบ _secRankCache) + wlSet = new Set(watchlist) สร้างหลัง row .map() จบ แทน
+watchlist.includes() 4 จุดใน filter (กัน stale จาก migrate mid-map)
 
 ที่อยู่: stockMap/drMap/usMap/hkMap (Object.fromEntries เต็ม array ทุกครั้ง) + sparkline filter
 4 จุด (watchlist.includes() ใน .filter() ของ DATA.stocks/_usData/_hkData/mirror) — ไม่มี cache
@@ -72,6 +80,11 @@ cap มาก (ผู้ใช้จริงมีไม่กี่สิบ�
 
 
 ─── ข้อ 3: mirror-fetch ไม่มี concurrency cap (ต่าง CONCURRENCY=8 ของ wlRefreshLivePrices) ───
+✅ แก้แล้ว: เพิ่ม _wlMirrorQueue + _wlDrainMirrorQueue (CONCURRENCY=8, splice+Promise.all
+วนจนคิวหมด) + _wlQueueMirrorFetch เป็นจุดเข้าเดียว 3 call site เดิมเปลี่ยนมาเรียกผ่านคิวแทน
+ยืนยันด้วย Playwright unit test ตรง _wlQueueMirrorFetch (async route delay) — max in-flight
+= 8 พอดีไม่เกิน (เทสต์แรกด้วย Python sync API time.sleep() ให้ผลปลอมเพราะ block dispatcher
+thread เดียว — แก้เป็น async_playwright ถึงวัดถูก)
 
 ที่อยู่: _wlFetchMirror/_wlFetchMirrorGuessMarket ยิงพร้อมกันทุก symbol ที่ unresolved ใน
 renderWatchlist().map() pass เดียว ไม่มี cap เหมือน wlRefreshLivePrices (CONCURRENCY=8)
@@ -88,6 +101,10 @@ render หลายจุด เสี่ยง regression กว่าจะค
 
 
 ─── ข้อ 4: esc() ใน renderWatchlist ซ้ำกับ _escHtml (escape อ่อนกว่า — ขาด '>' และ "'") ───
+✅ แก้แล้ว: ลบ local esc() ทิ้ง เปลี่ยนทุกจุดเรียกเป็น _escHtml() ตรง (รวมจุดที่ถูกย้ายเข้า
+helper ข้อ 1 ไปแล้วด้วย) — เจอจุดตกหล่นระหว่างแก้ 1 จุด (แถว SET-stock ปกติที่ท้ายฟังก์ชัน
+ก็ใช้ esc() ตัวเดียวกันอยู่ ไม่ได้อยู่ใน scope 3 helper ที่ extract ข้อ 1) แก้ครบแล้ว
+node --check + browser test ยืนยันไม่มี "esc is not defined" runtime error
 
 ที่อยู่: local `esc` (L~3674) hand-roll escape แค่ &, <, " ส่วน _escHtml (global) escape ครบกว่า
 — sibling helper ในบล็อกเดียวกัน (_wlMirrorLoadingRow ฯลฯ) เรียก _escHtml ตรงอยู่แล้ว
@@ -101,6 +118,8 @@ render หลายจุด เสี่ยง regression กว่าจะค
 
 
 ─── ข้อ 5: _wlMarketRank มี JP: prefix แต่ไม่มี path ไหนรองรับจริง (dead branch) ───
+✅ แก้แล้ว: ตัด clause "JP:" ทิ้งจาก _wlMarketRank เพิ่มคอมเมนต์อ้างอิง guard ที่ปุ่ม Tearsheet
+(ไม่รองรับ JP จริง — ไม่ใช่ฟีเจอร์ใหม่ แค่เอา dead code ที่ทำให้เข้าใจผิดออก)
 
 ที่อยู่: sort rank เผื่อ "JP:" prefix แต่ไม่มี render branch/migration chain/guess-market ไหน
 สร้างหรือรองรับ entry แบบนี้ได้จริง — ป้องกันด้วยการซ่อนปุ่ม "เพิ่ม Watchlist" ในหน้า Tearsheet
@@ -115,6 +134,10 @@ guess-market/badge) ไม่ใช่ patch เล็ก
 
 
 ─── ข้อ 6: legacy-migrate ไม่ migrate price alert ที่ผูกกับ symbol เก่า (bare) ───
+✅ แก้แล้ว: เพิ่ม _alertsRenameSymbol(oldSym, newSym) ใกล้ _loadAlerts/_saveAlerts เรียกหลัง
+_wlSave() ใน migrate block ทั้ง 3 (DR/US/HK) + ใช้ซ้ำที่ guess-market resolve (ข้อ 7) ด้วย
+เพราะบั๊กเดียวกัน — ยืนยันด้วย Playwright: seed alert บน "AAPL" bare แล้ว migrate เป็น
+"DR:AAPL" เช็คว่า wl-alert-tag ยังโชว์ถูกแถวหลัง migrate (ผ่าน)
 
 ที่อยู่: migration bare→prefixed (เช่น "AAPL"→"DR:AAPL") ไม่แตะ alert ใน localStorage ที่ยังคีย์
 ด้วย symbol เก่า — _wlAlertCell(newSym) หาไม่เจอ (a.symbol==='AAPL' ไม่ตรง 'DR:AAPL')
@@ -131,6 +154,11 @@ key เดียวกับที่ _loadAlerts() อ่าน)
 
 
 ─── ข้อ 7: _wlFetchMirrorGuessMarket race — เพิ่ม prefixed form มือขณะ guess-fetch ค้างอยู่ ───
+✅ แก้แล้ว: ตามคำแนะนำเดิม — เช็ค watchlist.includes(prefixedSym) ก่อน ถ้ามีอยู่แล้วลบ bare
+entry ทิ้ง (splice) แทนการ replace ทับ กันซ้ำ 2 รายการ + rename alert (ข้อ 6) ไปด้วยที่จุด
+เดียวกัน — window การชนแคบมาก (~70s) ไม่ได้จำลอง race จริง แต่ตรวจ path ปกติ (ไม่มีชน)
+ผ่าน Playwright แล้ว (US:ZS resolve สำเร็จไม่มี error/ซ้ำ) และอ่านโค้ดยืนยัน logic ตรงตามที่
+วางแผนไว้ (ตามเงื่อนไข verification ที่ตั้งไว้ตอนวางแผน)
 
 ที่อยู่: ถ้า user เพิ่ม "US:ZS" เองระหว่างที่ guess-fetch ของ "ZS" (bare) กำลังรอ (~70s) แล้ว
 resolve เป็น US พอดี → watchlist มี "US:ZS" ซ้ำ 2 รายการ (persist ทั้ง localStorage+server)
@@ -143,6 +171,11 @@ edge case จริง ต่ำกว่า correctness bug อื่นที�
 
 
 ─── ข้อ 8: DR sparkline ret=null (ประวัติ &lt;22 วัน) ถูก drawSparkline วาดเป็นสีเขียว ───
+✅ แก้แล้ว (ผู้ใช้เลือก: แก้ทั้งระบบใน drawSparkline ไม่ใช่แค่ Watchlist): เพิ่มเงื่อนไข
+isUnknownRet (null/undefined/NaN) วาดสีเทา #8b949e แทนเขียว — ตรวจ caller ทั้ง 4 จุดแล้ว
+(renderSparklinesInTable/ret_1m, DR/ret, Tearsheet/ret_1y, short-interest/-trend) ไม่มีจุด
+ไหนพัง เพราะ logic ตัวเลขจริง (>=0/<0) เหมือนเดิม มีแค่เพิ่ม branch unknown ก่อนหน้า —
+ยืนยันด้วย Playwright ว่าหน้าแรก (138 sparkline canvas) ยังเรนเดอร์ปกติไม่มี console error
 
 ที่อยู่: closes.length &lt; 22 → ret=null (กัน NaN จาก index ติดลบ) แต่ drawSparkline ใช้
 `(retVal||0)>=0` ทำให้ null ถูกตีความเป็น "ไม่ติดลบ" → วาดสีเขียวเสมอแม้หุ้นจะลงจริง

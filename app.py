@@ -1046,6 +1046,71 @@ def _rebuild_dr_cache():
         return _dr_do_rebuild()
 
 
+def _compute_dr_metrics(closes, dates, vols, cur_year):
+    """คำนวณ metrics ชุดเดียวกันจาก full price history (closes/dates/vols ascending,
+    ความยาวเท่ากันทั้ง 3 list) — ใช้ร่วมกันทั้ง _dr_do_rebuild (full) และ dr_quick_update
+    (_do_quick) กันปัญหา 2 path drift กัน (เคยเจอจริง: YTD tz-aware TypeError เฉพาะ full,
+    vol_avg20 int() vs round() ปัดคนละแบบ) — เรียกได้ก็ต่อเมื่อ len(closes) >= 2 เท่านั้น
+    (ผู้เรียกทั้งคู่ guard เงื่อนไขนี้ไว้ก่อนแล้ว)"""
+    import pandas as pd
+
+    price = closes[-1]
+
+    def _ret(n):
+        if len(closes) < n + 1:
+            return None
+        p = closes[-(n + 1)]
+        return round((price - p) / p * 100, 2) if p else None
+
+    close_52w = closes[-252:]
+    ath = round(max(closes), 4)
+
+    # เทียบ string ISO date ตรงๆ (เรียงตามลำดับตัวอักษร = เรียงตามวันที่จริงสำหรับ
+    # รูปแบบ YYYY-MM-DD) แทนการเทียบ pd.Timestamp ที่เคยพัง TypeError ตอน index
+    # tz-aware — ดู comment เดิมใน _dr_do_rebuild ก่อนรีวิว 2026-09-01
+    ytd_idx = next((i for i, d in enumerate(dates) if d >= f"{cur_year}-01-01"), None)
+    if ytd_idx is not None:
+        first_ytd = closes[ytd_idx]
+        ret_ytd = round((price - first_ytd) / first_ytd * 100, 2) if first_ytd else None
+    else:
+        ret_ytd = None
+
+    ret_1m, ret_3m, ret_6m, ret_1y = _ret(21), _ret(63), _ret(126), _ret(250)
+    rs_raw = calc_rs_raw(ret_1m, ret_3m, ret_6m, ret_1y)
+
+    _close_series = pd.Series(closes)
+    ema50  = calc_ema(_close_series, 50)
+    ema200 = calc_ema(_close_series, 200)
+
+    hist_bars = min(len(closes), 500)
+
+    return {
+        "ret_1w":  _ret(5),
+        "ret_1m":  ret_1m,
+        "ret_3m":  ret_3m,
+        "ret_6m":  ret_6m,
+        "ret_1y":  ret_1y,
+        "ret_3y":  _ret(756),
+        "ret_5y":  _ret(1260),
+        "ret_ytd": ret_ytd,
+        "high_52w": round(max(close_52w), 4),
+        "low_52w":  round(min(close_52w), 4),
+        "ath":      ath,
+        "ath_pct":  round((price - ath) / ath * 100, 2) if ath else None,
+        "rs_raw":   round(rs_raw, 4) if rs_raw is not None else None,
+        "above_ema50":  bool(price > ema50)  if ema50  is not None else None,
+        "above_ema200": bool(price > ema200) if ema200 is not None else None,
+        "price_history": [
+            [d, round(float(p), 4 if p < 1 else 2)]
+            for d, p in zip(dates[-hist_bars:], closes[-hist_bars:])
+        ],
+        "vol_history": vols[-260:] if vols else [],
+        "vol_today":   vols[-1] if vols else None,
+        "vol_avg20":   round(sum(vols[-21:-1]) / 20) if len(vols) >= 21 else None,
+        "close100":    [round(c, 4) for c in closes[-100:]],
+    }
+
+
 def _dr_do_rebuild():
     import yfinance as yf
     import pandas as pd
@@ -1127,13 +1192,6 @@ def _dr_do_rebuild():
         except (KeyError, TypeError):
             return pd.Series(dtype=float)
 
-    def _dr_ret(close, days):
-        if len(close) < days + 1:
-            return None
-        p = float(close.iloc[-(days + 1)])
-        n = float(close.iloc[-1])
-        return round((n - p) / p * 100, 2) if p else None
-
     results = []
     price_failed = []   # sym ที่ดึงราคาไม่สำเร็จ/ข้อมูลไม่พอ — เก็บไว้แจ้งใน result["warnings"]
     cur_year = _dt.now().year   # ใช้ตัด YTD — ปีเดียวกันตลอดทั้งรอบ ไม่ต้องคำนวณใหม่ทุกตัว (~283 ครั้ง)
@@ -1185,35 +1243,15 @@ def _dr_do_rebuild():
             chg   = (price - prev) / prev * 100 if prev else None
             live_chg = round((live_price - price) / price * 100, 2) if live_price and price else None
 
-            close100 = [round(float(x), 4) for x in close.tail(100).tolist()]
-
             # เก็บ full price history สำหรับ chart popup (date + price)
             dates_all  = [str(d)[:10] for d in close.index.tolist()]
             closes_all = [round(float(x), 6) for x in close.tolist()]
-
-            # above_ema50/200 + price/vol_history ~500/260 แท่ง (เหมือนหุ้นไทยใน
-            # set_data_fetcher.process_stock) — ให้ Screener ฝั่ง client เรียก
-            # _enrichTechSignals() แบบเดียวกับหุ้นไทยได้ (EMA/SMA cross, RSI rebound,
-            # bullish volume) แทนที่จะ hardcode null ทิ้งแบบเดิม (EMA200 ต้องการ
-            # warmup ~300 แท่งหลัง seed จึงจะ converge ถูกต้อง เลยเก็บยาวกว่า close100)
-            ema50  = calc_ema(close, 50)
-            ema200 = calc_ema(close, 200)
-            above_ema50  = bool(price > ema50)  if ema50  is not None else None
-            above_ema200 = bool(price > ema200) if ema200 is not None else None
-            _hist_bars = min(len(close), 500)
-            price_history = [
-                [d, round(float(p), 4 if p < 1 else 2)]
-                for d, p in zip(dates_all[-_hist_bars:], close.tail(_hist_bars).tolist())
-            ]
-            vol_history = [int(v) for v in vol_s.tail(260).tolist()] if len(vol_s) else []
-            vol_today   = int(vol_s.iloc[-1]) if len(vol_s) else None
-            vol_avg20   = int(vol_s.tail(21).iloc[:-1].mean()) if len(vol_s) >= 21 else None
-            # เก็บคู่กับ dates/closes เต็มประวัติ (ไม่ใช่แค่ tail 260 แบบ vol_history) —
-            # dr_quick_update ใช้ต่อความยาวทุกครั้งที่อัพเดท (entry.get("_full_vols", ...))
-            # เดิมไม่เคยเซ็ตค่านี้เลยในนี้ ทำให้รอบ quick-update แรกหลัง full rebuild ทุกครั้ง
-            # เข้า default [0]*len(old_dates) (เป็นพันแท่ง) เจือจาง vol_avg20/vol_history
-            # จนกลายเป็น 0 ผิดๆ — align กับความยาว close เหมือน dr_quick_update ทำ (ดู
-            # new_vols_raw) ไม่ align (เช่น NaN ถูก dropna ไม่เท่ากัน) ก็ fallback เป็น 0 ทั้งเส้น
+            # เก็บคู่กับ dates/closes เต็มประวัติ (ไม่ใช่แค่ tail 260) — dr_quick_update
+            # ใช้ต่อความยาวทุกครั้งที่อัพเดท (entry.get("_full_vols", ...)) เดิมไม่เคยเซ็ต
+            # ค่านี้เลยในนี้ ทำให้รอบ quick-update แรกหลัง full rebuild ทุกครั้งเข้า default
+            # [0]*len(old_dates) (เป็นพันแท่ง) เจือจาง vol_avg20/vol_history จนกลายเป็น 0
+            # ผิดๆ — align กับความยาว close เหมือน dr_quick_update ทำ (ดู new_vols_raw)
+            # ไม่ align (เช่น NaN ถูก dropna ไม่เท่ากัน) ก็ fallback เป็น 0 ทั้งเส้น
             full_vols = ([int(v) for v in vol_s.tolist()] if len(vol_s) == len(close)
                          else [0] * len(close))
 
@@ -1230,41 +1268,10 @@ def _dr_do_rebuild():
                 except Exception:
                     pass
 
-            ret_1w = _dr_ret(close, 5)
-            ret_1m = _dr_ret(close, 21)
-            ret_3m = _dr_ret(close, 63)
-            ret_6m = _dr_ret(close, 126)
-            ret_1y = _dr_ret(close, 250)
-            ret_3y = _dr_ret(close, 756)
-            ret_5y = _dr_ret(close, 1260)
-
-            # 52W High/Low
-            close_52w = close.iloc[-252:] if len(close) >= 252 else close
-            high_52w = round(float(close_52w.max()), 4)
-            low_52w  = round(float(close_52w.min()), 4)
-
-            # ATH
-            ath     = round(float(close.max()), 4)
-            ath_pct = round((price - ath) / ath * 100, 2) if ath else None
-
-            # YTD%
-            try:
-                # close.index อาจเป็น tz-aware (Yahoo บางเวอร์ชัน/ตลาด) — เทียบกับ Timestamp
-                # tz-naive ตรงๆ จะ raise TypeError แล้ว except ด้านล่างกลืนเป็น ret_ytd=None
-                # ทั้ง ~283 ตัว (quick-update path ที่ line ~2050 ใช้ string เทียบ เลยไม่โดน)
-                _ytd_idx = close.index
-                if getattr(_ytd_idx, "tz", None) is not None:
-                    _ytd_idx = _ytd_idx.tz_localize(None)
-                close_ytd  = close[_ytd_idx >= pd.Timestamp(f"{cur_year}-01-01")]
-                if len(close_ytd) > 0:
-                    first_ytd = float(close_ytd.iloc[0])
-                    ret_ytd   = round((price - first_ytd) / first_ytd * 100, 2) if first_ytd else None
-                else:
-                    ret_ytd = None
-            except Exception:
-                ret_ytd = None
-
-            rs_raw = calc_rs_raw(ret_1m, ret_3m, ret_6m, ret_1y)
+            # metrics (returns/52W/ATH/YTD/RS/EMA/price+vol history/close100) มาจาก
+            # helper กลาง _compute_dr_metrics เดียวกับ dr_quick_update._do_quick — กัน
+            # 2 path drift กัน (ดู comment ในนิยาม _compute_dr_metrics)
+            metrics = _compute_dr_metrics(closes_all, dates_all, full_vols, cur_year)
 
             # Market cap จาก batch ขนานด้านบน — พลาดก็ใช้ค่ารอบก่อน (best-effort)
             mkt_cap = mkt_map.get(yticker)
@@ -1281,34 +1288,34 @@ def _dr_do_rebuild():
                 "chg":      round(chg, 2) if chg is not None else None,
                 "live_price": round(live_price, 2) if live_price is not None else None,
                 "live_chg":   live_chg,
-                "ret_1w":   ret_1w,
-                "ret_1m":   ret_1m,
-                "ret_3m":   ret_3m,
-                "ret_6m":   ret_6m,
-                "ret_1y":   ret_1y,
-                "ret_3y":   ret_3y,
-                "ret_5y":   ret_5y,
-                "ret_ytd":  ret_ytd,
-                "high_52w": high_52w,
-                "low_52w":  low_52w,
-                "ath":      ath,
-                "ath_pct":  ath_pct,
-                "rs_raw":   round(rs_raw, 4) if rs_raw is not None else None,
+                "ret_1w":   metrics["ret_1w"],
+                "ret_1m":   metrics["ret_1m"],
+                "ret_3m":   metrics["ret_3m"],
+                "ret_6m":   metrics["ret_6m"],
+                "ret_1y":   metrics["ret_1y"],
+                "ret_3y":   metrics["ret_3y"],
+                "ret_5y":   metrics["ret_5y"],
+                "ret_ytd":  metrics["ret_ytd"],
+                "high_52w": metrics["high_52w"],
+                "low_52w":  metrics["low_52w"],
+                "ath":      metrics["ath"],
+                "ath_pct":  metrics["ath_pct"],
+                "rs_raw":   metrics["rs_raw"],
                 "rs_score": None,
                 "mkt_cap":  mkt_cap,
                 "drs":      stock["drs"],
                 "etf":      stock.get("etf", False),
-                "close100": close100,
+                "close100": metrics["close100"],
                 "ohlc30":   ohlc30,
                 "dates":    dates_all,
                 "closes":   closes_all,
                 "_full_vols":    full_vols,
-                "above_ema50":   above_ema50,
-                "above_ema200":  above_ema200,
-                "price_history": price_history,
-                "vol_history":   vol_history,
-                "vol_today":     vol_today,
-                "vol_avg20":     vol_avg20,
+                "above_ema50":   metrics["above_ema50"],
+                "above_ema200":  metrics["above_ema200"],
+                "price_history": metrics["price_history"],
+                "vol_history":   metrics["vol_history"],
+                "vol_today":     metrics["vol_today"],
+                "vol_avg20":     metrics["vol_avg20"],
             })
         except Exception as e:
             print(f"[DR] {stock['sym']}: {e}")
@@ -1984,7 +1991,10 @@ def dr_quick_update():
                             # ไม่เปลี่ยนขนาด dict ปลอดภัยกว่า
                             entry["live_price"] = None
                             entry["live_chg"] = None
-                        new_closes_raw = [round(float(c), 4) for c in close.tolist()]
+                        # ปัด 6 ตำแหน่งให้ตรงกับ _dr_do_rebuild (closes_all) — เดิมปัด 4
+                        # ตำแหน่งตรงนี้ ทำให้ความละเอียดของ entry["closes"] ต่างกันไปตามว่า
+                        # แท่งนั้นถูกเติมเข้ามาตอน full rebuild หรือ quick update
+                        new_closes_raw = [round(float(c), 6) for c in close.tolist()]
                         new_dates_raw  = [str(d)[:10] for d in close.index.tolist()]
                         new_vols_raw   = [int(v) for v in vol_s.tolist()] if len(vol_s) == len(close) else [0] * len(close)
                         # อัปเดต full history (+ volume คู่กัน สำหรับ _bullish_vol ฝั่ง client)
@@ -2004,42 +2014,10 @@ def dr_quick_update():
                         entry["dates"]  = old_dates
                         entry["closes"] = old_closes
                         entry["_full_vols"] = old_vols
-                        # อัปเดต close100 จาก full history ที่ dedupe แล้ว (ตัดปัญหาแท่งซ้ำ)
-                        # ปัด 4 ตำแหน่งให้ตรงกับ _dr_do_rebuild (old_closes/closes เก็บละเอียด
-                        # 6 ตำแหน่งสำหรับ full history — close100 ใช้แค่วาด sparkline คร่าวๆ)
-                        entry["close100"] = [round(c, 4) for c in old_closes[-100:]]
-                        # recalculate return metrics from updated full history
-                        def _ret_q(arr, n):
-                            if len(arr) < n + 1:
-                                return None
-                            p = arr[-(n+1)]
-                            return round((arr[-1] - p) / p * 100, 2) if p else None
-                        entry["ret_1w"] = _ret_q(old_closes, 5)
-                        entry["ret_1m"] = _ret_q(old_closes, 21)
-                        entry["ret_3m"] = _ret_q(old_closes, 63)
-                        entry["ret_6m"] = _ret_q(old_closes, 126)
-                        entry["ret_1y"] = _ret_q(old_closes, 250)
-                        entry["ret_3y"] = _ret_q(old_closes, 756)
-                        entry["ret_5y"] = _ret_q(old_closes, 1260)
-                        entry["rs_raw"] = round(rs_raw, 4) if (rs_raw := calc_rs_raw(
-                            entry["ret_1m"], entry["ret_3m"], entry["ret_6m"], entry["ret_1y"])) is not None else None
-                        # อัปเดต above_ema50/200 + price_history/vol_history (ให้ Screener
-                        # เรียก _enrichTechSignals() กับ DR ได้แบบเดียวกับหุ้นไทย — ดู
-                        # comment เต็มใน _dr_do_rebuild)
-                        _close_series = pd.Series(old_closes)
-                        _ema50_q  = calc_ema(_close_series, 50)
-                        _ema200_q = calc_ema(_close_series, 200)
-                        entry["above_ema50"]  = bool(price > _ema50_q)  if _ema50_q  is not None else None
-                        entry["above_ema200"] = bool(price > _ema200_q) if _ema200_q is not None else None
-                        _hist_bars_q = min(len(old_closes), 500)
-                        entry["price_history"] = [
-                            [d, round(float(p), 4 if p < 1 else 2)]
-                            for d, p in zip(old_dates[-_hist_bars_q:], old_closes[-_hist_bars_q:])
-                        ]
-                        entry["vol_history"] = old_vols[-260:]
-                        entry["vol_today"]   = old_vols[-1] if old_vols else None
-                        entry["vol_avg20"]   = (round(sum(old_vols[-21:-1]) / 20)
-                                                 if len(old_vols) >= 21 else None)
+                        # metrics (returns/52W/ATH/YTD/RS/EMA/price+vol history/close100)
+                        # มาจาก helper กลางเดียวกับ _dr_do_rebuild — กัน 2 path drift กัน
+                        # (ดู comment ในนิยาม _compute_dr_metrics)
+                        entry.update(_compute_dr_metrics(old_closes, old_dates, old_vols, cur_year))
                         # ต่อ ohlc30 เฉพาะแท่งที่ใหม่จริง (appended_count เดียวกับ close100/dates
                         # ด้านบน) — เดิมต่อแท่งที่ fetch มาทั้งหมดรวม overlap ทำให้ตัดฐานเก่า
                         # ทิ้งเกิน 1 แท่งเสมอ (แท่งวันก่อนหน้าหายไปจากกราฟแท่งเทียน 30D)
@@ -2056,22 +2034,6 @@ def dr_quick_update():
                                     new_ohlc.append([round(o,4), round(h,4), round(l,4), round(c2,4), int(v)])
                                 old_ohlc = entry.get("ohlc30", [])
                                 entry["ohlc30"] = (old_ohlc + new_ohlc)[-30:]
-                        except Exception:
-                            pass
-                        # recalculate 52W, ATH, YTD from updated full history
-                        try:
-                            closes_arr = old_closes
-                            high_52w = round(max(closes_arr[-252:]), 4) if closes_arr else entry.get("high_52w")
-                            low_52w  = round(min(closes_arr[-252:]), 4) if closes_arr else entry.get("low_52w")
-                            ath_val  = round(max(closes_arr), 4) if closes_arr else entry.get("ath")
-                            entry["high_52w"] = high_52w
-                            entry["low_52w"]  = low_52w
-                            entry["ath"]      = ath_val
-                            entry["ath_pct"]  = round((price - ath_val) / ath_val * 100, 2) if ath_val else None
-                            ytd_idx  = next((i for i, d in enumerate(old_dates) if d >= f"{cur_year}-01-01"), None)
-                            if ytd_idx is not None:
-                                first_ytd = old_closes[ytd_idx]
-                                entry["ret_ytd"] = round((price - first_ytd) / first_ytd * 100, 2) if first_ytd else None
                         except Exception:
                             pass
                         updated += 1

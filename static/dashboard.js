@@ -792,7 +792,10 @@ function drawSparkline(canvas, prices, retVal) {
   const pad = H > 30 ? 4 : 2;   // กราฟใหญ่ (Tearsheet) เว้นขอบมากกว่ากันเส้นชนขอบ
   const toY = v => H - pad - (v - mn) / range * (H - pad * 2);
   const toX = (i, n) => (i / (n-1)) * (W - 2) + 1;
-  const color = (retVal || 0) >= 0 ? '#3fb950' : '#f85149';
+  // retVal เป็น null/undefined (เช่น DR ที่มีประวัติราคา <22 วัน คำนวณ return ไม่ได้) เดิม
+  // (retVal||0)>=0 ปัดเป็น 0 ทำให้วาดเขียวเสมอไม่ว่าราคาจริงจะร่วงแค่ไหน — แยกเป็นสีเทาแทน
+  const isUnknownRet = retVal === null || retVal === undefined || (typeof retVal === 'number' && Number.isNaN(retVal));
+  const color = isUnknownRet ? '#8b949e' : (retVal >= 0 ? '#3fb950' : '#f85149');
   ctx.clearRect(0,0,W,H);
 
   // กราฟใหญ่ (Tearsheet, H>30): เติมพื้นที่ใต้เส้นด้วย gradient จางๆ + เส้นฐานราคาต้นงวด
@@ -3583,6 +3586,30 @@ async function _wlFetchTearsheetHeader(mkt, under) {
   return { ...d.header, price_history: d.header.sparkline };
 }
 
+// mirror fetch เดิมยิงพร้อมกันทุก symbol ที่ unresolved ในรอบ renderWatchlist().map() เดียว
+// ไม่มี cap (ต่างจาก wlRefreshLivePrices ที่ยิงทีละ CONCURRENCY=8) — watchlist ที่มีหุ้นนอก
+// ดัชนีเยอะอาจยิง /api/tearsheet พร้อมกันหลายสิบ request เสี่ยง sqlite lock ที่ backend
+// จำกัดด้วย queue+drain แบบเดียวกับ wlRefreshLivePrices แทน
+const _wlMirrorQueue = [];
+let _wlMirrorDraining = false;
+async function _wlDrainMirrorQueue() {
+  if (_wlMirrorDraining) return;
+  _wlMirrorDraining = true;
+  const CONCURRENCY = 8;
+  while (_wlMirrorQueue.length) {
+    const batch = _wlMirrorQueue.splice(0, CONCURRENCY);
+    await Promise.all(batch.map(item =>
+      item.guess ? _wlFetchMirrorGuessMarket(item.sym) : _wlFetchMirror(item.sym, item.mkt, item.under)));
+  }
+  _wlMirrorDraining = false;
+}
+function _wlQueueMirrorFetch(desc) {
+  if (_wlMirrorFetching.has(desc.sym)) return;
+  if (_wlMirrorQueue.some(q => q.sym === desc.sym)) return;
+  _wlMirrorQueue.push(desc);
+  _wlDrainMirrorQueue();
+}
+
 // ดึงข้อมูลหุ้น US:/HK: ที่รู้ตลาดแน่ชัดอยู่แล้ว (มี prefix) — เรียกครั้งเดียวต่อ symbol แล้ว
 // re-render ให้เอง (pattern เดียวกับ _drData/_usData/_hkData bulk fetch ด้านบนใน renderWatchlist)
 async function _wlFetchMirror(sym, mkt, under) {
@@ -3622,9 +3649,17 @@ async function _wlFetchMirrorGuessMarket(sym) {
     if (!watchlist.includes(sym)) return;
     if (!res.error) {
       const idx = watchlist.indexOf(sym);
-      if (idx !== -1) { watchlist[idx] = mkt + ':' + sym; _wlSave(); }
-      _wlMirrorData[mkt + ':' + sym] = res;
-      _wlMirrorCacheSave(mkt + ':' + sym, res);
+      const prefixedSym = mkt + ':' + sym;
+      if (idx !== -1) {
+        // ถ้า user เพิ่ม prefixed form เองมือระหว่างรอ guess-fetch (~70s) ค้างอยู่ —
+        // อย่า replace ทับจนได้ entry ซ้ำ 2 รายการ ตัด bare entry ที่เหลือทิ้งแทน
+        if (watchlist.includes(prefixedSym)) watchlist.splice(idx, 1);
+        else watchlist[idx] = prefixedSym;
+        _wlSave();
+        _alertsRenameSymbol(sym, prefixedSym);
+      }
+      _wlMirrorData[prefixedSym] = res;
+      _wlMirrorCacheSave(prefixedSym, res);
     }
     // cache ผลไว้กัน retry วนทุก render — error ติด timestamp ให้ renderWatchlist ปล่อย retry
     // ใหม่ได้หลังพ้น _WL_MIRROR_ERR_RETRY_MS เหมือน _wlFetchMirror ด้านบน
@@ -3661,6 +3696,115 @@ function _wlMirrorErrorRow(sym, under, mkt, errMsg) {
     </tr>`;
 }
 
+// DR/US/HK watchlist row markup ใช้ร่วมกันทั้งจาก path ที่ sym มี prefix อยู่แล้ว และ path
+// legacy-migrate (bare sym → เปลี่ยน prefix แล้ว render ใหม่) — เดิม 2 path มี markup ซ้ำกัน
+// เกือบทั้งหมด (~240 บรรทัด) ต่างกันแค่ตัวแปร แยกมาเป็น helper เดียวกันกันแก้ไม่ครบ 2 ที่
+function _wlRenderDrRow(sym, under, d) {
+  const chgCls = (d.chg ?? 0) >= 0 ? "green" : "red";
+  const tvSym  = yfToTVSym(d.yf);
+  const tvHref = `https://www.tradingview.com/chart/?symbol=${tvSym}&interval=D`;
+  return `
+    <tr data-sym="${_escHtml(sym)}" data-dr-close='${JSON.stringify(d.close100||[])}'>
+      <td><span class="${rsColor(d.rs_score)}" style="font-weight:700">${d.rs_score??"-"}</span></td>
+      <td>
+        <strong class="sym-link" style="color:var(--blue)" onclick="_wlOpenDr('${_escJsAttr(under)}')">${_escHtml(under)}</strong>
+        <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">DR</span>
+        <a class="tv-link" href="${tvHref}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>
+      </td>
+      <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escHtml(d.name)}</td>
+      <td style="font-size:11px;color:var(--text2)">${_escHtml(d.region)}</td>
+      <td class="r"><span style="font-size:12px;font-weight:600">${_drFmtPrice(d.price)}</span>
+        <br><span class="${chgCls}" style="font-size:10px">${(d.chg??0)>=0?"+":""}${(d.chg??0).toFixed(2)}%</span>
+        ${_wlLiveCell(sym, d.price, d)}
+      </td>
+      <td class="r text2" style="font-size:11px">—</td>
+      <td class="r">${pct(d.ret_1w)}</td>
+      <td class="r">${pct(d.ret_1m)}</td>
+      <td class="r">${pct(d.ret_3m)}</td>
+      <td class="r">${pct(d.ret_ytd)}</td>
+      <td class="r">${pct(d.ret_1y)}</td>
+      <td class="r"><canvas class="spark-canvas wl-dr-spark" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
+      <td class="r" style="font-size:11px">${_drFmtCap(d.mkt_cap)}</td>
+      <td class="r text2">—</td>
+      <td class="r text2">—</td>
+      <td class="r" style="white-space:nowrap">${_wlAlertCell(sym)}</td>
+      <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(sym)}')">✕</button></td>
+    </tr>`;
+}
+function _wlRenderUsRow(sym, u, isMirror) {
+  return `
+    <tr data-sym="US:${_escHtml(u.symbol)}">
+      <td><span class="${rsColor(u.rs_score)}" style="font-weight:700">${u.rs_score??"-"}</span></td>
+      <td>
+        <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('US','${_escJsAttr(u.symbol)}')` : `_openMirrorStock('${_escJsAttr(u.symbol)}','us')`}">${_escHtml(u.symbol)}</strong>
+        <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">US</span>
+        ${isMirror ? `<span style="font-size:9px;color:var(--text2)" title="หุ้นนอกดัชนีหลัก S&P500/Dow/NDX — ข้อมูลดึงแบบ on-demand เหมือนหน้า Tearsheet (cache 1 วัน)">🔍</span>` : ''}
+        ${_usTvLink(u.symbol)}
+      </td>
+      <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escHtml(u.name)||"—"}</td>
+      <td style="font-size:11px">${u.sector||"—"}</td>
+      <td class="r">${u.price!=null?u.price.toFixed(2):"—"}${_wlLiveCell(sym, u.price)}</td>
+      <td class="r">${pct(u.ret_1d)}</td>
+      <td class="r">${pct(u.ret_1w)}</td>
+      <td class="r">${pct(u.ret_1m)}</td>
+      <td class="r">${pct(u.ret_3m)}</td>
+      <td class="r">${pct(u.ret_ytd)}</td>
+      <td class="r">${pct(u.ret_1y)}</td>
+      <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
+      <td class="r text2" style="font-size:11px">—</td>
+      <td class="r">${emaBadge(u.above_ema50)}</td>
+      <td class="r">${emaBadge(u.above_ema200)}</td>
+      <td class="r" style="white-space:nowrap">${_wlAlertCell(sym)}</td>
+      <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(sym)}')">✕</button></td>
+    </tr>`;
+}
+function _wlRenderHkRow(sym, h, isMirror) {
+  return `
+    <tr data-sym="HK:${_escHtml(h.symbol)}">
+      <td><span class="${rsColor(h.rs_score)}" style="font-weight:700">${h.rs_score??"-"}</span></td>
+      <td>
+        <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('HK','${_escJsAttr(h.symbol)}')` : `_openMirrorStock('${_escJsAttr(h.symbol)}','hk')`}">${_escHtml(h.symbol)}</strong>
+        <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">HK</span>
+        ${isMirror ? `<span style="font-size:9px;color:var(--text2)" title="หุ้นนอกดัชนีหลัก HSI/HSCEI/HSTECH — ข้อมูลดึงแบบ on-demand เหมือนหน้า Tearsheet (cache 1 วัน)">🔍</span>` : ''}
+        ${_hkTvLink(h.symbol)}
+      </td>
+      <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escHtml(h.name)||"—"}</td>
+      <td style="font-size:11px">${h.sector||"—"}</td>
+      <td class="r">${h.price!=null?h.price.toFixed(2):"—"}${_wlLiveCell(sym, h.price)}</td>
+      <td class="r">${pct(h.ret_1d)}</td>
+      <td class="r">${pct(h.ret_1w)}</td>
+      <td class="r">${pct(h.ret_1m)}</td>
+      <td class="r">${pct(h.ret_3m)}</td>
+      <td class="r">${pct(h.ret_ytd)}</td>
+      <td class="r">${pct(h.ret_1y)}</td>
+      <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
+      <td class="r text2" style="font-size:11px">—</td>
+      <td class="r">${emaBadge(h.above_ema50)}</td>
+      <td class="r">${emaBadge(h.above_ema200)}</td>
+      <td class="r" style="white-space:nowrap">${_wlAlertCell(sym)}</td>
+      <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(sym)}')">✕</button></td>
+    </tr>`;
+}
+
+// stockMap/drMap/usMap/hkMap เดิม rebuild ทุกครั้งที่ renderWatchlist() ถูกเรียก (ถี่มาก — ทุก
+// mirror fetch ที่ resolve) ทั้งที่ DATA/_drData/_usData/_hkData reassign ทั้งก้อนเสมอ ไม่เคย
+// mutate in place (เหมือน DATA ที่ _secRankCache ใช้ identity-check อยู่แล้วที่ computeSectorRanks)
+// → memoize ด้วย reference-identity เดียวกัน กันสร้าง map ~900 หุ้นซ้ำโดยไม่จำเป็น
+let _wlMapCache = { data: null, dr: null, us: null, hk: null, stockMap: null, drMap: null, usMap: null, hkMap: null };
+function _wlBuildMaps() {
+  if (_wlMapCache.data === DATA && _wlMapCache.dr === _drData && _wlMapCache.us === _usData && _wlMapCache.hk === _hkData) {
+    return _wlMapCache;
+  }
+  _wlMapCache = {
+    data: DATA, dr: _drData, us: _usData, hk: _hkData,
+    stockMap: Object.fromEntries(DATA.stocks.map(s => [s.symbol, s])),
+    drMap:    Object.fromEntries((_drData || []).map(s => [s.sym, s])),
+    usMap:    Object.fromEntries((_usData?.stocks || []).map(s => [s.symbol, s])),
+    hkMap:    Object.fromEntries((_hkData?.stocks || []).map(s => [s.symbol, s])),
+  };
+  return _wlMapCache;
+}
+
 function renderWatchlist() {
   _wlPopulateSymList();
   if (!DATA) {
@@ -3668,13 +3812,7 @@ function renderWatchlist() {
       `<tr><td colspan="17"><div class="empty">กำลังโหลดข้อมูล...</div></td></tr>`;
     return;
   }
-  // ชื่อบริษัท (s.name/d.name/u.name/h.name) มาจากไฟล์ข้อมูลภายนอก (dr_universe/
-  // us-hk_index_metrics) ไม่ใช่ literal ที่เราคุมเอง — escape ก่อนแทรกเป็น HTML content
-  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
-  const stockMap = Object.fromEntries(DATA.stocks.map(s => [s.symbol, s]));
-  const drMap    = Object.fromEntries((_drData || []).map(s => [s.sym, s]));
-  const usMap    = Object.fromEntries((_usData?.stocks || []).map(s => [s.symbol, s]));
-  const hkMap    = Object.fromEntries((_hkData?.stocks || []).map(s => [s.symbol, s]));
+  const { stockMap, drMap, usMap, hkMap } = _wlBuildMaps();
 
   // ถ้ามี symbol ใน watchlist ที่ไม่เจอใน SET/DR/US Index/HK Index และยังไม่โหลดชุดข้อมูลนั้น
   // → fetch เฉพาะชุดที่ขาดจริง (ดู prefix DR:/US:/HK: บอกตลาดอยู่แล้ว) แล้ว re-render
@@ -3730,10 +3868,12 @@ function renderWatchlist() {
     return;
   }
 
-  // จัดเรียงตามตลาด: หุ้นไทย(ไม่มี prefix) → DR → US → HK → JP (sort เสถียร คงลำดับเดิม
+  // จัดเรียงตามตลาด: หุ้นไทย(ไม่มี prefix) → DR → US → HK (sort เสถียร คงลำดับเดิม
   // ภายในกลุ่มเดียวกัน) เรียงแค่ตอน render ไม่แตะ watchlist จริง กัน indexOf/migrate ด้านล่างพัง
+  // (ไม่มี "JP:" เพราะ Tearsheet ซ่อนปุ่มเพิ่ม Watchlist ของตลาด JP ไว้แล้ว — renderWatchlist
+  // ไม่มี render branch รองรับ entry แบบนี้จริง ดู guard ที่ปุ่ม "เพิ่มเข้า Watchlist" ของ JP)
   const _wlMarketRank = sym =>
-    sym.startsWith("DR:") ? 1 : sym.startsWith("US:") ? 2 : sym.startsWith("HK:") ? 3 : sym.startsWith("JP:") ? 4 : 0;
+    sym.startsWith("DR:") ? 1 : sym.startsWith("US:") ? 2 : sym.startsWith("HK:") ? 3 : 0;
   const sortedWatchlist = [...watchlist].sort((a, b) => _wlMarketRank(a) - _wlMarketRank(b));
 
   const rows = sortedWatchlist.map(sym => {
@@ -3744,43 +3884,14 @@ function renderWatchlist() {
       if (!d) return `
         <tr>
           <td class="text2">—</td>
-          <td><strong style="color:var(--blue)">${esc(under)}</strong>
+          <td><strong style="color:var(--blue)">${_escHtml(under)}</strong>
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:4px">DR</span>
           </td>
           <td colspan="14" class="text2">ยังไม่โหลดข้อมูล DR — ไปหน้า DR ก่อน</td>
           <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(sym)}')">✕</button></td>
         </tr>`;
 
-      const chgCls = (d.chg ?? 0) >= 0 ? "green" : "red";
-      const tvSym  = yfToTVSym(d.yf);
-      const tvHref = `https://www.tradingview.com/chart/?symbol=${tvSym}&interval=D`;
-      return `
-        <tr data-sym="${esc(sym)}" data-dr-close='${JSON.stringify(d.close100||[])}'>
-          <td><span class="${rsColor(d.rs_score)}" style="font-weight:700">${d.rs_score??"-"}</span></td>
-          <td>
-            <strong class="sym-link" style="color:var(--blue)" onclick="_wlOpenDr('${_escJsAttr(under)}')">${esc(under)}</strong>
-            <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">DR</span>
-            <a class="tv-link" href="${tvHref}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>
-          </td>
-          <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.name)}</td>
-          <td style="font-size:11px;color:var(--text2)">${esc(d.region)}</td>
-          <td class="r"><span style="font-size:12px;font-weight:600">${_drFmtPrice(d.price)}</span>
-            <br><span class="${chgCls}" style="font-size:10px">${(d.chg??0)>=0?"+":""}${(d.chg??0).toFixed(2)}%</span>
-            ${_wlLiveCell(sym, d.price, d)}
-          </td>
-          <td class="r text2" style="font-size:11px">—</td>
-          <td class="r">${pct(d.ret_1w)}</td>
-          <td class="r">${pct(d.ret_1m)}</td>
-          <td class="r">${pct(d.ret_3m)}</td>
-          <td class="r">${pct(d.ret_ytd)}</td>
-          <td class="r">${pct(d.ret_1y)}</td>
-          <td class="r"><canvas class="spark-canvas wl-dr-spark" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
-          <td class="r" style="font-size:11px">${_drFmtCap(d.mkt_cap)}</td>
-          <td class="r text2">—</td>
-          <td class="r text2">—</td>
-          <td class="r" style="white-space:nowrap">${_wlAlertCell(sym)}</td>
-          <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(sym)}')">✕</button></td>
-        </tr>`;
+      return _wlRenderDrRow(sym, under, d);
     }
 
     // ── US Index row (S&P500/Dow/NDX จาก us_index_metrics.json) — ถ้าไม่เจอในดัชนีหลัก
@@ -3793,33 +3904,9 @@ function renderWatchlist() {
         const m = _wlMirrorData[sym];
         if (m && !m.error) { u = m; isMirror = true; }
         else if (m && m.error && (Date.now() - (m.t || 0)) < _WL_MIRROR_ERR_RETRY_MS) return _wlMirrorErrorRow(sym, under, 'US', m.error);
-        else { if (m) delete _wlMirrorData[sym]; _wlFetchMirror(sym, 'US', under); return _wlMirrorLoadingRow(sym, under, 'US'); }
+        else { if (m) delete _wlMirrorData[sym]; _wlQueueMirrorFetch({sym, mkt:'US', under, guess:false}); return _wlMirrorLoadingRow(sym, under, 'US'); }
       }
-      return `
-        <tr data-sym="US:${esc(u.symbol)}">
-          <td><span class="${rsColor(u.rs_score)}" style="font-weight:700">${u.rs_score??"-"}</span></td>
-          <td>
-            <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('US','${_escJsAttr(u.symbol)}')` : `_openMirrorStock('${_escJsAttr(u.symbol)}','us')`}">${esc(u.symbol)}</strong>
-            <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">US</span>
-            ${isMirror ? `<span style="font-size:9px;color:var(--text2)" title="หุ้นนอกดัชนีหลัก S&P500/Dow/NDX — ข้อมูลดึงแบบ on-demand เหมือนหน้า Tearsheet (cache 1 วัน)">🔍</span>` : ''}
-            ${_usTvLink(u.symbol)}
-          </td>
-          <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.name)||"—"}</td>
-          <td style="font-size:11px">${u.sector||"—"}</td>
-          <td class="r">${u.price!=null?u.price.toFixed(2):"—"}${_wlLiveCell(sym, u.price)}</td>
-          <td class="r">${pct(u.ret_1d)}</td>
-          <td class="r">${pct(u.ret_1w)}</td>
-          <td class="r">${pct(u.ret_1m)}</td>
-          <td class="r">${pct(u.ret_3m)}</td>
-          <td class="r">${pct(u.ret_ytd)}</td>
-          <td class="r">${pct(u.ret_1y)}</td>
-          <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
-          <td class="r text2" style="font-size:11px">—</td>
-          <td class="r">${emaBadge(u.above_ema50)}</td>
-          <td class="r">${emaBadge(u.above_ema200)}</td>
-          <td class="r" style="white-space:nowrap">${_wlAlertCell(sym)}</td>
-          <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(sym)}')">✕</button></td>
-        </tr>`;
+      return _wlRenderUsRow(sym, u, isMirror);
     }
 
     // ── HK Index row (HSI/HSTECH/HSCEI จาก hk_index_metrics.json) — ถ้าไม่เจอในดัชนีหลัก
@@ -3832,33 +3919,9 @@ function renderWatchlist() {
         const m = _wlMirrorData[sym];
         if (m && !m.error) { h = m; isMirror = true; }
         else if (m && m.error && (Date.now() - (m.t || 0)) < _WL_MIRROR_ERR_RETRY_MS) return _wlMirrorErrorRow(sym, under, 'HK', m.error);
-        else { if (m) delete _wlMirrorData[sym]; _wlFetchMirror(sym, 'HK', under); return _wlMirrorLoadingRow(sym, under, 'HK'); }
+        else { if (m) delete _wlMirrorData[sym]; _wlQueueMirrorFetch({sym, mkt:'HK', under, guess:false}); return _wlMirrorLoadingRow(sym, under, 'HK'); }
       }
-      return `
-        <tr data-sym="HK:${esc(h.symbol)}">
-          <td><span class="${rsColor(h.rs_score)}" style="font-weight:700">${h.rs_score??"-"}</span></td>
-          <td>
-            <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('HK','${_escJsAttr(h.symbol)}')` : `_openMirrorStock('${_escJsAttr(h.symbol)}','hk')`}">${esc(h.symbol)}</strong>
-            <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">HK</span>
-            ${isMirror ? `<span style="font-size:9px;color:var(--text2)" title="หุ้นนอกดัชนีหลัก HSI/HSCEI/HSTECH — ข้อมูลดึงแบบ on-demand เหมือนหน้า Tearsheet (cache 1 วัน)">🔍</span>` : ''}
-            ${_hkTvLink(h.symbol)}
-          </td>
-          <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(h.name)||"—"}</td>
-          <td style="font-size:11px">${h.sector||"—"}</td>
-          <td class="r">${h.price!=null?h.price.toFixed(2):"—"}${_wlLiveCell(sym, h.price)}</td>
-          <td class="r">${pct(h.ret_1d)}</td>
-          <td class="r">${pct(h.ret_1w)}</td>
-          <td class="r">${pct(h.ret_1m)}</td>
-          <td class="r">${pct(h.ret_3m)}</td>
-          <td class="r">${pct(h.ret_ytd)}</td>
-          <td class="r">${pct(h.ret_1y)}</td>
-          <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
-          <td class="r text2" style="font-size:11px">—</td>
-          <td class="r">${emaBadge(h.above_ema50)}</td>
-          <td class="r">${emaBadge(h.above_ema200)}</td>
-          <td class="r" style="white-space:nowrap">${_wlAlertCell(sym)}</td>
-          <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(sym)}')">✕</button></td>
-        </tr>`;
+      return _wlRenderHkRow(sym, h, isMirror);
     }
 
     // ── SET row (หรือ DR/US/HK ที่เก็บโดยไม่มี prefix — migrate อัตโนมัติ) ──
@@ -3873,41 +3936,10 @@ function renderWatchlist() {
         if (idx !== -1) {
           watchlist[idx] = "DR:" + sym;
           _wlSave();
+          _alertsRenameSymbol(sym, "DR:" + sym);
         }
         // render ในรอบนี้เป็น DR row โดยใช้ key ใหม่
-        const newSym = "DR:" + sym;
-        const under = sym;
-        const d = drMatch;
-        const chgCls2 = (d.chg ?? 0) >= 0 ? "green" : "red";
-        const tvSym2  = yfToTVSym(d.yf);
-        const tvHref2 = `https://www.tradingview.com/chart/?symbol=${tvSym2}&interval=D`;
-        return `
-          <tr data-sym="${esc(newSym)}" data-dr-close='${JSON.stringify(d.close100||[])}'>
-            <td><span class="${rsColor(d.rs_score)}" style="font-weight:700">${d.rs_score??"-"}</span></td>
-            <td>
-              <strong class="sym-link" style="color:var(--blue)" onclick="_wlOpenDr('${_escJsAttr(under)}')">${esc(under)}</strong>
-              <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">DR</span>
-              <a class="tv-link" href="${tvHref2}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>
-            </td>
-            <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.name)}</td>
-            <td style="font-size:11px;color:var(--text2)">${esc(d.region)}</td>
-            <td class="r"><span style="font-size:12px;font-weight:600">${_drFmtPrice(d.price)}</span>
-              <br><span class="${chgCls2}" style="font-size:10px">${(d.chg??0)>=0?"+":""}${(d.chg??0).toFixed(2)}%</span>
-              ${_wlLiveCell(newSym, d.price, d)}
-            </td>
-            <td class="r text2" style="font-size:11px">—</td>
-            <td class="r">${pct(d.ret_1w)}</td>
-            <td class="r">${pct(d.ret_1m)}</td>
-            <td class="r">${pct(d.ret_3m)}</td>
-            <td class="r">${pct(d.ret_ytd)}</td>
-            <td class="r">${pct(d.ret_1y)}</td>
-            <td class="r"><canvas class="spark-canvas wl-dr-spark" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
-            <td class="r" style="font-size:11px">${_drFmtCap(d.mkt_cap)}</td>
-            <td class="r text2">—</td>
-            <td class="r text2">—</td>
-            <td class="r" style="white-space:nowrap">${_wlAlertCell(newSym)}</td>
-            <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(newSym)}')">✕</button></td>
-          </tr>`;
+        return _wlRenderDrRow("DR:" + sym, sym, drMatch);
       }
       // ตรวจว่าเป็น US Index ticker ที่ไม่มี prefix (เฉพาะตัวที่ไม่ใช่ DR ด้วย)
       const usMatch = usMap[sym];
@@ -3917,33 +3949,9 @@ function renderWatchlist() {
         if (idx !== -1) {
           watchlist[idx] = "US:" + sym;
           _wlSave();
+          _alertsRenameSymbol(sym, "US:" + sym);
         }
-        const u = usMatch;
-        const newSym = "US:" + sym;
-        return `
-          <tr data-sym="US:${esc(u.symbol)}">
-            <td><span class="${rsColor(u.rs_score)}" style="font-weight:700">${u.rs_score??"-"}</span></td>
-            <td>
-              <strong class="sym-link" style="color:var(--blue)" onclick="_openMirrorStock('${_escJsAttr(u.symbol)}','us')">${esc(u.symbol)}</strong>
-              <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">US</span>
-              ${_usTvLink(u.symbol)}
-            </td>
-            <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.name)||"—"}</td>
-            <td style="font-size:11px">${u.sector||"—"}</td>
-            <td class="r">${u.price!=null?u.price.toFixed(2):"—"}${_wlLiveCell(newSym, u.price)}</td>
-            <td class="r">${pct(u.ret_1d)}</td>
-            <td class="r">${pct(u.ret_1w)}</td>
-            <td class="r">${pct(u.ret_1m)}</td>
-            <td class="r">${pct(u.ret_3m)}</td>
-            <td class="r">${pct(u.ret_ytd)}</td>
-            <td class="r">${pct(u.ret_1y)}</td>
-            <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
-            <td class="r text2" style="font-size:11px">—</td>
-            <td class="r">${emaBadge(u.above_ema50)}</td>
-            <td class="r">${emaBadge(u.above_ema200)}</td>
-            <td class="r" style="white-space:nowrap">${_wlAlertCell(newSym)}</td>
-            <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(newSym)}')">✕</button></td>
-          </tr>`;
+        return _wlRenderUsRow("US:" + sym, usMatch, false);
       }
       // ตรวจว่าเป็น HK Index ticker ที่ไม่มี prefix (เฉพาะตัวที่ไม่ใช่ DR/US ด้วย)
       const hkMatch = hkMap[sym];
@@ -3953,33 +3961,9 @@ function renderWatchlist() {
         if (idx !== -1) {
           watchlist[idx] = "HK:" + sym;
           _wlSave();
+          _alertsRenameSymbol(sym, "HK:" + sym);
         }
-        const h = hkMatch;
-        const newSym = "HK:" + sym;
-        return `
-          <tr data-sym="HK:${esc(h.symbol)}">
-            <td><span class="${rsColor(h.rs_score)}" style="font-weight:700">${h.rs_score??"-"}</span></td>
-            <td>
-              <strong class="sym-link" style="color:var(--blue)" onclick="_openMirrorStock('${_escJsAttr(h.symbol)}','hk')">${esc(h.symbol)}</strong>
-              <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">HK</span>
-              ${_hkTvLink(h.symbol)}
-            </td>
-            <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(h.name)||"—"}</td>
-            <td style="font-size:11px">${h.sector||"—"}</td>
-            <td class="r">${h.price!=null?h.price.toFixed(2):"—"}${_wlLiveCell(newSym, h.price)}</td>
-            <td class="r">${pct(h.ret_1d)}</td>
-            <td class="r">${pct(h.ret_1w)}</td>
-            <td class="r">${pct(h.ret_1m)}</td>
-            <td class="r">${pct(h.ret_3m)}</td>
-            <td class="r">${pct(h.ret_ytd)}</td>
-            <td class="r">${pct(h.ret_1y)}</td>
-            <td class="r"><canvas class="spark-canvas" width="60" height="24" style="display:block;width:100%;height:24px"></canvas></td>
-            <td class="r text2" style="font-size:11px">—</td>
-            <td class="r">${emaBadge(h.above_ema50)}</td>
-            <td class="r">${emaBadge(h.above_ema200)}</td>
-            <td class="r" style="white-space:nowrap">${_wlAlertCell(newSym)}</td>
-            <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(newSym)}')">✕</button></td>
-          </tr>`;
+        return _wlRenderHkRow("HK:" + sym, hkMatch, false);
       }
       // ไม่เจอในทุกแหล่งที่รู้ตลาดแน่ชัด (SET/DR/US-idx/HK-idx) — อาจเป็นหุ้น mirror นอกดัชนี
       // หลักที่เก็บไว้แบบไม่มี prefix ตั้งแต่ก่อนมี prefix บังคับ (เช่น OKTA/ZS) ลอง on-demand
@@ -3988,12 +3972,12 @@ function renderWatchlist() {
       const guess = _wlMirrorData[sym];
       if (!guess || (guess.error && (Date.now() - (guess.t || 0)) >= _WL_MIRROR_ERR_RETRY_MS)) {
         if (guess) delete _wlMirrorData[sym];
-        _wlFetchMirrorGuessMarket(sym);
+        _wlQueueMirrorFetch({sym, guess:true});
         return _wlMirrorLoadingRow(sym, sym, null);
       }
       return `
         <tr>
-          <td class="text2">—</td><td><strong>${esc(sym)}</strong></td>
+          <td class="text2">—</td><td><strong>${_escHtml(sym)}</strong></td>
           <td colspan="14" class="text2">ไม่พบข้อมูล${guess.error ? ` — ${_escHtml(guess.error)}` : ''}</td>
           <td><button class="wl-del-btn" onclick="confirmRemoveFromWatchlist('${_escJsAttr(sym)}')">✕</button></td>
         </tr>`;
@@ -4002,7 +3986,7 @@ function renderWatchlist() {
       <tr data-sym="${s.symbol}">
         <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score??"-"}</span></td>
         <td><strong class="sym-link" onclick="openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}${dqBadge(s)}</td>
-        <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.name)}</td>
+        <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escHtml(s.name)}</td>
         <td style="font-size:11px">${s.sector||"—"}</td>
         <td class="r">${s.price?.toFixed(2)??"—"}${_wlLiveCell(s.symbol, s.price)}</td>
         <td class="r">${pct(s.ret_1d)}</td>
@@ -4022,14 +4006,19 @@ function renderWatchlist() {
 
   document.getElementById("wl-tbody").innerHTML = rows;
 
+  // สร้างหลัง .map() ข้างบนจบแล้วเท่านั้น (ไม่ใช่ต้นฟังก์ชัน) — legacy-migrate block ระหว่าง
+  // .map() มี mutate watchlist[idx] กลางทาง ถ้าสร้าง Set ไว้ก่อนจะ stale ไม่เห็นรายการที่เพิ่ง
+  // migrate เสร็จ ใช้ Set แทน watchlist.includes() ในลูป filter ด้านล่างกัน O(n×m) ทุก render
+  const wlSet = new Set(watchlist);
+
   // sparklines: SET
-  renderSparklinesInTable("wl-tbody", DATA.stocks.filter(s => watchlist.includes(s.symbol)));
+  renderSparklinesInTable("wl-tbody", DATA.stocks.filter(s => wlSet.has(s.symbol)));
 
   // sparklines: US Index — reuse ตัววาดเดียวกับ SET (มี price_history ในฟอร์แมตเดียวกัน
   // เพราะ process_stock() ตัวเดียวกัน) แค่ clone symbol ใส่ prefix ให้ตรงกับ data-sym
   if (_usData?.stocks?.length) {
     const usRows = _usData.stocks
-      .filter(u => watchlist.includes("US:" + u.symbol))
+      .filter(u => wlSet.has("US:" + u.symbol))
       .map(u => ({ ...u, symbol: "US:" + u.symbol }));
     renderSparklinesInTable("wl-tbody", usRows);
   }
@@ -4037,7 +4026,7 @@ function renderWatchlist() {
   // sparklines: HK Index — เหมือน US ทุกประการ (process_stock() ตัวเดียวกัน)
   if (_hkData?.stocks?.length) {
     const hkRows = _hkData.stocks
-      .filter(h => watchlist.includes("HK:" + h.symbol))
+      .filter(h => wlSet.has("HK:" + h.symbol))
       .map(h => ({ ...h, symbol: "HK:" + h.symbol }));
     renderSparklinesInTable("wl-tbody", hkRows);
   }
@@ -4045,7 +4034,7 @@ function renderWatchlist() {
   // sparklines: US/HK mirror นอกดัชนีหลัก — ดึง on-demand เหมือน Tearsheet แล้ว cache ไว้ใน
   // _wlMirrorData (key = watchlist entry เต็มอยู่แล้ว เช่น "US:ZS" ตรงกับ data-sym พอดี)
   const mirrorRows = Object.entries(_wlMirrorData)
-    .filter(([k, d]) => watchlist.includes(k) && d && !d.error && d.price_history?.length)
+    .filter(([k, d]) => wlSet.has(k) && d && !d.error && d.price_history?.length)
     .map(([k, d]) => ({ ...d, symbol: k }));
   if (mirrorRows.length) renderSparklinesInTable("wl-tbody", mirrorRows);
 
@@ -24683,6 +24672,18 @@ function _drSymColor(sym) {
   return palette[h % palette.length];
 }
 
+// โลโก้ underlying stock (หรือ initials fallback) — ใช้ร่วมกันทั้งมุมมองตาราง
+// (_drRows, cls='dr-logo') และการ์ด (_drCardGrid, cls='dr-card-logo') เดิม copy-paste
+// เหมือนกัน 2 ที่ต่างแค่ prefix class
+function _drLogoHtml(s, cls) {
+  const color    = _drSymColor(s.sym);
+  const initials = s.yf.slice(0, 4);
+  const logoUrl  = _drLogoUrl(s.yf);
+  return logoUrl
+    ? `<img src="${logoUrl}" class="${cls}-img" onerror="_drLogoFallback(this)"><div class="${cls}" style="background:${color};display:none">${initials}</div>`
+    : `<div class="${cls}" style="background:${color}">${initials}</div>`;
+}
+
 function _drFmtCap(v) {
   if (!v || v <= 0) return '—';
   if (v >= 1e12) return (v / 1e12).toFixed(2) + 'T';
@@ -25483,9 +25484,10 @@ function _renderDRDiff(d) {
   </div>`;
 }
 
-function _drWarningsHtml(d) {
-  // เดิม market cap/ราคาที่ดึงพลาด fallback เงียบๆ ใช้ค่าเก่า ไม่มีใครรู้ — ต่อจากนี้
-  // server แนบ d.warnings (สรุปสั้นๆ ว่าตัวไหนพัง) มาด้วยเสมอ โชว์เป็นบรรทัดเตือนใต้ dr-status
+// แบนเนอร์เตือนใต้ status ของหน้า DR/ETF — เดิม market cap/ราคาที่ดึงพลาด fallback
+// เงียบๆ ใช้ค่าเก่า ไม่มีใครรู้ — server แนบ d.warnings (สรุปสั้นๆ ว่าตัวไหนพัง) มาด้วยเสมอ
+// ใช้ร่วมกันทั้งหน้า DR (loadDRPage/_drPollRefresh) และ ETF (loadETFPage/_etfPollRefresh)
+function _warnBannerHtml(d) {
   if (!d.warnings || !d.warnings.length) return '';
   return `<br><span style="color:var(--yellow)">⚠ ${d.warnings.join(' · ')}</span>`;
 }
@@ -25512,7 +25514,7 @@ function loadDRPage() {
       document.getElementById('dr-status').innerHTML =
         `อัปเดต: ${ts} &nbsp;|&nbsp; ${_drData.length} underlying stocks &nbsp;|&nbsp; cache 4 ชั่วโมง` +
         (d.refreshing ? ' &nbsp;|&nbsp; <span style="color:var(--accent)">⟳ กำลังดึงข้อมูลชุดใหม่เบื้องหลัง...</span>' : '') +
-        _drWarningsHtml(d);
+        _warnBannerHtml(d);
       if (d.refreshing) _drPollRefresh(0);   // server กำลัง rebuild — poll จนได้ชุดใหม่
       _updateDRRegionCounts();
       renderDRTable();
@@ -25550,7 +25552,7 @@ function _drPollRefresh(attempt) {
       const st = document.getElementById('dr-status');
       if (st) st.innerHTML =
         `อัปเดต: ${ts} &nbsp;|&nbsp; ${_drData.length} underlying stocks &nbsp;|&nbsp; cache 4 ชั่วโมง <span style="color:var(--green)">✓ ข้อมูลชุดใหม่แล้ว</span>` +
-        _drWarningsHtml(d);
+        _warnBannerHtml(d);
       _updateDRRegionCounts();
       if (document.getElementById('page-dr')?.classList.contains('active')) renderDRTable();
       // แท็บ TH ของ Stock Rotation ใช้ _drData ชุดเดียวกัน — ปิดป้ายและวาดซ้ำถ้าดูอยู่
@@ -25796,12 +25798,7 @@ function _drCardGrid(stocks) {
   return stocks.map(s => {
     const chgCls  = s.chg == null ? '' : (s.chg >= 0 ? 'green' : 'red');
     const chgStr  = s.chg != null ? (s.chg >= 0 ? '+' : '') + s.chg.toFixed(2) + '%' : '—';
-    const color   = _drSymColor(s.sym);
-    const initials = s.yf.slice(0, 4);
-    const logoUrl = _drLogoUrl(s.yf);
-    const logoHtml = logoUrl
-      ? `<img src="${logoUrl}" class="dr-card-logo-img" onerror="_drLogoFallback(this)"><div class="dr-card-logo" style="background:${color};display:none">${initials}</div>`
-      : `<div class="dr-card-logo" style="background:${color}">${initials}</div>`;
+    const logoHtml = _drLogoHtml(s, 'dr-card-logo');
     const badges = _drBadgesHtml(s.drs);
     const cPct = v => v != null ? `<span class="${v>=0?'green':'red'}">${v>=0?'+':''}${v.toFixed(2)}%</span>` : '—';
     const rsDisp = s.rs_score != null ? `<span class="${rsColor(s.rs_score)}" style="font-weight:700">RS ${s.rs_score}</span>` : '';
@@ -25911,14 +25908,8 @@ function _drRows(stocks) {
   return stocks.map(s => {
     const chgCls   = s.chg == null ? '' : (s.chg >= 0 ? 'green' : 'red');
     const chgStr   = s.chg != null ? (s.chg >= 0 ? '+' : '') + s.chg.toFixed(2) + '%' : '—';
-    const color    = _drSymColor(s.sym);
-    const initials = s.yf.slice(0, 4);
     const badges   = _drBadgesHtml(s.drs);
-
-    const logoUrl = _drLogoUrl(s.yf);
-    const logoHtml = logoUrl
-      ? `<img src="${logoUrl}" class="dr-logo-img" onerror="_drLogoFallback(this)"><div class="dr-logo" style="background:${color};display:none">${initials}</div>`
-      : `<div class="dr-logo" style="background:${color}">${initials}</div>`;
+    const logoHtml = _drLogoHtml(s, 'dr-logo');
 
     const drPct = v => v != null
       ? `<span class="${v >= 0 ? 'green' : 'red'}" style="font-size:11px">${v >= 0 ? '+' : ''}${v.toFixed(2)}%</span>`
@@ -26057,11 +26048,6 @@ function _etfLogoUrl(sym) {
   return `https://media.set.or.th/common/logo/company/${encodeURIComponent(sym)}.png`;
 }
 
-function _etfWarningsHtml(d) {
-  if (!d.warnings || !d.warnings.length) return '';
-  return `<br><span style="color:var(--yellow)">⚠ ${d.warnings.join(' · ')}</span>`;
-}
-
 function loadETFPage() {
   _ackEtfNewListings();
   if (_etfLoaded && _etfData) { renderETFTable(); return; }
@@ -26080,7 +26066,7 @@ function loadETFPage() {
       document.getElementById('etf-status').innerHTML =
         `อัปเดต: ${ts} &nbsp;|&nbsp; ${_etfData.length} ETF &nbsp;|&nbsp; cache 2 ชั่วโมง` +
         (d.refreshing ? ' &nbsp;|&nbsp; <span style="color:var(--accent)">⟳ กำลังดึงข้อมูลชุดใหม่เบื้องหลัง...</span>' : '') +
-        _etfWarningsHtml(d);
+        _warnBannerHtml(d);
       if (d.refreshing) _etfPollRefresh(0);
       _updateETFCategoryCounts();
       renderETFTable();
@@ -26111,7 +26097,7 @@ function _etfPollRefresh(attempt) {
       const st = document.getElementById('etf-status');
       if (st) st.innerHTML =
         `อัปเดต: ${ts} &nbsp;|&nbsp; ${_etfData.length} ETF &nbsp;|&nbsp; cache 2 ชั่วโมง <span style="color:var(--green)">✓ ข้อมูลชุดใหม่แล้ว</span>` +
-        _etfWarningsHtml(d);
+        _warnBannerHtml(d);
       _updateETFCategoryCounts();
       const rf = document.getElementById('etfrot-refreshing');
       if (rf) rf.style.display = 'none';
@@ -30721,6 +30707,15 @@ function _fmtAlertPrice(v, dp = 2) {
 function _saveAlerts(arr) {
   localStorage.setItem(ALERT_STORAGE_KEY, JSON.stringify(arr));
   _alertsPush(arr);
+}
+// Watchlist legacy-migrate (bare symbol → prefixed เช่น "AAPL"→"DR:AAPL") เปลี่ยน key ใน
+// watchlist array แต่ alert เดิมยังผูกกับ symbol เก่า — ไม่ rename ตาม alert จะมองไม่เห็น/
+// จัดการไม่ได้จาก _wlAlertCell(newSym) อีกเลย (a.symbol==='AAPL' ไม่ตรง 'DR:AAPL')
+function _alertsRenameSymbol(oldSym, newSym) {
+  const alerts = _loadAlerts();
+  let changed = false;
+  alerts.forEach(a => { if (a.symbol === oldSym) { a.symbol = newSym; changed = true; } });
+  if (changed) _saveAlerts(alerts);
 }
 
 // ============================================================
