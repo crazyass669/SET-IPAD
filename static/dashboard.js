@@ -17201,6 +17201,10 @@ let _finTab    = 'set';
 // ไตรมาส Yahoo · 'set' = SET.or.th รายปี (หุ้นไทยเท่านั้น)
 let _finView = 'finnomena';
 let _finData = null;
+// ลำดับคำขอของเมนูงบการเงิน — bump ทุกครั้งที่เริ่มค้นหุ้นใหม่ (searchFinancials) แต่ละ view-loader
+// เก็บ seq ตอนเริ่มแล้วเช็คซ้ำหลัง await ก่อน render — กัน response ช้าของหุ้นเก่ามาทับ view หุ้นใหม่
+// (เช่น ค้น PTT แบบ fallback ดึงสดช้า แล้วคลิกชิป AOT ที่แคชไว้ก่อน — PTT ห้าม overwrite)
+let _finViewSeq = 0;
 let _finRenderSource = 'yahoo';   // source ที่ใช้ render ล่าสุด (รวม yahoo_q) — ให้ปุ่มสลับ ทุกfield ใช้ตัวเดิม
 // % เทียบของตารางรายไตรมาส — 'qoq' (งวดก่อนหน้า) หลอกตากับหุ้นมีฤดูกาล (เช่นค้าปลีก Q4
 // สูงกว่า Q3 เสมอทุกปี ไม่ได้แปลว่าธุรกิจโต) เพิ่ม 'yoy' (ไตรมาสเดียวกันปีก่อน) เทียบกันตรง
@@ -19360,6 +19364,10 @@ const FIN_RECENT_FLAG = { US: '🇺🇸', HK: '🇭🇰', JP: '🇯🇵' };
 function _finRecentRender() {
   const box = document.getElementById('fin-recent');
   if (!box) return;
+  // โหมด "เทียบหุ้น 2 ตัว" เปิดอยู่ → ซ่อนชิป "เพิ่งดู" (คนละบริบทกับค้นหุ้นเดี่ยว) — กัน
+  // initFinPage()->_finRecentRender() ที่เรียกตอน toggleFinCompare เปิดพาเนล มาโชว์ชิปกลับ
+  const cmpPanel = document.getElementById('fin-compare-panel');
+  if (cmpPanel && cmpPanel.style.display !== 'none') { box.style.display = 'none'; return; }
   const list = _finRecentLoad();
   if (!list.length) { box.style.display = 'none'; return; }
   box.style.display = 'flex';
@@ -19382,12 +19390,17 @@ function _finRecentPick(sym, tab, mkt) {
 }
 
 // ============================================================
-// เทียบหุ้น 2 ตัว — overlay รายได้ (indexed) + net margin จากงบไตรมาส Finnomena 16 ปี
+// เทียบหุ้น 2 ตัว — ตาราง P&L รายไตรมาส/รายปีย้อนหลัง + สรุป snapshot (ค่าล่าสุด) ของหุ้นสองตัว
+// เทียบกัน จากงบ Finnomena 16 ปี / SET.or.th / Yahoo (กราฟ dual-line overlay รายได้ indexed +
+// net margin ถูกถอดออกใน commit d0241a5 — ตอนนี้เป็นตารางล้วน)
 // ผสมหุ้นไทย/ต่างประเทศกันได้ — ป้าย 🇹🇭/🌏 กำหนดตลาดตรงๆ ไม่มีการเดา (symbol บางตัวชนกัน
 // เช่น META = Meta Platforms สหรัฐฯ vs META Corporation หุ้นไทย mai — เดาแล้วผิดมาแล้ว)
+// ฝั่ง 🌏 มีปุ่มย่อย US/HK/JP อีกชั้น (ไม่เดา sub-market จาก mirror list — รหัสตัวเลข JP/HK ชนกัน)
 // เลือกป้ายก่อนพิมพ์ · autocomplete + แหล่งข้อมูลอิงป้ายที่เลือกเสมอ พิมพ์ไม่ทำให้ป้ายสลับเอง
 // ============================================================
 let _finCmpMarket = { a: 'set', b: 'dr' };   // ค่าเริ่มต้น: A=ไทย, B=ต่างประเทศ (ตรงกับ placeholder)
+let _finCmpDrMkt = { a: 'US', b: 'US' };     // sub-market ของฝั่ง 🌏 (ใช้เมื่อ _finCmpMarket[side]==='dr')
+let _finCmpSeq = 0;                          // กัน response เก่าที่มาช้าทับผลใหม่ / กดเทียบซ้ำ
 // 'q' = รายไตรมาส (ฝั่งไทยใช้ SET.or.th เป็นหลัก, DR ใช้ Finnomena) · 'y' = รายปี (ทั้งสองฝั่ง
 // ใช้ Finnomena เสมอ — SET.or.th/Yahoo ไม่มี endpoint รายปีย้อนลึกพอสำหรับโหมดนี้)
 let _finCmpPeriod = 'q';
@@ -19414,10 +19427,22 @@ function _finCmpSyncMarketUI(side) {
   // autocomplete ต้องเป็นรายชื่อของตลาดที่ป้ายนี้เลือกอยู่เท่านั้น — ใช้ datalist เดียวกับ
   // ช่องค้นหาหุ้นเดี่ยว (fin-set-datalist/fin-dr-datalist) ไม่ต้องโคลนซ้ำ
   document.getElementById(`fin-cmp-${side}`)?.setAttribute('list', isDr ? 'fin-dr-datalist' : 'fin-set-datalist');
+  // ปุ่มย่อย US/HK/JP โผล่เฉพาะตอนเลือก 🌏 — ไม่เดา sub-market จาก mirror list อีกต่อไป
+  const sub = document.getElementById(`fin-cmp-${side}-drmkt`);
+  if (sub) {
+    sub.style.display = isDr ? 'flex' : 'none';
+    ['US', 'HK', 'JP'].forEach(mk => document.getElementById(`fin-cmp-${side}-mk-${mk}`)
+      ?.classList.toggle('active', _finCmpDrMkt[side] === mk));
+  }
 }
 
 function setFinCmpMarket(side, mkt) {
   _finCmpMarket[side] = mkt;
+  _finCmpSyncMarketUI(side);
+}
+
+function setFinCmpDrMkt(side, mk) {
+  _finCmpDrMkt[side] = mk;
   _finCmpSyncMarketUI(side);
 }
 
@@ -19428,7 +19453,8 @@ function toggleFinCompare() {
   document.getElementById('fin-compare-btn').classList.toggle('active', opening);
   // ซ่อนช่องค้นหาปกติ + ผลลัพธ์เดี่ยวตอนเปิดโหมดเทียบ กันสับสนว่ากำลังดูโหมดไหนอยู่
   const recent = document.getElementById('fin-recent');
-  if (recent) recent.style.display = opening ? 'none' : recent.style.display;
+  if (recent && opening) recent.style.display = 'none';   // ตอนปิด: _finRecentRender() ด้านล่างคืนแถวเอง
+  if (!opening) _finCmpSeq++;   // ปิดโหมดเทียบ = ทิ้ง response ที่ยัง in-flight ไม่ให้เขียนลงพาเนลที่ซ่อนแล้ว
   ['fin-search-set', 'fin-search-dr', 'fin-result'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = opening ? 'none' : '';
@@ -19442,6 +19468,8 @@ function toggleFinCompare() {
     return;
   }
   initFinPage();   // ให้แน่ใจว่า fin-set-datalist/fin-dr-datalist โหลดแล้ว (ช่องเทียบชี้ไปใช้ตรงๆ)
+  const runBtn = document.getElementById('fin-cmp-run-btn');
+  if (runBtn) runBtn.disabled = false;   // เผื่อรอบก่อนปิดพาเนลตอนยัง in-flight (finally ไม่คืนปุ่มข้าม seq)
   _finCmpSyncMarketUI('a');
   _finCmpSyncMarketUI('b');
 }
@@ -19453,8 +19481,9 @@ function _finGuessDrMarket(sym) {
   return 'US';
 }
 
-async function _finCompareFetch(sym, isDr, period) {
-  const market = isDr ? _finGuessDrMarket(sym) : null;
+async function _finCompareFetch(sym, isDr, period, drMkt) {
+  // drMkt = ตลาดที่ผู้ใช้เลือกตรงๆ จากปุ่ม US/HK/JP (fallback เป็นการเดาเดิมเฉพาะตอนไม่ได้ส่งมา)
+  const market = isDr ? (drMkt || _finGuessDrMarket(sym)) : null;
   const base = `/api/financials-full/${encodeURIComponent(sym)}`;
   const qs = src => `?source=${src}${isDr ? '&is_dr=1' : ''}${market ? `&market=${market}` : ''}`;
 
@@ -19526,14 +19555,10 @@ function _finCagr(series) {
   return (Math.pow(last.v / first.v, 1 / years) - 1) * 100;
 }
 
-// ตารางเทียบไตรมาสต่อไตรมาสย้อนหลัง (รายได้/กำไรสุทธิ/Gross-Net Margin) ของหุ้นสองตัว —
-// เสริมกราฟ dual-line ด้านบนที่เห็นแค่ "แนวโน้ม" ด้วยตัวเลขจริงรายไตรมาสให้เทียบเป๊ะๆ ได้
-// จัดกลุ่มคอลัมน์เป็นปี พ.ศ. เหมือนตาราง QPL (ดู _qplTableCore) เพื่อความคุ้นตา — ใช้ union ของ
-// วันที่จากทั้งสองฝั่ง เผื่อปีบัญชี/แหล่งข้อมูลไม่ตรงกัน (ช่องที่ฝั่งใดไม่มีข้อมูลแสดง '—' เฉยๆ)
 // ดึง series ของ field หนึ่งจาก d.qpl ({date: rawRow}) — เหมือน _finSeries แต่ rawRow เป็น
 // object ทั้งแถว (จาก compute_qpl_report) ไม่ใช่ dict {date:val} แบบ income/ratios ปกติ
 // ไม่มี d.qpl เลย (เช่น DR ที่ fallback ไป finnomena_q/yahoo_q ตรงๆ ไม่ผ่าน compute_qpl_report)
-// -> คืน [] เฉยๆ ให้กลุ่มแถวนั้นถูกกรองทิ้งอัตโนมัติใน _finCmpQuarterTable
+// -> คืน [] เฉยๆ ให้กลุ่มแถวนั้นถูกกรองทิ้งอัตโนมัติใน _finCmpHistTable
 function _qplFieldSeries(qpl, field) {
   if (!qpl) return [];
   return Object.entries(qpl).map(([d, row]) => ({ d, v: row[field] }))
@@ -19553,146 +19578,110 @@ function _finCmpQtrLabel(dateStr) {
   return { yearBe: y + 543, q: Math.ceil(m / 3) };
 }
 
-function _finCmpQuarterTable(symA, symB, COL_A, COL_B, series, scrollId) {
-  const allDates = new Set();
-  Object.values(series).forEach(({ a, b }) => { a.forEach(o => allDates.add(o.d)); b.forEach(o => allDates.add(o.d)); });
-  if (!allDates.size) return '';
-  const byYear = {};
-  [...allDates].sort().forEach(d => {
-    const { yearBe, q } = _finCmpQtrLabel(d);
-    (byYear[yearBe] = byYear[yearBe] || [null, null, null, null])[q - 1] = d;
-  });
-  const years = Object.keys(byYear).map(Number).sort((a, b) => a - b);
-
-  const yearHead = years.map(y => `<th colspan="4" style="text-align:center;background:#8b2fc9;color:#fff;padding:6px 4px;border:1px solid var(--border)">${y}</th>`).join('');
-  const qHead = years.map(() => [1, 2, 3, 4].map(qn =>
-    `<th style="text-align:center;background:#c93fd6;color:#fff;padding:4px;border:1px solid var(--border);font-size:11px">Q${qn}</th>`).join('')).join('');
-
-  // คอลัมน์ซ้ายสุด (ชื่อรายการ) ตรึงไว้ไม่ขยับตอนเลื่อนดูไตรมาสเก่า/ใหม่ — ต้องมี background
-  // ทึบ (ไม่ใช่โปร่งใสแบบเซลล์อื่น) ไม่งั้นข้อมูลคอลัมน์ที่เลื่อนผ่านจะทะลุให้เห็นข้างหลัง
-  const stickyCol = 'position:sticky;left:0;z-index:1;background:var(--bg2)';
-  const row = (label, color, map, fmt, opts = {}) => `<tr>
-    <td style="${stickyCol};padding:${opts.indent ? '3px 8px 3px 22px' : '5px 8px'};border:1px solid var(--border);font-size:${opts.indent ? '10.5px' : '12px'};white-space:nowrap${opts.indent ? ';color:var(--text2)' : ''}">
-      ${opts.indent ? '' : `<span style="width:8px;height:8px;border-radius:50%;background:${color};display:inline-block;margin-right:5px"></span>`}${label}
-    </td>
-    ${years.map(y => [1, 2, 3, 4].map(qn => {
-      const d = byYear[y][qn - 1];
-      const v = d ? map[d] : null;
-      const cellColor = opts.pctColor && v != null ? (v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text2)') : (opts.indent ? 'var(--text2)' : '');
-      return `<td class="r" style="padding:${opts.indent ? '3px 6px' : '4px 6px'};border:1px solid var(--border);font-size:${opts.indent ? '10.5px' : '11.5px'}${cellColor ? `;color:${cellColor}` : ''}">${v != null ? fmt(v) : '—'}</td>`;
-    }).join('')).join('')}
-  </tr>`;
-
-  // ตัว <td> ของหัวกลุ่ม colspan กว้างเต็มแถวอยู่แล้ว (ไม่ได้เลื่อนหลุดจอ) แต่ "ข้อความ" ข้างในจะ
-  // เลื่อนตามไปด้วยถ้าไม่ทำอะไรเพิ่ม — ต้องห่อข้อความด้วย <div> sticky แยกอีกชั้น ข้อความถึงจะ
-  // ลอยค้างที่ขอบซ้ายตามจอเหมือนคอลัมน์ชื่อรายการด้านล่าง (sticky บน colspan cell ตรงๆ ไม่พอ
-  // เพราะ cell กว้างเท่าตารางทั้งก้อนอยู่แล้ว ตำแหน่งกล่องไม่ขยับ แต่ข้อความข้างในยังไหลตามปกติ)
-  const groupHdr = label => `<tr><td colspan="${1 + years.length * 4}" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--blue);background:var(--card2);border:1px solid var(--border);padding:0"><div style="position:sticky;left:0;width:max-content;padding:6px 8px">${label}</div></td></tr>`;
-
-  const toMap = s => Object.fromEntries(s.map(o => [o.d, o.v]));
-  // % QoQ คำนวณจาก "ไตรมาสก่อนหน้าจริงในอนุกรมของหุ้นตัวเอง" (s[i-1]) ไม่ใช่ช่องตารางก่อนหน้า
-  // เพราะคอลัมน์เป็น union ของวันที่ทั้งสองฝั่ง อาจมีช่องว่างที่ฝั่งนี้ไม่มีข้อมูลปนอยู่ ถ้าอิงตำแหน่ง
-  // ในตารางจะเทียบข้ามไตรมาสผิดโดยไม่รู้ตัว — field ที่เป็น % อยู่แล้ว (GPM/NPM) ใช้ "ผลต่างจุด
-  // เปอร์เซ็นต์ (pp)" แทน % growth ซ้อน % เพราะ growth ของเปอร์เซ็นต์ตีความคลุมเครือ/เข้าใจผิดง่าย
-  const fmtPP = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + 'pp';
-  const qoqMap = (s, isPctField) => {
-    const out = {};
-    for (let i = 1; i < s.length; i++) {
-      const cur = s[i].v, prev = s[i - 1].v;
-      if (cur == null || prev == null) continue;
-      out[s[i].d] = isPctField ? (cur - prev) : (prev > 0 ? (cur / prev - 1) * 100 : null);
-    }
-    return out;
-  };
-
-  // กรองกลุ่มที่ไม่มีข้อมูลทั้งสองฝั่งทิ้ง — เช่นฝั่ง DR ที่ fallback ไป finnomena_q/yahoo_q ตรงๆ
-  // จะไม่มี breakdown COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี เลย (ไม่ผ่าน compute_qpl_report) กันตารางโล่งเป็นแถวว่าง
-  const rowsHtml = Object.entries(series).filter(([, { a, b }]) => a.length || b.length)
-    .map(([label, { a, b, fmt, isPctField }]) => {
-      const qFmt = isPctField ? fmtPP : _finPct;
-      return groupHdr(label)
-        + row(symA, COL_A, toMap(a), fmt)
-        + row('% QoQ', COL_A, qoqMap(a, isPctField), qFmt, { indent: true, pctColor: true })
-        + row(symB, COL_B, toMap(b), fmt)
-        + row('% QoQ', COL_B, qoqMap(b, isPctField), qFmt, { indent: true, pctColor: true });
-    }).join('');
-  if (!rowsHtml) return '';
-
-  return `
-    <div style="font-size:11px;color:var(--accent);font-weight:600;margin:0 0 4px">📅 เทียบรายไตรมาสย้อนหลัง (ตัวเลขจริง — เลื่อนซ้ายเพื่อดูปีเก่ากว่า)</div>
-    <div id="${scrollId}" style="overflow-x:auto">
-      <table class="tbl" style="border-collapse:collapse;min-width:600px">
-        <thead>
-          <tr><th style="${stickyCol};z-index:2;border:1px solid var(--border)"></th>${yearHead}</tr>
-          <tr><th style="${stickyCol};z-index:2;border:1px solid var(--border)"></th>${qHead}</tr>
-        </thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-    </div>`;
-}
-
-// ตารางเทียบปีต่อปีย้อนหลัง — คู่กับ _finCmpQuarterTable ด้านบนแต่ไม่มีคอลัมน์ย่อยไตรมาส (คอลัมน์ =
-// ปี พ.ศ. ตรงๆ) ใช้ตอนโหมด "รายปี" (period='y') ซึ่งทั้งสองฝั่งดึงจาก finnomena_y เสมอ (ดู
-// _finCompareFetch) แถวเติบโตเรียก '% YoY' แทน '% QoQ' เพราะเทียบปีก่อนหน้าจริงๆ ไม่ใช่ไตรมาสก่อนหน้า
 function _finCmpYearLabel(dateStr) {
   return parseInt(dateStr.slice(0, 4), 10) + 543;
 }
 
-function _finCmpAnnualTable(symA, symB, COL_A, COL_B, series, scrollId) {
-  const allDates = new Set();
-  Object.values(series).forEach(({ a, b }) => { a.forEach(o => allDates.add(o.d)); b.forEach(o => allDates.add(o.d)); });
-  if (!allDates.size) return '';
-  const years = [...allDates].sort();   // คีย์เป็น 'YYYY-12-31' เรียงตามลำดับเวลาได้ตรงๆ
+// ตารางเทียบย้อนหลังของหุ้นสองตัว — mode 'q' (คอลัมน์ = ปี พ.ศ. × Q1-Q4) หรือ 'y' (คอลัมน์ = ปี พ.ศ.)
+// รวมโค้ดตารางรายไตรมาส/รายปีที่เดิมเกือบซ้ำกันทั้งดุ้นไว้ที่เดียว ต่างกันแค่การจัดกลุ่มคอลัมน์
+// ── คีย์คอลัมน์เป็น "งวด" (ปี×10+ไตรมาส หรือ ปี พ.ศ.) ไม่ใช่วันที่ดิบ: หุ้นไทย/SET.or.th ใช้วัน
+//    สิ้นงวดสังเคราะห์ 'YYYY-03-31/-06-30/...' ส่วน Yahoo (fallback ตอน Finnomena ไม่มี) ใช้วัน
+//    สิ้นงวดจริง เช่น AAPL '2024-06-29' — ถ้า match ด้วยวันที่ตรงๆ ฝั่งที่วันไม่ตรงจะขึ้น '—' ทั้งแถว
+// ── แถว % QoQ/% YoY: field ที่ "ยิ่งน้อยยิ่งดี" (ต้นทุน/ภาษี/หนี้ ฯลฯ — series entry มี invert:true)
+//    ระบายสีกลับด้าน คือ เพิ่มขึ้น=แดง ลดลง=เขียว ให้ตรงกับตาราง snapshot ด้านล่าง
+function _finCmpHistTable(symA, symB, COL_A, COL_B, series, scrollId, mode) {
+  const isYr = mode === 'y';
+  const colKeyOf = d => isYr ? _finCmpYearLabel(d)
+    : (() => { const { yearBe, q } = _finCmpQtrLabel(d); return yearBe * 10 + q; })();
 
-  const yearHead = years.map(d => `<th style="text-align:center;background:#8b2fc9;color:#fff;padding:6px 4px;border:1px solid var(--border);font-size:11px">${_finCmpYearLabel(d)}</th>`).join('');
+  const keySet = new Set();
+  Object.values(series).forEach(({ a, b }) => {
+    a.forEach(o => keySet.add(colKeyOf(o.d)));
+    b.forEach(o => keySet.add(colKeyOf(o.d)));
+  });
+  if (!keySet.size) return '';
 
-  // คอลัมน์ซ้ายสุด (ชื่อรายการ) ตรึงไว้ไม่ขยับ — ดูคอมเมนต์เดียวกันใน _finCmpQuarterTable
+  // รายการคีย์คอลัมน์ที่จะ render: รายปี = เฉพาะปีที่มีข้อมูล · รายไตรมาส = ทุกปีที่โผล่ × Q1-Q4
+  // ครบ (เก็บช่องไตรมาสที่ยังไม่มีข้อมูลไว้เป็น '—' เหมือนพฤติกรรมเดิม)
+  let cols;
+  if (isYr) {
+    cols = [...keySet].sort((x, y) => x - y);
+  } else {
+    const yrs = [...new Set([...keySet].map(k => Math.floor(k / 10)))].sort((x, y) => x - y);
+    cols = [];
+    yrs.forEach(y => [1, 2, 3, 4].forEach(qn => cols.push(y * 10 + qn)));
+  }
+
+  // คอลัมน์ซ้ายสุด (ชื่อรายการ) ตรึงไว้ไม่ขยับตอนเลื่อนดูงวดเก่า/ใหม่ — ต้องมี background ทึบ
+  // (ไม่โปร่งใสแบบเซลล์อื่น) ไม่งั้นข้อมูลคอลัมน์ที่เลื่อนผ่านจะทะลุให้เห็นข้างหลัง
   const stickyCol = 'position:sticky;left:0;z-index:1;background:var(--bg2)';
   const row = (label, color, map, fmt, opts = {}) => `<tr>
     <td style="${stickyCol};padding:${opts.indent ? '3px 8px 3px 22px' : '5px 8px'};border:1px solid var(--border);font-size:${opts.indent ? '10.5px' : '12px'};white-space:nowrap${opts.indent ? ';color:var(--text2)' : ''}">
       ${opts.indent ? '' : `<span style="width:8px;height:8px;border-radius:50%;background:${color};display:inline-block;margin-right:5px"></span>`}${label}
     </td>
-    ${years.map(d => {
-      const v = map[d];
-      const cellColor = opts.pctColor && v != null ? (v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text2)') : (opts.indent ? 'var(--text2)' : '');
+    ${cols.map(k => {
+      const v = map[k];
+      const cellColor = opts.pctColor && v != null
+        ? (v > 0 ? (opts.invert ? 'var(--red)' : 'var(--green)') : v < 0 ? (opts.invert ? 'var(--green)' : 'var(--red)') : 'var(--text2)')
+        : (opts.indent ? 'var(--text2)' : '');
       return `<td class="r" style="padding:${opts.indent ? '3px 6px' : '4px 6px'};border:1px solid var(--border);font-size:${opts.indent ? '10.5px' : '11.5px'}${cellColor ? `;color:${cellColor}` : ''}">${v != null ? fmt(v) : '—'}</td>`;
     }).join('')}
   </tr>`;
 
-  // ดูคอมเมนต์เดียวกันใน _finCmpQuarterTable — sticky บน colspan cell ตรงๆ ไม่พอ ต้องห่อ
-  // ข้อความด้วย <div> sticky แยกอีกชั้นข้างใน ข้อความถึงจะลอยค้างที่ขอบซ้ายตามจอจริง
-  const groupHdr = label => `<tr><td colspan="${1 + years.length}" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--blue);background:var(--card2);border:1px solid var(--border);padding:0"><div style="position:sticky;left:0;width:max-content;padding:6px 8px">${label}</div></td></tr>`;
+  // ตัว <td> ของหัวกลุ่ม colspan กว้างเต็มแถวอยู่แล้ว (ไม่ได้เลื่อนหลุดจอ) แต่ "ข้อความ" ข้างในจะ
+  // เลื่อนตามไปด้วยถ้าไม่ทำอะไรเพิ่ม — ต้องห่อข้อความด้วย <div> sticky แยกอีกชั้น ข้อความถึงจะ
+  // ลอยค้างที่ขอบซ้ายตามจอเหมือนคอลัมน์ชื่อรายการด้านล่าง
+  const groupHdr = label => `<tr><td colspan="${1 + cols.length}" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--blue);background:var(--card2);border:1px solid var(--border);padding:0"><div style="position:sticky;left:0;width:max-content;padding:6px 8px">${label}</div></td></tr>`;
 
-  const toMap = s => Object.fromEntries(s.map(o => [o.d, o.v]));
+  const toMap = s => Object.fromEntries(s.map(o => [colKeyOf(o.d), o.v]));
   const fmtPP = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + 'pp';
-  const yoyMap = (s, isPctField) => {
+  // % เทียบ "งวดก่อนหน้าจริงในอนุกรมของหุ้นตัวเอง" (s[i-1]) ไม่ใช่ช่องตารางก่อนหน้า เพราะคอลัมน์
+  // เป็น union ของงวดทั้งสองฝั่ง อาจมีช่องว่างปนอยู่ · field ที่เป็น % อยู่แล้ว (GPM/NPM) ใช้
+  // "ผลต่างจุดเปอร์เซ็นต์ (pp)" แทน % growth ซ้อน %
+  const growthMap = (s, isPctField) => {
     const out = {};
     for (let i = 1; i < s.length; i++) {
       const cur = s[i].v, prev = s[i - 1].v;
       if (cur == null || prev == null) continue;
-      out[s[i].d] = isPctField ? (cur - prev) : (prev > 0 ? (cur / prev - 1) * 100 : null);
+      out[colKeyOf(s[i].d)] = isPctField ? (cur - prev) : (prev > 0 ? (cur / prev - 1) * 100 : null);
     }
     return out;
   };
+  const growLabel = isYr ? '% YoY' : '% QoQ';
 
+  // thead: รายไตรมาส = 2 แถว (ปี colspan 4 + Q1-Q4), รายปี = แถวเดียว (ปี พ.ศ.)
+  let theadRows;
+  if (isYr) {
+    theadRows = `<tr><th style="${stickyCol};z-index:2;border:1px solid var(--border)"></th>` +
+      cols.map(y => `<th style="text-align:center;background:#8b2fc9;color:#fff;padding:6px 4px;border:1px solid var(--border);font-size:11px">${y}</th>`).join('') + `</tr>`;
+  } else {
+    const yrs = [...new Set(cols.map(k => Math.floor(k / 10)))];
+    theadRows =
+      `<tr><th style="${stickyCol};z-index:2;border:1px solid var(--border)"></th>` +
+      yrs.map(y => `<th colspan="4" style="text-align:center;background:#8b2fc9;color:#fff;padding:6px 4px;border:1px solid var(--border)">${y}</th>`).join('') + `</tr>` +
+      `<tr><th style="${stickyCol};z-index:2;border:1px solid var(--border)"></th>` +
+      yrs.map(() => [1, 2, 3, 4].map(qn => `<th style="text-align:center;background:#c93fd6;color:#fff;padding:4px;border:1px solid var(--border);font-size:11px">Q${qn}</th>`).join('')).join('') + `</tr>`;
+  }
+
+  // กรองกลุ่มที่ไม่มีข้อมูลทั้งสองฝั่งทิ้ง — เช่นฝั่ง DR ที่ fallback ไป finnomena_q/yahoo_q ตรงๆ
+  // จะไม่มี breakdown COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี เลย (ไม่ผ่าน compute_qpl_report) กันแถวโล่ง
   const rowsHtml = Object.entries(series).filter(([, { a, b }]) => a.length || b.length)
-    .map(([label, { a, b, fmt, isPctField }]) => {
-      const yFmt = isPctField ? fmtPP : _finPct;
+    .map(([label, { a, b, fmt, isPctField, invert }]) => {
+      const gFmt = isPctField ? fmtPP : _finPct;
+      const gOpts = { indent: true, pctColor: true, invert: !!invert };
       return groupHdr(label)
         + row(symA, COL_A, toMap(a), fmt)
-        + row('% YoY', COL_A, yoyMap(a, isPctField), yFmt, { indent: true, pctColor: true })
+        + row(growLabel, COL_A, growthMap(a, isPctField), gFmt, gOpts)
         + row(symB, COL_B, toMap(b), fmt)
-        + row('% YoY', COL_B, yoyMap(b, isPctField), yFmt, { indent: true, pctColor: true });
+        + row(growLabel, COL_B, growthMap(b, isPctField), gFmt, gOpts);
     }).join('');
   if (!rowsHtml) return '';
 
   return `
-    <div style="font-size:11px;color:var(--accent);font-weight:600;margin:0 0 4px">📅 เทียบรายปีย้อนหลัง (ตัวเลขจริง — เลื่อนซ้ายเพื่อดูปีเก่ากว่า)</div>
+    <div style="font-size:11px;color:var(--accent);font-weight:600;margin:0 0 4px">📅 เทียบ${isYr ? 'รายปี' : 'รายไตรมาส'}ย้อนหลัง (ตัวเลขจริง — เลื่อนซ้ายเพื่อดูงวดเก่ากว่า)</div>
     <div id="${scrollId}" style="overflow-x:auto">
       <table class="tbl" style="border-collapse:collapse;min-width:600px">
-        <thead>
-          <tr><th style="${stickyCol};z-index:2;border:1px solid var(--border)"></th>${yearHead}</tr>
-        </thead>
+        <thead>${theadRows}</thead>
         <tbody>${rowsHtml}</tbody>
       </table>
     </div>`;
@@ -19714,9 +19703,12 @@ function _renderFinCompare(symA, dA, symB, dB, period) {
   const pbvA = _finSeries(valA['PBV']), pbvB = _finSeries(valB['PBV']);
   const dyA = _finSeries(valA['Dividend Yield']), dyB = _finSeries(valB['Dividend Yield']);
   // P/E ใช้ TTM ที่คำนวณเองจาก Basic EPS (ไม่ใช่ field 'PE' ดิบของ Finnomena ที่เคยเจอค่าเพี้ยน
-  // เช่น 655x — ดู _ttmPeSeries) แม่นกว่าและตรงกับที่หน้าค้นหาหุ้นเดี่ยวใช้อยู่แล้ว
-  const peA = _ttmPeSeries(incA['Basic EPS'], valA['Close']);
-  const peB = _ttmPeSeries(incB['Basic EPS'], valB['Close']);
+  // เช่น 655x — ดู _ttmPeSeries) แม่นกว่าและตรงกับที่หน้าค้นหาหุ้นเดี่ยวใช้อยู่แล้ว — ตัดค่าที่เกิน
+  // เพดานสมเหตุสมผลทิ้ง (ไตรมาสที่ TTM EPS ใกล้ 0 ทำให้ Close÷EPS ระเบิดเป็นพันๆ เท่า แล้วโดน
+  // ไฮไลท์เขียวว่า "ถูกกว่า" — เกณฑ์เดียวกับ _annualPeSeries)
+  const PE_CMP_MAX = 1000;
+  const peA = _ttmPeSeries(incA['Basic EPS'], valA['Close']).filter(o => o.v > 0 && o.v <= PE_CMP_MAX);
+  const peB = _ttmPeSeries(incB['Basic EPS'], valB['Close']).filter(o => o.v > 0 && o.v <= PE_CMP_MAX);
   const COL_A = '#58a6ff', COL_B = '#e8a33d';
 
   // บรรทัดแยกย่อยของงบกำไรขาดทุนรายไตรมาส (COGS/SG&A แยกขาย-บริหาร/กำไรดำเนินงาน/ต้นทุนการเงิน/
@@ -19769,61 +19761,73 @@ function _renderFinCompare(symA, dA, symB, dB, period) {
   const fmtDays = v => v == null ? '—' : v.toFixed(1) + ' วัน';
   const periodLabel = isYear ? 'ปีล่าสุด' : 'ไตรมาสล่าสุด';
 
-  const nameA = (dA.name && dA.name !== symA) ? dA.name : symA;
-  const nameB = (dB.name && dB.name !== symB) ? dB.name : symB;
+  const nameA = _escHtml((dA.name && dA.name !== symA) ? dA.name : symA);
+  const nameB = _escHtml((dB.name && dB.name !== symB) ? dB.name : symB);
+  const esA = _escHtml(symA), esB = _escHtml(symB);   // symbol มาจากช่องกรอก (uppercase อย่างเดียว) — escape ก่อนฝัง HTML
   const srcLabelA = dA._srcLabel || 'Finnomena รายไตรมาส', srcLabelB = dB._srcLabel || 'Finnomena รายไตรมาส';
-  const srcNote = srcLabelA === srcLabelB ? srcLabelA : `${symA}: ${srcLabelA} · ${symB}: ${srcLabelB}`;
+  const srcNote = srcLabelA === srcLabelB ? srcLabelA : `${esA}: ${srcLabelA} · ${esB}: ${srcLabelB}`;
 
+  // invert:true = รายการ "ยิ่งน้อยยิ่งดี" (ต้นทุน/ภาษี/หนี้/วงจรเงินสด) — แถว %QoQ/%YoY ระบายสีกลับด้าน
+  // ให้ตรงกับ FIN_INVERT_KEYS / _finColCls ที่ตาราง snapshot ด้านล่างใช้ (เดิมเขียวเมื่อบวกทุกแถว
+  // ทำให้ต้นทุน/หนี้ที่พุ่งขึ้นดูเป็นสีเขียว = "ดี")
   const periodSeries = {
     'รายได้': { a: revA, b: revB, fmt: fmtNum },
-    'ต้นทุนขาย': { a: cogsA, b: cogsB, fmt: fmtNum },
+    'ต้นทุนขาย': { a: cogsA, b: cogsB, fmt: fmtNum, invert: true },
     'กำไรขั้นต้น': { a: gpA, b: gpB, fmt: fmtNum },
     'Gross Margin %': { a: gpmA, b: gpmB, fmt: fmtPct, isPctField: true },
-    'ค่าใช้จ่ายในการขาย': { a: sellA, b: sellB, fmt: fmtNum },
-    'ค่าใช้จ่ายในการบริหาร': { a: adminA, b: adminB, fmt: fmtNum },
-    'รวม SG&A': { a: sgaA, b: sgaB, fmt: fmtNum },
+    'ค่าใช้จ่ายในการขาย': { a: sellA, b: sellB, fmt: fmtNum, invert: true },
+    'ค่าใช้จ่ายในการบริหาร': { a: adminA, b: adminB, fmt: fmtNum, invert: true },
+    'รวม SG&A': { a: sgaA, b: sgaB, fmt: fmtNum, invert: true },
     'กำไรจากการดำเนินงาน': { a: opA, b: opB, fmt: fmtNum },
-    'ต้นทุนทางการเงิน': { a: finCostA, b: finCostB, fmt: fmtNum },
+    'ต้นทุนทางการเงิน': { a: finCostA, b: finCostB, fmt: fmtNum, invert: true },
     'กำไรก่อนภาษี': { a: pretaxA, b: pretaxB, fmt: fmtNum },
-    'ค่าใช้จ่ายภาษีเงินได้': { a: taxA, b: taxB, fmt: fmtNum },
+    'ค่าใช้จ่ายภาษีเงินได้': { a: taxA, b: taxB, fmt: fmtNum, invert: true },
     'กำไรสุทธิ': { a: niA, b: niB, fmt: fmtNum },
     'Net Margin %': { a: marginA, b: marginB, fmt: fmtPct, isPctField: true },
     // อัตราส่วนสำเร็จรูปจาก Finnomena — ROE/ROA มีอยู่แล้วในตาราง snapshot (ค่าล่าสุด) แต่ที่นี่
     // เห็นย้อนหลังทุกงวดพร้อม %QoQ/%YoY เหมือน field อื่นในตารางนี้
     'ROE %': { a: roeA, b: roeB, fmt: fmtPct, isPctField: true },
     'ROA %': { a: roaA, b: roaB, fmt: fmtPct, isPctField: true },
-    'Debt to Equity': { a: deA, b: deB, fmt: fmtX },
-    'SGA to Revenue %': { a: sgaRevA, b: sgaRevB, fmt: fmtPct, isPctField: true },
-    'Cash Cycle': { a: cashCycleA, b: cashCycleB, fmt: fmtDays },
+    'Debt to Equity': { a: deA, b: deB, fmt: fmtX, invert: true },
+    'SGA to Revenue %': { a: sgaRevA, b: sgaRevB, fmt: fmtPct, isPctField: true, invert: true },
+    'Cash Cycle': { a: cashCycleA, b: cashCycleB, fmt: fmtDays, invert: true },
   };
+  // CAGR รายได้: โหมดรายไตรมาส ใช้ผลรวม TTM (4 ไตรมาสต่อเนื่อง) เป็นจุดหัว-ท้าย ไม่ใช่ไตรมาสเดี่ยว
+  // (ไตรมาสแรกที่เป็น Q1 เทียบไตรมาสท้ายที่เป็น Q4 มีความต่างฤดูกาลปน ทำให้ annualized เพี้ยน และ
+  // หุ้นสองตัวมักเริ่ม/จบคนละไตรมาส ทำให้ไฮไลท์ "ผู้ชนะ CAGR" ไม่น่าเชื่อถือ)
+  const ttm4 = arr => {
+    if (arr.length < 4) return [];
+    const o = [];
+    for (let i = 3; i < arr.length; i++) o.push({ d: arr[i].d, v: arr[i - 3].v + arr[i - 2].v + arr[i - 1].v + arr[i].v });
+    return o;
+  };
+  const cagrRevA = isYear ? revA : ttm4(revA), cagrRevB = isYear ? revB : ttm4(revB);
   // ตารางเทียบย้อนหลังอยู่บนสุดตามที่ user ขอ (เห็นตัวเลขจริงก่อนสรุป snapshot ด้านล่าง) — โหมด
-  // รายไตรมาสจัดกลุ่มคอลัมน์เป็นปี×Q1-Q4, โหมดรายปีคอลัมน์ = ปีตรงๆ (ดู _finCmpAnnualTable)
+  // รายไตรมาสจัดกลุ่มคอลัมน์เป็นปี×Q1-Q4, โหมดรายปีคอลัมน์ = ปีตรงๆ (ดู _finCmpHistTable)
   const html = `
-  ${isYear
-    ? _finCmpAnnualTable(symA, symB, COL_A, COL_B, periodSeries, 'fin-cmp-yr-scroll')
-    : _finCmpQuarterTable(symA, symB, COL_A, COL_B, periodSeries, 'fin-cmp-qtr-scroll')}
+  ${_finCmpHistTable(esA, esB, COL_A, COL_B, periodSeries, isYear ? 'fin-cmp-yr-scroll' : 'fin-cmp-qtr-scroll', isYear ? 'y' : 'q')}
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0 14px">
     <div style="padding:8px 12px;border-radius:8px;background:${COL_A}18;border:1px solid ${COL_A}55">
       <span style="width:10px;height:10px;border-radius:50%;background:${COL_A};display:inline-block;margin-right:6px"></span>
-      <b>${symA}</b> <span style="color:var(--text2);font-size:12px">${nameA}</span>
+      <b>${esA}</b> <span style="color:var(--text2);font-size:12px">${nameA}</span>
     </div>
     <div style="padding:8px 12px;border-radius:8px;background:${COL_B}18;border:1px solid ${COL_B}55">
       <span style="width:10px;height:10px;border-radius:50%;background:${COL_B};display:inline-block;margin-right:6px"></span>
-      <b>${symB}</b> <span style="color:var(--text2);font-size:12px">${nameB}</span>
+      <b>${esB}</b> <span style="color:var(--text2);font-size:12px">${nameB}</span>
     </div>
   </div>
   <table class="tbl" style="width:100%">
     <thead><tr>
       <th style="padding:6px 8px"></th>
-      <th style="padding:6px 8px;text-align:right;color:${COL_A}">${symA}</th>
-      <th style="padding:6px 8px;text-align:right;color:${COL_B}">${symB}</th>
+      <th style="padding:6px 8px;text-align:right;color:${COL_A}">${esA}</th>
+      <th style="padding:6px 8px;text-align:right;color:${COL_B}">${esB}</th>
     </tr></thead>
     <tbody>
       ${_finCmpSection('📈 ขนาด/การเติบโต')}
       ${_finCmpMetric('Market Cap', last(mcapA), last(mcapB), fmtNum, null)}
       ${_finCmpMetric(`รายได้${periodLabel}`, last(revA), last(revB), fmtNum, null)}
       ${_finCmpMetric(`รายได้ YoY (${periodLabel})`, lastYoy(revA), lastYoy(revB), fmtPct, true)}
-      ${_finCmpMetric('CAGR รายได้ (เต็มช่วงข้อมูล)', _finCagr(revA), _finCagr(revB), fmtPct, true)}
+      ${_finCmpMetric('CAGR รายได้ (เต็มช่วงข้อมูล)', _finCagr(cagrRevA), _finCagr(cagrRevB), fmtPct, true)}
       ${_finCmpMetric(`กำไรสุทธิ${periodLabel}`, last(niA), last(niB), fmtNum, null)}
       ${_finCmpMetric(`กำไรสุทธิ YoY (${periodLabel})`, lastYoy(niA), lastYoy(niB), fmtPct, true)}
       ${_finCmpSection('💎 คุณภาพ')}
@@ -19855,11 +19859,16 @@ async function runFinCompare() {
   const out = document.getElementById('fin-cmp-result');
   if (!symA || !symB) { hint.textContent = 'กรอกหุ้นทั้งสองฝั่งก่อน'; return; }
   const isDrA = _finCmpIsDr('a'), isDrB = _finCmpIsDr('b');
+  const mkA = isDrA ? _finCmpDrMkt.a : null, mkB = isDrB ? _finCmpDrMkt.b : null;
   const period = _finCmpPeriod;
+  const seq = ++_finCmpSeq;   // กดเทียบซ้ำ/ปิดพาเนล → response รอบก่อนที่มาช้ากว่าจะถูกทิ้ง
+  const btn = document.getElementById('fin-cmp-run-btn');
+  if (btn) btn.disabled = true;
   hint.textContent = 'กำลังโหลด...';
   out.innerHTML = '';
   try {
-    const [dA, dB] = await Promise.all([_finCompareFetch(symA, isDrA, period), _finCompareFetch(symB, isDrB, period)]);
+    const [dA, dB] = await Promise.all([_finCompareFetch(symA, isDrA, period, mkA), _finCompareFetch(symB, isDrB, period, mkB)]);
+    if (seq !== _finCmpSeq) return;
     if (dA.error) throw new Error(`${symA}: ${dA.error}`);
     if (dB.error) throw new Error(`${symB}: ${dB.error}`);
     hint.textContent = '';
@@ -19867,8 +19876,11 @@ async function runFinCompare() {
     out.innerHTML = result.html;
     result.afterInsert();
   } catch (e) {
+    if (seq !== _finCmpSeq) return;
     hint.textContent = '';
-    out.innerHTML = `<div class="empty" style="padding:20px;color:var(--red)">⚠ ${e.message}</div>`;
+    out.innerHTML = `<div class="empty" style="padding:20px;color:var(--red)">⚠ ${_escHtml(e.message)}</div>`;
+  } finally {
+    if (seq === _finCmpSeq && btn) btn.disabled = false;
   }
 }
 
@@ -19878,6 +19890,10 @@ function resetFinCompare() {
   document.getElementById('fin-cmp-hint').textContent = '';
   document.getElementById('fin-cmp-result').innerHTML = '';
   _finCmpMarket = { a: 'set', b: 'dr' };
+  _finCmpDrMkt = { a: 'US', b: 'US' };
+  _finCmpSeq++;   // ทิ้ง response ที่ยัง in-flight
+  const runBtn = document.getElementById('fin-cmp-run-btn');
+  if (runBtn) runBtn.disabled = false;
   _finCmpSyncMarketUI('a');
   _finCmpSyncMarketUI('b');
   setFinCmpPeriod('q');
@@ -20116,13 +20132,16 @@ async function searchFinancials() {
   const hintId  = _finTab === 'set' ? 'fin-set-hint' : 'fin-dr-hint';
   const sym = (document.getElementById(inputId).value || '').trim().toUpperCase();
   if (!sym) return;
+  _finViewSeq++;   // คำขอใหม่ — response ช้าของหุ้น/มุมมองก่อนหน้าจะถูก stale-guard ตัดทิ้ง
   const hint = document.getElementById(hintId);
   const isDrSym = _finTab === 'dr';
   // มุมมองปันผลใช้ endpoint/renderer แยกจากงบการเงิน (ไม่ใช่ financials-full) — แตกสาขาออก
   // จาก flow เดิมตรงนี้เลย กัน VIEW_MAP/fallback logic ของงบไม่เกี่ยวข้องมาปนกัน
   if (_finView === 'dividends') {
-    _finRecentAdd(sym, _finTab);
-    history.replaceState(null, '', '#fin/' + _finTab + '/' + encodeURIComponent(sym));
+    // มุมมองปันผลก็แยกตลาด DR (loadDividendsView รับ market) — เก็บ mkt ในชิปเหมือน qpl/merged
+    // ไม่งั้นคลิกชิปตอนแท็บตลาดปัจจุบันไม่ตรงจะ resolve ตลาดผิด
+    _finRecentAdd(sym, _finTab, isDrSym ? _finMirMarket : null);
+    history.replaceState(null, '', '#fin/' + _finTab + '/' + (isDrSym ? _finMirMarket + ':' : '') + encodeURIComponent(sym));
     loadDividendsView(sym, isDrSym ? _finMirMarket : 'TH', hint);
     return;
   }
@@ -20229,7 +20248,7 @@ async function searchFinancials() {
       _checkFinDQ(sym);
   } catch(e) {
     hint.textContent = '';
-    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${e.message}</div>`;
+    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${_escHtml(e.message)}</div>`;
   }
 }
 
@@ -20263,18 +20282,21 @@ async function _checkFinDQ(sym) {
 // หนี้สิน ฯลฯ) ต่างจากตาราง P&L/งบรวมที่ dashboard ประกอบเอง — ตัวนี้เป็นเลขทางการที่
 // SET คำนวณจากงบที่บริษัทยื่นจริง
 async function loadFinHealthView(sym, hint) {
+  const seq = _finViewSeq;
   hint.textContent = 'กำลังโหลด...';
   document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูล Financial Health...</div>';
   try {
     const r = await _fetchTimeout(`/api/financial-health/${encodeURIComponent(sym)}`, 20000,
       'หมดเวลารอข้อมูล (เกิน 20 วิ) — ลองใหม่อีกครั้ง');
     const d = await r.json();
+    if (seq !== _finViewSeq) return;   // เปลี่ยนหุ้น/มุมมองไปแล้วระหว่างรอโหลด — ห้ามทับ
     if (d.error) throw new Error(d.error);
     hint.textContent = '';
     _renderFinHealth(d);
   } catch (e) {
+    if (seq !== _finViewSeq) return;
     hint.textContent = '';
-    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${e.message}</div>`;
+    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${_escHtml(e.message)}</div>`;
   }
 }
 
@@ -20349,18 +20371,21 @@ function _renderFinHealth(d) {
 // สถิติซื้อขายรายปี/ผลตอบแทนเทียบ sector-market — cash_cycle เป็น null ปกติสำหรับหุ้นกลุ่ม
 // การเงิน/REIT (endpoint นั้น 404 เสมอ) โดยอีก 4 sub-endpoint ยังมีข้อมูล
 async function loadFinFactsheetView(sym, hint) {
+  const seq = _finViewSeq;
   hint.textContent = 'กำลังโหลด...';
   document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูล Factsheet...</div>';
   try {
     const r = await _fetchTimeout(`/api/financial-factsheet/${encodeURIComponent(sym)}`, 20000,
       'หมดเวลารอข้อมูล (เกิน 20 วิ) — ลองใหม่อีกครั้ง');
     const d = await r.json();
+    if (seq !== _finViewSeq) return;   // เปลี่ยนหุ้น/มุมมองไปแล้วระหว่างรอโหลด — ห้ามทับ
     if (d.error) throw new Error(d.error);
     hint.textContent = '';
     _renderFinFactsheet(d);
   } catch (e) {
+    if (seq !== _finViewSeq) return;
     hint.textContent = '';
-    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${e.message}</div>`;
+    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${_escHtml(e.message)}</div>`;
   }
 }
 
@@ -20398,35 +20423,60 @@ function _fsCell(v, color) {
   return `<td style="${style}">${_finFactsheetFmt(v)}</td>`;
 }
 
+// คีย์เรียงงวดตามเวลาจริง — SET คืน list ไม่เรียง (มักเป็น [งวดสะสมล่าสุด, งวดสะสมปีก่อน,
+// ปีเต็มล่าสุด, ปีเต็มก่อนหน้า]) และ _merge_factsheet_period_list เรียงใหม่ตอน sync รอบ 2
+// เท่านั้น — frontend ต้องเรียงเองเสมอ ไม่งั้นคอลัมน์สลับ + สีแนวโน้มเทียบผิดงวด
+function _fsPeriodSortKey(p) {
+  if (p.end_date) return p.end_date;
+  if (p.as_of_date) return p.as_of_date;
+  const qn = { Q1: '03-31', Q2: '06-30', Q3: '09-30', Q9: '12-31' }[p.quarter] || '12-31';
+  return `${p.year || 0}-${qn}`;
+}
+
 // ตารางแบบ period -> data[{account_name,value}] ใช้ร่วมกัน cash_cycle/financial_ratio/
 // financial_growth (รูปร่างเหมือนกันเป๊ะ) รวม account_name ทุกงวดเป็นแถว (งวดไหนไม่มีค่า
-// ของรายการนั้นโชว์ '—' — SET บางงวดให้ไม่ครบทุกบัญชีเหมือน financial-health) — เทียบค่ากับ
-// งวดก่อนหน้าเซลล์ต่อเซลล์ ใส่สีเขียว/แดงตาม _fsIsLowerBetter (งวดแรกไม่มีของก่อนหน้าให้เทียบ
-// เลยไม่มีสี)
-function _finFactsheetSeriesTable(periods, emptyMsg) {
+// ของรายการนั้นโชว์ '—' — SET บางงวดให้ไม่ครบทุกบัญชีเหมือน financial-health)
+// เรียงงวดเก่า→ใหม่ก่อนเสมอ · signColor=true (financial_growth ที่เป็นค่า YoY อยู่แล้ว): ใส่สีตาม
+// เครื่องหมายของตัวเองทีละเซลล์ · signColor=false (cash_cycle/financial_ratio): เทียบกับงวด
+// "ชนิดเดียวกัน" (quarter code เท่ากัน — งวดสะสมเทียบงวดสะสม / ปีเต็มเทียบปีเต็ม ไม่ปนกัน)
+// ที่ใกล้ที่สุดก่อนหน้า ใส่เขียว/แดงตาม _fsIsLowerBetter
+function _finFactsheetSeriesTable(periods, emptyMsg, signColor) {
   if (!periods || !periods.length) {
     return `<div style="font-size:12px;color:var(--text2)">${emptyMsg || 'ไม่มีข้อมูล'}</div>`;
   }
+  const sorted = periods.slice().sort((a, b) => _fsPeriodSortKey(a).localeCompare(_fsPeriodSortKey(b)));
   const names = [];
   const seen = new Set();
-  periods.forEach(p => (p.data || []).forEach(a => {
+  sorted.forEach(p => (p.data || []).forEach(a => {
     if (a.account_name && !seen.has(a.account_name)) { seen.add(a.account_name); names.push(a.account_name); }
   }));
   const rows = names.map(name => {
     const lowerBetter = _fsIsLowerBetter(name);
-    const vals = periods.map(p => {
+    const vals = sorted.map(p => {
       const a = (p.data || []).find(x => x.account_name === name);
       return a ? a.value : null;
     });
     const cells = vals.map((v, i) => {
-      const color = (i > 0 && v != null && vals[i - 1] != null)
-        ? _fsTrendColor(v - vals[i - 1], lowerBetter) : '';
+      let color = '';
+      if (v != null) {
+        if (signColor) {
+          color = _fsSignColor(v);
+        } else {
+          // งวดก่อนหน้าที่เป็น "ชนิดเดียวกัน" (quarter code ตรงกัน) เท่านั้น — กันเทียบงวดสะสม
+          // 6 เดือน กับปีเต็ม หรือ Q ต่างกัน
+          let prev = null;
+          for (let j = i - 1; j >= 0; j--) {
+            if (sorted[j].quarter === sorted[i].quarter && vals[j] != null) { prev = vals[j]; break; }
+          }
+          if (prev != null) color = _fsTrendColor(v - prev, lowerBetter);
+        }
+      }
       return _fsCell(v, color);
     }).join('');
     return `<tr><td style="font-size:12px;max-width:260px">${name.replace(/</g, '&lt;')}</td>${cells}</tr>`;
   }).join('');
   return `<div style="overflow-x:auto"><table class="tbl" style="min-width:480px;font-size:12px">
-    <thead><tr><th style="text-align:left">รายการ</th>${periods.map(p => `<th style="text-align:right">${_finFactsheetPeriodLabel(p)}</th>`).join('')}</tr></thead>
+    <thead><tr><th style="text-align:left">รายการ</th>${sorted.map(p => `<th style="text-align:right">${_finFactsheetPeriodLabel(p)}</th>`).join('')}</tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
 }
@@ -20434,8 +20484,12 @@ function _finFactsheetSeriesTable(periods, emptyMsg) {
 // %เปลี่ยนแปลงรายปี (percent_change) เป็นค่า return อยู่แล้ว ใส่สีตามเครื่องหมายของตัวเองได้เลย
 // (บวก=เขียว/ลบ=แดง) ไม่ต้องเทียบกับงวดก่อนหน้า ต่างจาก PE/PBV/Yield/Beta/Payout/Turnover/
 // MktCap ที่ไม่มีทิศทาง "ดีขึ้น" ที่ชัดเจนพอจะฟันธงสี เลยปล่อยไม่มีสี
-function _finFactsheetTradingStatTable(rows) {
-  if (!rows || !rows.length) return `<div style="font-size:12px;color:var(--text2)">ไม่มีข้อมูล</div>`;
+function _finFactsheetTradingStatTable(rowsIn) {
+  if (!rowsIn || !rowsIn.length) return `<div style="font-size:12px;color:var(--text2)">ไม่มีข้อมูล</div>`;
+  // SET คืน + _merge_factsheet_trading_stat สะสมตามลำดับ dict-insertion (เช่น [YTD,2025,2024]
+  // และเพี้ยนหนักขึ้นหลังข้ามปี) — เรียงเก่า→ใหม่ตาม date จริง (YTD = วันล่าสุดจึงอยู่ขวาสุด)
+  const _tsKey = r => r.date || (/^\d{4}$/.test(r.period || '') ? `${r.period}-12-31` : '9999-12-31');
+  const rows = rowsIn.slice().sort((a, b) => _tsKey(a).localeCompare(_tsKey(b)));
   const fields = [['close', 'ราคาปิด'], ['percent_change', '%เปลี่ยนแปลง (%)'],
     ['pe', 'P/E (เท่า)'], ['pbv', 'P/BV (เท่า)'], ['dividend_yield', 'Div Yield (%)'],
     ['dividend_payout_ratio', 'Payout Ratio'], ['beta', 'Beta'],
@@ -20502,7 +20556,7 @@ function _renderFinFactsheet(d) {
   </div>`);
   if (has('financial_growth')) cards.push(`<div class="card" style="padding:16px;margin-bottom:12px">
     <div style="font-size:14px;font-weight:700;margin-bottom:8px">📈 อัตราการเติบโต (YoY)</div>
-    ${_finFactsheetSeriesTable(d.financial_growth)}
+    ${_finFactsheetSeriesTable(d.financial_growth, null, true)}
   </div>`);
   if (has('trading_stat')) cards.push(`<div class="card" style="padding:16px;margin-bottom:12px">
     <div style="font-size:14px;font-weight:700;margin-bottom:8px">📊 สถิติซื้อขายรายปี</div>
@@ -20515,8 +20569,8 @@ function _renderFinFactsheet(d) {
   box.innerHTML = `
     <div style="font-size:11px;color:var(--text2);margin-bottom:12px">
       ข้อมูลจาก factsheet SET.or.th (endpoint ไม่มีเอกสารรองรับทางการ — โครงสร้างอาจเปลี่ยนได้โดยไม่แจ้งล่วงหน้า) · หุ้นไทยเท่านั้น
-      <span style="color:var(--text2)"> · <span style="color:var(--green);font-weight:600">สีเขียว</span> = ดีขึ้นจากงวดก่อน,
-      <span style="color:var(--red);font-weight:600">สีแดง</span> = แย่ลง (เทียบทิศทางตามธรรมชาติของแต่ละรายการ เช่น ระยะเวลาเก็บหนี้/วงจรเงินสด สั้นลง = ดีขึ้น)</span>
+      <span style="color:var(--text2)"> · งวดเรียงเก่า→ใหม่ (ซ้าย→ขวา) · วงจรเงินสด/อัตราส่วน: <span style="color:var(--green);font-weight:600">เขียว</span> = ดีขึ้นจากงวดชนิดเดียวกันก่อนหน้า,
+      <span style="color:var(--red);font-weight:600">แดง</span> = แย่ลง (เทียบทิศทางตามธรรมชาติของแต่ละรายการ เช่น ระยะเวลาเก็บหนี้/วงจรเงินสด สั้นลง = ดีขึ้น) · อัตราการเติบโต: เขียว/แดง = ค่า YoY เป็นบวก/ลบ</span>
     </div>
     ${cards.join('')}`;
 }
@@ -20524,18 +20578,21 @@ function _renderFinFactsheet(d) {
 // มุมมอง "💵 กระแสเงินสด & งบดุล (SET)" — /api/financial-cashflow-balance (source set_cashflow/
 // set_balance ใน financials_store.py) OCF/CFI/CFF/CapEx + งบดุลย่อรายไตรมาส หุ้นไทยเท่านั้น
 async function loadFinCashflowBalanceView(sym, hint) {
+  const seq = _finViewSeq;
   hint.textContent = 'กำลังโหลด...';
   document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูลกระแสเงินสด/งบดุล...</div>';
   try {
     const r = await _fetchTimeout(`/api/financial-cashflow-balance/${encodeURIComponent(sym)}`, 20000,
       'หมดเวลารอข้อมูล (เกิน 20 วิ) — ลองใหม่อีกครั้ง');
     const d = await r.json();
+    if (seq !== _finViewSeq) return;   // เปลี่ยนหุ้น/มุมมองไปแล้วระหว่างรอโหลด — ห้ามทับ
     if (d.error) throw new Error(d.error);
     hint.textContent = '';
     _renderFinCashflowBalance(d);
   } catch (e) {
+    if (seq !== _finViewSeq) return;
     hint.textContent = '';
-    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${e.message}</div>`;
+    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${_escHtml(e.message)}</div>`;
   }
 }
 
@@ -20687,6 +20744,7 @@ function _tsGoFinHealth(sym) {
 }
 
 async function loadFinQplReport(sym, isDr, market, hint) {
+  const seq = _finViewSeq;
   hint.textContent = 'กำลังโหลด...';
   document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูลงบการเงิน...</div>';
   try {
@@ -20694,12 +20752,14 @@ async function loadFinQplReport(sym, isDr, market, hint) {
     const r = await _fetchTimeout(`/api/financials-qpl-report/${encodeURIComponent(sym)}${qs}`, 25000,
       'หมดเวลารอข้อมูล (เกิน 25 วิ) — หุ้นนี้อาจยังไม่เคย sync ในเครื่อง กำลังลองดึงสดแต่ช้าเกินไป ลองใหม่อีกครั้ง');
     const d = await r.json();
+    if (seq !== _finViewSeq) return;   // เปลี่ยนหุ้น/มุมมองไปแล้วระหว่างรอโหลด — ห้ามทับ view + poison _finQplData
     if (d.error) throw new Error(d.error);
     hint.textContent = '';
     _renderFinQplReport(d);
   } catch (e) {
+    if (seq !== _finViewSeq) return;
     hint.textContent = '';
-    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${e.message}</div>`;
+    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${_escHtml(e.message)}</div>`;
   }
 }
 
@@ -21467,6 +21527,7 @@ let _finMergedPeriod = 'q';
 let _finMergedIsDr = false;
 
 async function loadFinMergedReport(sym, isDr, market, hint) {
+  const seq = _finViewSeq;
   hint.textContent = 'กำลังโหลด...';
   document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงข้อมูลงบการเงิน...</div>';
   try {
@@ -21474,6 +21535,7 @@ async function loadFinMergedReport(sym, isDr, market, hint) {
     const r = await _fetchTimeout(`/api/financials-merged-report/${encodeURIComponent(sym)}${qs}`, 25000,
       'หมดเวลารอข้อมูล (เกิน 25 วิ) — หุ้นนี้อาจยังไม่เคย sync ในเครื่อง กำลังลองดึงสดแต่ช้าเกินไป ลองใหม่อีกครั้ง');
     const d = await r.json();
+    if (seq !== _finViewSeq) return;   // เปลี่ยนหุ้น/มุมมองไปแล้วระหว่างรอโหลด — ห้ามทับ view + poison _finMergedData
     if (d.error) throw new Error(d.error);
     hint.textContent = '';
     _finMergedData = d;
@@ -21481,8 +21543,9 @@ async function loadFinMergedReport(sym, isDr, market, hint) {
     _finMergedIsDr = !!isDr;
     _renderFinMergedReport(d);
   } catch (e) {
+    if (seq !== _finViewSeq) return;
     hint.textContent = '';
-    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${e.message}</div>`;
+    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${_escHtml(e.message)}</div>`;
   }
 }
 

@@ -3398,7 +3398,7 @@
   <div id="fin-coverage-result" style="display:none;margin-bottom:12px"></div>
   <div id="fin-quarter-coverage-result" style="display:none;margin-bottom:12px"></div>
 
-  <!-- เทียบหุ้น 2 ตัว — ใช้งบไตรมาส Finnomena 16 ปี เทียบรายได้/margin/ROE แบบ overlay -->
+  <!-- เทียบหุ้น 2 ตัว — ตาราง P&L รายไตรมาส/รายปีย้อนหลัง + สรุป snapshot ค่าล่าสุด (กราฟ overlay ถอดออกแล้ว) -->
   <div id="fin-compare-panel" class="card" style="padding:14px 16px;margin-bottom:12px;display:none">
     <div style="font-size:12px;color:var(--text2);margin-bottom:8px">เทียบงบการเงิน 2 หุ้น (ไทยหรือต่างประเทศ ผสมกันได้) — สลับดูรายไตรมาสหรือรายปีได้ (โหมดรายปีใช้ Finnomena ทั้งสองฝั่ง)
       <span class="scr-tip-icon">?<div class="scr-tip-box" style="width:280px;text-align:left">
@@ -3414,6 +3414,11 @@
           <button class="filter-btn active" id="fin-cmp-a-set" onclick="setFinCmpMarket('a','set')" style="font-size:10px;padding:2px 8px;border-radius:5px 0 0 5px">🇹🇭 ไทย</button>
           <button class="filter-btn" id="fin-cmp-a-dr" onclick="setFinCmpMarket('a','dr')" style="font-size:10px;padding:2px 8px;border-radius:0 5px 5px 0">🌏 ต่างประเทศ</button>
         </div>
+        <div class="filter-row" id="fin-cmp-a-drmkt" style="gap:0;margin:0;display:none">
+          <button class="filter-btn active" id="fin-cmp-a-mk-US" onclick="setFinCmpDrMkt('a','US')" style="font-size:10px;padding:2px 8px;border-radius:5px 0 0 5px">US</button>
+          <button class="filter-btn" id="fin-cmp-a-mk-HK" onclick="setFinCmpDrMkt('a','HK')" style="font-size:10px;padding:2px 8px">HK</button>
+          <button class="filter-btn" id="fin-cmp-a-mk-JP" onclick="setFinCmpDrMkt('a','JP')" style="font-size:10px;padding:2px 8px;border-radius:0 5px 5px 0">JP</button>
+        </div>
       </div>
       <span style="color:var(--text2);font-size:12px">เทียบกับ</span>
       <div style="display:flex;flex-direction:column;gap:4px">
@@ -3423,6 +3428,11 @@
           <button class="filter-btn" id="fin-cmp-b-set" onclick="setFinCmpMarket('b','set')" style="font-size:10px;padding:2px 8px;border-radius:5px 0 0 5px">🇹🇭 ไทย</button>
           <button class="filter-btn active" id="fin-cmp-b-dr" onclick="setFinCmpMarket('b','dr')" style="font-size:10px;padding:2px 8px;border-radius:0 5px 5px 0">🌏 ต่างประเทศ</button>
         </div>
+        <div class="filter-row" id="fin-cmp-b-drmkt" style="gap:0;margin:0;display:none">
+          <button class="filter-btn active" id="fin-cmp-b-mk-US" onclick="setFinCmpDrMkt('b','US')" style="font-size:10px;padding:2px 8px;border-radius:5px 0 0 5px">US</button>
+          <button class="filter-btn" id="fin-cmp-b-mk-HK" onclick="setFinCmpDrMkt('b','HK')" style="font-size:10px;padding:2px 8px">HK</button>
+          <button class="filter-btn" id="fin-cmp-b-mk-JP" onclick="setFinCmpDrMkt('b','JP')" style="font-size:10px;padding:2px 8px;border-radius:0 5px 5px 0">JP</button>
+        </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:4px">
         <span style="font-size:10px;color:var(--text2)">ช่วงเวลา</span>
@@ -3431,7 +3441,7 @@
           <button class="filter-btn" id="fin-cmp-period-y" onclick="setFinCmpPeriod('y')" style="font-size:10px;padding:2px 8px;border-radius:0 5px 5px 0" title="ใช้งบรายปีจาก Finnomena ทั้งสองฝั่งเสมอ (แม้ฝั่งไทยปกติจะใช้ SET.or.th รายไตรมาสก็ตาม) — เปลี่ยนตัวเลือกนี้แล้วต้องกด &quot;⚖️ เทียบ&quot; ใหม่ถึงจะมีผลกับตารางที่แสดงอยู่">รายปี</button>
         </div>
       </div>
-      <button class="btn-primary" onclick="runFinCompare()">⚖️ เทียบ</button>
+      <button class="btn-primary" id="fin-cmp-run-btn" onclick="runFinCompare()">⚖️ เทียบ</button>
       <button class="filter-btn" onclick="resetFinCompare()" title="ล้างช่องกรอกและผลเทียบ">↺ รีเซ็ต</button>
       <span id="fin-cmp-hint" style="font-size:11px;color:var(--text2)"></span>
     </div>
@@ -5659,6 +5669,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260902i"></script>
+<script src="static/dashboard.js?v=20260902k"></script>
 </body>
 </html>
