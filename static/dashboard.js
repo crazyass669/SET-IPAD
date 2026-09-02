@@ -42,10 +42,8 @@ function _wlSave() {
   localStorage.setItem("set_wl", JSON.stringify(watchlist));
   fetch('/api/watchlist').then(r => r.ok ? r.json() : Promise.reject())
     .then(serverList => {
-      if (Array.isArray(serverList)) {
-        let changed = false;
-        serverList.forEach(s => { if (typeof s === 'string' && !_wlListHas(watchlist, s)) { watchlist.push(s); changed = true; } });
-        if (changed) localStorage.setItem("set_wl", JSON.stringify(watchlist));
+      if (Array.isArray(serverList) && _wlMergeFromServer(watchlist, serverList)) {
+        localStorage.setItem("set_wl", JSON.stringify(watchlist));
       }
     })
     .catch(() => {})
@@ -92,11 +90,19 @@ function _wlListHas(list, sym) {
   return list.includes(_wlBaseSym(sym));
 }
 
+// union merge จาก serverList เข้า `local` (แก้ในที่) — ใช้ร่วมกันทั้ง _wlSave (ก่อน POST) และ
+// _wlSyncFromServer (ตอนโหลดหน้า) กันโค้ดซ้ำ (เดิม copy-paste บรรทัดเดียวกัน 2 จุด — เหมือน
+// _mergeAlertRatchet ที่ฝั่ง price alert แยกออกมาเป็น helper อยู่แล้ว รีวิวโค้ด 2026-09-02)
+function _wlMergeFromServer(local, serverList) {
+  let changed = false;
+  serverList.forEach(s => { if (typeof s === 'string' && !_wlListHas(local, s)) { local.push(s); changed = true; } });
+  return changed;
+}
+
 (function _wlSyncFromServer() {
   fetch('/api/watchlist').then(r => r.ok ? r.json() : Promise.reject()).then(serverList => {
     if (!Array.isArray(serverList)) return;
-    let changed = false;
-    serverList.forEach(s => { if (typeof s === 'string' && !_wlListHas(watchlist, s)) { watchlist.push(s); changed = true; } });
+    const changed = _wlMergeFromServer(watchlist, serverList);
     if (changed) {
       localStorage.setItem("set_wl", JSON.stringify(watchlist));
       if (document.getElementById('page-watchlist')?.classList.contains('active')) renderWatchlist();
@@ -3423,6 +3429,7 @@ function removeFromWatchlist(sym) {
   _wlSave();
   delete _wlMirrorData[sym];
   _wlMirrorCacheRemove(sym);
+  delete _wlLive[sym];   // กันราคา "สด" เก่าโผล่ทันทีไม่มี timestamp บอก ถ้าเพิ่ม sym เดิมกลับมาทีหลัง
   renderWatchlist();
 }
 // ปุ่ม ✕ ในตาราง Watchlist เรียกอันนี้ (ถามยืนยันก่อนลบกันกดผิด) ต่างจาก
@@ -3455,7 +3462,7 @@ function _wlAlertCell(sym) {
 let _wlLive = {};   // key = watchlist entry ("PTT"/"DR:AAPL"/"US:AAPL"/"HK:0700.HK") -> {price, ts}
 
 function _wlLiveTag(basePrice, live) {
-  if (live == null || basePrice == null) return '';
+  if (live == null || !basePrice) return '';
   const chg = (live - basePrice) / basePrice * 100;
   const chgStr = ` <span style="color:${chg >= 0 ? 'var(--green)' : 'var(--red)'}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>`;
   return `<span title="ราคาล่าสุดจาก Yahoo Finance — ดึงตอนกดปุ่ม ⚡ ราคาล่าสุด (ต่างจากราคาปิดหลักด้านบนที่เป็นราคาปิดแท่งล่าสุดในเครื่อง)" style="display:block;font-size:9px;color:var(--text2);white-space:nowrap;cursor:help">⚡ ${live.toFixed(2)}${chgStr}</span>`;
@@ -3539,6 +3546,9 @@ let _wlMirrorFetching = new Set();
 // จึง cache เฉพาะผลสำเร็จ ใช้ TTL เดียวกับฝั่ง server (stale_days=1) กันข้อมูลเก่าค้าง
 const _WL_MIRROR_LS = 'set_wl_mirror_cache';
 const _WL_MIRROR_TTL_MS = 24 * 60 * 60 * 1000;
+// error (ต่างจาก TTL ของข้อมูลสำเร็จด้านบน) เก็บแค่ในหน่วยความจำ ไม่ persist ลง localStorage —
+// ถ้าไม่หมดอายุเองจะค้าง error แดงถาวรทั้ง session แม้สาเหตุเป็นแค่ Yahoo timeout ชั่วคราว
+const _WL_MIRROR_ERR_RETRY_MS = 60 * 1000;
 
 function _wlMirrorCacheLoad() {
   let raw;
@@ -3584,10 +3594,12 @@ async function _wlFetchMirror(sym, mkt, under) {
     // ทิ้งผลลัพธ์ ไม่งั้น cache (ทั้ง in-memory และ localStorage) จะฟื้นคืนชีพหุ้นที่ลบไปแล้ว
     // กลับมาโผล่อีกครั้งถ้าเพิ่มซ้ำภายใน 24 ชม. (พบจากรีวิวโค้ด 2026-08-24)
     if (!watchlist.includes(sym)) return;
-    _wlMirrorData[sym] = res;
+    // error ติด timestamp ไว้ด้วย — renderWatchlist จะปล่อยให้ retry ใหม่หลังพ้น
+    // _WL_MIRROR_ERR_RETRY_MS แทนที่จะค้างแถวแดงถาวรทั้ง session (เห็นบ่อยตอน Yahoo timeout ชั่วคราว)
+    _wlMirrorData[sym] = res.error ? { ...res, t: Date.now() } : res;
     if (!res.error) _wlMirrorCacheSave(sym, res);
   } catch (e) {
-    if (watchlist.includes(sym)) _wlMirrorData[sym] = { error: e.message || 'โหลดไม่สำเร็จ' };
+    if (watchlist.includes(sym)) _wlMirrorData[sym] = { error: e.message || 'โหลดไม่สำเร็จ', t: Date.now() };
   } finally {
     _wlMirrorFetching.delete(sym);
     renderWatchlist();
@@ -3614,9 +3626,11 @@ async function _wlFetchMirrorGuessMarket(sym) {
       _wlMirrorData[mkt + ':' + sym] = res;
       _wlMirrorCacheSave(mkt + ':' + sym, res);
     }
-    _wlMirrorData[sym] = res;   // cache ผลไว้ (สำเร็จ/พลาดก็ตาม) กัน retry วนทุก render
+    // cache ผลไว้กัน retry วนทุก render — error ติด timestamp ให้ renderWatchlist ปล่อย retry
+    // ใหม่ได้หลังพ้น _WL_MIRROR_ERR_RETRY_MS เหมือน _wlFetchMirror ด้านบน
+    _wlMirrorData[sym] = res.error ? { ...res, t: Date.now() } : res;
   } catch (e) {
-    if (watchlist.includes(sym)) _wlMirrorData[sym] = { error: e.message || 'โหลดไม่สำเร็จ' };
+    if (watchlist.includes(sym)) _wlMirrorData[sym] = { error: e.message || 'โหลดไม่สำเร็จ', t: Date.now() };
   } finally {
     _wlMirrorFetching.delete(sym);
     renderWatchlist();
@@ -3671,7 +3685,15 @@ function renderWatchlist() {
     watchlist.forEach(sym => {
       const hasPfx = sym.startsWith("DR:") || sym.startsWith("US:") || sym.startsWith("HK:");
       const clean = hasPfx ? sym.slice(3) : sym;
-      if (stockMap[sym] || stockMap[clean] || drMap[clean] || usMap[clean] || hkMap[clean]) return;
+      // ต้องเช็คเทียบกับตลาดที่ prefix ของ entry บอกไว้เท่านั้น ไม่ใช่ทุก map — ไม่งั้น ticker
+      // ที่ซ้ำชื่อข้ามตลาด (เช่น TSLA เป็นทั้งสมาชิก US Index และ DR underlying) จะเข้าใจผิดว่า
+      // "พร้อมแล้ว" จาก map ของอีกตลาดที่บังเอิญโหลดมาก่อน ทำให้ตลาดจริงของ entry นั้นไม่เคยถูก
+      // fetch เลย (แถวค้าง "ยังไม่โหลดข้อมูล" ถาวร) — entry ไม่มี prefix (legacy) ยังไม่รู้ตลาด
+      // จริง เช็คทุกแหล่งเหมือนเดิม
+      if (sym.startsWith("DR:")) { if (drMap[clean]) return; }
+      else if (sym.startsWith("US:")) { if (usMap[clean]) return; }
+      else if (sym.startsWith("HK:")) { if (hkMap[clean]) return; }
+      else if (stockMap[sym] || stockMap[clean] || drMap[clean] || usMap[clean] || hkMap[clean]) return;
       // เว็บมือถือ/iPad (IS_STATIC): /api/us-index-metrics, /api/hk-index-metrics ไม่มีบน GitHub
       // Pages เลย (us/hk_prices.db local-only ไม่ได้ bake) ดึงยังไงก็ไม่สำเร็จ — ถ้ายังนับเป็น
       // "unknown" ต่อไปจะค้างจอ "กำลังโหลดข้อมูล..." ทั้งตารางตลอดกาลทุกครั้งที่มีหุ้น US/HK ดัชนี
@@ -3689,12 +3711,13 @@ function renderWatchlist() {
       Promise.all([
         (_drData || !need.has("DR")) ? Promise.resolve() : _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000).then(r => r.json()).then(d => {
           if (d.stocks) { _drData = d.stocks; _drLoaded = true; }
+          if (d.refreshing) _drPollRefresh(0);   // cache stale — poll เบื้องหลังจนได้ชุดใหม่ (pattern เดียวกับหน้า DR)
         }).catch(() => {}),
-        (IS_STATIC || _usData || !need.has("US")) ? Promise.resolve() : fetch('/api/us-index-metrics').then(r => r.json()).then(d => {
-          _usData = d;
+        (IS_STATIC || _usData || !need.has("US")) ? Promise.resolve() : _fetchTimeout('/api/us-index-metrics', 25000).then(r => r.json()).then(d => {
+          if (d && !d.error) _usData = d;   // route คืน {error:...} ตอน exception — ห้าม cache เป็นข้อมูลจริง ไม่งั้นไม่ retry อีกเลยทั้ง session
         }).catch(() => {}),
-        (IS_STATIC || _hkData || !need.has("HK")) ? Promise.resolve() : fetch('/api/hk-index-metrics').then(r => r.json()).then(d => {
-          _hkData = d;
+        (IS_STATIC || _hkData || !need.has("HK")) ? Promise.resolve() : _fetchTimeout('/api/hk-index-metrics', 25000).then(r => r.json()).then(d => {
+          if (d && !d.error) _hkData = d;
         }).catch(() => {}),
       ]).then(renderWatchlist);
       return;
@@ -3740,7 +3763,7 @@ function renderWatchlist() {
             <a class="tv-link" href="${tvHref}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>
           </td>
           <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.name)}</td>
-          <td style="font-size:11px;color:var(--text2)">${d.region}</td>
+          <td style="font-size:11px;color:var(--text2)">${esc(d.region)}</td>
           <td class="r"><span style="font-size:12px;font-weight:600">${_drFmtPrice(d.price)}</span>
             <br><span class="${chgCls}" style="font-size:10px">${(d.chg??0)>=0?"+":""}${(d.chg??0).toFixed(2)}%</span>
             ${_wlLiveCell(sym, d.price, d)}
@@ -3769,14 +3792,14 @@ function renderWatchlist() {
       if (!u) {
         const m = _wlMirrorData[sym];
         if (m && !m.error) { u = m; isMirror = true; }
-        else if (m && m.error) return _wlMirrorErrorRow(sym, under, 'US', m.error);
-        else { _wlFetchMirror(sym, 'US', under); return _wlMirrorLoadingRow(sym, under, 'US'); }
+        else if (m && m.error && (Date.now() - (m.t || 0)) < _WL_MIRROR_ERR_RETRY_MS) return _wlMirrorErrorRow(sym, under, 'US', m.error);
+        else { if (m) delete _wlMirrorData[sym]; _wlFetchMirror(sym, 'US', under); return _wlMirrorLoadingRow(sym, under, 'US'); }
       }
       return `
-        <tr data-sym="US:${u.symbol}">
+        <tr data-sym="US:${esc(u.symbol)}">
           <td><span class="${rsColor(u.rs_score)}" style="font-weight:700">${u.rs_score??"-"}</span></td>
           <td>
-            <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('US','${u.symbol}')` : `_openMirrorStock('${u.symbol}','us')`}">${u.symbol}</strong>
+            <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('US','${_escJsAttr(u.symbol)}')` : `_openMirrorStock('${_escJsAttr(u.symbol)}','us')`}">${esc(u.symbol)}</strong>
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">US</span>
             ${isMirror ? `<span style="font-size:9px;color:var(--text2)" title="หุ้นนอกดัชนีหลัก S&P500/Dow/NDX — ข้อมูลดึงแบบ on-demand เหมือนหน้า Tearsheet (cache 1 วัน)">🔍</span>` : ''}
             ${_usTvLink(u.symbol)}
@@ -3808,14 +3831,14 @@ function renderWatchlist() {
       if (!h) {
         const m = _wlMirrorData[sym];
         if (m && !m.error) { h = m; isMirror = true; }
-        else if (m && m.error) return _wlMirrorErrorRow(sym, under, 'HK', m.error);
-        else { _wlFetchMirror(sym, 'HK', under); return _wlMirrorLoadingRow(sym, under, 'HK'); }
+        else if (m && m.error && (Date.now() - (m.t || 0)) < _WL_MIRROR_ERR_RETRY_MS) return _wlMirrorErrorRow(sym, under, 'HK', m.error);
+        else { if (m) delete _wlMirrorData[sym]; _wlFetchMirror(sym, 'HK', under); return _wlMirrorLoadingRow(sym, under, 'HK'); }
       }
       return `
-        <tr data-sym="HK:${h.symbol}">
+        <tr data-sym="HK:${esc(h.symbol)}">
           <td><span class="${rsColor(h.rs_score)}" style="font-weight:700">${h.rs_score??"-"}</span></td>
           <td>
-            <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('HK','${h.symbol}')` : `_openMirrorStock('${h.symbol}','hk')`}">${h.symbol}</strong>
+            <strong class="sym-link" style="color:var(--blue)" onclick="${isMirror ? `_wlOpenMirrorTearsheet('HK','${_escJsAttr(h.symbol)}')` : `_openMirrorStock('${_escJsAttr(h.symbol)}','hk')`}">${esc(h.symbol)}</strong>
             <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">HK</span>
             ${isMirror ? `<span style="font-size:9px;color:var(--text2)" title="หุ้นนอกดัชนีหลัก HSI/HSCEI/HSTECH — ข้อมูลดึงแบบ on-demand เหมือนหน้า Tearsheet (cache 1 วัน)">🔍</span>` : ''}
             ${_hkTvLink(h.symbol)}
@@ -3867,7 +3890,7 @@ function renderWatchlist() {
               <a class="tv-link" href="${tvHref2}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>
             </td>
             <td style="font-size:11px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.name)}</td>
-            <td style="font-size:11px;color:var(--text2)">${d.region}</td>
+            <td style="font-size:11px;color:var(--text2)">${esc(d.region)}</td>
             <td class="r"><span style="font-size:12px;font-weight:600">${_drFmtPrice(d.price)}</span>
               <br><span class="${chgCls2}" style="font-size:10px">${(d.chg??0)>=0?"+":""}${(d.chg??0).toFixed(2)}%</span>
               ${_wlLiveCell(newSym, d.price, d)}
@@ -3898,10 +3921,10 @@ function renderWatchlist() {
         const u = usMatch;
         const newSym = "US:" + sym;
         return `
-          <tr data-sym="US:${u.symbol}">
+          <tr data-sym="US:${esc(u.symbol)}">
             <td><span class="${rsColor(u.rs_score)}" style="font-weight:700">${u.rs_score??"-"}</span></td>
             <td>
-              <strong class="sym-link" style="color:var(--blue)" onclick="_openMirrorStock('${u.symbol}','us')">${u.symbol}</strong>
+              <strong class="sym-link" style="color:var(--blue)" onclick="_openMirrorStock('${_escJsAttr(u.symbol)}','us')">${esc(u.symbol)}</strong>
               <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">US</span>
               ${_usTvLink(u.symbol)}
             </td>
@@ -3934,10 +3957,10 @@ function renderWatchlist() {
         const h = hkMatch;
         const newSym = "HK:" + sym;
         return `
-          <tr data-sym="HK:${h.symbol}">
+          <tr data-sym="HK:${esc(h.symbol)}">
             <td><span class="${rsColor(h.rs_score)}" style="font-weight:700">${h.rs_score??"-"}</span></td>
             <td>
-              <strong class="sym-link" style="color:var(--blue)" onclick="_openMirrorStock('${h.symbol}','hk')">${h.symbol}</strong>
+              <strong class="sym-link" style="color:var(--blue)" onclick="_openMirrorStock('${_escJsAttr(h.symbol)}','hk')">${esc(h.symbol)}</strong>
               <span style="font-size:9px;background:rgba(88,166,255,.15);color:var(--blue);border-radius:3px;padding:1px 4px;margin-left:3px">HK</span>
               ${_hkTvLink(h.symbol)}
             </td>
@@ -3963,7 +3986,8 @@ function renderWatchlist() {
       // เดาตลาด (_wlFetchMirrorGuessMarket) — สำเร็จแล้วจะ migrate เป็น "US:"/"HK:" ให้เอง
       // แล้ว re-render ผ่าน branch ด้านบนตรงๆ ไม่ผ่าน path นี้อีก
       const guess = _wlMirrorData[sym];
-      if (!guess) {
+      if (!guess || (guess.error && (Date.now() - (guess.t || 0)) >= _WL_MIRROR_ERR_RETRY_MS)) {
+        if (guess) delete _wlMirrorData[sym];
         _wlFetchMirrorGuessMarket(sym);
         return _wlMirrorLoadingRow(sym, sym, null);
       }
@@ -30597,10 +30621,8 @@ let _wlAlertSym = null;
 
 function openWlAlertModal(sym) {
   _wlAlertSym = sym;
-  const isDR = _isDRSym(sym);
-  const isUS = _isUsSym(sym);
-  const isHK = _isHkSym(sym);
-  const label = isDR ? `DR: ${_drUnder(sym)} (USD)` : isUS ? `US: ${_usUnder(sym)} (USD)` : isHK ? `HK: ${_hkUnder(sym)} (HKD)` : sym;
+  const { isDR, isUS, isHK, under } = _alertSymMeta(sym);
+  const label = isDR ? `DR: ${under} (USD)` : isUS ? `US: ${under} (USD)` : isHK ? `HK: ${under} (HKD)` : sym;
   document.getElementById("wl-alert-modal-title").textContent = `🔔 แจ้งเตือนราคา — ${label}`;
   const priceLabel = _currentPriceLabel(sym);
   document.getElementById("wl-al-price").placeholder = priceLabel || "0.00";
@@ -30802,25 +30824,34 @@ function _populateAlertSymList() {
 }
 
 function _isDRSym(sym) { return sym.startsWith("DR:"); }
-function _drUnder(sym) { return sym.slice(3); }
 function _isUsSym(sym) { return sym.startsWith("US:"); }
-function _usUnder(sym) { return sym.slice(3); }
 function _isHkSym(sym) { return sym.startsWith("HK:"); }
-function _hkUnder(sym) { return sym.slice(3); }
+
+// ตลาด/สกุลเงิน/label/ทศนิยม ของ alert symbol (prefix DR:/US:/HK: หรือ SET เปล่า) — จุดเดียว
+// ที่ map ข้อมูลนี้ ใช้ร่วมกันทุกจุดที่ต้องโชว์ currency/label ของ alert (เดิมกระจาย logic
+// เดียวกันแยกกัน 5 จุด: openWlAlertModal/_currentPriceLabel/renderAlertPanel/
+// _showNextAlertPopup/_showBrowserNotification — พบจากรีวิวโค้ด 2026-09-02)
+function _alertSymMeta(sym) {
+  const isDR = _isDRSym(sym), isUS = _isUsSym(sym), isHK = _isHkSym(sym);
+  const under = _wlBaseSym(sym);
+  const curr = isHK ? "HKD" : (isDR || isUS) ? "USD" : "บาท";
+  const label = isDR ? `DR: ${under}` : isUS ? `US: ${under}` : isHK ? `HK: ${under}` : sym;
+  return { isDR, isUS, isHK, under, curr, label, dp: isDR ? 4 : 2 };
+}
 
 function _currentPriceLabel(sym) {
-  if (_isDRSym(sym)) {
-    const under = _drUnder(sym);
+  const { isDR, isUS, isHK, under } = _alertSymMeta(sym);
+  if (isDR) {
     const dr = (_drData || []).find(x => x.sym === under);
     const curr = dr?.region === "TH" ? "THB" : (under.includes(".") ? "" : "USD");
     return dr ? `ราคาปัจจุบัน: ${dr.price?.toFixed(2)} ${curr}` : null;
   }
-  if (_isUsSym(sym)) {
-    const u = (_usData?.stocks || []).find(x => x.symbol === _usUnder(sym));
+  if (isUS) {
+    const u = (_usData?.stocks || []).find(x => x.symbol === under);
     return u ? `ราคาปัจจุบัน: ${u.price?.toFixed(2)} USD` : null;
   }
-  if (_isHkSym(sym)) {
-    const h = (_hkData?.stocks || []).find(x => x.symbol === _hkUnder(sym));
+  if (isHK) {
+    const h = (_hkData?.stocks || []).find(x => x.symbol === under);
     return h ? `ราคาปัจจุบัน: ${h.price?.toFixed(2)} HKD` : null;
   }
   const s = DATA?.stocks?.find(x => x.symbol === sym);
@@ -30836,11 +30867,17 @@ function addAlert() {
   if (!sym) { alert("กรุณากรอกชื่อหุ้น"); return; }
   if (!price || price <= 0) { alert("กรุณากรอกราคาเป้าหมาย"); return; }
 
-  // auto-detect DR เหมือน Watchlist
-  if (!sym.startsWith("DR:")) {
-    const matchesDR  = (_drData || []).some(s => s.sym === sym);
+  // auto-detect DR/US/HK เหมือน Watchlist (addToWatchlist) — เดิมมีแค่ DR ทำให้พิมพ์ symbol
+  // US/HK เปล่าๆ (เช่น "ZS") ไม่ถูกเติม prefix ให้เลยทั้งที่ comment ข้างบนอ้างว่าทำเหมือนกัน
+  // (พบจากรีวิวโค้ด 2026-09-02)
+  if (!sym.startsWith("DR:") && !sym.startsWith("US:") && !sym.startsWith("HK:")) {
     const matchesSET = (DATA?.stocks || []).some(s => s.symbol === sym);
-    if (matchesDR && !matchesSET) sym = "DR:" + sym;
+    const matchesDR  = (_drData || []).some(s => s.sym === sym);
+    const matchesUS  = (_usData?.stocks || []).some(s => s.symbol === sym);
+    const matchesHK  = (_hkData?.stocks || []).some(s => s.symbol === sym);
+    if (!matchesSET && matchesDR) sym = "DR:" + sym;
+    else if (!matchesSET && !matchesDR && matchesUS) sym = "US:" + sym;
+    else if (!matchesSET && !matchesDR && !matchesUS && matchesHK) sym = "HK:" + sym;
   }
 
   const alerts = _loadAlerts();
@@ -30882,27 +30919,24 @@ function renderAlertPanel() {
   const triggered = alerts.filter(a => a.triggered);
 
   // แสดงสกุลเงิน/label ให้ตรงตลาด — DR/US = USD, HK = HKD, ที่เหลือ (SET) = บาท
-  // (เหมือนกันกับ _showAlertToast/_showBrowserNotification ที่ทำ mapping นี้อยู่แล้ว)
-  const _alSymMeta = sym => {
-    const isDR = _isDRSym(sym), isUS = _isUsSym(sym), isHK = _isHkSym(sym);
-    const curr = isHK ? "HKD" : (isDR || isUS) ? "USD" : "บาท";
-    const label = isDR ? `DR: ${_drUnder(sym)}` : isUS ? `US: ${_usUnder(sym)}` : isHK ? `HK: ${_hkUnder(sym)}` : sym;
-    return { curr, label, dp: isDR ? 4 : 2 };
-  };
-
+  // (ใช้ _alertSymMeta กลางตัวเดียวกับ openWlAlertModal/_showNextAlertPopup/_showBrowserNotification)
+  //
+  // label/note/id ต้อง escape ก่อนแทรก — backend (_valid_price_alert) เช็คแค่ type ไม่กรอง
+  // ตัวอักษร ถ้ามาจาก sync ข้ามเครื่อง/แก้ไฟล์มือ/POST ตรงๆ อาจมี HTML/quote ปนมาได้ (เหมือน
+  // เหตุผลที่ _wlAlertCell ใช้ _escHtml/_escJsAttr กับ sym อยู่แล้ว — พบจากรีวิวโค้ด 2026-09-02)
   const activeEl = document.getElementById("al-active-list");
   activeEl.innerHTML = active.length === 0
     ? `<div class="alert-empty">ยังไม่มีแจ้งเตือน — เพิ่มได้ด้านบน</div>`
     : active.map(a => {
         const condTh = a.condition === "above" ? "≥" : "≤";
-        const { curr, label, dp } = _alSymMeta(a.symbol);
+        const { curr, label, dp } = _alertSymMeta(a.symbol);
         return `<div class="alert-item">
           <div class="alert-item-body">
-            <div class="alert-sym">${label}</div>
+            <div class="alert-sym">${_escHtml(label)}</div>
             <div class="alert-cond">ราคา ${condTh} <strong>${_fmtAlertPrice(a.targetPrice, dp)}</strong> ${curr}</div>
-            ${a.note ? `<div class="alert-note">${a.note}</div>` : ""}
+            ${a.note ? `<div class="alert-note">${_escHtml(a.note)}</div>` : ""}
           </div>
-          <button class="alert-del-btn" onclick="deleteAlert('${a.id}')" title="ลบ">×</button>
+          <button class="alert-del-btn" onclick="deleteAlert('${_escJsAttr(a.id)}')" title="ลบ">×</button>
         </div>`;
       }).join("");
 
@@ -30912,15 +30946,15 @@ function renderAlertPanel() {
   triggeredEl.innerHTML = triggered.map(a => {
     const condTh = a.condition === "above" ? "≥" : "≤";
     const when = a.triggeredAt ? new Date(a.triggeredAt).toLocaleString("th-TH", { hour12: false }) : "";
-    const { curr, label, dp } = _alSymMeta(a.symbol);
+    const { curr, label, dp } = _alertSymMeta(a.symbol);
     return `<div class="alert-item triggered">
       <div class="alert-item-body">
-        <div class="alert-sym">${label} <span style="font-size:10px;color:var(--yellow)">✓ triggered</span></div>
+        <div class="alert-sym">${_escHtml(label)} <span style="font-size:10px;color:var(--yellow)">✓ triggered</span></div>
         <div class="alert-cond">ราคา ${condTh} ${_fmtAlertPrice(a.targetPrice, dp)} → ราคาจริง <strong>${a.triggeredPrice?.toFixed(dp) ?? "—"}</strong> ${curr}</div>
         ${when ? `<div class="alert-note">${when}</div>` : ""}
-        ${a.note ? `<div class="alert-note">${a.note}</div>` : ""}
+        ${a.note ? `<div class="alert-note">${_escHtml(a.note)}</div>` : ""}
       </div>
-      <button class="alert-del-btn" onclick="deleteAlert('${a.id}')" title="ลบ">×</button>
+      <button class="alert-del-btn" onclick="deleteAlert('${_escJsAttr(a.id)}')" title="ลบ">×</button>
     </div>`;
   }).join("") + (triggered.length > 0 ? `<div style="padding:0 12px 12px"><button onclick="clearTriggeredAlerts()" style="width:100%;padding:5px;background:transparent;border:1px solid var(--border);border-radius:5px;color:var(--text2);cursor:pointer;font-size:11px">ล้างทั้งหมด</button></div>` : "");
 }
@@ -31024,15 +31058,11 @@ function _showNextAlertPopup() {
     const isUp = alert.condition === "above";
     box.className = isUp ? "up" : "down";
     document.getElementById("alert-popup-icon").textContent = isUp ? "🔼" : "🔽";
-    const isDRAlert = _isDRSym(alert.symbol);
-    const isUSAlert = _isUsSym(alert.symbol);
-    const isHKAlert = _isHkSym(alert.symbol);
-    const curr = isHKAlert ? "HKD" : (isDRAlert || isUSAlert) ? "USD" : "บาท";
-    const symLabel = isDRAlert ? `DR: ${_drUnder(alert.symbol)}` : isUSAlert ? `US: ${_usUnder(alert.symbol)}` : isHKAlert ? `HK: ${_hkUnder(alert.symbol)}` : alert.symbol;
+    const { curr, label: symLabel, dp } = _alertSymMeta(alert.symbol);
     document.getElementById("alert-popup-sym").textContent = symLabel;
     document.getElementById("alert-popup-msg").innerHTML =
-      `ราคา <strong style="font-size:18px;color:${isUp ? "var(--green)" : "var(--red)"}">${price.toFixed(isDRAlert ? 4 : 2)}</strong> ${curr}<br>
-       <span style="font-size:12px;color:var(--text2)">เป้าหมาย ${condTh} ${_fmtAlertPrice(alert.targetPrice, isDRAlert ? 4 : 2)} ${curr}</span>`;
+      `ราคา <strong style="font-size:18px;color:${isUp ? "var(--green)" : "var(--red)"}">${price.toFixed(dp)}</strong> ${curr}<br>
+       <span style="font-size:12px;color:var(--text2)">เป้าหมาย ${condTh} ${_fmtAlertPrice(alert.targetPrice, dp)} ${curr}</span>`;
     document.getElementById("alert-popup-note").textContent = alert.note || "";
   }
   document.getElementById("alert-popup").classList.add("open");
@@ -31056,12 +31086,7 @@ function _showBrowserNotification(alert, price) {
   if (!("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
   const condTh = alert.condition === "above" ? "≥" : "≤";
-  const isDR = _isDRSym(alert.symbol);
-  const isUS = _isUsSym(alert.symbol);
-  const isHK = _isHkSym(alert.symbol);
-  const curr = isHK ? "HKD" : (isDR || isUS) ? "USD" : "บาท";
-  const dp = isDR ? 4 : 2;
-  const symLabel = isDR ? `DR: ${_drUnder(alert.symbol)}` : isUS ? `US: ${_usUnder(alert.symbol)}` : isHK ? `HK: ${_hkUnder(alert.symbol)}` : alert.symbol;
+  const { curr, label: symLabel, dp } = _alertSymMeta(alert.symbol);
   new Notification(`🔔 ${symLabel} ถึงราคาเป้า!`, {
     body: `ราคา ${price.toFixed(dp)} ${curr} (เป้า ${condTh} ${_fmtAlertPrice(alert.targetPrice, dp)})${alert.note ? "\n" + alert.note : ""}`,
     icon: "/favicon.ico",

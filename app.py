@@ -1030,9 +1030,9 @@ def get_dr_data():
     # ไม่มี cache เลย (รันครั้งแรกสุดของเครื่อง) หรือ fresh=1 — ทำสดแบบ blocking
     try:
         result = _rebuild_dr_cache()
+        return jsonify(_dr_light(result))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    return jsonify(_dr_light(result))
 
 
 def _rebuild_dr_cache():
@@ -6079,10 +6079,16 @@ def tearsheet(market, symbol):
             # HK ใช้ "0700.HK" ในดัชนีหลัก (yfinance ticker ตรงๆ) แต่ mirror_candidates/fetch_header
             # ต้องการรหัสดิบไม่มี suffix (ดู _mirror_sym) — ตัดก่อนเช็ค/ก่อนส่งเข้า yfinance เสมอ
             raw_sym = _mirror_sym(mkt, sym)
-            if not any(name == raw_sym for ex, name, _sid in financials_store.mirror_candidates((mkt,))):
-                return jsonify({"error": f"ไม่พบหุ้น {sym} ในตลาด {mkt}"}), 404
-            from sources import mirror_ondemand
-            s = mirror_ondemand.fetch_header(BASE_DIR, mkt, raw_sym)
+            # mirror_candidates() อาจ cold-start ไป urlopen ที่ Finnomena (ไม่มี except ภายใน) และ
+            # fetch_header() ไปดึง Yahoo สด — ทั้งคู่พังได้จาก network/timeout ไม่ใช่แค่ "ไม่พบหุ้น"
+            # กันไม่ให้ 500 ทั้ง response เหมือน get_dividends/financials_store.get ด้านล่าง
+            try:
+                if not any(name == raw_sym for ex, name, _sid in financials_store.mirror_candidates((mkt,))):
+                    return jsonify({"error": f"ไม่พบหุ้น {sym} ในตลาด {mkt}"}), 404
+                from sources import mirror_ondemand
+                s = mirror_ondemand.fetch_header(BASE_DIR, mkt, raw_sym)
+            except Exception as e:
+                return jsonify({"error": f"ดึงข้อมูลหุ้น {sym} ไม่สำเร็จ: {e}"}), 502
             if not s:
                 return jsonify({"error": f"ดึงราคาหุ้น {sym} ไม่สำเร็จ — ตรวจสอบชื่อย่ออีกครั้ง"
                                           f" หรือหุ้นนี้อาจข้อมูลไม่พอคำนวณ (เพิ่ง IPO/เทรดเบาบาง)"}), 404
@@ -6126,14 +6132,23 @@ def tearsheet(market, symbol):
         # ตลาดนี้ (JP/VN/ฯลฯ ไม่มี pipeline) คำนวณสดตัวเดียว (fetch_header_lite sync งบให้แล้ว)
         snap_rows = {}
         fkey = lite_dr_sym
-        f = factor_snapshot._factors_for(BASE_DIR, lite_dr_sym, is_dr=True) or {}
-        if f:
-            f.setdefault("div_cagr_5y", factor_snapshot._div_cagr_5y(BASE_DIR, lite_dr_sym, "DR"))
+        # _factors_for/_div_cagr_5y เปิด sqlite connection เอง (busy_timeout=5000) เหมือน
+        # get_dividends/financials_store.get ด้านล่าง — กัน "database is locked" ไม่ให้ทั้ง
+        # response หายไปเพราะแค่ factor เสริม (เหตุผลเดียวกับ comment ที่ get_dividends ด้านล่าง)
+        try:
+            f = factor_snapshot._factors_for(BASE_DIR, lite_dr_sym, is_dr=True) or {}
+            if f:
+                f.setdefault("div_cagr_5y", factor_snapshot._div_cagr_5y(BASE_DIR, lite_dr_sym, "DR"))
+        except Exception:
+            f = {}
     else:
-        if mkt == "TH":
-            snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
-        else:
-            snap_rows = {r["symbol"]: r for r in factor_snapshot.get_mirror_snapshot(BASE_DIR, mkt)}
+        try:
+            if mkt == "TH":
+                snap_rows = {r["symbol"]: r for r in factor_snapshot.get_snapshot(BASE_DIR, is_dr=False)}
+            else:
+                snap_rows = {r["symbol"]: r for r in factor_snapshot.get_mirror_snapshot(BASE_DIR, mkt)}
+        except Exception:
+            snap_rows = {}
         fkey = _mirror_sym(mkt, sym)
         f = snap_rows.get(fkey) or {}
 
@@ -6285,7 +6300,10 @@ def tearsheet(market, symbol):
         except Exception:
             y_payload = None
         if y_payload:
-            dcf["forecast"] = financials_store.compute_dcf_forecast_inputs(y_payload)
+            try:
+                dcf["forecast"] = financials_store.compute_dcf_forecast_inputs(y_payload)
+            except Exception:
+                pass
 
     # เติมเครื่องมือประเมินมูลค่าทางเลือก (นอกจาก DCF) — PEG / Graham Number / DDM / Justified P-B
     # คำนวณฝั่ง client ทั้งหมด (เหมือน DCF) ที่นี่แค่ส่งวัตถุดิบ + ค่าเริ่มต้นที่ผู้ใช้ปรับเองได้
@@ -6303,8 +6321,11 @@ def tearsheet(market, symbol):
     # เท่านั้น ไม่มีค่า ≠ คะแนนแย่) · ต้องเคยกด sync ESG ในหน้า Screener+ ก่อนถึงจะมีข้อมูล
     esg = set_company.get_esg(BASE_DIR, sym) if (mkt == "TH" and not lite) else None
 
-    meta_computed_at = (factor_snapshot.snapshot_meta(BASE_DIR).get("computed_at") if mkt == "TH"
-                         else factor_snapshot.mirror_snapshot_meta(BASE_DIR).get("computed_at"))
+    try:
+        meta_computed_at = (factor_snapshot.snapshot_meta(BASE_DIR).get("computed_at") if mkt == "TH"
+                             else factor_snapshot.mirror_snapshot_meta(BASE_DIR).get("computed_at"))
+    except Exception:
+        meta_computed_at = None
     return jsonify({
         "symbol": sym, "market": mkt, "header": header, "valuation": valuation, "quality": quality,
         "dividend": dividend, "dcf": dcf, "valuation_models": valuation_models, "dr_symbol": dr_symbol,
@@ -12404,55 +12425,56 @@ def nvdr_symbol(symbol):
 
 
 # ============================================================
-# Watchlist sync ข้ามเครื่อง — เก็บเป็นไฟล์ data/watchlist.json ให้ git push/pull
-# พาไปด้วยได้ (แยกจาก localStorage ที่ผูกกับเบราว์เซอร์/เครื่องเดียว) frontend เรียก
-# GET ตอนโหลดหน้าเพื่อ merge เข้า localStorage แล้วยิง POST กลับทุกครั้งที่ watchlist
-# เปลี่ยน (ดู _wlSave() ใน dashboard.js) — merge แบบ union เท่านั้น ไม่มีการลบข้ามเครื่อง
+# Watchlist / price-alert sync ข้ามเครื่อง — เก็บเป็นไฟล์ data/watchlist.json,
+# data/price_alerts.json ให้ git push/pull พาไปด้วยได้ (แยกจาก localStorage ที่ผูกกับ
+# เบราว์เซอร์/เครื่องเดียว) frontend เรียก GET ตอนโหลดหน้าเพื่อ merge เข้า localStorage
+# แล้วยิง POST กลับทุกครั้งที่เปลี่ยน (watchlist: union เท่านั้น ดู _wlSave/_wlSyncFromServer,
+# alert: union + triggered ratchet ด้วย "id" ดู _alertsSyncFromServer ใน dashboard.js) —
+# ไม่มีการลบข้ามเครื่องอัตโนมัติทั้งคู่ backend แค่เก็บ/คืนทั้งก้อนตามที่ frontend ส่งมา
 # ============================================================
+def _read_synced_json_or_500(path, log_prefix):
+    """คืน (payload, None) ปกติ หรือ (None, error_response) ตอนอ่านพัง — ใช้ร่วมกันโดย
+    get_watchlist/get_price_alerts ที่มี contract เดียวกัน: ไฟล์ไม่มี = [] ปกติ (ยังไม่เคย sync),
+    อ่านพัง (เช่น JSON เสียจาก git merge conflict) = 500 ห้ามคืน [] เฉยๆ — frontend
+    (_wlSyncFromServer/_alertsSyncFromServer) แยกไม่ออกระหว่าง "ว่างจริง" กับ "อ่านพัง" แล้วจะ
+    sync ทับไฟล์ด้วยลิสต์ของเครื่องเดียวนี้ ทำให้ตัวที่เครื่องอื่น sync ไว้หายถาวร"""
+    if not os.path.exists(path):
+        return [], None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f), None
+    except Exception as e:
+        print(f"[{log_prefix}] read error: {e}")
+        return None, (jsonify({"error": "read failed"}), 500)
+
+
+def _save_synced_list(body, body_key, path, item_ok, max_len=500):
+    """validate + เขียนไฟล์ list ที่ sync ข้ามเครื่อง แบบ atomic — ใช้ร่วมกันโดย save_watchlist/
+    save_price_alerts (ต่างกันแค่ key ใน body/ไฟล์ปลายทาง/ตัวเช็ค item เดียว)"""
+    items = body.get(body_key)
+    if not isinstance(items, list) or len(items) > max_len or not all(item_ok(x) for x in items):
+        return jsonify({"error": f"invalid {body_key}"}), 400
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    _atomic_write_json(path, items)
+    return jsonify({"ok": True, "count": len(items)})
+
+
 @app.route("/api/watchlist", methods=["GET"])
 def get_watchlist():
-    if not os.path.exists(WATCHLIST_FILE):
-        return jsonify([])
-    try:
-        with open(WATCHLIST_FILE, encoding="utf-8") as f:
-            return jsonify(json.load(f))
-    except Exception as e:
-        # ห้ามคืน [] ตอนไฟล์อ่านไม่ได้ (เช่น JSON เสียจาก git merge conflict) — frontend
-        # (_wlSyncFromServer) แยกไม่ออกระหว่าง "ว่างจริง" กับ "อ่านพัง" แล้วจะ sync ทับไฟล์
-        # ด้วยลิสต์ของเครื่องเดียวนี้ ทำให้ตัวที่เครื่องอื่น sync ไว้หายถาวร — ตอบ 500 ให้ชัดแทน
-        print(f"[watchlist] read error: {e}")
-        return jsonify({"error": "read failed"}), 500
+    data, err = _read_synced_json_or_500(WATCHLIST_FILE, "watchlist")
+    return err if err else jsonify(data)
 
 
 @app.route("/api/watchlist", methods=["POST"])
 def save_watchlist():
     body = request.get_json(silent=True) or {}
-    syms = body.get("symbols")
-    if not isinstance(syms, list) or len(syms) > 500 or not all(isinstance(s, str) for s in syms):
-        return jsonify({"error": "invalid symbols"}), 400
-    os.makedirs(os.path.dirname(WATCHLIST_FILE), exist_ok=True)
-    _atomic_write_json(WATCHLIST_FILE, syms)
-    return jsonify({"ok": True, "count": len(syms)})
+    return _save_synced_list(body, "symbols", WATCHLIST_FILE, lambda s: isinstance(s, str))
 
 
-# ============================================================
-# Price alert sync ข้ามเครื่อง — เก็บเป็นไฟล์ data/price_alerts.json ให้ git push/pull
-# พาไปด้วยได้เหมือน /api/watchlist ด้านบน (alert เดิมอยู่แค่ localStorage ต่อเครื่อง จึง
-# ไม่เคยติดไปตอนย้ายเครื่อง) frontend merge แบบ union ด้วย "id" เอง (ดู _alertsSyncFromServer
-# ใน dashboard.js) ฝั่ง backend แค่เก็บ/คืนทั้งก้อนตามที่ frontend ส่งมาเหมือน watchlist
-# ============================================================
 @app.route("/api/price-alerts", methods=["GET"])
 def get_price_alerts():
-    if not os.path.exists(PRICE_ALERTS_FILE):
-        return jsonify([])
-    try:
-        with open(PRICE_ALERTS_FILE, encoding="utf-8") as f:
-            return jsonify(json.load(f))
-    except Exception as e:
-        # เหตุผลเดียวกับ get_watchlist ด้านบน — ห้ามคืน [] ตอนไฟล์อ่านไม่ได้ ไม่งั้น sync
-        # ข้ามเครื่องจะเห็นว่า "ว่างจริง" แล้วทับไฟล์ด้วยลิสต์ของเครื่องเดียวนี้
-        print(f"[price-alerts] read error: {e}")
-        return jsonify({"error": "read failed"}), 500
+    data, err = _read_synced_json_or_500(PRICE_ALERTS_FILE, "price-alerts")
+    return err if err else jsonify(data)
 
 
 def _valid_price_alert(a):
@@ -12460,7 +12482,10 @@ def _valid_price_alert(a):
     หลุดเข้าไปสะสมใน price_alerts.json แล้ว sync กระจายไปทุกเครื่อง ทำให้ a.targetPrice.toFixed()
     ฝั่ง frontend throw ตอน render จนตาราง Watchlist/แผงแจ้งเตือนค้างทั้งหน้า (ดู _wlAlertCell)
     เช็ค triggeredPrice/triggeredAt ด้วยเหตุผลเดียวกัน — เคยหลุดผ่านได้เพราะเช็คแค่ targetPrice
-    ทำให้ a.triggeredPrice.toFixed() ใน _renderWlExistingAlerts/renderAlertPanel throw แทน"""
+    ทำให้ a.triggeredPrice.toFixed() ใน _renderWlExistingAlerts/renderAlertPanel throw แทน
+    เช็ค note ด้วย (เดิมไม่เช็คเลยแม้แต่ type) — ไม่งั้นค่าที่ไม่ใช่ string/ยาวเกินไปหลุดผ่านไปได้
+    แล้วโผล่ใน innerHTML ของ renderAlertPanel/_renderWlExistingAlerts แบบไม่ผ่าน escape ใดๆ
+    (ดู _escHtml call ที่เพิ่มเข้าไปคู่กัน — รีวิวโค้ด 2026-09-02)"""
     if not (isinstance(a, dict) and isinstance(a.get("id"), str)):
         return False
     tp = a.get("targetPrice")
@@ -12475,19 +12500,16 @@ def _valid_price_alert(a):
         return False
     if a.get("triggeredAt") is not None and not isinstance(a.get("triggeredAt"), str):
         return False
+    note = a.get("note")
+    if note is not None and not (isinstance(note, str) and len(note) <= 300):
+        return False
     return True
 
 
 @app.route("/api/price-alerts", methods=["POST"])
 def save_price_alerts():
     body = request.get_json(silent=True) or {}
-    alerts = body.get("alerts")
-    if (not isinstance(alerts, list) or len(alerts) > 500
-            or not all(_valid_price_alert(a) for a in alerts)):
-        return jsonify({"error": "invalid alerts"}), 400
-    os.makedirs(os.path.dirname(PRICE_ALERTS_FILE), exist_ok=True)
-    _atomic_write_json(PRICE_ALERTS_FILE, alerts)
-    return jsonify({"ok": True, "count": len(alerts)})
+    return _save_synced_list(body, "alerts", PRICE_ALERTS_FILE, _valid_price_alert)
 
 
 # ============================================================

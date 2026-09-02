@@ -1,0 +1,155 @@
+Watchlist B — mirror cache (ลำดับ 2) — finding ที่ตั้งใจไม่แก้ในรอบ code review 2026-09-02
+===============================================================================
+>>> สถานะล่าสุด (2026-09-02): correctness bug ที่ยืนยันแล้ว (อ่านโค้ดจริงหรือ trace source)
+    แก้ครบ 13 จุด (7 backend app.py + 6 frontend dashboard.js) เหลือรายการด้านล่างค้าง —
+    เป็น code-quality (reuse/simplification/efficiency) + edge-case severity ต่ำล้วน ไม่ใช่
+    correctness bug ที่ทำให้ route 500 / JS throw / หน้าเว็บค้าง / ค่าที่โชว์ผิดในเคสปกติ
+
+แก้แล้ว (correctness, ยืนยัน syntax ผ่าน py_compile + node --check):
+  backend (app.py, tearsheet()+/api/dr):
+    - L6082 mirror_candidates()+fetch_header() ไม่มี try/except (cold Finnomena/Yahoo พัง = 500)
+    - L6129/6131 lite branch _factors_for/_div_cagr_5y ไม่การ์ด (ไม่สม่ำเสมอกับจุดอื่นในฟังก์ชันเดียวกัน)
+    - L6134/6136 get_snapshot/get_mirror_snapshot ไม่การ์ด (sqlite "database is locked")
+    - L6288 compute_dcf_forecast_inputs ไม่การ์ด (ebit None → TypeError → 500 ทั้ง response)
+    - L6306 snapshot_meta/mirror_snapshot_meta ไม่การ์ด (บรรทัดสุดท้ายก่อน return)
+    - L1035 (/api/dr) return jsonify(_dr_light(result)) หลุดจาก try/except ของ path cold-start
+  frontend (dashboard.js, renderWatchlist ส่วนใหญ่):
+    - _wlLiveTag หาร basePrice=0 ไม่เช็ค → Infinity%/NaN%
+    - prefetch-need check เทียบ bare ticker ข้ามทุกตลาดแทนที่จะเทียบตาม prefix ของ entry เอง
+      (DR:AAPL ค้างถาวรถ้า usMap มี AAPL อยู่ก่อนแล้ว)
+    - /api/us-index-metrics, /api/hk-index-metrics: bare fetch() ไม่มี timeout + ไม่เช็ค
+      {error:...} shape (cache error เป็นข้อมูลจริงถาวรทั้ง session) → เปลี่ยนเป็น _fetchTimeout
+      + เช็ค d.error ก่อน assign
+    - /api/dr fetch ใน Watchlist ไม่เคยอ่าน d.refreshing → เพิ่ม _drPollRefresh(0) เหมือนหน้า DR
+    - u.symbol/h.symbol ไม่ escape ตอนแทรกใน onclick attribute + text (แถว mirror ทั้ง 4 บล็อก:
+      prefixed US/HK + legacy-migrate US/HK) → ใช้ esc()/_escJsAttr ให้ครบเหมือนแถว DR ข้างเคียง
+    - d.region ไม่ escape (2 จุด: prefixed + legacy DR row) ต่างจาก d.name ข้างบนที่ escape แล้ว
+    - _wlMirrorData เก็บ error ถาวรไม่มี TTL → เพิ่ม _WL_MIRROR_ERR_RETRY_MS (60s) + timestamp,
+      renderWatchlist ลบ entry เก่าแล้ว retry ใหม่แทนที่จะค้างแถวแดงทั้ง session
+    - removeFromWatchlist ไม่เคลียร์ _wlLive[sym] → เพิ่ม delete กันราคาเก่าโผล่ทันทีถ้าเพิ่มกลับมา
+
+ดู memory: (ยังไม่ได้เขียนตอนสร้างไฟล์นี้ — เขียนหลัง browser test ผ่าน)
+
+===============================================================================
+วิธีใช้ไฟล์นี้: ปิดลำดับ 2 (Watchlist B) ใน CODE_REVIEW_MENU_TEMPLATES.txt เป็น ✅ ไม่ได้จนกว่า
+จะเคลียร์รายการด้านล่าง (แก้จริง หรือตัดสินใจไม่แก้ถาวรแล้วบันทึกเหตุผล) — ระหว่างนี้สถานะ
+ค้างที่ 🔶 (รีวิว+แก้ correctness bug เสร็จ, ผ่าน browser test เบื้องต้นแล้ว แต่ยังมี finding
+ค้าง = ปิด ✅ เต็มรูปแบบไม่ได้ตามเงื่อนไขไฟล์ template "0 finding เหลืออยู่")
+ขอบเขตจริง = เมนู "Watchlist" เฉพาะบล็อก mirror cache หลัก (dashboard.js:3255-4054+) +
+/api/tearsheet, /api/us-index-metrics, /api/hk-index-metrics, /api/dr
+===============================================================================
+
+
+─── ข้อ 1: แม่แบบแถว DR/US/HK ซ้ำ 2 ชุด (prefixed path vs legacy-migrate path, ~240 บรรทัด) ───
+
+ที่อยู่: DR/US/HK row template ซ้ำกัน — prefixed (~L3730-3843) กับ legacy bare-symbol migrate
+(~L3860-3975) ต่างกันแค่ตัวแปร (d/u/h vs sym/newSym) กับ side-effect การ migrate entry
+
+ควรแก้เพราะ: แก้ markup/badge/คอลัมน์ใหม่ต้องแก้ 2 ที่ ไม่งั้น legacy path หลุดตกซิงค์
+
+ไม่แก้รอบนี้เพราะ: refactor ใหญ่ (~240 บรรทัด) เสี่ยง regression สูงกว่า finding อื่นในรอบนี้
+มาก ต้อง diff behavior ทั้ง 6 แถว (DR/US/HK × 2 path) ให้ตรงเป๊ะก่อน-หลัง ควรทำแยก session
+พร้อม browser test ละเอียดกว่ารอบ correctness-only นี้
+
+แนะนำ: เขียน helper เดียว รับ (mode: 'prefixed'|'legacy', data, sym) คืน HTML string เดียวกัน
+
+
+─── ข้อ 2: renderWatchlist() ไม่มี memoization — rebuild map/filter เต็มทุกครั้งที่เรียก ───
+
+ที่อยู่: stockMap/drMap/usMap/hkMap (Object.fromEntries เต็ม array ทุกครั้ง) + sparkline filter
+4 จุด (watchlist.includes() ใน .filter() ของ DATA.stocks/_usData/_hkData/mirror) — ไม่มี cache
+ระหว่างเรียกซ้ำ (renderWatchlist เรียกซ้ำได้ถี่มาก — ทุก mirror fetch ที่ resolve)
+
+ควรแก้เพราะ: O(stocks × watchlist) ต่อ .filter() หนึ่งจุด (~400,000 comparison ถ้า watchlist
+ใกล้ cap 500) × ซ้ำ 4 ตลาด × ทุก re-render — watchlist.includes ควรเป็น Set ครั้งเดียว
+
+ไม่แก้รอบนี้เพราะ: ไม่ใช่ correctness bug (ผลลัพธ์ถูกต้อง แค่ช้า) และ watchlist ปกติเล็กกว่า
+cap มาก (ผู้ใช้จริงมีไม่กี่สิบตัว) — ผลกระทบจริงต่ำ ไม่คุ้ม refactor ที่แตะโครงสร้างฟังก์ชันหลัก
+ของทั้งเมนูในรอบเดียวกับที่เพิ่งแก้ correctness ไปหลายจุดแล้ว (เสี่ยง introduce บั๊กใหม่)
+
+แนะนำ: ถ้าจะทำ — แคช map/filter ผลไว้ invalidate เมื่อ DATA.stocks/_drData/_usData/_hkData
+เปลี่ยนจริง (เทียบ reference หรือ dirty flag) ไม่ใช่ rebuild ทุกครั้ง
+
+
+─── ข้อ 3: mirror-fetch ไม่มี concurrency cap (ต่าง CONCURRENCY=8 ของ wlRefreshLivePrices) ───
+
+ที่อยู่: _wlFetchMirror/_wlFetchMirrorGuessMarket ยิงพร้อมกันทุก symbol ที่ unresolved ใน
+renderWatchlist().map() pass เดียว ไม่มี cap เหมือน wlRefreshLivePrices (CONCURRENCY=8)
+
+ควรแก้เพราะ: watchlist ที่มี off-index ticker เยอะ (bulk import, หรือ error-TTL หมดอายุพร้อมกัน
+หลัง fix ข้อ error-cache ด้านบน) อาจยิง /api/tearsheet พร้อมกันหลายสิบ request — เสี่ยง sqlite
+lock / thread pool อิ่มที่ backend (comment ใน app.py เองก็ระบุ Watchlist เป็นเคสเสี่ยงสุด)
+
+ไม่แก้รอบนี้เพราะ: ต้องออกแบบ queue/batch ใหม่ (เหมือน wlRefreshLivePrices) กระทบ flow การ
+render หลายจุด เสี่ยง regression กว่าจะคุ้มในรอบที่เน้น correctness bug ที่ยืนยันแล้วก่อน
+
+แนะนำ: ทำพร้อมข้อ error-TTL retry ที่เพิ่งแก้ (เพราะ retry จะเพิ่ม burst โอกาสชนกันมากขึ้น) —
+จำกัด batch เหมือน wlRefreshLivePrices
+
+
+─── ข้อ 4: esc() ใน renderWatchlist ซ้ำกับ _escHtml (escape อ่อนกว่า — ขาด '>' และ "'") ───
+
+ที่อยู่: local `esc` (L~3674) hand-roll escape แค่ &, <, " ส่วน _escHtml (global) escape ครบกว่า
+— sibling helper ในบล็อกเดียวกัน (_wlMirrorLoadingRow ฯลฯ) เรียก _escHtml ตรงอยู่แล้ว
+
+ควรแก้เพราะ: 2 implementation escape ไม่เท่ากัน เสี่ยง drift ถ้าแก้ _escHtml แล้วลืมจุดนี้
+
+ไม่แก้รอบนี้เพราะ: esc() แบบเดียวกันซ้ำอยู่ ~10 จุดทั่ว dashboard.js (ไม่ใช่แค่ Watchlist) — แก้
+เฉพาะจุดนี้จะไม่สม่ำเสมอกับที่อื่น ควรเป็น cleanup ทั้งไฟล์แยกต่างหาก ไม่ใช่ scope เมนูเดียว
+
+แนะนำ: รวบไปทำตอน cleanup ทั้งไฟล์ (ค้นหา `.replace(/&/g,` ทั้งไฟล์ แทนที่ด้วย _escHtml ทีเดียว)
+
+
+─── ข้อ 5: _wlMarketRank มี JP: prefix แต่ไม่มี path ไหนรองรับจริง (dead branch) ───
+
+ที่อยู่: sort rank เผื่อ "JP:" prefix แต่ไม่มี render branch/migration chain/guess-market ไหน
+สร้างหรือรองรับ entry แบบนี้ได้จริง — ป้องกันด้วยการซ่อนปุ่ม "เพิ่ม Watchlist" ในหน้า Tearsheet
+JP ไว้แล้ว (คอมเมนต์ ~L11886) กันไม่ให้สร้าง entry แบบนี้ผ่าน UI ปกติได้
+
+ไม่แก้รอบนี้เพราะ: ไม่ reachable ผ่าน UI ปกติ (มี guard อยู่แล้วอีกชั้น) ถ้าจะรองรับ JP จริงต้อง
+เพิ่ม render branch เต็มรูปแบบ (เหมือน DR/US/HK) ซึ่งเป็นงาน "เพิ่มฟีเจอร์" ไม่ใช่ "แก้บั๊ก" —
+นอกสโคป code review รอบนี้
+
+แนะนำ: ถ้าจะรองรับ JP ใน Watchlist จริง ทำเป็นงานแยก (เพิ่ม branch ครบ 4 จุด: render/migrate/
+guess-market/badge) ไม่ใช่ patch เล็ก
+
+
+─── ข้อ 6: legacy-migrate ไม่ migrate price alert ที่ผูกกับ symbol เก่า (bare) ───
+
+ที่อยู่: migration bare→prefixed (เช่น "AAPL"→"DR:AAPL") ไม่แตะ alert ใน localStorage ที่ยังคีย์
+ด้วย symbol เก่า — _wlAlertCell(newSym) หาไม่เจอ (a.symbol==='AAPL' ไม่ตรง 'DR:AAPL')
+
+ผลกระทบจริง: alert ไม่หายจริง (ยังอยู่ใน storage ทำงานปกติถ้ามี logic เช็คแยก) แค่ "มองไม่เห็น/
+จัดการไม่ได้" จาก Watchlist UI หลัง migrate ครั้งเดียว — เป็น edge case (ต้องมี legacy entry
+ที่ตั้ง alert ไว้ก่อน 2026-08 ค่อนข้างนาน + ยังไม่เคย re-add ทำให้ migrate ใหม่)
+
+ไม่แก้รอบนี้เพราะ: severity ต่ำ (ไม่ throw/ไม่ค้าง ไม่ใช่ correctness ที่โชว์ค่าผิด) + ต้องเช็ค
+เพิ่มว่ามี user จริงกี่คนที่ยังมี legacy entry แบบนี้ค้างอยู่ก่อนตัดสินใจว่าคุ้มแก้แค่ไหน
+
+แนะนำ: migration block เพิ่ม rename key ใน alerts array คู่กับ watchlist array (localStorage
+key เดียวกับที่ _loadAlerts() อ่าน)
+
+
+─── ข้อ 7: _wlFetchMirrorGuessMarket race — เพิ่ม prefixed form มือขณะ guess-fetch ค้างอยู่ ───
+
+ที่อยู่: ถ้า user เพิ่ม "US:ZS" เองระหว่างที่ guess-fetch ของ "ZS" (bare) กำลังรอ (~70s) แล้ว
+resolve เป็น US พอดี → watchlist มี "US:ZS" ซ้ำ 2 รายการ (persist ทั้ง localStorage+server)
+
+ไม่แก้รอบนี้เพราะ: window การชนแคบมาก (ต้องเพิ่ม 2 ฟอร์มของ symbol เดียวกันภายใน ~70s พอดี) —
+edge case จริง ต่ำกว่า correctness bug อื่นที่แก้ไปแล้วในรอบนี้มาก
+
+แนะนำ: guess-fetch resolve เช็ค watchlist.includes(mkt+':'+sym) ก่อน push/replace ถ้ามีอยู่แล้ว
+ให้ลบ bare entry ทิ้งเฉยๆ แทนการ replace
+
+
+─── ข้อ 8: DR sparkline ret=null (ประวัติ &lt;22 วัน) ถูก drawSparkline วาดเป็นสีเขียว ───
+
+ที่อยู่: closes.length &lt; 22 → ret=null (กัน NaN จาก index ติดลบ) แต่ drawSparkline ใช้
+`(retVal||0)>=0` ทำให้ null ถูกตีความเป็น "ไม่ติดลบ" → วาดสีเขียวเสมอแม้หุ้นจะลงจริง
+
+ไม่แก้รอบนี้เพราะ: กระทบเฉพาะ DR ที่เพิ่งมีประวัติราคา &lt;22 วัน (เพิ่ง sync ครั้งแรก) — เคส
+แคบมาก และ drawSparkline เป็น shared helper เรียกจากหลายเมนู ต้องเช็คผลกระทบที่อื่นก่อนแก้
+เงื่อนไข ไม่ใช่แค่จุดเดียวใน Watchlist
+
+แนะนำ: แก้ที่ drawSparkline ให้ `retVal == null` วาดสีเทา/text2 แทนเขียว (ทำเป็น cleanup
+ของ drawSparkline เอง ไม่ใช่ patch เฉพาะ Watchlist)
