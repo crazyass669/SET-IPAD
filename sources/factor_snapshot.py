@@ -241,6 +241,7 @@ def _factors_for(base_dir, sym, is_dr, z_variant=None):
         "ps_median": ps.get("median"), "ps_mean": ps.get("mean"), "ps_n": ps.get("n"),
         "ev_ebitda_value": valp["ev_ebitda"]["value"], "ev_ebitda_percentile": valp["ev_ebitda"]["percentile"],
         "ev_ebitda_median": valp["ev_ebitda"]["median"], "ev_ebitda_mean": valp["ev_ebitda"].get("mean"),
+        "ev_ebitda_n": valp["ev_ebitda"].get("n"),
         "div_yield": valp["div_yield"]["value"],
         # --- BVPS งวดล่าสุด (Graham Number/Justified P-B ในหน้า Tearsheet) ---
         "bvps": bvps,
@@ -528,6 +529,7 @@ def _factors_from_finn(fq):
         "ps_median": ps.get("median"), "ps_mean": ps.get("mean"), "ps_n": ps.get("n"),
         "ev_ebitda_value": valp["ev_ebitda"]["value"], "ev_ebitda_percentile": valp["ev_ebitda"]["percentile"],
         "ev_ebitda_median": valp["ev_ebitda"]["median"], "ev_ebitda_mean": valp["ev_ebitda"].get("mean"),
+        "ev_ebitda_n": valp["ev_ebitda"].get("n"),
         "div_yield": valp["div_yield"]["value"],
         "bvps": bvps, "eps_latest": eps_ttm_est, "eps_latest_date": None,
         "high_season_q": seas["high_q"] if seas else None,

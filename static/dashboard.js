@@ -11553,6 +11553,7 @@ function _workspaceRenderBreadthBars(quarters) {
 // datalist ก็ค้นได้ ตรงนี้แค่ขยาย autocomplete ให้ครอบคลุมด้วย (merge /api/mirror-symbols)
 // ============================================================
 let _tsData = null;
+let _tsLoadSeq = 0;   // กัน response เก่า (หุ้นที่ดึงช้าจาก Yahoo) เขียนทับ _tsData/หน้าจอ ของหุ้นที่ผู้ใช้กดทีหลัง
 let _tsMarket = 'TH';
 // ค่าเริ่มต้นล่าสุดของ PE/PBV Valuation (ปุ่ม "↺ ค่าเริ่มต้น") — อัพเดทตอน render ครั้งแรก
 // (naive: current PE/PBV ±25%) แล้วถูกเขียนทับด้วยสถิติย้อนหลังจริงตอน _tsApplyPeBandDefaults/
@@ -11600,16 +11601,18 @@ async function _tsBuildDatalist() {
     dl.dataset.key = key;
     return;
   }
-  const store = _tsMarket === 'US' ? '_usData' : _tsMarket === 'HK' ? '_hkData' : '_jpData';
-  const metricsUrl = _tsMarket === 'US' ? '/api/us-index-metrics'
-    : _tsMarket === 'HK' ? '/api/hk-index-metrics' : '/api/jp-index-metrics';
-  if (!window[store]) {
+  // _usData/_hkData/_jpData เป็น top-level `let` ไม่ใช่ property ของ window — window['_usData']
+  // undefined เสมอ ทำให้ก่อนหน้านี้ (ก) ยิง index-metrics ใหม่ทุกครั้งที่สลับแท็บ (ข) stocks เป็น []
+  // ตลอด (autocomplete หุ้น US/HK/JP ไม่มีชื่อบริษัท) — ใช้ getter/setter ผ่าน _FS_MIRROR_IDX
+  // เหมือน Screener+/_openMirrorStock + เช็ค d.error ก่อน cache (route คืน {error} 500 ตอนไฟล์หาย)
+  const idx = _FS_MIRROR_IDX[_tsMarket.toLowerCase()];
+  if (!idx.get()) {
     try {
-      const d = await (await fetch(metricsUrl)).json();
-      if (_tsMarket === 'US') _usData = d; else if (_tsMarket === 'HK') _hkData = d; else _jpData = d;
+      const d = await (await fetch(idx.endpoint)).json();
+      if (d && !d.error && d.stocks) idx.set(d);
     } catch { return; }
   }
-  const stocks = window[store]?.stocks || [];
+  const stocks = idx.get()?.stocks || [];
   const mirror = (await _loadMirrorSymbols())[_tsMarket] || [];
   const key = _tsMarket + ':' + stocks.length + ':' + mirror.length;
   if (dl.dataset.key === key) return;
@@ -11647,6 +11650,7 @@ async function loadTearsheet(symArg, marketOverride) {
   // ปกติ ต้อง escape ก่อนแทรกเป็น HTML content กัน reflected XSS (พบจากรีวิวโค้ด 2026-08-02)
   // ประกาศไว้นอก try/catch เพราะ catch block ก็ใช้ (block scope ของ const ใน try เข้าไม่ถึง)
   const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const seq = ++_tsLoadSeq;
   try {
     // marketOverride: ใช้ตอนเปิดจาก modal หุ้น DR (ดู openTearsheetFromModal) — ต้องส่ง
     // market='DR' ให้ backend resolve DR sym เป็น underlying US/HK เอง (DR sym อาจไม่ตรงกับ
@@ -11654,10 +11658,12 @@ async function loadTearsheet(symArg, marketOverride) {
     const r = await _fetchTimeout(`/api/tearsheet/${marketOverride || _tsMarket}/${encodeURIComponent(sym)}`, 35000,
       'หมดเวลารอข้อมูล (เกิน 35 วิ) — หุ้นตัวนี้อาจอยู่นอกดัชนีหลักและต้องดึงราคาสดจาก Yahoo ครั้งแรก ลองใหม่อีกครั้ง');
     const d = await r.json();
+    if (seq !== _tsLoadSeq) return;   // มีการโหลดหุ้นตัวใหม่แซงระหว่างรอ — ทิ้ง response นี้ ไม่แตะ _tsData/หน้าจอ
     if (d.error) { box.innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
     _tsData = d;
     renderTearsheet(d);
   } catch (e) {
+    if (seq !== _tsLoadSeq) return;
     box.innerHTML = '<div class="empty" style="color:var(--red)">โหลดไม่สำเร็จ: ' + esc(e.message) + '</div>';
   }
 }
@@ -11981,12 +11987,14 @@ function _tsAnalystConsensusHtml(a, price) {
   // upside เทียบราคาปัจจุบันจริง (สดจากหน้า) ไม่ใช่ target_upside_pct ที่อิง price_at_fetch เก่า
   const up = (a.target_mean != null && price) ? (a.target_mean / price - 1) * 100 : null;
   const upClr = up == null ? 'var(--text2)' : up > 0 ? 'var(--green)' : up < 0 ? 'var(--red)' : 'var(--text)';
-  const recTotal = a.rec_total || 0;
   const buy = (a.rec_strong_buy || 0) + (a.rec_buy || 0);
   const hold = a.rec_hold || 0;
   const sell = (a.rec_sell || 0) + (a.rec_strong_sell || 0);
-  const seg = (n, clr) => recTotal && n ? `<div style="width:${n / recTotal * 100}%;background:${clr}"></div>` : '';
-  const recBar = recTotal ? `
+  // ตัวหารแถบ = ผลรวม bucket จริง ไม่ใช่ a.rec_total (Yahoo numberOfAnalystOpinions มักไม่ตรงกับ
+  // strong_buy+buy+hold+sell+strong_sell — ถ้าใช้ rec_total แถบจะไม่เต็มกรอบหรือล้นกรอบ)
+  const recSum = buy + hold + sell;
+  const seg = (n, clr) => recSum && n ? `<div style="width:${n / recSum * 100}%;background:${clr}"></div>` : '';
+  const recBar = recSum ? `
     <div style="display:flex;height:10px;border-radius:5px;overflow:hidden;margin:6px 0 4px">
       ${seg(buy, 'var(--green)')}${seg(hold, '#e8a33d')}${seg(sell, 'var(--red)')}
     </div>
@@ -11999,7 +12007,7 @@ function _tsAnalystConsensusHtml(a, price) {
 
   // เทียบกับ Fair Value (DCF Base) ของเราเอง — snapshot จาก _tsDcfRecalc() ตอน render
   let dcfCmp = '';
-  if (_tsDcfBaseFairValue != null && a.target_mean != null) {
+  if (_tsDcfBaseFairValue != null && _tsDcfBaseFairValue > 0 && a.target_mean != null) {
     const diff = (a.target_mean / _tsDcfBaseFairValue - 1) * 100;
     const [txt, clr] = Math.abs(diff) <= 10 ? ['ใกล้เคียงกัน', 'var(--text)']
       : diff > 0 ? ['นักวิเคราะห์มองสูงกว่า', 'var(--green)']
@@ -12658,20 +12666,31 @@ function _tsLoadLiveValuation(d, h) {
   const yfSym = d.yf_symbol;
   const basePrice = h.price;
   if (!yfSym || !basePrice) return;
-  _fetchTimeout(`/api/live-price/${encodeURIComponent(d.symbol)}?yf=${encodeURIComponent(yfSym)}`, 20000)
+  // TH: ไม่ส่ง ?yf — ปล่อยให้ /api/live-price ใช้ SET API fast path (~1s) แทน yfinance fast_info
+  // ที่ช้า 30-45s ตอนโดน rate limit (ดู docstring live_price) · non-TH ต้องส่ง yf เพราะ backend
+  // เดา ticker mirror ที่ไม่มี suffix ผิด
+  const mkt = d.market || 'TH';
+  const url = mkt === 'TH'
+    ? `/api/live-price/${encodeURIComponent(d.symbol)}`
+    : `/api/live-price/${encodeURIComponent(d.symbol)}?yf=${encodeURIComponent(yfSym)}`;
+  _fetchTimeout(url, 20000)
     .then(r => r.json()).then(res => {
       if (_tsData?.symbol !== d.symbol) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
       if (res.error || !res.price) return;
       const live = res.price;
       const priceEl = document.getElementById('ts-val-live-price');
       if (priceEl) {
-        priceEl.textContent = `· ราคาล่าสุด (Yahoo): ${live.toLocaleString(undefined, {maximumFractionDigits: 2})} ${res.currency || ''}`;
+        priceEl.textContent = `· ราคาล่าสุด: ${live.toLocaleString(undefined, {maximumFractionDigits: 2})} ${res.currency || ''}`;
       }
       const ratio = live / basePrice;
       ['pe', 'pbv', 'ps'].forEach(key => {
         const v = (d.valuation || {})[key];
         const el = document.getElementById('ts-val-' + key);
         if (!el || !v || v.value == null) return;
+        // rescale ได้เฉพาะค่าที่อิงราคาชุดเดียวกับ h.price (daily snapshot) — ถ้า value มาจาก
+        // Finnomena สิ้นไตรมาส (live_scalable=false) ratio จะ ≈1 = โชว์ค่าไตรมาสเก่าติดป้ายว่าสด
+        // ผิด · การ์ด band "มูลค่าเทียบอดีตตัวเอง" ด้านล่างคำนวณ PE/PBV สดจริงจาก EPS/BVPS ให้แล้ว
+        if (!v.live_scalable) return;
         el.textContent = Math.round(v.value * ratio * 100) / 100;
       });
     }).catch(() => {});

@@ -6187,9 +6187,14 @@ def tearsheet(market, symbol):
         mid = n // 2
         return vals[mid] if n % 2 else round((vals[mid - 1] + vals[mid]) / 2, 3)
 
+    # live_scalable: ค่านี้อิงราคาชุดเดียวกับ header.price (daily snapshot จาก set_data.json/
+    # index_metrics) หรือไม่ — ถ้าใช่ frontend rescale ด้วย (ราคาสด ÷ header.price) ได้ตรง
+    # ถ้าไม่ (ตกไปใช้ f.get('*_value') ของ Finnomena = ราคา ณ สิ้นไตรมาส) การ rescale ด้วย
+    # header.price จะให้ ratio≈1 = โชว์ค่าไตรมาสเก่าโดยติดป้ายว่า "สด" (ดู _tsLoadLiveValuation)
     valuation = {
         "pe": {
             "value": s.get("pe") if s.get("pe") is not None else f.get("pe_value"),
+            "live_scalable": s.get("pe") is not None,
             "percentile": f.get("pe_percentile"), "label": _label(f.get("pe_percentile")),
             "mean": f.get("pe_mean"), "median": f.get("pe_median"), "n": f.get("pe_n"),
             "sector_median": _sector_median(lambda sy: (th_map.get(sy) or {}).get("pe")
@@ -6198,6 +6203,7 @@ def tearsheet(market, symbol):
         },
         "pbv": {
             "value": s.get("pbv") if s.get("pbv") is not None else f.get("pbv_value"),
+            "live_scalable": s.get("pbv") is not None,
             "percentile": f.get("pbv_percentile"), "label": _label(f.get("pbv_percentile")),
             "mean": f.get("pbv_mean"), "median": f.get("pbv_median"), "n": f.get("pbv_n"),
             "sector_median": _sector_median(lambda sy: (th_map.get(sy) or {}).get("pbv")
@@ -6205,19 +6211,25 @@ def tearsheet(market, symbol):
                                              else (snap_rows.get(sy) or {}).get("pbv_value")),
         },
         "ps": {
-            "value": f.get("ps_value"), "percentile": f.get("ps_percentile"),
+            # P/S ไม่เคยถูกเก็บใน set_data.json/index_metrics (0/930 TH, 0 US/HK/JP) — value นี้
+            # มาจาก Finnomena สิ้นไตรมาสเสมอ → live_scalable=False ตายตัว
+            "value": f.get("ps_value"), "live_scalable": False,
+            "percentile": f.get("ps_percentile"),
             "label": _label(f.get("ps_percentile")),
             "mean": f.get("ps_mean"), "median": f.get("ps_median"), "n": f.get("ps_n"),
             "sector_median": _sector_median(lambda sy: (snap_rows.get(sy) or {}).get("ps_value")),
         },
         "div_yield": {
-            "value": s.get("div_yield"),
+            # s.get('div_yield') = None ทั้งหมดสำหรับ US/HK/JP (0/518, 0/105, 0/225) — ต้อง
+            # fallback มา factor snapshot เหมือน pe/pbv ไม่งั้นการ์ด "ปันผล%" ว่างทั้ง universe US/HK/JP
+            "value": s.get("div_yield") if s.get("div_yield") is not None else f.get("div_yield"),
             "sector_median": _sector_median(lambda sy: (th_map.get(sy) or {}).get("div_yield")),
         },
         "ev_ebitda": {
             "value": f.get("ev_ebitda_value"), "percentile": f.get("ev_ebitda_percentile"),
             "label": _label(f.get("ev_ebitda_percentile")),
             "mean": f.get("ev_ebitda_mean"), "median": f.get("ev_ebitda_median"),
+            "n": f.get("ev_ebitda_n"),
             "sector_median": _sector_median(lambda sy: (snap_rows.get(sy) or {}).get("ev_ebitda_value")),
         },
     }
@@ -6278,7 +6290,8 @@ def tearsheet(market, symbol):
     except Exception:
         div_rows, _div_synced = [], None
     dividend = {
-        "yield": s.get("div_yield"),
+        # เหมือน valuation.div_yield — s.get('div_yield') ว่างทั้ง US/HK/JP, fallback factor snapshot
+        "yield": s.get("div_yield") if s.get("div_yield") is not None else f.get("div_yield"),
         "cagr_5y": f.get("div_cagr_5y"),
         "growth_streak_y": f.get("div_growth_streak_y"),
         "coverage": f.get("dividend_coverage"),

@@ -78,9 +78,13 @@ def resolve_yf_ticker(base_dir, sym, market=None):
     if market == "US":
         return sym, False
     if market == "HK":
-        return sym.zfill(4) + ".HK", False
+        # sym อาจมาพร้อม suffix ".HK" อยู่แล้ว (เช่น h.symbol ของ Tearsheet = "0700.HK" จาก
+        # hk_index_metrics.json) — ตัดออกก่อน zfill แล้วต่อกลับ กัน ".HK.HK" ซ้อนสอง (ปฏิทิน
+        # earnings ของหุ้น HK/JP เลยว่างถาวรเพราะ yfinance หา ticker พังนี้ไม่เจอ)
+        base = sym[:-3] if sym.endswith(".HK") else sym
+        return base.zfill(4) + ".HK", False
     if market == "JP":
-        return sym + ".T", False
+        return (sym if sym.endswith(".T") else sym + ".T"), False
     return None, False
 
 
