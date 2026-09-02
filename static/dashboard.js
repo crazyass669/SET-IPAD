@@ -20777,6 +20777,12 @@ function _qplPct(v) {
   if (v == null || isNaN(v)) return '—';
   return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
 }
+// คำเรียกสกุลเงินของงบสำหรับ label หน่วย — DR US/HK/JP งบเป็น USD/HKD/JPY ไม่ใช่บาท
+// (compute_qpl_report/compute_full_report ไม่แปลงค่าเงิน) THB/ว่าง/— = บาท ที่เหลือใช้รหัสสกุลตรงๆ
+function _finCurWord(cur) {
+  const c = String(cur || '').toUpperCase();
+  return (!c || c === 'THB' || c === '—' || c === 'บาท') ? 'บาท' : c;
+}
 
 // แกนสร้างตาราง P&L รายไตรมาส (ใช้ร่วมกัน 2 จุด: มุมมอง "📋 P&L รายไตรมาส" ผสาน 3 แหล่ง
 // และตาราง "SET.or.th" ล้วนๆ ที่แทรกในแท็บ 🇹🇭 SET.or.th — ดู _loadSetQplTable) คืน
@@ -21466,7 +21472,6 @@ function _drawFinExtraCharts(rows, period) {
 }
 
 function _renderFinQplReport(d) {
-  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   const qs = d.quarters || [];
   if (!qs.length) {
     document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">ไม่พบข้อมูลงบไตรมาสของหุ้นนี้</div>';
@@ -21477,8 +21482,8 @@ function _renderFinQplReport(d) {
 
   document.getElementById('fin-result').innerHTML = `
     <div class="card" style="padding:14px 16px">
-      <div style="font-size:13px;font-weight:700;margin-bottom:2px">${esc(d.sym)} ${d.name && d.name !== d.sym ? `— ${esc(d.name)}` : ''}</div>
-      <div style="font-size:11px;color:var(--text2);margin-bottom:10px">งบกำไรขาดทุนรายไตรมาส (หน่วย: พันบาท) — ผสาน Finnomena + Yahoo Finance + SET.or.th · เลื่อนซ้ายเพื่อดูปีเก่ากว่า</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:2px">${_escHtml(d.sym)} ${d.name && d.name !== d.sym ? `— ${_escHtml(d.name)}` : ''}</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:10px">งบกำไรขาดทุนรายไตรมาส (หน่วย: พัน${_finCurWord(d.currency)}) — ผสาน Finnomena + Yahoo Finance + SET.or.th · เลื่อนซ้ายเพื่อดูปีเก่ากว่า</div>
       <div style="font-size:12px;font-weight:700;margin-bottom:6px">📈 P&amp;L CHANGE <span id="qpl-chg-title">${_qplChgLabel()}</span>% (รายได้/ต้นทุน/กำไรสุทธิ) + กำไรขั้นต้น GPM% (20Q)</div>
       ${_qplChgToggleHtml()}
       <div style="position:relative;height:260px;margin-bottom:16px"><canvas id="qpl-yoy-chart"></canvas></div>
@@ -21673,10 +21678,11 @@ const _FIN_SANKEY_CLR = { revenue: '#58a6ff', cost: '#f85149', grossProfit: '#39
 // ต่อตัวอักษรไม่เท่ากัน) ใช้ font-family เดียวกับที่ --font กำหนดไว้ให้ body (SVG text ไม่ได้ตั้ง
 // font-family เอง เลย inherit มาจาก body) แคช context ไว้ตัวเดียวไม่ต้องสร้างใหม่ทุกครั้ง
 let _finSankeyMeasureCtx = null;
+let _finSankeyFontFam = null;   // --font ของ body คงที่ทั้ง session — อ่าน getComputedStyle ครั้งเดียวพอ
 function _finSankeyTextWidth(text, fontSize, weight) {
   if (!_finSankeyMeasureCtx) _finSankeyMeasureCtx = document.createElement('canvas').getContext('2d');
-  const fam = getComputedStyle(document.body).fontFamily || 'sans-serif';
-  _finSankeyMeasureCtx.font = `${weight} ${fontSize}px ${fam}`;
+  if (!_finSankeyFontFam) _finSankeyFontFam = getComputedStyle(document.body).fontFamily || 'sans-serif';
+  _finSankeyMeasureCtx.font = `${weight} ${fontSize}px ${_finSankeyFontFam}`;
   return _finSankeyMeasureCtx.measureText(text).width;
 }
 
@@ -21803,8 +21809,9 @@ function _renderFinSankeySvg(v) {
   ];
   const OFF = 8, barW = 10, colGap = 200, x0 = 8, LABEL_TAIL_W = 140;
   const rev = v.revenue;
-  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
-  const fmtM = n => n == null ? '—' : (n / 1e6).toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' ลบ.';
+  const esc = _escHtml;
+  const _curAbbr = (v._curWord && v._curWord !== 'บาท') ? ` ล.${v._curWord}` : ' ลบ.';
+  const fmtM = n => n == null ? '—' : (n / 1e6).toLocaleString('en-US', { maximumFractionDigits: 1 }) + _curAbbr;
   const fmtPct = n => n == null ? '' : (n / rev * 100).toFixed(1) + '% of Rev';
   const fmtPctShort = n => n == null ? '' : (n / rev * 100).toFixed(1) + '%';
 
@@ -21989,11 +21996,12 @@ function _renderFinSankeySvg(v) {
 // ของเดิมทุกครั้งที่เปลี่ยนหุ้น/toggle รายไตรมาส-รายปีอยู่แล้ว)
 let _finSankeyStockV = null;
 
-function _finSankeyCardHtml(qs, isFinancialSector, sym, isDr) {
+function _finSankeyCardHtml(qs, isFinancialSector, sym, isDr, cur) {
   const v = _computeFinSankeyTtm(qs);
   if (!v) return '';
   const hideForFinSector = isFinancialSector === undefined ? v.isBankLike : isFinancialSector;
   if (hideForFinSector) return '';
+  v._curWord = _finCurWord(cur);
   const svg = _renderFinSankeySvg(v);
   if (!svg) return '';
   _finSankeyStockV = v;
@@ -22009,7 +22017,7 @@ function _finSankeyCardHtml(qs, isFinancialSector, sym, isDr) {
         <div style="font-size:13px;font-weight:700">🌊 Income Sankey Diagram — TTM 4Q${_tipIconHtml('แผนภาพเส้นทางรายได้ → กำไรขั้นต้น → กำไรจากการดำเนินงาน (EBIT) → กำไรก่อนภาษี → กำไรสุทธิ แยกกิ่งต้นทุน/ค่าใช้จ่ายที่ถูกหักออกในแต่ละขั้น<br><br>ความหนาของแท่งคงที่ทุกกล่องเสมอ (ไม่ได้สื่อขนาดจริง) — เทียบสัดส่วนจากตัวเลข % ที่กำกับไว้ข้างแท่งแทน')}</div>
         ${compareBtnHtml}
       </div>
-      <div style="font-size:11px;color:var(--text2);margin-bottom:${v.staleBy ? 4 : 10}px">${v.periodLabel} · หน่วย: ล้านบาท · ผลรวม 4 ไตรมาสล่าสุด (TTM) จาก P&amp;L ผสานด้านล่าง</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:${v.staleBy ? 4 : 10}px">${v.periodLabel} · หน่วย: ล้าน${v._curWord || 'บาท'} · ผลรวม 4 ไตรมาสล่าสุด (TTM) จาก P&amp;L ผสานด้านล่าง</div>
       ${v.staleBy ? `<div style="font-size:11px;color:#e3b341;margin-bottom:10px">⚠ ไม่ใช่ TTM ของไตรมาสล่าสุด (${v.latestQLabel}) — ข้อมูลต้นทุนทางการเงิน/ภาษีของไตรมาสนั้นยังมาไม่ครบจากต้นทาง แสดง TTM ของ 4 ไตรมาสก่อนหน้าแทนชั่วคราว</div>` : ''}
       <div style="display:flex;gap:14px;margin-bottom:10px;font-size:10.5px;color:var(--text2)">
         <span>${dot(_FIN_SANKEY_CLR.revenue)}รายได้</span>
@@ -22126,9 +22134,15 @@ async function _toggleFinSankeySectorCompare(sym) {
       const r = await _fetchTimeout(`/api/financials-sankey-sector/${encodeURIComponent(sym)}`, 60000,
         'หมดเวลารอข้อมูลกลุ่ม (เกิน 60 วิ)');
       data = await r.json();
-      _finSankeySectorCache[sym] = data;
+      // ไม่ cache error — 404 {error} ตอน set_data.json ถูกเขียนทับกลางคัน (Quick Update) เป็น
+      // transient ถ้า cache ไว้ ปุ่มจะโชว์ error ค้างจนกว่าจะ reload หน้า กดใหม่ไม่ช่วย
+      if (data && !data.error) _finSankeySectorCache[sym] = data;
     }
-    if (stillCurrent()) box.innerHTML = _finSankeySectorBodyHtml(data, stockV);
+    if (stillCurrent()) {
+      box.innerHTML = (data && data.error)
+        ? `<div style="font-size:11.5px;color:var(--red);padding:10px 0 2px">⚠ ${_escHtml(data.error)}</div>`
+        : _finSankeySectorBodyHtml(data, stockV);
+    }
   } catch (e) {
     if (stillCurrent()) box.innerHTML = `<div style="font-size:11.5px;color:var(--red);padding:10px 0 2px">⚠ ${_escHtml(e.message)}</div>`;
   } finally {
@@ -22142,7 +22156,7 @@ async function _toggleFinSankeySectorCompare(sym) {
 // d.quarters เสมอไม่ว่า toggle รายไตรมาส/รายปีจะตั้งไว้ที่โหมดไหน (ต้องใช้ข้อมูลรายไตรมาสเท่านั้น
 // ถึงจะคำนวณ TTM ได้ และ d.years ไม่มี field capex/current_assets/current_liabilities/inventory/
 // accounts_receivable ให้ใช้ ดู docstring ของ rollup_full_report_annual ใน financials_store.py)
-function _finKeyRatiosHtml(qs) {
+function _finKeyRatiosHtml(qs, cur) {
   if (!qs || qs.length < 4) return '';
   const sorted = [...qs].sort((a, b) => (a.year_be * 4 + a.q) - (b.year_be * 4 + b.q));
   const byKey = {};
@@ -22163,28 +22177,50 @@ function _finKeyRatiosHtml(qs) {
     }
     return null;
   };
+  // หา anchor ของ TTM ด้วย byKey (year_be*4+q) เหมือน latestVal ไม่ใช่ไล่ตำแหน่ง sorted[i] —
+  // ถ้า quarters มีงวดขาดกลางชุด "4 ตัวท้าย" ของอาเรย์จะย้อนไกลเกิน 4 ไตรมาสปฏิทินจริง ทำให้
+  // ได้ TTM ที่เก่าค้าง (บั๊กเดียวกับที่แก้ใน latestVal / app.py _latest_value)
   const ttm = field => {
-    let anchor = null;
-    for (let i = sorted.length - 1; i >= Math.max(0, sorted.length - 4); i--) {
-      if (sorted[i][field] != null) { anchor = sorted[i]; break; }
+    if (anchorKey == null) return null;
+    let anchorK = null;
+    for (let off = 0; off < 4; off++) {
+      const row = byKey[anchorKey - off];
+      if (row && row[field] != null) { anchorK = anchorKey - off; break; }
     }
-    if (!anchor) return null;
+    if (anchorK == null) return null;
     let sum = 0;
     for (let off = 0; off < 4; off++) {
-      const p = byKey[anchor.year_be * 4 + anchor.q - off];
+      const p = byKey[anchorK - off];
       if (!p || p[field] == null) return null;
       sum += p[field];
     }
     return sum;
   };
+  // ไตรมาสล่าสุดที่มี field นี้จริง อยู่ห่างจากงวดล่าสุดของชุดกี่ไตรมาส (สำหรับเตือนว่า TTM
+  // คำนวณจากหน้าต่างเก่ากว่าไตรมาสล่าสุด — เหมือน staleBy ของการ์ด Sankey ด้านบน)
+  const anchorOffOf = field => {
+    if (anchorKey == null) return null;
+    for (let off = 0; off < 4; off++) { const r = byKey[anchorKey - off]; if (r && r[field] != null) return off; }
+    return null;
+  };
   const npTtm = ttm('net_profit'), opTtm = ttm('operating_profit'), cfoTtm = ttm('cfo'),
         capexTtm = ttm('capex'), taxTtm = ttm('tax_expense'), pretaxTtm = ttm('pretax_profit'),
         daTtm = ttm('da');
+  const npAnchorOff = anchorOffOf('net_profit');
   const eq = latestVal('total_equity'), ta = latestVal('total_assets'), td = latestVal('total_debt'),
         cash = latestVal('cash'), ca = latestVal('current_assets'), cl = latestVal('current_liabilities');
 
-  const roe = (npTtm != null && eq) ? npTtm / eq * 100 : null;
-  const roa = (npTtm != null && ta) ? npTtm / ta * 100 : null;
+  // ROE / D/E / WC/E / ROA / FCF-NP / Capex-Dep หารด้วยฐานที่ "ติดลบไม่ได้ตามธรรมชาติ" (ส่วนของ
+  // ผู้ถือหุ้น / สินทรัพย์รวม / กำไรสุทธิ / D&A) — ถ้าฐานติดลบ (ขาดทุนสะสม, หรือข้อมูลต้นทางเพี้ยน
+  // แบบ warnNegative ของ total_assets) การหารจะกลับเครื่องหมายทำให้ค่าอ่านผิดความหมาย (เช่น ROE
+  // ขาดทุน→โชว์ +สวยหรู) เหมือน "negative ROE trap" ที่กราฟ ROE/D/E ด้านล่างเตือนไว้ — ซ่อนค่าแทน
+  // + ใส่ caveat (roic กันตัวเองด้วย invCap>0 อยู่แล้ว)
+  const eqPos = eq != null && eq > 0;
+  const taPos = ta != null && ta > 0;
+  const npPos = npTtm != null && npTtm > 0;
+  const daPos = daTtm != null && daTtm > 0;
+  const roe = (npTtm != null && eqPos) ? npTtm / eq * 100 : null;
+  const roa = (npTtm != null && taPos) ? npTtm / ta * 100 : null;
   // ROIC = NOPAT TTM (กำไรจากการดำเนินงาน หลังหักภาษีสมมติ) ÷ เงินทุนที่ลงทุน (หนี้+ทุน-เงินสด)
   // — clamp อัตราภาษีที่ 0-60% กันไตรมาสขาดทุน/มีรายการพิเศษทำให้อัตราภาษีดิบ (tax/pretax) เพี้ยน
   let roic = null;
@@ -22193,15 +22229,18 @@ function _finKeyRatiosHtml(qs) {
     const invCap = td + eq - cash;
     if (invCap > 0) roic = opTtm * (1 - taxRate) / invCap * 100;
   }
-  const deRatio = (td != null && eq) ? td / eq : null;
-  const wcE = (ca != null && cl != null && eq) ? (ca - cl) / eq : null;
+  const deRatio = (td != null && eqPos) ? td / eq : null;
+  const wcE = (ca != null && cl != null && eqPos) ? (ca - cl) / eq : null;
   const netDebt = (td != null && cash != null) ? td - cash : null;
-  const capexDep = (capexTtm != null && daTtm) ? Math.abs(capexTtm) / daTtm : null;
-  const fcfNp = (cfoTtm != null && capexTtm != null && npTtm) ? (cfoTtm - Math.abs(capexTtm)) / npTtm : null;
+  const capexDep = (capexTtm != null && daPos) ? Math.abs(capexTtm) / daTtm : null;
+  const fcfNp = (cfoTtm != null && capexTtm != null && npPos) ? (cfoTtm - Math.abs(capexTtm)) / npTtm : null;
 
+  const curW = _finCurWord(cur);
+  const milUnit = curW === 'บาท' ? 'ล.บ.' : 'ล.' + curW;
+  const milNote = curW === 'บาท' ? 'ล้านบาท' : 'ล้าน' + curW;
   const pct = v => v == null ? '—' : `${v.toFixed(1)}%`;
   const xf = v => v == null ? '—' : `${v.toFixed(2)}x`;
-  const bahtM = v => v == null ? '—' : `${Math.round(v / 1e6).toLocaleString('en-US')} ล.บ.`;
+  const bahtM = v => v == null ? '—' : `${Math.round(v / 1e6).toLocaleString('en-US')} ${milUnit}`;
 
   const tile = (label, val, tip, color) => `
     <div title="${tip}" style="flex:1;min-width:112px;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;cursor:help">
@@ -22218,13 +22257,25 @@ function _finKeyRatiosHtml(qs) {
       ${tile('ROA (TTM)', pct(roa), 'กำไรสุทธิ TTM ÷ สินทรัพย์รวมล่าสุด')}
       ${tile('D/E Ratio', xf(deRatio), 'หนี้มีภาระดอกเบี้ย ÷ ส่วนของผู้ถือหุ้น')}
       ${tile('WC/E', xf(wcE), '(สินทรัพย์หมุนเวียน - หนี้สินหมุนเวียน) ÷ ส่วนของผู้ถือหุ้น — เงินทุนหมุนเวียนเทียบทุน')}
-      ${tile('Net Debt', bahtM(netDebt), 'หนี้มีภาระดอกเบี้ย - เงินสด (หน่วยล้านบาท) — บวก(แดง)=หนี้มากกว่าเงินสด, ลบ(เขียว)=เงินสดสุทธิเป็นบวก', netDebt == null ? null : (netDebt > 0 ? '#f85149' : '#3fb950'))}
-      ${tile('Total Assets', bahtM(ta), 'สินทรัพย์รวมล่าสุด (หน่วยล้านบาท)')}
-      ${tile('Equity', bahtM(eq), 'ส่วนของผู้ถือหุ้นล่าสุด (หน่วยล้านบาท)')}
-      ${tile('Total Debt', bahtM(td), 'หนี้ที่มีภาระดอกเบี้ยล่าสุด (หน่วยล้านบาท)')}
+      ${tile('Net Debt', bahtM(netDebt), `หนี้มีภาระดอกเบี้ย - เงินสด (หน่วย${milNote}) — บวก(แดง)=หนี้มากกว่าเงินสด, ลบ(เขียว)=เงินสดสุทธิเป็นบวก`, netDebt == null ? null : (netDebt > 0 ? '#f85149' : '#3fb950'))}
+      ${tile('Total Assets', bahtM(ta), `สินทรัพย์รวมล่าสุด (หน่วย${milNote})`)}
+      ${tile('Equity', bahtM(eq), `ส่วนของผู้ถือหุ้นล่าสุด (หน่วย${milNote})`)}
+      ${tile('Total Debt', bahtM(td), `หนี้ที่มีภาระดอกเบี้ยล่าสุด (หน่วย${milNote})`)}
       ${tile('Capex/Dep', xf(capexDep), 'CapEx TTM ÷ ค่าเสื่อมราคา&ตัดจำหน่าย (D&A) TTM — มากกว่า 1x แปลว่าลงทุนขยายเร็วกว่าสินทรัพย์เดิมเสื่อม')}
       ${tile('FCF/NP', xf(fcfNp), '(CFO - CapEx) TTM ÷ กำไรสุทธิ TTM — วัดคุณภาพกำไร ยิ่งใกล้/เกิน 1x ยิ่งแปลว่ากำไรเป็นเงินสดจริง')}
     </div>
+    ${(eq != null && eq <= 0) ? `
+    <div style="margin-top:8px;font-size:10.5px;color:var(--red);line-height:1.5">
+      ⚠ ส่วนของผู้ถือหุ้นล่าสุด${eq < 0 ? 'ติดลบ' : 'เป็นศูนย์'} (${bahtM(eq)}) — ซ่อน ROE / D/E / WC/E เพราะการหารด้วยฐาน${eq < 0 ? 'ติดลบ' : 'ศูนย์'}อ่านค่าผิดความหมาย
+    </div>` : ''}
+    ${(ta != null && ta <= 0) ? `
+    <div style="margin-top:6px;font-size:10.5px;color:var(--red);line-height:1.5">
+      ⚠ สินทรัพย์รวมล่าสุด${ta < 0 ? 'ติดลบ' : 'เป็นศูนย์'} (น่าจะข้อมูลต้นทางคลาดเคลื่อน) — ซ่อน ROA
+    </div>` : ''}
+    ${(npTtm != null && npAnchorOff != null && npAnchorOff > 0) ? `
+    <div style="margin-top:6px;font-size:10.5px;color:#e3b341;line-height:1.5">
+      ⚠ ไตรมาสล่าสุดยังไม่มีกำไรสุทธิจากต้นทาง — ROE / ROIC / ROA / FCF-NP คำนวณจาก TTM ของ 4 ไตรมาสก่อนหน้า (เก่ากว่างวดล่าสุด ${npAnchorOff} ไตรมาส)
+    </div>` : ''}
   </div>`;
 }
 
@@ -22307,8 +22358,20 @@ function _drawQuarterCompareCharts(qs) {
   });
 }
 
+// wrapper — เรียกได้จากทั้ง loadFinMergedReport (มี try/catch อยู่แล้ว) และปุ่ม toggle
+// setFinMergedPeriod/setQplChgMode (onclick ตรงๆ ไม่มี guard) — ถ้าการประกอบตาราง/HTML
+// (ส่วน synchronous ก่อน innerHTML) throw ปุ่มจะติ๊ก .active ใหม่แล้วแต่เนื้อหาไม่อัปเดต
+// = toggle ค้างเงียบๆ ไม่ให้เกิดแบบนั้น โชว์ error card แทน
 function _renderFinMergedReport(d) {
-  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  try {
+    _renderFinMergedReportImpl(d);
+  } catch (e) {
+    console.error('merged report render failed', e);
+    const box = document.getElementById('fin-result');
+    if (box) box.innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ แสดงผลงบผสานล้มเหลว: ${_escHtml(e && e.message || e)}</div>`;
+  }
+}
+function _renderFinMergedReportImpl(d) {
   const qs = d.quarters || [];
   const ys = d.years || [];
   if (!qs.length && !ys.length) {
@@ -22335,7 +22398,7 @@ function _renderFinMergedReport(d) {
     <div style="position:relative;height:260px;margin-bottom:16px"><canvas id="qpl-yoy-chart"></canvas></div>` : '';
 
   // การ์ด KPI สรุปอัตราส่วนหลัก — เสมอโชว์ไม่ว่า toggle อยู่โหมดไหน (ดู docstring _finKeyRatiosHtml)
-  const keyRatiosHtml = (() => { try { return _finKeyRatiosHtml(qs); } catch (e) { return ''; } })();
+  const keyRatiosHtml = (() => { try { return _finKeyRatiosHtml(qs, d.currency); } catch (e) { return ''; } })();
 
   // Seasonality กำไรสุทธิ (นอกจากรายได้) + เทียบไตรมาสเดียวกันข้ามปี + Heatmap YoY% — มีความหมาย
   // เฉพาะรายไตรมาสเท่านั้น (ปีต่อปีไม่มี "ไตรมาส" ให้เทียบ) ห่อ try/catch กันกราฟเสริมพังหน้าหลัก
@@ -22418,13 +22481,13 @@ function _renderFinMergedReport(d) {
 
   // Sankey คำนวณจาก TTM 4 ไตรมาสล่าสุดใน d.quarters เสมอ ไม่ผูกกับ toggle รายไตรมาส/รายปี
   // (_finMergedPeriod) — วางบนสุดของแท็บตามที่ผู้ใช้ขอ
-  const sankeyHtml = _finSankeyCardHtml(qs, d.is_financial_sector, d.sym, _finMergedIsDr);
+  const sankeyHtml = (() => { try { return _finSankeyCardHtml(qs, d.is_financial_sector, d.sym, _finMergedIsDr, d.currency); } catch (e) { return ''; } })();
 
   document.getElementById('fin-result').innerHTML = `
     ${sankeyHtml}
     <div class="card" style="padding:14px 16px">
-      <div style="font-size:13px;font-weight:700;margin-bottom:2px">${esc(d.sym)} ${d.name && d.name !== d.sym ? `— ${esc(d.name)}` : ''}</div>
-      <div style="font-size:11px;color:var(--text2);margin-bottom:10px">งบผสานทุกแหล่ง (หน่วย: พันบาท) — P&L: Finnomena+Yahoo+SET.or.th (SET แม่นสุด ทับก่อนเสมอ) · งบดุล/กระแสเงินสดรายไตรมาส: Finnomena+Yahoo (SET.or.th ไม่มีรายไตรมาสจริงของ 2 งบนี้)${_finTab === 'set' ? ' · รายปี: สินทรัพย์รวม/ส่วนผู้ถือหุ้น/CFO/CFI/CFF ของหุ้นไทยใช้ตัวเลขทางการจาก SET company-highlight ทับผลรวม Finnomena+Yahoo' : ''} · เลื่อนซ้ายเพื่อดูปีเก่ากว่า</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:2px">${_escHtml(d.sym)} ${d.name && d.name !== d.sym ? `— ${_escHtml(d.name)}` : ''}</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:10px">งบผสานทุกแหล่ง (หน่วย: พัน${_finCurWord(d.currency)}) — P&L: Finnomena+Yahoo+SET.or.th (SET แม่นสุด ทับก่อนเสมอ) · งบดุล/กระแสเงินสดรายไตรมาส: Finnomena+Yahoo (SET.or.th ไม่มีรายไตรมาสจริงของ 2 งบนี้)${_finTab === 'set' ? ' · รายปี: สินทรัพย์รวม/ส่วนผู้ถือหุ้น/CFO/CFI/CFF ของหุ้นไทยใช้ตัวเลขทางการจาก SET company-highlight ทับผลรวม Finnomena+Yahoo' : ''} · เลื่อนซ้ายเพื่อดูปีเก่ากว่า</div>
       ${keyRatiosHtml}
       ${periodToggle}
       ${chartHtml}
@@ -22436,15 +22499,20 @@ function _renderFinMergedReport(d) {
       ${bsWarnCaveat}
     </div>`;
   _qplScrollToLatest(scrollId);
-  if (isQMode && qs.length) _drawQplYoyChart(qs, 'qpl-yoy-chart');
-  else if (!isQMode && ys.length) _drawQplYoyChartAnnual(ys, 'qpl-yoy-chart');
-  _drawFinExtraCharts(isQMode ? qs : ys, _finMergedPeriod);
+  // ห่อการวาดกราฟทั้งหมด — throw ที่นี่จะ propagate กลับไป catch ของ loadFinMergedReport แล้วเขียน
+  // ทับรายงานที่ประกอบเสร็จแล้ว (หรือทำ toggle ช่วง/โหมดเงียบๆ ไม่ทำงาน) ทั้งที่ตัวรายงานยังดีอยู่
+  try {
+    if (isQMode && qs.length) _drawQplYoyChart(qs, 'qpl-yoy-chart');
+    else if (!isQMode && ys.length) _drawQplYoyChartAnnual(ys, 'qpl-yoy-chart');
+    _drawFinExtraCharts(isQMode ? qs : ys, _finMergedPeriod);
+  } catch (e) { /* กราฟเท่านั้น ไม่ให้พังทั้งรายงาน */ }
   if (isQMode && qs.length) { try { _drawQuarterCompareCharts(qs); } catch (e) { /* กราฟเสริมเท่านั้น */ } }
 }
 
 // งาน #5 Dividend History — มุมมอง "💵 ปันผล" ในหน้างบการเงิน (ใช้ endpoint แยก
 // /api/dividends ไม่ใช่ financials-full — ดู PLAN_stock_study_suite.txt งาน #5)
 async function loadDividendsView(sym, market, hint, refresh) {
+  const seq = _finViewSeq;
   hint.textContent = 'กำลังโหลด...';
   document.getElementById('fin-result').innerHTML = '<div class="empty" style="padding:24px">กำลังดึงประวัติปันผล...</div>';
   try {
@@ -22452,13 +22520,15 @@ async function loadDividendsView(sym, market, hint, refresh) {
     const r = await _fetchTimeout(`/api/dividends/${market}/${encodeURIComponent(sym)}${qs}`, 25000,
       'หมดเวลารอข้อมูล (เกิน 25 วิ) — ข้อมูลปันผลหุ้นนี้เก่าเกิน 30 วัน กำลังลองดึงสดจาก Yahoo แต่ช้าเกินไป ลองใหม่อีกครั้ง');
     const d = await r.json();
+    if (seq !== _finViewSeq) return;   // เปลี่ยนหุ้น/มุมมองไปแล้วระหว่างรอโหลด — ห้ามทับ view + _divEventsLastArgs
     if (d.error) throw new Error(d.error);
     hint.innerHTML = (d.stale ? '⚠ ข้อมูลอาจเก่ากว่า 30 วัน · ' : '') +
-      (d.synced_at ? `sync ล่าสุด: ${d.synced_at}` : '');
+      (d.synced_at ? `sync ล่าสุด: ${_escHtml(d.synced_at)}` : '');
     _renderDividendsView(d, sym, market, hint);
   } catch (e) {
+    if (seq !== _finViewSeq) return;
     hint.textContent = '';
-    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${e.message}</div>`;
+    document.getElementById('fin-result').innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ ${_escHtml(e.message)}</div>`;
   }
 }
 
@@ -22498,11 +22568,11 @@ function _renderDividendsView(d, sym, market, hint) {
     const h = Math.max(2, Math.round(y.dps / maxDps * 100));
     const color = y.complete ? 'var(--blue)' : 'var(--text2)';
     const yieldTxt = y.yield_pct != null ? `yield ${y.yield_pct}%` : '';
-    return `<div style="flex:1;min-width:14px;display:flex;flex-direction:column;align-items:center;gap:4px" title="${y.year}: ${y.dps} บาท/หุ้น ${yieldTxt}${y.complete ? '' : ' (ยังไม่ครบปี)'}">
+    return `<div style="flex:1;min-width:14px;display:flex;flex-direction:column;align-items:center;gap:4px" title="${_escHtml(y.year)}: ${_escHtml(y.dps)} บาท/หุ้น ${yieldTxt}${y.complete ? '' : ' (ยังไม่ครบปี)'}">
       <div style="width:100%;height:120px;display:flex;align-items:flex-end">
         <div style="width:100%;height:${h}%;background:${color};border-radius:3px 3px 0 0"></div>
       </div>
-      <div style="font-size:10px;color:var(--text2);writing-mode:vertical-rl;transform:rotate(180deg)">${y.year}</div>
+      <div style="font-size:10px;color:var(--text2);writing-mode:vertical-rl;transform:rotate(180deg)">${_escHtml(y.year)}</div>
     </div>`;
   }).join('');
 
@@ -22521,14 +22591,14 @@ function _renderDividendsView(d, sym, market, hint) {
   }
   const eventsRows = eventsList.map(e => {
     const yv = yieldOf(e);
-    return `<tr><td style="padding:4px 10px">${e.ex_date}</td><td style="padding:4px 10px;text-align:right">${e.dps}</td>
+    return `<tr><td style="padding:4px 10px">${_escHtml(e.ex_date)}</td><td style="padding:4px 10px;text-align:right">${_escHtml(e.dps)}</td>
       <td style="padding:4px 10px;text-align:right;color:var(--text2)">${yv != null ? yv + '%' : '—'}</td></tr>`;
   }).join('');
 
   document.getElementById('fin-result').innerHTML = `
     <div class="card" style="padding:16px 18px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <h3 style="margin:0">💵 ประวัติปันผล ${sym}</h3>
+        <h3 style="margin:0">💵 ประวัติปันผล ${_escHtml(sym)}</h3>
         <button class="filter-btn" style="font-size:12px" onclick="loadDividendsView('${_escJsAttr(sym)}','${_escJsAttr(market)}',document.getElementById('${_escJsAttr(hint.id)}'),true)">🔄 ดึงข้อมูลปันผลใหม่</button>
       </div>
       ${summary}
@@ -22543,7 +22613,7 @@ function _renderDividendsView(d, sym, market, hint) {
       </div>
       <div style="font-size:11px;color:var(--text2);margin-top:10px">
         ปันผลปรับตาม stock split แล้ว (yfinance) · Payout Ratio = DPS ปีล่าสุด ÷ EPS งวดล่าสุด
-        (${d.eps_latest_date || '—'}) จากงบ Yahoo — ไม่มีค่าถ้าขาดทุนหรือไม่มีข้อมูล EPS ·
+        (${_escHtml(d.eps_latest_date || '—')}) จากงบ Yahoo — ไม่มีค่าถ้าขาดทุนหรือไม่มีข้อมูล EPS ·
         yield รายปีรองรับ TH/US/HK/JP (DR ยังไม่รองรับ — ไม่มี local price store ให้ underlying)
       </div>
     </div>`;
@@ -23029,13 +23099,6 @@ function _finPct(v) {
   return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
 }
 
-function _finGetRow(dict, keys) {
-  for (const k of keys) {
-    if (dict[k]) return dict[k];
-  }
-  return null;
-}
-
 // รายการที่ "ยิ่งน้อยยิ่งดี" — เพิ่มขึ้นควรเป็นแดง ไม่ใช่เขียว (ตรงข้ามกับรายได้/กำไรที่ยิ่งมากยิ่งดี)
 const FIN_INVERT_KEYS = new Set([
   'Total Expenses', 'Operating Expense', 'Cost Of Revenue', 'Reconciled Cost Of Revenue',
@@ -23101,7 +23164,9 @@ function _svgBars(series, opt) {
     const yy = y(o.v), top = Math.min(yy, z), h = Math.abs(yy - z);
     // opt.qoq: สีเทียบกับงวดก่อนหน้า (โตขึ้น=เขียว ลดลง=แดง) — ใช้กับค่าที่บวกเสมอ เช่นรายได้
     // ปกติ: สีตามเครื่องหมาย (บวก=เขียว ลบ=แดง)
-    const up = opt.qoq ? (i === 0 || o.v >= series[i - 1].v) : (o.v >= 0);
+    // opt.invert: รายการ "ยิ่งน้อยยิ่งดี" (ค่าใช้จ่าย/หนี้สิน) — เพิ่มขึ้น = แดง (ตรงข้ามปกติ)
+    let up = opt.qoq ? (i === 0 || o.v >= series[i - 1].v) : (o.v >= 0);
+    if (opt.invert) up = !up;
     const col = up ? (opt.pos || '#3fb950') : (opt.neg || '#f85149');
     return `<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(h, 0.5).toFixed(1)}" fill="${col}"/>`;
   }).join('');
@@ -23179,6 +23244,13 @@ function _ttmRevenueSeries(revRow) {
   if (items.length < 4) return [];
   const out = [];
   for (let i = 3; i < items.length; i++) {
+    // กันไตรมาสขาดหาย (gap) ทำให้ TTM รวมข้ามช่วงเวลาที่ไม่ติดกันจริง — เกณฑ์เดียวกับ
+    // _ttmEpsLast (ระยะห่างไตรมาสติดกันต้องไม่เกิน ~105 วัน) ไม่งั้น PS band/กราฟเส้นเพี้ยน
+    let contiguous = true;
+    for (let k = i - 2; k <= i; k++) {
+      if ((new Date(items[k].d) - new Date(items[k - 1].d)) / 86400000 > 105) { contiguous = false; break; }
+    }
+    if (!contiguous) continue;
     const ttm = items[i - 3].v + items[i - 2].v + items[i - 1].v + items[i].v;
     if (ttm > 0) out.push({ d: items[i].d, v: ttm });
   }
@@ -23264,12 +23336,16 @@ function _svgBand(series, label, lowerIsCheap, idPrefix) {
   const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
   // งวดล่าสุดก็ต้อง winsorize ด้วยขอบเดียวกับ lo/hi ไม่งั้น "ปัจจุบัน" อาจโชว์เกิน
   // "สูงสุด" ที่ตัดขอบไปแล้ว (ขัดกับคำอธิบาย _PE_BAND_NOTE_HTML ด้านบน)
-  const cur = Math.min(hi, Math.max(lo, series[series.length - 1].v));
-  const pos = Math.max(0, Math.min(100, (cur - lo) / (hi - lo || 1) * 100));
+  const rawCur = series[series.length - 1].v;
+  // ค่าปัจจุบัน ≤ 0 (เช่น PBV ติดลบจากส่วนของผู้ถือหุ้นติดลบ — NWR/TSR) ไม่มีความหมายเชิง
+  // valuation — ห้ามหนีบเข้า lo แล้วโชว์เป็น "ถูกสุดที่เคยเป็นมา" (บริษัทใกล้ล้ม ไม่ใช่ของถูก)
+  const curValid = rawCur > 0;
+  const cur = curValid ? Math.min(hi, Math.max(lo, rawCur)) : rawCur;
+  const pos = curValid ? Math.max(0, Math.min(100, (cur - lo) / (hi - lo || 1) * 100)) : 100;
   const meanPos = Math.max(0, Math.min(100, (mean - lo) / (hi - lo || 1) * 100));
-  // สีจุด: ถูก=เขียว แพง=แดง (สำหรับ PE/PBV ที่ต่ำ=ถูก)
-  const cheap = lowerIsCheap ? cur <= p25 : cur >= p75;
-  const rich = lowerIsCheap ? cur >= p75 : cur <= p25;
+  // สีจุด: ถูก=เขียว แพง=แดง (สำหรับ PE/PBV ที่ต่ำ=ถูก) — ค่าติดลบถือเป็นสัญญาณอันตราย (แดง)
+  const cheap = curValid && (lowerIsCheap ? cur <= p25 : cur >= p75);
+  const rich = !curValid || (lowerIsCheap ? cur >= p75 : cur <= p25);
   const col = cheap ? '#3fb950' : rich ? '#f85149' : '#d9932e';
   const f = v => (Math.round(v * 100) / 100);
   // idPrefix: ถ้าให้มา จะใส่ id ไว้ให้ _patchLiveBand แก้เป็นราคาสดจาก Yahoo ทีหลังได้
@@ -23278,7 +23354,7 @@ function _svgBand(series, label, lowerIsCheap, idPrefix) {
   const tickId = idPrefix ? ` id="${idPrefix}-tick"` : '';
   return `<div style="margin:6px 0"${idPrefix ? ` data-lo="${lo}" data-hi="${hi}" data-p25="${p25}" data-p75="${p75}" data-lower-cheap="${lowerIsCheap ? 1 : 0}"` : ''}>
     <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2)">
-      <span><b style="color:var(--text)">${label}</b> ปัจจุบัน <b${curId} style="color:${col}">${f(cur)}</b></span>
+      <span><b style="color:var(--text)">${label}</b> ปัจจุบัน <b${curId} style="color:${col}">${curValid ? f(cur) : f(rawCur) + ' ⚠'}</b></span>
       <span>เฉลี่ย <span style="color:#58a6ff">${f(mean)}</span> · มัธยฐาน ${f(med)} · ต่ำสุด ${f(lo)} · สูงสุด ${f(hi)}</span>
     </div>
     <div style="position:relative;height:12px;margin-top:3px;border-radius:6px;background:linear-gradient(90deg,#3fb95055,#d9932e55,#f8514955)">
@@ -23340,9 +23416,8 @@ function _finSeasonality(row) {
     [1, 2, 3, 4].forEach(q => ratios[q].push(qd[q] / avg));
   });
   if (years < 3) return null;
-  const median = xs => { const s = [...xs].sort((a, b) => a - b), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
   const idx = {};
-  [1, 2, 3, 4].forEach(q => idx[q] = median(ratios[q]));   // median ทนปีเพี้ยน
+  [1, 2, 3, 4].forEach(q => idx[q] = _median(ratios[q]));   // median ทนปีเพี้ยน (ใช้ helper กลาง)
   let hi = 1, lo = 1;
   [2, 3, 4].forEach(q => { if (idx[q] > idx[hi]) hi = q; if (idx[q] < idx[lo]) lo = q; });
   const swing = (idx[hi] - idx[lo]) * 100;
@@ -23393,12 +23468,17 @@ function _finQuartersToDateMap(qs, field) {
 // กราฟเส้นย้อนหลังแบบเดียวกับหน้า Valuation ตลาด (ดู _drawFinTrendCharts ด้านล่าง)
 // แยกออกมาจาก _finTrendSectionImpl เพื่อให้เรียกคำนวณซ้ำได้ตอน draw กราฟ (หลัง DOM
 // มี canvas element แล้ว) โดยไม่ต้อง parse ทั้ง section ใหม่
+const _finValSeriesCache = new WeakMap();   // memo ต่อ payload d — _finTrendSectionImpl กับ
+                                            // _drawFinTrendCharts เรียกซ้ำด้วย d ก้อนเดียวกันทุก render
 function _finValuationSeries(d) {
+  if (_finValSeriesCache.has(d)) return _finValSeriesCache.get(d);
   const inc = d.income || {}, val = d.valuation || {};
   const pe = _annualPeSeries(inc['Basic EPS'], val['Close']);
   const pbv = _finSeries(val['PBV']);
   const ps = _psSeries(val['Market Cap'], inc['Total Revenue'] || inc['Operating Revenue']);
-  return { pe, pbv, ps };
+  const out = { pe, pbv, ps };
+  _finValSeriesCache.set(d, out);
+  return out;
 }
 
 // avg/std (population, หลัง winsorize กันค่าเพี้ยนสุดโต่งเหมือน _sigmaBandHtml) + p25/median/p75
@@ -23639,11 +23719,14 @@ function setFinViewMode(mode, btn) {
 
 // แถวเดียวในโหมดกราฟ — เส้น sparkline (เก่า→ใหม่) + ค่าล่าสุด + %เปลี่ยนแปลงตลอดช่วงที่แสดง
 // สีเส้น: ค่าล่าสุด ≥ ค่าแรกสุด = เขียว (โตขึ้น/ดีขึ้น) · น้อยกว่า = แดง (ลดลง)
-function _finRowChart(label, colLabels, vals, isRatioKey) {
+// rowKey: ใช้เช็ค FIN_INVERT_KEYS — รายการ "ยิ่งน้อยยิ่งดี" (ค่าใช้จ่าย/หนี้) กลับสีให้ตรงกับตาราง
+function _finRowChart(label, colLabels, vals, isRatioKey, rowKey) {
   const series = vals.map((v, i) => ({ d: colLabels[i], v })).filter(o => o.v != null && !isNaN(o.v));
   if (series.length < 2) return '';
+  const invert = FIN_INVERT_KEYS.has(rowKey);
   const first = series[0].v, last = series[series.length - 1].v;
-  const up = last >= first;
+  let up = last >= first;
+  if (invert) up = !up;
   const color = up ? '#3fb950' : '#f85149';
   const lastText = isRatioKey ? last.toFixed(2) : _finFmt(last);
   const pctChange = first !== 0 ? (last - first) / Math.abs(first) * 100 : null;
@@ -23660,7 +23743,7 @@ function _finRowChart(label, colLabels, vals, isRatioKey) {
     <div style="font-size:10px;color:var(--text2);display:flex;justify-content:space-between">
       <span>${series[0].d}</span><span>${series[series.length - 1].d}</span>
     </div>
-    ${_svgBars(series, { height: 60, qoq: true, pos: '#3fb950', neg: '#f85149' })}
+    ${_svgBars(series, { height: 60, qoq: true, invert, pos: '#3fb950', neg: '#f85149' })}
   </div>`;
 }
 
@@ -23717,7 +23800,7 @@ function _finFullTable(title, cols, colLabels, groups, rows, getVal, isRatio, sh
     dataRows.forEach(r => {
       const vals = cols.map(c => getVal(r.key, c));
       if (isChart) {
-        const rowChart = _finRowChart(_finLabel(r.key), colLabels, vals, isRatio(r.key));
+        const rowChart = _finRowChart(_finLabel(r.key), colLabels, vals, isRatio(r.key), r.key);
         if (rowChart) { bodyHtml += rowChart; shown++; }
         return;
       }
@@ -23788,12 +23871,19 @@ function exportFinCSV() {
     const overflowWrap = table.closest('div[style*="overflow-x:auto"]');
     const wrap = overflowWrap ? overflowWrap.parentElement : null;
     const title = wrap ? wrap.firstElementChild.textContent.trim() : '';
-    const headRow = [...table.querySelectorAll('thead th')].map(th => esc(th.textContent.trim().replace(/\s+/g, ' ')));
+    // อ่าน text ของ cell โดยตัดกล่อง tooltip ที่ซ่อนอยู่ (_tipIconHtml → .scr-tip-icon) ออกก่อน —
+    // ไม่งั้น textContent จะลากคำอธิบาย tooltip ทั้งย่อหน้ามาต่อกับชื่อรายการใน CSV
+    const cellText = el => {
+      const c = el.cloneNode(true);
+      c.querySelectorAll('.scr-tip-icon').forEach(n => n.remove());
+      return c.textContent.trim().replace(/\s+/g, ' ');
+    };
+    const headRow = [...table.querySelectorAll('thead th')].map(th => esc(cellText(th)));
     const bodyRows = [...table.querySelectorAll('tbody tr')].map(tr => {
       const cells = [...tr.children];
       if (cells.length === 1 && cells[0].hasAttribute('colspan')) return null;   // แถวหัวกลุ่ม ไม่ใช่ข้อมูล
       return cells.map((td, i) => {
-        if (i === 0) return esc(td.textContent.trim().replace(/\s+/g, ' '));
+        if (i === 0) return esc(cellText(td));
         const raw = td.childNodes[0] ? td.childNodes[0].textContent.trim() : td.textContent.trim();
         return esc(raw);
       }).join(',');
@@ -23885,7 +23975,7 @@ function _renderFinancialsFull(d, source) {
       ? 'Finnomena · รายได้/กำไร/กระแสเงินสด = รวม 4 ไตรมาสของปี · งบดุล/valuation = ณ สิ้นปี · เฉพาะปีที่ครบ 4 ไตรมาส'
       : isFinn
         ? 'Finnomena · วันที่งวดสังเคราะห์จาก fiscal+ไตรมาส · แหล่งงบไตรมาสย้อนยาวที่สุด'
-        : `Yahoo Finance · yfinance: ${d.yf || '—'}`;
+        : `Yahoo Finance · yfinance: ${_escHtml(d.yf || '—')}`;
     const disclaimer = isFinnY
       ? '⚠ งบรายปีนี้รวมจากงบไตรมาส Finnomena (พิสูจน์แล้วยอดตรงกับ Yahoo รายปี) — ลึกถึง ~16-20 ปี · EPS รายปีเป็นการรวม 4 ไตรมาส อาจคลาดจากจำนวนหุ้นที่เปลี่ยนระหว่างปีเล็กน้อย'
       : isFinn
@@ -23949,14 +24039,14 @@ function _renderFinancialsFull(d, source) {
         <div id="fin-tv-widget" style="height:480px;border-radius:6px;overflow:hidden;background:#131722"></div>
       </div>` : ''}
       <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px">
-        <span style="font-size:18px;font-weight:700">${d.sym}</span>
+        <span style="font-size:18px;font-weight:700">${_escHtml(d.sym)}</span>
         ${typeLabel}
         ${srcBadge}
-        <span style="font-size:13px;color:var(--text2)">${dispName || ''}</span>
+        <span style="font-size:13px;color:var(--text2)">${_escHtml(dispName || '')}</span>
         ${tvHtml}
         ${jittaHtml}
         ${fsSetHtml}
-        <span style="font-size:11px;color:var(--text2);margin-left:auto">สกุลเงิน: <strong>${d.currency || '—'}</strong></span>
+        <span style="font-size:11px;color:var(--text2);margin-left:auto">สกุลเงิน: <strong>${_escHtml(d.currency || '—')}</strong></span>
       </div>
       <div style="font-size:11px;color:var(--text2);margin-bottom:10px">${srcNote} · ${isQ ? `ข้อมูลรายไตรมาส (% = ${pctOffset === 4 ? 'เทียบไตรมาสเดียวกันปีก่อน YoY' : 'เทียบงวดก่อนหน้า QoQ'})` : 'ข้อมูลรายปี'}</div>
       ${fyBanner}
@@ -23999,7 +24089,7 @@ function _renderFinancialsFull(d, source) {
   document.getElementById('fin-result').innerHTML = `
   <div class="card" style="margin-top:12px">
     <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px">
-      <span style="font-size:18px;font-weight:700">${d.sym}</span>
+      <span style="font-size:18px;font-weight:700">${_escHtml(d.sym)}</span>
       <span style="background:#d9932e22;color:#d9932e;padding:2px 8px;border-radius:4px;font-size:11px">🇹🇭 SET.or.th</span>
       <span style="font-size:11px;color:var(--text2);margin-left:auto">สกุลเงิน: <strong>THB</strong></span>
     </div>
@@ -24015,204 +24105,6 @@ function _renderFinancialsFull(d, source) {
   _finScrollTablesToLatest();
   _loadPriceAnalyticsFin(d.sym);
   _loadSetQplTable(d.sym);
-}
-
-function _renderFinancials(d) {
-  const inc = d.income, bal = d.balance, cf = d.cashflow;
-
-  // Get sorted years (oldest → newest)
-  const allDates = new Set();
-  [inc, bal, cf].forEach(section => Object.values(section).forEach(row => Object.keys(row).forEach(k => allDates.add(k))));
-  const years = [...allDates].sort().slice(-4);
-  const yearLabels = years.map(y => y.slice(0, 4));
-
-  // Helper: render one table section
-  function _finTable(title, rows) {
-    const headerCells = yearLabels.map(y => `<th class="r" style="min-width:90px">${y}</th>`).join('');
-    let rowHtml = '';
-    for (const { label, keys, calc } of rows) {
-      let vals = years.map(() => null);
-      if (calc) {
-        vals = calc(inc, bal, cf, years);
-      } else if (keys) {
-        for (const key of keys) {
-          const found = inc[key] || bal[key] || cf[key];
-          if (found) { vals = years.map(y => found[y] ?? null); break; }
-        }
-      }
-      if (vals.every(v => v === null)) continue;
-      const cells = vals.map((v, i) => {
-        const cls = i > 0 ? _finColCls(v, vals[i-1]) : '';
-        return `<td class="r ${cls}" style="font-size:12px">${_finFmt(v)}</td>`;
-      }).join('');
-      rowHtml += `<tr><td style="font-size:12px;padding:5px 8px;white-space:nowrap">${label}</td>${cells}</tr>`;
-    }
-    if (!rowHtml) return '';
-    return `
-    <div style="margin-top:16px">
-      <div style="font-size:13px;font-weight:600;color:var(--blue);margin-bottom:6px">${title}</div>
-      <div style="overflow-x:auto"><table class="tbl" style="min-width:400px">
-        <thead><tr><th style="min-width:160px">รายการ</th>${headerCells}</tr></thead>
-        <tbody>${rowHtml}</tbody>
-      </table></div>
-    </div>`;
-  }
-
-  const incomeRows = [
-    { label: 'Revenue',            keys: ['Total Revenue','Revenue'] },
-    { label: 'Gross Profit',       keys: ['Gross Profit'] },
-    { label: 'Gross Margin %',     keys: null, calc: (inc,_b,_c,yrs) => {
-        const rev = _finGetRow(inc, ['Total Revenue','Revenue']);
-        const gp  = _finGetRow(inc, ['Gross Profit']);
-        return yrs.map(y => (rev&&gp&&rev[y]&&gp[y]) ? gp[y]/rev[y]*100 : null);
-    }},
-    { label: 'Operating Income',   keys: ['Operating Income','EBIT'] },
-    { label: 'EBITDA',             keys: ['EBITDA','Normalized EBITDA'] },
-    { label: 'Net Income',         keys: ['Net Income','Net Income Common Stockholders'] },
-    { label: 'Net Margin %',       keys: null, calc: (inc,_b,_c,yrs) => {
-        const rev = _finGetRow(inc, ['Total Revenue','Revenue']);
-        const ni  = _finGetRow(inc, ['Net Income','Net Income Common Stockholders']);
-        return yrs.map(y => (rev&&ni&&rev[y]&&ni[y]) ? ni[y]/rev[y]*100 : null);
-    }},
-    { label: 'EPS (Diluted)',      keys: ['Diluted EPS','Basic EPS'] },
-  ];
-
-  const balRows = [
-    { label: 'Total Assets',      keys: ['Total Assets'] },
-    { label: 'Cash & Equiv.',     keys: ['Cash And Cash Equivalents','Cash Cash Equivalents And Short Term Investments','Cash And Short Term Investments'] },
-    { label: 'Total Debt',        keys: ['Total Debt','Long Term Debt'] },
-    { label: 'Equity',            keys: ['Stockholders Equity','Common Stock Equity','Total Equity Gross Minority Interest'] },
-    { label: 'Debt/Equity',       keys: null, calc: (_i,bal,_c,yrs) => {
-        const dbt = _finGetRow(bal, ['Total Debt','Long Term Debt']);
-        const eq  = _finGetRow(bal, ['Stockholders Equity','Common Stock Equity','Total Equity Gross Minority Interest']);
-        return yrs.map(y => (dbt&&eq&&eq[y]&&eq[y]!==0) ? dbt[y]/eq[y] : null);
-    }},
-  ];
-
-  const cfRows = [
-    { label: 'Operating CF',      keys: ['Operating Cash Flow','Cash From Operating Activities'] },
-    { label: 'CapEx',             keys: ['Capital Expenditure','Capital Expenditures'] },
-    { label: 'Free Cash Flow',    keys: ['Free Cash Flow'] },
-    { label: 'Dividends Paid',    keys: ['Common Stock Dividend Paid','Cash Dividends Paid'] },
-  ];
-
-  // Revenue + Net Income chart
-  const revData  = _finGetRow(inc, ['Total Revenue','Revenue']);
-  const niData   = _finGetRow(inc, ['Net Income','Net Income Common Stockholders']);
-  const revVals  = years.map(y => revData?.[y] ?? null);
-  const niVals   = years.map(y => niData?.[y]  ?? null);
-  const chartId  = 'fin-chart-' + Date.now();
-
-  const typeLabel = d.type === 'set'
-    ? `<span style="background:#1f6feb22;color:#58a6ff;padding:2px 8px;border-radius:4px;font-size:11px">🇹🇭 SET</span>`
-    : `<span style="background:#3fb95022;color:#3fb950;padding:2px 8px;border-radius:4px;font-size:11px">🌏 DR</span>`;
-
-  document.getElementById('fin-result').innerHTML = `
-  <div class="card" style="margin-top:12px">
-    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px">
-      <span style="font-size:18px;font-weight:700">${d.sym}</span>
-      <a class="tv-link" href="https://www.tradingview.com/chart/?symbol=${d.type==='set'?'SET:'+d.sym:yfToTVSym(d.yf)}&interval=D" target="_blank" rel="noopener" title="ดูใน TradingView">↗</a>
-      ${d.type==='set' ? `<a href="https://www.set.or.th/th/market/product/stock/quote/${encodeURIComponent(d.sym)}/financial-statement/company-highlights" target="_blank" rel="noopener" title="ดูงบการเงินบนเว็บ SET" style="font-size:11px;color:#b09030;border:1px solid #b09030;border-radius:4px;padding:1px 7px;text-decoration:none;vertical-align:middle">SET ↗</a>` : ''}
-      ${typeLabel}
-      <span style="font-size:13px;color:var(--text2)">${d.name}</span>
-      <span style="font-size:11px;color:var(--text2);margin-left:auto">สกุลเงิน: <strong>${d.currency}</strong></span>
-    </div>
-    <div style="font-size:11px;color:var(--text2);margin-bottom:12px">yfinance: ${d.yf} · ข้อมูลรายปี (Annual)</div>
-
-    ${years.length ? `
-    <canvas id="${chartId}" style="width:100%;max-width:680px;height:180px;display:block"></canvas>
-    ` : ''}
-
-    ${_finTable('📊 งบกำไรขาดทุน (Income Statement)', incomeRows)}
-    ${_finTable('📋 งบดุล (Balance Sheet)', balRows)}
-    ${_finTable('💵 กระแสเงินสด (Cash Flow)', cfRows)}
-
-    <div style="font-size:10px;color:var(--text2);margin-top:16px">
-      ⚠ ข้อมูลจาก Yahoo Finance อาจไม่ครบถ้วนสำหรับหุ้นบางตัว โดยเฉพาะ VN/EU — ใช้เพื่อดูแนวโน้มเท่านั้น
-    </div>
-  </div>`;
-
-  // Draw chart after DOM is ready
-  requestAnimationFrame(() => {
-    const cv = document.getElementById(chartId);
-    if (cv && (revVals.some(v=>v!=null) || niVals.some(v=>v!=null))) {
-      _drawFinChart(cv, yearLabels, revVals, niVals, d.currency);
-    }
-  });
-}
-
-function _drawFinChart(canvas, labels, revVals, niVals, currency) {
-  const dpr = window.devicePixelRatio || 1;
-  const W   = Math.min(canvas.parentElement.clientWidth, 680);
-  const H   = 180;
-  canvas.width  = W * dpr; canvas.height = H * dpr;
-  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-
-  const PAD = { top: 24, right: 16, bottom: 36, left: 60 };
-  const PW  = W - PAD.left - PAD.right;
-  const PH  = H - PAD.top  - PAD.bottom;
-
-  ctx.fillStyle = '#161b22';
-  ctx.fillRect(0, 0, W, H);
-
-  const n = labels.length;
-  if (n === 0) return;
-
-  const allVals = [...revVals, ...niVals].filter(v => v != null);
-  const minV = Math.min(0, ...allVals);
-  const maxV = Math.max(...allVals) * 1.1 || 1;
-  const toY  = v => PAD.top + (1 - (v - minV) / (maxV - minV)) * PH;
-  const barW = Math.floor(PW / n * 0.35);
-  const gap  = PW / n;
-
-  // Grid lines
-  ctx.setLineDash([2,4]); ctx.lineWidth = 0.5; ctx.strokeStyle = 'rgba(48,54,61,0.8)';
-  [0, 0.25, 0.5, 0.75, 1].forEach(t => {
-    const y = PAD.top + t * PH;
-    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + PW, y); ctx.stroke();
-    const v = maxV - t * (maxV - minV);
-    ctx.fillStyle = '#8b949e'; ctx.font = '9px Segoe UI,sans-serif'; ctx.textAlign = 'right';
-    ctx.fillText(_finFmt(v), PAD.left - 3, y + 3);
-  });
-  ctx.setLineDash([]);
-
-  const zero = toY(0);
-
-  labels.forEach((lbl, i) => {
-    const cx = PAD.left + i * gap + gap / 2;
-
-    // Revenue bar (blue)
-    if (revVals[i] != null) {
-      const y = toY(revVals[i]), h = Math.abs(zero - y);
-      ctx.fillStyle = 'rgba(88,166,255,0.55)';
-      ctx.fillRect(cx - barW - 2, Math.min(y, zero), barW, Math.max(h, 1));
-    }
-    // Net Income bar (green/red)
-    if (niVals[i] != null) {
-      const y = toY(niVals[i]), h = Math.abs(zero - y);
-      ctx.fillStyle = niVals[i] >= 0 ? 'rgba(63,185,80,0.7)' : 'rgba(248,81,73,0.7)';
-      ctx.fillRect(cx + 2, Math.min(y, zero), barW, Math.max(h, 1));
-    }
-
-    // X label
-    ctx.fillStyle = '#8b949e'; ctx.font = '10px Segoe UI,sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(lbl, cx, H - PAD.bottom + 14);
-  });
-
-  // Zero line
-  if (minV < 0) {
-    ctx.strokeStyle = 'rgba(139,148,158,0.4)'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(PAD.left, zero); ctx.lineTo(PAD.left + PW, zero); ctx.stroke();
-  }
-
-  // Legend
-  ctx.fillStyle = 'rgba(88,166,255,0.7)';  ctx.fillRect(PAD.left, 6, 10, 9);
-  ctx.fillStyle = '#ccc'; ctx.font = '10px Segoe UI,sans-serif'; ctx.textAlign = 'left';
-  ctx.fillText('Revenue', PAD.left + 13, 14);
-  ctx.fillStyle = 'rgba(63,185,80,0.8)'; ctx.fillRect(PAD.left + 72, 6, 10, 9);
-  ctx.fillText('Net Income', PAD.left + 85, 14);
 }
 
 // ============================================================

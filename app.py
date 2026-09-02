@@ -3448,6 +3448,9 @@ def get_financials_qpl_report(symbol):
         return jsonify({"error": f"ประมวลผลงบ {sym} ล้มเหลว: {e}"}), 500
     report["sym"] = sym
     report["name"] = (yq or finn or {}).get("name") or sym
+    # สกุลเงินของงบ — DR US/HK/JP งบเป็น USD/HKD/JPY (compute_qpl_report ไม่แปลงค่าเงิน)
+    # frontend ใช้ตั้ง label หน่วย ไม่ให้เขียน "พันบาท" ทับตัวเลขสกุลอื่น
+    report["currency"] = (yq or finn or {}).get("currency") or "—"
     return jsonify(report)
 
 
@@ -3533,6 +3536,9 @@ def get_financials_merged_report(symbol):
         return jsonify({"error": f"ประมวลผลงบ {sym} ล้มเหลว: {e}"}), 500
     report["sym"] = sym
     report["name"] = (yq or finn or {}).get("name") or sym
+    # สกุลเงินของงบ — DR US/HK/JP งบเป็น USD/HKD/JPY (compute_full_report ไม่แปลงค่าเงิน)
+    # frontend ใช้ตั้ง label หน่วย ไม่ให้เขียน "พันบาท"/"ล้านบาท" ทับตัวเลขสกุลอื่น
+    report["currency"] = (yq or finn or {}).get("currency") or "—"
     # ธนาคาร/ประกัน/เงินทุนฯ — บอก frontend ให้ซ่อน Income Sankey Diagram เพราะ COGS/กำไรขั้นต้น
     # ที่ผสานมาได้ (มักมาจาก Yahoo/Finnomena ที่ตีความดอกเบี้ยจ่ายเป็น 'Cost Of Revenue') ไม่ใช่
     # แนวคิดต้นทุนขายแบบธุรกิจทั่วไป ทำให้ Sankey เข้าใจผิดได้ (เช็คแล้วทั้ง KBANK และ JPM: cogs
