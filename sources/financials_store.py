@@ -1701,12 +1701,19 @@ def rollup_full_report_annual(quarters, set_annual=None):
     years = {}
     for y, rows in by_year.items():
         rows = sorted(rows, key=lambda r: r["q"])
+        rev_quarters = {r["q"] for r in rows if r.get("revenue") is not None}
         yr = {"year_ad": y, "year_be": y + 543,
-              "complete": any(r.get("revenue") is not None for r in rows) and
-                          len({r["q"] for r in rows if r.get("revenue") is not None}) == 4}
+              "complete": bool(rev_quarters) and len(rev_quarters) == 4}
         for f in _QPL_FLOW_FIELDS + _BSCF_FLOW_FIELDS:
-            vals = [r[f] for r in rows if r.get(f) is not None]
-            yr[f] = round(sum(vals), 4) if vals else None
+            f_quarters = {r["q"] for r in rows if r.get(f) is not None}
+            # รวมเป็นยอดรายปีเฉพาะเมื่อ field นี้ครอบไตรมาสเดียวกับ revenue เป๊ะ — บรรทัดละเอียด
+            # (cogs/selling_exp/admin_exp/financial_cost/pretax_profit/tax_expense) มีเฉพาะไตรมาส
+            # Yahoo/SET ล่าสุด ~6-8 งวด ถ้ารวมมั่วจะได้ผลรวม 2 ไตรมาสไปโชว์ในแถวที่ revenue เป็น
+            # ยอด 4 ไตรมาสเต็ม แล้ว pretax_yoy/tax_pct ที่ derive ต่อก็ผิดตาม
+            if f_quarters and f_quarters == rev_quarters:
+                yr[f] = round(sum(r[f] for r in rows if r.get(f) is not None), 4)
+            else:
+                yr[f] = None
         for f in _BSCF_STOCK_FIELDS:
             latest = next((r[f] for r in reversed(rows) if r.get(f) is not None), None)
             yr[f] = latest

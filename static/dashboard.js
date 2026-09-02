@@ -7752,6 +7752,9 @@ async function checkFinCoverage(resultId = 'fin-coverage-result') {
   try {
     const r = await fetch('/api/financials-coverage');
     const d = await r.json();
+    // route คืน {error:...}, 500 ตอน exception — r.json() ไม่ throw ต้องเช็คเอง ไม่งั้น
+    // _renderFinCoverage เห็น d.yahoo/d.set เป็น undefined แล้วโชว์ "✓ ครบทั้งหมดแล้ว" ลวงตา
+    if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
     _renderFinCoverage(d, resultId);
   } catch (e) {
     box.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ ตรวจสอบไม่สำเร็จ: ${e.message}</div>`;
@@ -7819,11 +7822,15 @@ function retryFinMissing(symbols, resultId = 'fin-coverage-result') {
 
 async function checkFinQuarterCoverage(resultId = 'fin-quarter-coverage-result') {
   const box = document.getElementById(resultId);
+  if (!box) return;
   box.style.display = 'block';
   box.innerHTML = '<div class="empty" style="padding:16px">กำลังตรวจสอบ...</div>';
   try {
     const r = await fetch('/api/financials-quarter-coverage');
     const d = await r.json();
+    // route คืน {error:...}, 500 ตอน exception — r.json() ไม่ throw ต้องเช็คเอง ไม่งั้น
+    // _renderFinQuarterCoverage เห็น keys เป็น [] แล้วโชว์ "✓ ได้งวดล่าสุดครบทุกตัวแล้ว" ลวงตา
+    if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
     _renderFinQuarterCoverage(d, resultId);
   } catch (e) {
     box.innerHTML = `<div class="empty" style="padding:16px;color:var(--red)">⚠ ตรวจสอบไม่สำเร็จ: ${e.message}</div>`;
@@ -7832,6 +7839,7 @@ async function checkFinQuarterCoverage(resultId = 'fin-quarter-coverage-result')
 
 function _renderFinQuarterCoverage(d, resultId = 'fin-quarter-coverage-result') {
   const box = document.getElementById(resultId);
+  if (!box) return;
   const srcLabels = { set: 'SET company-highlight', set_qpl: 'SET P&L รายไตรมาส',
                        yahoo_q: 'Yahoo Finance', finnomena_q: 'Finnomena' };
   const keys = Object.keys(srcLabels).filter(k => d[k]);

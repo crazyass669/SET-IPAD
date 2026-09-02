@@ -3161,9 +3161,12 @@ def get_financials(symbol):
         for k in rev_keys:
             row = income.get(k)
             if row:
-                vals = [v for v in row.values() if v is not None]
-                if vals:
-                    ann_rev = max(vals, key=abs)
+                # ต้องเทียบ TTM กับ 'ปีล่าสุด' ไม่ใช่ปีที่ยอดสูงสุด — บริษัทที่รายได้หด >95%
+                # จากจุดพีคหลายปีก่อน จะโดน max(key=abs) หยิบยอดพีคมาเป็นตัวหาร ratio ต่ำเกิน
+                # 0.05 แล้วล้าง TTM ที่ถูกต้องทิ้ง (ดู ttm_bad ด้านล่าง)
+                items = [(d, v) for d, v in row.items() if v is not None]
+                if items:
+                    ann_rev = max(items, key=lambda x: str(x[0]))[1]
                     break
         ttm_bad = False
         # เช็ค individual quarter revenue ต้องไม่ติดลบ
@@ -3320,7 +3323,13 @@ def get_financials_full(symbol):
         # (calendar/fiscal_shift/mismatch/unverified — ดู _finnomena_annual_status)
         # เดิมหุ้นปีบัญชีไม่ตรงปฏิทิน (55 ตัว) + mirror US/HK ทั้งหมด (~5,100 ตัว) โดนกันหมด
         # ทั้งที่ยอดรวม 'ปีบัญชี' ของ Finnomena ถูกต้องในตัวเอง แค่ป้ายปีเหลื่อม/ไม่มีตัวเทียบ
-        status, med = _finnomena_annual_status(annual, sym, is_dr)
+        # _finnomena_annual_status อ่าน yahoo/yahoo_q จาก DB เพิ่ม (unguarded get) + คณิต
+        # median-diff แบบหาร — DB lock หรือค่า non-numeric ใน payload เก่าทำให้ throw ได้
+        # ไม่ควรทำให้ทั้ง endpoint 500 ทั้งที่ annual (ตัวหลัก) พร้อมส่งแล้ว
+        try:
+            status, med = _finnomena_annual_status(annual, sym, is_dr)
+        except Exception:
+            status, med = "unverified", None
         annual["fy_status"] = status
         if med is not None:
             annual["fy_diff_pct"] = round(med * 100, 1)
@@ -3364,6 +3373,10 @@ def get_financials_full(symbol):
         data = financials_store.get(BASE_DIR, sym, source, is_dr=is_dr, market=market)
     except Exception:
         data = None
+    if not data:
+        # re-read หลัง upsert ล้มเหลว/ได้ค่าว่าง (เช่น DB lock แทรกทันทีหลังเราเพิ่งเขียนเอง) —
+        # อย่าคืน body `null` HTTP 200 (frontend d.income/d.name -> TypeError หน้าเว็บค้าง)
+        return jsonify({"error": f"{sym}: บันทึกงบการเงินแล้วแต่อ่านกลับไม่สำเร็จ ลองใหม่อีกครั้ง"}), 503
     return jsonify(_with_quality(data))
 
 
@@ -3593,7 +3606,13 @@ def get_financials_compare(symbol):
 
     # Finnomena รายไตรมาส — ยาว ~16-20 ปีแต่หยาบ (ไม่มี COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี)
     # ดึงไว้ก่อนเพราะใช้ทั้งเสริมประวัติ P&L (compute_qpl_report) และดึง valuation ด้านล่าง
-    finn = financials_store.get(BASE_DIR, sym, "finnomena_q")
+    # financials_store.get() เปิด connection ใหม่ (busy_timeout=5000) — ถ้า background job
+    # (sync-all/mirror) กำลังเขียน financials.db นานเกิน 5s พอดี อาจได้ sqlite3.OperationalError:
+    # database is locked ต้องกันไว้ไม่ให้ endpoint นี้ 500 (pattern เดียวกับ /api/financials-qpl-report)
+    try:
+        finn = financials_store.get(BASE_DIR, sym, "finnomena_q")
+    except Exception:
+        finn = None
     if finn is None:
         try:
             fresh = financials_store.fetch_finnomena_quarterly(sym)
@@ -3604,7 +3623,10 @@ def get_financials_compare(symbol):
 
     # Yahoo รายไตรมาส — ครบทุกบรรทัดตรงตัวแต่สั้นแค่ไม่กี่ไตรมาสล่าสุด ใช้เสริมรายละเอียด
     # COGS/SG&A แยก/ต้นทุนการเงิน/ภาษี ให้ช่วงที่ SET detail ยังไปไม่ถึง
-    yq = financials_store.get(BASE_DIR, sym, "yahoo_q")
+    try:
+        yq = financials_store.get(BASE_DIR, sym, "yahoo_q")
+    except Exception:
+        yq = None
     if yq is None:
         try:
             fresh = financials_store.fetch_yahoo_quarterly(sym)
@@ -3626,7 +3648,10 @@ def get_financials_compare(symbol):
     if not finn and not yq and not set_series:
         return jsonify({"error": f"ไม่พบข้อมูลงบการเงินของ {sym}"}), 404
 
-    quarters = financials_store.compute_qpl_report(finn, yq, set_series=set_series)["quarters"]
+    try:
+        quarters = financials_store.compute_qpl_report(finn, yq, set_series=set_series)["quarters"]
+    except Exception:
+        quarters = None
     if not quarters:
         return jsonify({"error": f"ไม่พบข้อมูลงบการเงินของ {sym}"}), 404
 
@@ -3649,7 +3674,10 @@ def get_financials_compare(symbol):
     # ที่ไม่ null ก็ได้ค่าล่าสุดจริงเสมอ ไม่ต้อง sort เพิ่ม) — กรองเฉพาะ quarter=='Q9' (งวดรายปี
     # ตามธรรมเนียมเดียวกับจุดอื่นในโค้ดเบส) ไม่งั้นถ้าปีปัจจุบันยังไม่จบปี entries ตัวท้ายสุดจะเป็น
     # ไตรมาสกลางปี (Q1-Q3) ได้ค่า ROE/ROA/D-E รายไตรมาสมาแทนที่จะเป็นรายปีตามที่ตั้งใจ
-    hl = financials_store.get(BASE_DIR, sym, "set")
+    try:
+        hl = financials_store.get(BASE_DIR, sym, "set")
+    except Exception:
+        hl = None
     if hl is None:
         try:
             fresh = financials_store.fetch_set_full(sym)
@@ -4677,9 +4705,14 @@ def _financials_analytics_core(yahoo_only: bool):
         set_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=False)
         dr_symbols = financials_store.get_synced_symbols(BASE_DIR, "yahoo", is_dr=True)
         fin_sector_syms = factor_snapshot._financial_sector_symbols(BASE_DIR)
+        # pe_map มาจาก set_data.json (หุ้นไทยล้วน) — ห้ามส่งเข้า DR: symbol ที่ชนกัน (เช่น 'META'
+        # = META Corp ไทย vs Meta Platforms underlying ของ DR) จะได้ PEG จาก P/E บริษัทไทยที่ไม่
+        # เกี่ยวกัน ส่วนตัวที่ไม่ชนก็ได้ None อยู่แล้ว — ยังไม่มีแหล่ง P/E รายตัวสำหรับ DR
+        # (dr_cache.json ไม่มี field 'pe') PEG ฝั่ง DR จึงเป็น None ทั้งหมดจนกว่าจะมีแหล่ง
+        dr_pe_map: dict = {}
         return {
             "set": _compute_fin_analytics_for(set_symbols, False, pe_map, mktcap_map, yahoo_only=yahoo_only, fin_sector_syms=fin_sector_syms),
-            "dr": _compute_fin_analytics_for(dr_symbols, True, pe_map, dr_mktcap_map, yahoo_only=yahoo_only),
+            "dr": _compute_fin_analytics_for(dr_symbols, True, dr_pe_map, dr_mktcap_map, yahoo_only=yahoo_only),
         }
 
     # lock กันหลายแท็บ/request ที่มาชนตอน cache หมดอายุพร้อมกันคำนวณซ้ำซ้อนกัน (ดูคอมเมนต์
@@ -5948,6 +5981,9 @@ def _mirror_sym(mkt, sym):
     return sym
 
 
+_tearsheet_th_universe_cache: dict = {}
+
+
 def _tearsheet_universe_map(mkt):
     """คืน {symbol: entry} ของตลาดที่ tearsheet รองรับ — TH จาก set_data.json (ทุกหุ้น),
     US/HK จาก us_index_metrics.json/hk_index_metrics.json (เฉพาะสมาชิกดัชนีหลัก S&P500+
@@ -5956,13 +5992,23 @@ def _tearsheet_universe_map(mkt):
     field ชื่อเดียวกันทุกไฟล์ (ret_1d/rs_score/stage/price_history ฯลฯ) โค้ดข้างล่างเลยใช้ร่วมกันได้"""
     out = {}
     if mkt == "TH":
-        if os.path.exists(DATA_FILE):
-            try:
-                with open(DATA_FILE, encoding="utf-8") as f:
-                    for s in json.load(f).get("stocks", []):
-                        out[s["symbol"]] = s
-            except Exception:
-                pass
+        # set_data.json ~12MB — cache ตาม mtime กัน parse ซ้ำทุก hit ของ /api/financials-sankey-sector
+        # และ /api/financials-merged-report (path US/HK/JP) — dict อ่านอย่างเดียวใน call site เลย
+        # แชร์ instance เดียวได้ (pattern เดียวกับ _dh_th_universe_cache / index_metrics_common.load_local)
+        try:
+            mtime = os.path.getmtime(DATA_FILE)
+        except OSError:
+            return out
+        cached = _tearsheet_th_universe_cache.get("v")
+        if cached is not None and _tearsheet_th_universe_cache.get("mtime") == mtime:
+            return cached
+        try:
+            with open(DATA_FILE, encoding="utf-8") as f:
+                for s in json.load(f).get("stocks", []):
+                    out[s["symbol"]] = s
+            _tearsheet_th_universe_cache.update(mtime=mtime, v=out)
+        except Exception:
+            pass
     elif mkt == "US":
         from sources import us_index_metrics
         for s in us_index_metrics.load_local(BASE_DIR).get("stocks", []):
