@@ -12832,8 +12832,19 @@ function _tsDcfModelReset() {
   _tsDcfModelRecalc();
 }
 
+// คำเรียกสกุลเงินของงบ/ราคาใน Tearsheet ตามตลาด — งบ mirror US/HK/JP เป็น USD/HKD/JPY
+// (backend ไม่แปลงค่าเงิน — mkt_cap/price/forecast.revenue อยู่สกุลเดียวกันหมด) · ตลาด lite อื่น
+// (DR VN/SG/EU/…) ไม่รู้สกุลแน่ชัด คืน '' ให้ผู้เรียกใช้ label กลางๆ ("ล้าน" / "/หุ้น" เปล่าๆ)
+function _tsCurWord() {
+  return { TH: 'บาท', US: 'USD', HK: 'HKD', JP: 'JPY' }[_tsData?.market] || '';
+}
+// "ล้าน<หน่วย>" — ไทยเขียนติด ("ล้านบาท") · รหัสสกุลอังกฤษเว้นวรรค ("ล้าน USD") · lite → "ล้าน"
+function _tsMilUnit(cw) { return cw === 'บาท' ? 'ล้านบาท' : cw ? 'ล้าน ' + cw : 'ล้าน'; }
+
 function _tsDcfModelHtml(fc, dcf) {
   _tsDcfModelOverrides = { revenue: {}, ebit: {}, noplat: {}, da: {}, capex: {}, nwc: {} };
+  const cw = _tsCurWord();   // 'บาท' (TH) · 'USD'/'HKD'/'JPY' · '' (lite อื่น)
+  const munit = _tsMilUnit(cw);   // TH → "ล้านบาท", US/HK/JP → "ล้าน USD/…", lite → "ล้าน"
   const isTH = _tsData?.market === 'TH';
   const factsheetUrl = isTH
     ? `https://www.set.or.th/th/market/product/stock/quote/${(_tsData?.symbol || '').toLowerCase()}/factsheet` : null;
@@ -12914,10 +12925,10 @@ function _tsDcfModelHtml(fc, dcf) {
         </div>
         <div>
           <div style="font-size:10.5px;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">ขั้น 3 — Capital Structure</div>
-          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:6px">มูลค่าส่วนของผู้ถือหุ้น (E) ล้านบาท
+          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:6px">มูลค่าส่วนของผู้ถือหุ้น (E) ${munit}
             <input id="ts-dm-eq" type="number" step="1" value="${equityDefault.toFixed(0)}"
               class="scr-input" style="display:block;width:100%;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
-          <label style="font-size:11px;color:var(--text2);display:block">มูลค่าหนี้สินที่มีดอกเบี้ย (D) ล้านบาท
+          <label style="font-size:11px;color:var(--text2);display:block">มูลค่าหนี้สินที่มีดอกเบี้ย (D) ${munit}
             <input id="ts-dm-debt" type="number" step="1" value="${debtDefault.toFixed(0)}"
               class="scr-input" style="display:block;width:100%;margin-top:3px" oninput="_tsDcfModelRecalc()"></label>
           <div id="ts-dm-capstruct-out" style="font-size:11px;color:var(--text2);margin-top:8px"></div>
@@ -12952,6 +12963,9 @@ function _tsDcfModelRecalc() {
   const capBox = document.getElementById('ts-dm-capstruct-out');
   const waccBox = document.getElementById('ts-dm-wacc-out');
   if (!fc || !tblBox || !sumBox || !waccBox) return;
+  const cw = _tsCurWord();               // 'บาท' (TH) · 'USD'/'HKD'/'JPY' · '' (lite อื่น)
+  const munit = _tsMilUnit(cw);          // label หน่วยตาราง — ตรงกับ _tsDcfModelHtml
+  const perShare = cw ? cw + '/หุ้น' : '/หุ้น';
   const num = (id, dflt) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : dflt; };
   const g13 = num('ts-dm-g13', 5) / 100, g45 = num('ts-dm-g45', 3) / 100;
   const ebitM = num('ts-dm-ebitm', 10) / 100, tax = num('ts-dm-tax', 20) / 100;
@@ -13066,7 +13080,7 @@ function _tsDcfModelRecalc() {
     <th style="text-align:right">EBIT ✏️</th><th style="text-align:right">EBIT%</th><th style="text-align:right">NOPLAT ✏️</th>
     <th style="text-align:right">D&amp;A ✏️</th><th style="text-align:right">CapEx ✏️</th><th style="text-align:right">NWC ✏️</th>
     <th style="text-align:right">FCFF</th></tr></thead><tbody>${ttmRowHtml}${rowsHtml}</tbody></table></div>
-    <div style="font-size:10px;color:var(--text2);margin-top:4px">หน่วย: ล้านบาท/หน่วยเดียวกับ Market Cap · ✏️ = กดตัวเลขในช่องนั้นๆ เพื่อแก้เป็นค่าที่ตั้งเองรายปีได้ (เว้นว่างเพื่อกลับไปใช้สูตรจากช่อง % ด้านบน) — แก้ Revenue ปีไหน ปีถัดไปจะคำนวณต่อจากค่าที่แก้แล้ว, EBIT% เป็นอัตราส่วนคำนวณจาก EBIT/Revenue เสมอไม่มีช่องแก้ตรงๆ, TTM (ฐาน) เป็นข้อมูลจริงแก้ไม่ได้</div>`;
+    <div style="font-size:10px;color:var(--text2);margin-top:4px">หน่วย: ${munit} (หน่วยเดียวกับ Market Cap) · ✏️ = กดตัวเลขในช่องนั้นๆ เพื่อแก้เป็นค่าที่ตั้งเองรายปีได้ (เว้นว่างเพื่อกลับไปใช้สูตรจากช่อง % ด้านบน) — แก้ Revenue ปีไหน ปีถัดไปจะคำนวณต่อจากค่าที่แก้แล้ว, EBIT% เป็นอัตราส่วนคำนวณจาก EBIT/Revenue เสมอไม่มีช่องแก้ตรงๆ, TTM (ฐาน) เป็นข้อมูลจริงแก้ไม่ได้</div>`;
 
   const netCash = dcf.net_cash || 0, netDebt = -netCash;
   const ev = pvSum + pvTv;
@@ -13083,9 +13097,9 @@ function _tsDcfModelRecalc() {
       <div>Net Debt<br><b>${fmt(netDebt)}</b></div>
       <div>Market Cap (Equity)<br><b>${fmt(equityValue)}</b></div>
     </div>
-    <div style="font-size:20px;font-weight:800">${intrinsic != null ? intrinsic.toFixed(2) : '—'} บาท/หุ้น
+    <div style="font-size:20px;font-weight:800">${intrinsic != null ? intrinsic.toFixed(2) : '—'} ${perShare}
       ${upside != null ? `<span style="font-size:13px;font-weight:600;margin-left:6px;color:${upside > 0 ? 'var(--green)' : 'var(--red)'}">(${upside > 0 ? '+' : ''}${upside.toFixed(1)}%)</span>` : ''}</div>
-    <div style="font-size:10.5px;color:var(--text2)">ราคาปัจจุบัน ${price != null ? price.toFixed(2) : '—'} บาท · Intrinsic Price = Market Cap (Equity) ÷ จำนวนหุ้น (${shares != null ? (shares / 1e6).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'} ล้านหุ้น)</div>
+    <div style="font-size:10.5px;color:var(--text2)">ราคาปัจจุบัน ${price != null ? price.toFixed(2) : '—'}${cw ? ' ' + cw : ''} · Intrinsic Price = Market Cap (Equity) ÷ จำนวนหุ้น (${shares != null ? (shares / 1e6).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'} ล้านหุ้น)</div>
   </div>`;
 }
 
@@ -13309,21 +13323,26 @@ function _altNav(bvps, targetPb) {
   return bvps * targetPb;
 }
 
-// EV/Sales ปัจจุบัน = PS ratio ปรับด้วยสัดส่วน EV/MktCap (EV = MktCap − เงินสดสุทธิ) — ไม่ต้อง
-// รู้ยอดขายจริงเป็นตัวเงินก็คำนวณได้ เพราะ PS = MktCap/Sales อยู่แล้ว
-function _altEvSalesCurrent(ps, mktCap, netCash) {
-  if (ps == null || ps <= 0 || !mktCap) return null;
+// EV/Sales ปัจจุบัน = EV ÷ ยอดขาย (EV = MktCap − เงินสดสุทธิ)
+// ทางที่ถูก: ใช้ยอดขายจริง (salesActual = forecast.revenue งบ Yahoo ปีล่าสุด สกุลเดียวกับ MktCap)
+// fallback (ไม่มี forecast เช่น กลุ่มการเงิน): PS ratio ปรับด้วยสัดส่วน EV/MktCap — แต่ PS จาก
+// Finnomena เป็นค่า ณ "สิ้นไตรมาส" (live_scalable=false) ถ้าราคาขยับเยอะตั้งแต่ปิดงวด ค่าที่ได้จะ
+// เพี้ยนตามส่วนต่างราคา (mktCap วันนี้ ÷ PS สิ้นงวด = ยอดขายจริง × ราคาวันนี้/ราคาสิ้นงวด)
+function _altEvSalesCurrent(ps, mktCap, netCash, salesActual) {
+  if (!mktCap) return null;
   const ev = mktCap - (netCash || 0);
+  if (salesActual != null && salesActual > 0) return ev / salesActual;
+  if (ps == null || ps <= 0) return null;
   return ps * (ev / mktCap);
 }
 
-function _altEvSalesFair(ps, mktCap, netCash, price, targetMultiple) {
-  const evSalesCur = _altEvSalesCurrent(ps, mktCap, netCash);
+function _altEvSalesFair(ps, mktCap, netCash, price, targetMultiple, salesActual) {
+  const evSalesCur = _altEvSalesCurrent(ps, mktCap, netCash, salesActual);
   if (evSalesCur == null || evSalesCur <= 0 || targetMultiple == null || targetMultiple <= 0 || !price) return null;
   // ราคาแปรผันตรงกับ EV/Sales ที่ตั้งไว้ เทียบกับ EV/Sales ปัจจุบัน (Sales/shares คงที่)
   // แต่ net cash ไม่ได้แปรผันตามราคา — ปรับผ่าน EV แทนราคาตรงๆ ให้แม่นกว่า
   const shares = mktCap / price;
-  const sales = mktCap / ps;
+  const sales = (salesActual != null && salesActual > 0) ? salesActual : mktCap / ps;
   const impliedEv = targetMultiple * sales;
   return (impliedEv + (netCash || 0)) / shares;
 }
@@ -13392,7 +13411,14 @@ function _tsAltValHtml(d) {
             <input id="ts-alt-ddm-r" type="number" step="0.5" value="${vm.discount_rate_default ?? ''}"
               class="scr-input" style="display:block;width:90px;margin-top:3px" oninput="_tsAltValRecalc()"></label>
           <label style="font-size:11px;color:var(--text2)">โตปันผล %/ปี
-            <input id="ts-alt-ddm-g" type="number" step="0.5" value="${d.dividend?.cagr_5y ?? vm.terminal_growth_default ?? ''}"
+            <input id="ts-alt-ddm-g" type="number" step="0.5" value="${(() => {
+              // ค่าเริ่มต้น = min(CAGR ปันผล 5 ปี, terminal growth) — Gordon Growth ต้องมี g < r
+              // เสมอ ถ้าปล่อย CAGR อดีตดิบๆ (หุ้นปันผลไทยหลายตัว 8-40%) มันจะ ≥ r default (TH 9%)
+              // ทำให้การ์ดขึ้น error ทันทีตั้งแต่เปิด หรือถ้าใกล้ r พอดีจะพ่น fair value พุ่งเวอร์
+              const c = d.dividend?.cagr_5y, tg = vm.terminal_growth_default;
+              if (c == null) return tg ?? '';
+              return tg == null ? c : Math.min(c, tg);
+            })()}"
               class="scr-input" style="display:block;width:90px;margin-top:3px" oninput="_tsAltValRecalc()"></label>
         </div>
         <div id="ts-alt-ddm-out" style="margin-top:8px"></div>
@@ -13431,7 +13457,7 @@ function _tsAltValHtml(d) {
         <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">EV/Sales${_altTipIcon(ALT_VAL_TIPS.evs)}</div>
         <label style="font-size:11px;color:var(--text2)">Target EV/Sales × <span style="font-weight:400">(ค่าเริ่มต้น = ปัจจุบัน — ปรับเทียบเพื่อนร่วมกลุ่มเองจากหน้า "เทียบเพื่อน")</span>
           <input id="ts-alt-evs-target" type="number" step="0.1"
-            value="${(() => { const v = _altEvSalesCurrent(d.valuation?.ps?.value, d.dcf?.mkt_cap, d.dcf?.net_cash); return v != null ? v.toFixed(2) : ''; })()}"
+            value="${(() => { const v = _altEvSalesCurrent(d.valuation?.ps?.value, d.dcf?.mkt_cap, d.dcf?.net_cash, d.dcf?.forecast?.revenue); return v != null ? v.toFixed(2) : ''; })()}"
             class="scr-input" style="display:block;width:100px;margin-top:3px" oninput="_tsAltValRecalc()"></label>
         <div id="ts-alt-evs-out" style="margin-top:8px"></div>
       </div>
@@ -13561,9 +13587,10 @@ function _tsAltValRecalc() {
   const evsOut = document.getElementById('ts-alt-evs-out');
   if (evsOut) {
     const ps = d.valuation?.ps?.value, mktCap = d.dcf?.mkt_cap, netCash = d.dcf?.net_cash;
-    const evsCur = _altEvSalesCurrent(ps, mktCap, netCash);
+    const salesActual = d.dcf?.forecast?.revenue;
+    const evsCur = _altEvSalesCurrent(ps, mktCap, netCash, salesActual);
     const target = parseFloat(document.getElementById('ts-alt-evs-target')?.value);
-    const fair = _altEvSalesFair(ps, mktCap, netCash, price, Number.isFinite(target) ? target : null);
+    const fair = _altEvSalesFair(ps, mktCap, netCash, price, Number.isFinite(target) ? target : null, salesActual);
     if (fair == null || !price) {
       evsOut.innerHTML = `<div class="empty" style="padding:2px 0;font-size:11.5px">ข้อมูลไม่พอ (ต้องมี P/S และมูลค่าตลาด)</div>`;
     } else {
@@ -13591,10 +13618,13 @@ function _tsAltValRecalc() {
   }
 }
 
-// hk_index_metrics.json เก็บ symbol แบบ "0700.HK" (ให้ chart/header ใช้ตรงๆ) แต่ endpoint
-// อื่น (news/filings/financials) ที่ผูกกับ namespace mirror ('FINN:HK:0700') ต้องการรหัสดิบ
-// ไม่มี suffix เสมอ — ตัดออกก่อนทุกจุดที่ข้ามไปหน้าอื่น (TH/US ไม่มี .HK อยู่แล้ว ตัดแล้วเหมือนเดิม)
-function _tsRawSym(sym) { return (sym || '').replace(/\.HK$/i, ''); }
+// hk_index_metrics.json เก็บ symbol แบบ "0700.HK" / jp_index_metrics.json แบบ "7203.T"
+// (ให้ chart/header ใช้ตรงๆ) แต่ endpoint อื่น (news/filings/financials) ที่ผูกกับ namespace
+// mirror ('FINN:HK:0700' / 'FINN:JP:7203') ต้องการรหัสดิบไม่มี suffix เสมอ — ตัดออกก่อนทุกจุดที่
+// ข้ามไปหน้าอื่น (TH/US ไม่มี suffix อยู่แล้ว ตัดแล้วเหมือนเดิม) · ต้องตัด .T ด้วย ไม่งั้น
+// _news_resolve_yf ฝั่ง backend เติม ".T" ซ้ำได้ "7203.T.T" หาข่าวหุ้นญี่ปุ่นไม่เจอ และ deep-link
+// #fin/dr/JP:7203.T ไม่ตรง convention (_openMirrorStock ใช้ /\.(HK|T)$/i)
+function _tsRawSym(sym) { return (sym || '').replace(/\.(HK|T)$/i, ''); }
 
 async function _tsLoadNews(sym) {
   const el = document.getElementById('ts-news');
@@ -13945,19 +13975,41 @@ async function loadInsOwnership() {
   }
 }
 
+// ข้อมูล insider (แบบ 59) + major-changes (แบบ 246) 180 วันเต็ม "ทั้งกระดาน" — endpoint ทั้งคู่
+// คืนทุกหุ้น (~4,400 แถว) แล้วกรองตามหุ้นฝั่ง client · Tearsheet (_tsLoadInsider) กับ popup หุ้น
+// (loadInsiderForStock) เดิมต่างคนต่างยิงตารางเต็มซ้ำทุกครั้งที่เปิดหุ้น — รวมเป็น loader เดียว
+// cache 10 นาที + กัน request ซ้อน (เปิดหลายหุ้นติดๆ กัน / Tearsheet+popup พร้อมกัน)
+let _insStockCache = null;      // { ts, r59:[...], r246:[...] }
+let _insStockInflight = null;
+const _INS_STOCK_TTL = 600000;
+
+async function _loadInsiderStockData() {
+  if (_insStockCache && Date.now() - _insStockCache.ts < _INS_STOCK_TTL) return _insStockCache;
+  if (_insStockInflight) return _insStockInflight;
+  const timeoutMs = IS_STATIC ? 20000 : 200000;   // IS_STATIC ไม่มี live sync ให้รอ
+  _insStockInflight = (async () => {
+    try {
+      const [r59res, r246res] = await Promise.all([
+        _fetchTimeout('/api/insider-trades?days=180', timeoutMs).then(r => r.json()),
+        _fetchTimeout('/api/major-changes?days=180', timeoutMs).then(r => r.json()),
+      ]);
+      _insStockCache = { ts: Date.now(), r59: r59res.records || [], r246: r246res.records || [] };
+      return _insStockCache;
+    } finally {
+      _insStockInflight = null;
+    }
+  })();
+  return _insStockInflight;
+}
+
 async function _tsLoadInsider(sym) {
   const el = document.getElementById('ts-insider');
   if (!el) return;
   try {
-    // ดู fetchInsiderData ด้านบน — IS_STATIC ไม่มี live sync ให้รอ ต้อง timeout สั้น
-    const _timeoutMs = IS_STATIC ? 20000 : 200000;
-    const [r59res, r246res] = await Promise.all([
-      _fetchTimeout('/api/insider-trades?days=180', _timeoutMs).then(r => r.json()),
-      _fetchTimeout('/api/major-changes?days=180', _timeoutMs).then(r => r.json()),
-    ]);
+    const data = await _loadInsiderStockData();
     if (_tsData?.symbol !== sym) return;
-    const r59 = (r59res.records || []).filter(x => x.symbol === sym);
-    const r246 = (r246res.records || []).filter(x => x.symbol === sym);
+    const r59 = data.r59.filter(x => x.symbol === sym);
+    const r246 = data.r246.filter(x => x.symbol === sym);
     const all = [...r59.map(x => ({...x, src: 'r59'})), ...r246.map(x => ({...x, src: 'r246'}))]
                   .sort((a, b) => (b.trade_date || '').localeCompare(a.trade_date || ''));
     if (!all.length) { el.innerHTML = '<div class="empty" style="padding:8px 0;font-size:11px">ไม่มีรายการ 180 วัน</div>'; return; }
@@ -30314,6 +30366,7 @@ async function syncInsiderData() {
     const r = await _fetchTimeout('/api/insider-sync', 200000, 'หมดเวลารอ sync ข้อมูล SEC', { method: 'POST' }).then(r => r.json());
     if (!r.ok) throw new Error(r.error || 'sync ไม่สำเร็จ');
     _insData = null;
+    _insStockCache = null;   // การ์ด insider ใน Tearsheet/popup หุ้นใช้ cache แยก — ล้างด้วย
     // ต่อท้ายผลสรุป sync เฉพาะตอน refetch สำเร็จจริง — ไม่งั้น ins-status จะกลายเป็น
     // "✗ โหลดข้อมูลไม่สำเร็จ · ✓ sync ดึงใหม่..." ที่ขัดกันเอง
     const okRefetch = await fetchInsiderData();
@@ -30527,15 +30580,10 @@ async function loadInsiderForStock(symbol) {
   el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:4px 0">กำลังโหลด insider...</div>';
 
   try {
-    // ดู fetchInsiderData ด้านบน — IS_STATIC ไม่มี live sync ให้รอ ต้อง timeout สั้น
-    const _timeoutMs = IS_STATIC ? 20000 : 200000;
-    const [r59res, r246res] = await Promise.all([
-      _fetchTimeout('/api/insider-trades?days=180', _timeoutMs).then(r => r.json()),
-      _fetchTimeout('/api/major-changes?days=180', _timeoutMs).then(r => r.json()),
-    ]);
+    const data = await _loadInsiderStockData();
     const sym = symbol.toUpperCase();
-    const r59  = (r59res.records  || []).filter(x => x.symbol === sym);
-    const r246 = (r246res.records || []).filter(x => x.symbol === sym);
+    const r59  = data.r59.filter(x => x.symbol === sym);
+    const r246 = data.r246.filter(x => x.symbol === sym);
     const all  = [...r59.map(x=>({...x,src:'r59'})), ...r246.map(x=>({...x,src:'r246'}))]
                    .sort((a,b) => (b.trade_date||'').localeCompare(a.trade_date||''));
 

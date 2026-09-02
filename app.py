@@ -7182,9 +7182,14 @@ def stock_news(symbol):
     ex = ThreadPoolExecutor(max_workers=3)
     try:
         futs = {name: ex.submit(fn) for name, fn in jobs.items()}
+        # deadline ร่วม 30 วิ สำหรับทุกแหล่ง (ไม่ใช่ 30 วิ/แหล่ง) — เดิม f.result(timeout=30)
+        # ต่อ future ทีละตัว ถ้า yahoo ค้าง 30 วิ แล้ว google ค้างอีก 30 set อีก 30 รวมเป็น ~90 วิ
+        # เกิน _fetchTimeout ฝั่ง frontend (35 วิ) หน้าเว็บขึ้น "โหลดข่าวไม่สำเร็จ" ทั้งที่ backend
+        # ยังวิ่งอยู่ · ตอนนี้รวมทุกแหล่งไม่เกิน ~30 วิ แหล่งที่ยังไม่เสร็จนับเป็น error ของแหล่งนั้น
+        deadline = time.monotonic() + 30
         for name, f in futs.items():
             try:
-                rows.extend(f.result(timeout=30))
+                rows.extend(f.result(timeout=max(0.0, deadline - time.monotonic())))
             except Exception as e:
                 errors[name] = str(e)[:120]
     finally:
@@ -11061,7 +11066,7 @@ def insider_trades():
     """ผู้บริหารซื้อขายหุ้น (แบบ 59) — อ่านจากฐานข้อมูลสะสม (sec_filings.db)
     ไม่ยิง SEC สดทุกครั้งอีกต่อไป ข้อมูลใหม่เข้ามาจาก sync_insider_trades()
     (เรียกตอน Quick Update / auto-update cron) เท่านั้น"""
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timedelta as _td
 
     try:
         days = int(request.args.get("days", 30))
@@ -11091,7 +11096,7 @@ def insider_trades():
     return jsonify({
         "records": records,
         "days": days,
-        "from": (_dt.now() - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d"),
+        "from": (_dt.now() - _td(days=days)).strftime("%Y-%m-%d"),
         "to":   _dt.now().strftime("%Y-%m-%d"),
         "fetched_at": last_synced or "-",
     })
@@ -11100,7 +11105,7 @@ def insider_trades():
 @app.route("/api/major-changes")
 def major_changes():
     """ผู้ถือหุ้นรายใหญ่เปลี่ยนแปลง (แบบ 246-2) — อ่านจากฐานข้อมูลสะสม (sec_filings.db)"""
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timedelta as _td
 
     try:
         days = int(request.args.get("days", 30))
@@ -11127,7 +11132,7 @@ def major_changes():
     return jsonify({
         "records": records,
         "days": days,
-        "from": (_dt.now() - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d"),
+        "from": (_dt.now() - _td(days=days)).strftime("%Y-%m-%d"),
         "to":   _dt.now().strftime("%Y-%m-%d"),
         "fetched_at": last_synced or "-",
     })
