@@ -1440,13 +1440,20 @@ function setRotTimeframe(tf, btn) {
   if (sub)    sub.textContent    = isShort
     ? 'แกน X = 1M Return (Trend) · แกน Y = 1W Return (Momentum) · ลูกศรบอกทิศ 1–4 สัปดาห์ล่าสุด'
     : 'แกน X = 3M Return (Trend) · แกน Y = 1M Return (Momentum)';
-  renderRotation();
+  // เฉพาะ Scatter + Playbook เท่านั้นที่ผูกกับ timeframe — เดิมเรียก renderRotation() เต็ม
+  // รื้อ Appendix (ไล่ DATA.stocks ~1200 ตัว สร้างชิปหลายร้อย node), Heatmap/Multi-Timeframe
+  // ใหม่ทั้งตาราง และดึง rotation-alerts ซ้ำ ทั้งที่ผลลัพธ์เหมือนเดิมเป๊ะ → jank ทุกครั้งที่กดสลับ
+  if (!DATA) return;
+  const data = rotView === 'sector' ? DATA.sectors : DATA.industries;
+  drawRotationScatter([...data].sort((a, b) => (b.ret_1m || 0) - (a.ret_1m || 0)));
+  renderRotPlaybook(data);
 }
 
 // ============================================================
 // ROTATION QUADRANT ALERTS — sector เปลี่ยน quadrant (ยืนยัน 3 วันทำการ)
 // ============================================================
 let _rotAlertsData = null;
+let _rotAlertsInflight = null;   // กัน fetch ซ้อนตอนสลับ Sector/Industry/Long/Short ระหว่างรอ
 
 const _QUAD_COLOR = { Leading: '#3fb950', Improving: '#58a6ff',
                       Weakening: '#e3b341', Lagging: '#f85149' };
@@ -1455,14 +1462,31 @@ function _quadSpan(q) {
   return `<span style="color:${_QUAD_COLOR[q] || 'var(--text2)'};font-weight:700">${q}</span>`;
 }
 
+function _fetchRotAlerts() {
+  if (!_rotAlertsInflight) {
+    _rotAlertsInflight = (async () => {
+      try {
+        const r = await _fetchTimeout('/api/rotation-alerts', 15000);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        // payload จริงมี key rules เสมอ — proxy/error ที่คืน {} หรือ {error:...} ต้องไม่ถูก
+        // cache ไว้ทั้ง session (เดิมไม่เช็ค r.ok + cache ทุกกรณี → พาเนลค้างซ่อน/ค้างชุดเก่า
+        // จนกว่าจะ Quick Update ในแอป แม้ server กลับมาปกติแล้ว)
+        if (!d || typeof d !== 'object' || !d.rules) throw new Error((d && d.error) || 'bad payload');
+        return d;
+      } finally {
+        _rotAlertsInflight = null;
+      }
+    })();
+  }
+  return _rotAlertsInflight;
+}
+
 async function renderRotAlerts() {
   const el = document.getElementById('rot-alerts');
   if (!el) return;
   try {
-    if (!_rotAlertsData) {
-      const r = await _fetchTimeout('/api/rotation-alerts', 15000);
-      _rotAlertsData = await r.json();
-    }
+    if (!_rotAlertsData) _rotAlertsData = await _fetchRotAlerts();
     const d = _rotAlertsData;
     const trans   = (d.transitions || []).slice(0, 8);
     const pending = (d.pending || []);  // โชว์ตั้งแต่วันแรก (1/3) — early warning เร็วสุดโดยไม่แตะตรรกะ
@@ -1758,29 +1782,36 @@ function renderRotAppendix() {
     groups[g].push(s);
   });
 
-  // เรียง group ตามค่าเฉลี่ย RS ของหุ้นในกลุ่ม (สูงสุดก่อน)
-  const sorted = Object.entries(groups).sort((a, b) => {
-    const avgRs = arr => arr.reduce((s, x) => s + (x.rs_score || 0), 0) / arr.length;
-    return avgRs(b[1]) - avgRs(a[1]);
-  });
+  // ค่าเฉลี่ย RS ของกลุ่ม — ตัดหุ้นที่ยังไม่ถูกจัดอันดับ (rs_score == null) ออก ให้ตรงกับ
+  // avg_rs ที่ backend (summarize_groups) ส่งมา และที่ Scatter/Multi-Timeframe/Playbook ใช้
+  // เดิมหาร stocks.length ทั้งก้อนโดยนับ null เป็น 0 → ค่าต่ำกว่าจริงและขัดกับตัวเลขอีก 3 จุด
+  const _grpAvgRs = arr => {
+    const r = arr.filter(x => x.rs_score != null);
+    return r.length ? r.reduce((s, x) => s + x.rs_score, 0) / r.length : null;
+  };
+
+  // เรียง group ตามค่าเฉลี่ย RS ของหุ้นในกลุ่ม (สูงสุดก่อน · กลุ่มไม่มีหุ้นถูกจัดอันดับไว้ท้าย)
+  const sorted = Object.entries(groups).sort((a, b) =>
+    (_grpAvgRs(b[1]) ?? -1) - (_grpAvgRs(a[1]) ?? -1));
 
   const rsCol = v => v >= 80 ? '#3fb950' : v >= 60 ? '#e3b341' : '#8b949e';
   const retCol = v => v > 0 ? '#3fb950' : v < 0 ? '#f85149' : '#8b949e';
 
   const cards = sorted.map(([name, stocks]) => {
     // เรียงหุ้นใน group ตาม RS สูงสุดก่อน
-    const sorted_stocks = [...stocks].sort((a, b) => (b.rs_score || 0) - (a.rs_score || 0));
-    const avgRs = Math.round(stocks.reduce((s, x) => s + (x.rs_score || 0), 0) / stocks.length);
+    const sorted_stocks = [...stocks].sort((a, b) => (b.rs_score ?? -1) - (a.rs_score ?? -1));
+    const avgRsNum = _grpAvgRs(stocks);
+    const avgRs = avgRsNum != null ? Math.round(avgRsNum) : null;
     const ret1m = stocks.filter(s => s.ret_1m != null);
     const avgRet1m = ret1m.length ? ret1m.reduce((s, x) => s + x.ret_1m, 0) / ret1m.length : null;
 
     const chips = sorted_stocks.map(s => {
-      const rs = s.rs_score || 0;
+      const rs = s.rs_score;   // null = ยังไม่ถูกจัดอันดับ (นับเป็นชิปเทา ไม่ใช่ RS 0)
       const bg = rs >= 80 ? 'rgba(63,185,80,0.15)' : rs >= 60 ? 'rgba(227,179,65,0.12)' : 'rgba(139,148,158,0.1)';
       const border = rs >= 80 ? 'rgba(63,185,80,0.35)' : rs >= 60 ? 'rgba(227,179,65,0.3)' : 'rgba(139,148,158,0.2)';
       const ret = s.ret_1d != null ? `${s.ret_1d > 0 ? '+' : ''}${s.ret_1d.toFixed(2)}%` : '';
       const retC = s.ret_1d != null ? retCol(s.ret_1d) : '#8b949e';
-      return `<span title="${s.symbol} · RS ${rs} · 1M ${s.ret_1m != null ? (s.ret_1m > 0 ? '+' : '') + s.ret_1m.toFixed(2) + '%' : '—'} · ราคา ${s.price || '—'}"
+      return `<span title="${s.symbol} · RS ${rs ?? '—'} · 1M ${s.ret_1m != null ? (s.ret_1m > 0 ? '+' : '') + s.ret_1m.toFixed(2) + '%' : '—'} · ราคา ${s.price || '—'}"
         onclick="openChartModal('${s.symbol}')"
         style="display:inline-flex;align-items:center;gap:3px;background:${bg};border:1px solid ${border};
                border-radius:4px;padding:2px 6px;font-size:10px;cursor:pointer;white-space:nowrap;
@@ -1802,7 +1833,7 @@ function renderRotAppendix() {
           <span style="font-size:12px;font-weight:700;color:#c8d0dc;flex:1">${name}</span>
           <span style="font-size:10px;color:var(--text2)">${stocks.length} หุ้น</span>
           ${avgRetStr}
-          <span style="font-size:10px;color:${rsCol(avgRs)};font-weight:600">RS ${avgRs}</span>
+          <span style="font-size:10px;color:${rsCol(avgRs)};font-weight:600">RS ${avgRs ?? '—'}</span>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:0">${chips}</div>
       </div>`;
@@ -1826,7 +1857,10 @@ function rotHeatSortBy(col) {
 }
 
 function renderRotHeat() {
-  const data = rotView === 'sector' ? DATA.sectors : DATA.industries;
+  _ensureIdxDataLoaded(() => { if (_curRotTab === 'heat') renderRotHeat(); });
+  // ใช้ดัชนีถ่วงน้ำหนัก market-cap จริงเหมือนตาราง Multi-Timeframe ที่อยู่คู่กันใน grid-2 —
+  // เดิม heat อ่านค่าเฉลี่ยหุ้นดิบ ทำให้เลข 1W/1M/3M/6M/1Y ของกลุ่มเดียวกันไม่ตรงกันสองพาเนล
+  const data = (rotView === 'sector' ? DATA.sectors : DATA.industries).map(_sectorWithIdxOverride);
   const periods = ['ret_1w','ret_1m','ret_3m','ret_6m','ret_1y'];
   const labels  = ['1W','1M','3M','6M','1Y'];
   const sorted = [...data].sort((a,b) => {
@@ -1847,7 +1881,9 @@ function renderRotHeat() {
 
   function th(col, label, alignLeft) {
     const active = _rotHeatSortCol === col;
-    const arrow  = active ? (_rotHeatSortDir === 1 ? '▼' : '▲') : '';
+    // ลูกศรสะท้อนทิศเรียงจริง: คอลัมน์ชื่อ (localeCompare) dir=1 คือ A→Z (▲) · ตัวเลข dir=1 คือ มาก→น้อย (▼)
+    const asc    = col === 'name' ? _rotHeatSortDir === 1 : _rotHeatSortDir === -1;
+    const arrow  = active ? (asc ? '▲' : '▼') : '';
     return `<th style="text-align:${alignLeft?'left':'center'};padding:4px 6px;color:var(--text2);font-weight:600;cursor:pointer" onclick="rotHeatSortBy('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
   }
 
@@ -1893,7 +1929,9 @@ function renderRotRVOL() {
 
   function th(col, label, extraAttr) {
     const active = _rotRvolSortCol === col;
-    const arrow  = active ? (_rotRvolSortDir === 1 ? '▼' : '▲') : '';
+    // ลูกศรสะท้อนทิศเรียงจริง: คอลัมน์ข้อความ (symbol/sector) dir=1 คือ A→Z (▲) · ตัวเลข dir=1 คือ มาก→น้อย (▼)
+    const asc    = _rvolStr.has(col) ? _rotRvolSortDir === 1 : _rotRvolSortDir === -1;
+    const arrow  = active ? (asc ? '▲' : '▼') : '';
     return `<th style="cursor:pointer" ${extraAttr||''} onclick="rotRvolSortBy('${col}')">${label}<span class="sort-ind${active?' on':''}">${arrow}</span></th>`;
   }
 

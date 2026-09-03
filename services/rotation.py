@@ -49,27 +49,44 @@ def quadrant_of(ret_3m, ret_1m, dead_zone=DEAD_ZONE_PCT):
     return "Lagging"
 
 
-def _advance(entry, quad, date):
-    """เดิน state machine หนึ่งวัน — คืน (entry ใหม่, transition หรือ None)"""
+def _pending_expired(pending, as_of):
+    """pending ที่ last_date ห่างจาก as_of เกิน PENDING_STALE_DAYS วันปฏิทิน = ถือว่าขาดช่วง
+    (ค้างใน dead zone มานาน ไม่มีสัญญาณต่อ) — ควรเริ่มนับใหม่แทนการนับต่อ"""
+    last = pending.get("last_date") or pending.get("first_date")
+    if not last:
+        return False
+    try:
+        return (date.fromisoformat(as_of) - date.fromisoformat(last)).days > PENDING_STALE_DAYS
+    except Exception:
+        return False
+
+
+def _advance(entry, quad, as_of):
+    """เดิน state machine หนึ่งวัน — คืน (entry ใหม่, transition หรือ None)
+    (param ชื่อ as_of ไม่ใช่ date เพื่อไม่ให้บัง `from datetime import date` ที่ module ใช้)"""
     if quad is None:
         return entry, None                     # วันไม่มีสัญญาณ — สถานะคงเดิม
     if entry is None:
-        return {"confirmed": quad, "since": date, "pending": None}, None  # seed เงียบ
+        return {"confirmed": quad, "since": as_of, "pending": None}, None  # seed เงียบ
     if quad == entry["confirmed"]:
         entry["pending"] = None                # กลับ quadrant เดิม — ล้มการนับ
         return entry, None
 
     p = entry.get("pending")
-    if p and p["quadrant"] == quad:
+    # นับต่อเฉพาะเมื่อ pending เดิม quadrant เดียวกัน "และ" ไม่ได้เงียบค้างเกิน
+    # PENDING_STALE_DAYS — ไม่งั้นวันในกลุ่มเดียวกันที่โผล่ห่างกันเป็นสัปดาห์ (dead zone
+    # คั่นกลางยาว) จะถูกนับรวมเป็น "ยืนยัน 3 วันทำการติดกัน" ทั้งที่กินเวลาจริงเป็นเดือน
+    # (สอดคล้องกับ pending_of ที่ซ่อน pending แบบนี้จาก UI อยู่แล้ว)
+    if p and p["quadrant"] == quad and not _pending_expired(p, as_of):
         p["days"] += 1
-        p["last_date"] = date
-    else:                                      # เริ่มนับใหม่ (quadrant ใหม่/สลับตัว)
-        p = {"quadrant": quad, "days": 1, "first_date": date, "last_date": date}
+        p["last_date"] = as_of
+    else:                                      # เริ่มนับใหม่ (quadrant ใหม่/สลับตัว/ค้างนานเกิน)
+        p = {"quadrant": quad, "days": 1, "first_date": as_of, "last_date": as_of}
     entry["pending"] = p
 
     if p["days"] >= CONFIRM_DAYS:
         transition = {"from": entry["confirmed"], "to": quad,
-                      "date": date, "started": p["first_date"]}
+                      "date": as_of, "started": p["first_date"]}
         return {"confirmed": quad, "since": p["first_date"], "pending": None}, transition
     return entry, None
 
