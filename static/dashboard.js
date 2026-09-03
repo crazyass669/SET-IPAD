@@ -425,7 +425,7 @@ async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = nul
         // หน้า "หุ้น US/HK", Heatmap, Rotation จะยังโชว์ข้อมูลเก่าจนกว่าจะ F5 เอง
         _usData = null; _usSectorRanks = {}; _usBreadthCacheByRange = {};
         _hkData = null; _hkSectorRanks = {}; _hkBreadthCacheByRange = {};
-        _jpData = null; _jpSectorRanks = null; _jpBreadthCacheByRange = {};
+        _jpData = null; _jpSectorRanks = null; _jpBreadthCacheByRange = {}; _jpBreadthEpoch++;
         _hmData = {}; _hkHmData = {}; _jpHmData = null;
         loadData();
         // if already on a data page, reload it immediately
@@ -18852,6 +18852,9 @@ function loadJpStocksPage() {
         if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">ยังไม่มีข้อมูล — กดปุ่ม <b>📈 JP Index Max</b> หรือ <b>⚡ Quick Update</b> เพื่อดึงราคาและคำนวณ metrics</td></tr>`;
         return;
       }
+      // กัน null entry ใน jp_index_metrics.json (JSON เพี้ยน) ทำให้ s.sector/s.symbol throw
+      // ทั้งหน้า — hardening แบบเดียวกับ loadHkStocksPage
+      if (Array.isArray(d.stocks)) d.stocks = d.stocks.filter(s => s && typeof s === 'object');
       _jpData = d;
       _rebuildJpSectorFilter();
       renderJpTable();
@@ -18869,7 +18872,7 @@ function _rebuildJpSectorFilter() {
   const sel = document.getElementById('jp-sector-filter');
   if (!sel) return;
   const cur = sel.value;
-  sel.innerHTML = sectors.map(s => `<option value="${s}">${s === 'ALL' ? 'ทุก Sector' : s}</option>`).join('');
+  sel.innerHTML = sectors.map(s => `<option value="${_escHtml(s)}">${s === 'ALL' ? 'ทุก Sector' : _escHtml(s)}</option>`).join('');
   sel.value = sectors.includes(cur) ? cur : 'ALL';
   _jpSector = sel.value;
 }
@@ -18938,7 +18941,7 @@ function renderJpTable() {
     return `<tr>
       <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score ?? '-'}</span></td>
       <td><strong class="sym-link" onclick="openJpChartModal('${s.symbol}')">${s.symbol}</strong>${_jpTvLink(s.symbol)}</td>
-      <td style="font-size:11px;color:var(--text2)">${s.sector || '—'}</td>
+      <td style="font-size:11px;color:var(--text2)">${s.sector ? _escHtml(s.sector) : '—'}</td>
       <td class="r">${s.price != null ? s.price.toFixed(1) : '—'}</td>
       <td class="r">${pct(s.ret_1d)}</td>
       <td class="r">${pct(s.ret_1w)}</td>
@@ -18991,6 +18994,9 @@ let _jpBreadthData = null;
 let _jpBreadthRange = '1y';
 let _jpBreadthCacheByRange = {};
 let _jpBreadthLoading = false;
+// bump เมื่อ cache ถูกล้าง (Quick Update / JP Index Max เสร็จ) — response ที่ยิงค้างอยู่
+// ก่อนล้างจะเช็ค epoch ไม่ตรงแล้วทิ้ง ไม่เขียนข้อมูลเก่าทับ cache ที่เพิ่งล้าง
+let _jpBreadthEpoch = 0;
 
 function setJpBreadthRange(range, btn) {
   if (_jpBreadthRange === range) return;
@@ -19002,6 +19008,7 @@ function setJpBreadthRange(range, btn) {
 
 async function loadJpBreadthChart() {
   const rng = _jpBreadthRange;
+  const epoch = _jpBreadthEpoch;
   const cached = _jpBreadthCacheByRange[rng];
   if (cached) { _jpBreadthData = cached; drawJpBreadthChart(); return; }
   if (_jpBreadthLoading) return;
@@ -19017,6 +19024,8 @@ async function loadJpBreadthChart() {
       'หมดเวลารอ Market Breadth หุ้น JP (เกิน 30 วิ) — ลองใหม่อีกครั้ง');
     const d = await r.json();
     if (d.error) throw new Error(d.error);
+    // cache ถูกล้างระหว่างรอ response (Quick Update/JP Index Max เสร็จ) — ข้อมูลนี้เก่าแล้ว ทิ้ง
+    if (epoch !== _jpBreadthEpoch) return;
     _jpBreadthCacheByRange[rng] = d;
     if (rng === _jpBreadthRange) {
       _jpBreadthData = d;
@@ -19029,7 +19038,7 @@ async function loadJpBreadthChart() {
     });
   } finally {
     _jpBreadthLoading = false;
-    if (_jpBreadthRange !== rng && !_jpBreadthCacheByRange[_jpBreadthRange]) loadJpBreadthChart();
+    if (epoch === _jpBreadthEpoch && _jpBreadthRange !== rng && !_jpBreadthCacheByRange[_jpBreadthRange]) loadJpBreadthChart();
   }
 }
 
@@ -19089,9 +19098,9 @@ function renderJpSectorTable() {
   const tbody = document.getElementById('jp-sectors-tbody');
   if (!tbody) return;
   tbody.innerHTML = rows.map((s, i) => `
-    <tr style="cursor:pointer" onclick="_openJpSector('${String(s.name || 'Unknown').replace(/'/g,"\\'")}')">
+    <tr style="cursor:pointer" onclick="_openJpSector('${_escJsAttr(s.name || 'Unknown')}')">
       <td class="text2">${i + 1}</td>
-      <td><strong>${s.name || 'Unknown'}</strong></td>
+      <td><strong>${_escHtml(s.name || 'Unknown')}</strong></td>
       <td class="r text2">${s.count}</td>
       <td class="r"><span class="${rsColor(s.avg_rs)}" style="font-weight:700">${s.avg_rs ?? '—'}</span></td>
       <td class="r">${pct(s.ret_1d)}</td>

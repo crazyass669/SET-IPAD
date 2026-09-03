@@ -51,7 +51,12 @@ _SECTION_RE = re.compile(r'==\s*構成銘柄一覧\s*==\n(.*?)\n==[^=]', re.DOTA
 _SUBHEAD_RE = re.compile(r'^===\s*(.+?)（\d+銘柄）\s*===$')
 _ROW_RE = re.compile(r'^\|([0-9A-Za-z]{3,6})\|\|\[\[([^\]]+)\]\]')
 
-_SECTOR_JUNK_RE = re.compile(r'[\[\]{}|]')
+# นอกจาก wiki markup ([[ ]] {{ }} |) ยังกัน < > " ' = ด้วย — เหมือน
+# sources/us_index_membership.py::_SECTOR_JUNK_RE (ดูคอมเมนต์ที่นั่น): ชื่อ sector จริง
+# ไม่มีตัวอักษรพวกนี้ ปล่อยผ่านทำให้ header ที่ถูก vandalize บน ja.wikipedia (เช่น
+# "=== Tech<svg onload=...>（5銘柄） ===") หลุดเข้า jp_index_membership.json / jp_index_metrics.json
+# แล้ว render เป็น HTML สดในหน้า "หุ้น JP"
+_SECTOR_JUNK_RE = re.compile(r'''[\[\]{}|<>"'=]''')
 
 
 def _looks_like_sector(s):

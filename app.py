@@ -3020,7 +3020,8 @@ def jp_sector_ranks():
     from sources import jp_index_metrics
     from core.metrics import summarize_groups
     try:
-        stocks = [s for s in jp_index_metrics.load_local(BASE_DIR).get("stocks", []) if s.get("in_nikkei225")]
+        stocks = [s for s in jp_index_metrics.load_local(BASE_DIR).get("stocks", [])
+                  if isinstance(s, dict) and s.get("in_nikkei225")]
         return jsonify({"sectors": summarize_groups(stocks, "sector")})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -11347,16 +11348,10 @@ def _run_index_drift_checks():
     if _stale("HK"):
         _check_wiki_index("HK", hk_index_membership, "HK")
     if _stale("JP"):
-        try:
-            from sources import jp_index_membership
-            result, _live = jp_index_membership.diff_membership(BASE_DIR)
-            new_n = sum(len(v) for v in result["new"].values())
-            rem_n = sum(len(v) for v in result["removed"].values())
-            new_sample = sorted({s for lst in result["new"].values() for s in lst})
-            rem_sample = sorted({s for lst in result["removed"].values() for s in lst})
-            index_drift.record_check(BASE_DIR, "JP", new_n, rem_n, new_sample, rem_sample)
-        except Exception as e:
-            index_drift.record_check(BASE_DIR, "JP", 0, 0, error=str(e)[:200])
+        # jp_index_membership.diff_membership รับ mirror_jp= เหมือน US/HK — reuse _check_wiki_index
+        # ตัวเดียวกัน (ได้ mirror_gap ติดมาด้วย) ไม่ต้องเขียนลูปนับซ้ำ
+        from sources import jp_index_membership
+        _check_wiki_index("JP", jp_index_membership, "JP")
 
 
 def _run_quick():
