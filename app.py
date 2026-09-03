@@ -405,6 +405,13 @@ def _save_etf_cache_to_file(result):
     except Exception as e:
         print(f"[ETF] Failed to save cache: {e}")
 
+# read-modify-write etf_known_symbols.json เกิดจาก 2 path พร้อมกันได้: (1) background
+# rebuild thread เรียก _check_etf_new_listings (2) request thread เรียก
+# /api/etf-new-listings/ack — ถ้าไม่ล็อก last-writer-wins อาจทำ known set หด/badge เด้ง
+# กลับหลัง ack ไปแล้ว
+_etf_new_listings_lock = threading.Lock()
+
+
 def _check_etf_new_listings(stocks):
     """เทียบ symbol ที่เพิ่งดึงมา (ETF ไม่มี static list ให้ curate แบบ DR — ดึงสดจาก
     SET ทุกรอบ rebuild อยู่แล้ว) กับ known set ที่บันทึกไว้ในไฟล์ — ตัวใหม่ที่ไม่เคยเห็น
@@ -413,31 +420,39 @@ def _check_etf_new_listings(stocks):
     กันหายตอน restart server ครั้งแรกที่ไม่มีไฟล์เลย (เพิ่ง deploy ฟีเจอร์นี้) ไม่ถือว่า
     ทุกตัวเป็น "ใหม่" ทั้งหมด (กัน badge ระเบิดเทียบกับ known set ว่าง)"""
     current = {s["symbol"] for s in stocks if s.get("symbol")}
-    state = None
-    if os.path.exists(ETF_NEW_LISTINGS_FILE):
-        try:
-            with open(ETF_NEW_LISTINGS_FILE, encoding="utf-8") as f:
-                state = json.load(f)
-        except Exception as e:
-            print(f"[ETF] Failed to load known-symbols state: {e}")
-
     from datetime import datetime as _dt
-    if state is None:
-        _atomic_write_json(ETF_NEW_LISTINGS_FILE, {
-            "known": sorted(current), "pending_new": [], "updated_at": _dt.now().isoformat(),
-        })
-        return
+    with _etf_new_listings_lock:
+        file_exists = os.path.exists(ETF_NEW_LISTINGS_FILE)
+        state = None
+        if file_exists:
+            try:
+                with open(ETF_NEW_LISTINGS_FILE, encoding="utf-8") as f:
+                    state = json.load(f)
+            except Exception as e:
+                # ไฟล์มีอยู่แต่อ่านไม่ได้ (เขียนค้าง/ไฟดับ/เสีย) — ข้ามรอบนี้ ห้ามเขียนทับ
+                # ไม่งั้น known set + pending_new badge ที่สะสมไว้หายเกลี้ยงเหมือน first-run
+                print(f"[ETF] known-symbols state อ่านไม่ได้ ({e}) — ข้ามรอบนี้ ไม่เขียนทับ")
+                return
 
-    known = set(state.get("known") or [])
-    pending = set(state.get("pending_new") or [])
-    new_syms = current - known
-    if new_syms:
-        pending |= new_syms
-        print(f"[ETF] พบ ETF ใหม่ {len(new_syms)} ตัว: {', '.join(sorted(new_syms))}")
-    known |= current
-    _atomic_write_json(ETF_NEW_LISTINGS_FILE, {
-        "known": sorted(known), "pending_new": sorted(pending), "updated_at": _dt.now().isoformat(),
-    })
+        if not file_exists:
+            _atomic_write_json(ETF_NEW_LISTINGS_FILE, {
+                "known": sorted(current), "pending_new": [], "updated_at": _dt.now().isoformat(),
+            })
+            return
+        if not isinstance(state, dict):
+            print("[ETF] known-symbols state ไม่ใช่ dict — ข้ามรอบนี้")
+            return
+
+        known = set(state.get("known") or [])
+        pending = set(state.get("pending_new") or [])
+        new_syms = current - known
+        if new_syms:
+            pending |= new_syms
+            print(f"[ETF] พบ ETF ใหม่ {len(new_syms)} ตัว: {', '.join(sorted(new_syms))}")
+        known |= current
+        _atomic_write_json(ETF_NEW_LISTINGS_FILE, {
+            "known": sorted(known), "pending_new": sorted(pending), "updated_at": _dt.now().isoformat(),
+        })
 
 # History: อ่านจาก SQLite ผ่าน core.store (point query ~6ms) — ไม่มี in-memory
 # cache 434MB อีกต่อไป และไม่ต้องมี mtime invalidation (query ตรงทุกครั้ง)
@@ -964,16 +979,251 @@ def get_npdata(symbol):
         return jsonify({"error": str(e)}), 500
 
 
+# settrade Incapsula bootstrap cookie — cache ต่อ process (TTL 15 นาที เหมือน
+# set_api._HDR_TTL) · การเปิดหน้า /th/equities/quote/<sym>/analyst-consensus
+# ครั้งเดียวได้ cookie visid_incap/incap_ses ที่ใช้กับ /api/set-fund/consensus/*
+# ได้ทั้ง domain (ทุก symbol) — ไม่ใช่ต่อ request
+_settrade_cookie_cache: dict = {}   # {"ts": float, "cookie": str}
+_SETTRADE_COOKIE_TTL = 15 * 60
+_settrade_cookie_lock = threading.Lock()
+
+
+def _settrade_ac_cookie(force=False):
+    import requests as req
+    c = _settrade_cookie_cache.get("cookie")
+    if not force and c and time.time() - _settrade_cookie_cache["ts"] < _SETTRADE_COOKIE_TTL:
+        return c
+    with _settrade_cookie_lock:
+        c = _settrade_cookie_cache.get("cookie")
+        if not force and c and time.time() - _settrade_cookie_cache["ts"] < _SETTRADE_COOKIE_TTL:
+            return c
+        s = req.Session()
+        s.headers["User-Agent"] = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36")
+        s.get("https://www.settrade.com/th/equities/quote/PTTGC/analyst-consensus", timeout=25)
+        cookie = "; ".join(f"{k}={v}" for k, v in s.cookies.get_dict().items())
+        if "incap_ses" not in cookie:
+            raise RuntimeError("settrade bootstrap: ไม่ได้ Incapsula cookie")
+        _settrade_cookie_cache.update({"ts": time.time(), "cookie": cookie})
+        return cookie
+
+
+def _rr_company_name(sym):
+    """ชื่อบริษัทภาษาไทยจาก set_data.json (cache ตาม mtime, ไม่มี network) —
+    best-effort คืน None ถ้าไม่เจอ (settrade consensus API ไม่ส่งชื่อบริษัทมา)"""
+    try:
+        e = _tearsheet_universe_map("TH").get(sym) or {}
+        return e.get("name_th") or e.get("name")
+    except Exception:
+        return None
+
+
+def _rr_num(v, nd=2):
+    """float → string ทศนิยม nd ตำแหน่ง (คั่นหลักพันสำหรับตัวใหญ่) — None ถ้าไม่มีค่า"""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f != f:  # NaN
+        return None
+    return f"{f:,.{nd}f}"
+
+
+def _rr_from_settrade(sym):
+    """บทวิเคราะห์ + ฉันทามติจาก settrade IAA consensus (แหล่งทางการ) — คืน dict
+    รูปเดียวกับ _rr_from_9hoon หรือ raise · endpoint:
+      /api/set-fund/consensus/stock/<sym>/consensus   (per-broker + avg/median/high/low)
+      /api/set-fund/consensus/stock/overall?symbol=   (last price + buy/hold/sell)
+    ต้องแนบ Incapsula cookie จาก _settrade_ac_cookie() ไม่งั้น 403"""
+    import requests as req
+    from datetime import datetime as _dt
+
+    def _get(path, params):
+        for attempt in range(2):
+            ck = _settrade_ac_cookie(force=attempt > 0)
+            r = req.get("https://www.settrade.com" + path, params=params, timeout=20,
+                        headers={"Accept": "application/json", "Cookie": ck,
+                                 "Referer": f"https://www.settrade.com/th/equities/quote/{sym}/analyst-consensus",
+                                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"})
+            if r.status_code == 403 and attempt == 0:
+                continue
+            r.raise_for_status()
+            return r.json()
+        raise RuntimeError("settrade 403 (Incapsula)")
+
+    con = _get(f"/api/set-fund/consensus/stock/{sym}/consensus", {"lang": "th"})
+    rows = con.get("consensuses") or []
+    if not rows:
+        raise ValueError(f"settrade: ไม่มีฉันทามติสำหรับ {sym}")
+
+    try:
+        ov = (_get("/api/set-fund/consensus/stock/overall",
+                   {"lang": "th", "symbol": sym}).get("overall") or [{}])[0]
+    except Exception:
+        ov = {}
+
+    by1 = str(int(con["currentYear"]) + 543) + "F" if con.get("currentYear") else "F1"
+    by2 = str(int(con["nextYear"]) + 543) + "F" if con.get("nextYear") else "F2"
+
+    avg = con.get("average") or {}
+    med = con.get("median") or {}
+    last_price = ov.get("lastPrice")
+    tgt_med = ov.get("medianTargetPrice") or med.get("targetPrice")
+    upside = None
+    if tgt_med and last_price:
+        u = (tgt_med / last_price - 1) * 100
+        upside = f"{u:+.1f}%"
+    rt = ov.get("recommendType")
+
+    summary = {
+        "market":        "SET",
+        "last_price":    _rr_num(last_price),
+        "coverage":      str(ov["totalCoverage"]) if ov.get("totalCoverage") is not None else str(len(rows)),
+        "buy":  str(ov["buy"])  if ov.get("buy")  is not None else None,
+        "hold": str(ov["hold"]) if ov.get("hold") is not None else None,
+        "sell": str(ov["sell"]) if ov.get("sell") is not None else None,
+        "rating":        rt.capitalize() if rt else None,
+        "target_avg":    _rr_num(ov.get("averageTargetPrice") or avg.get("targetPrice")),
+        "target_median": _rr_num(tgt_med),
+        "upside":        upside,
+        "eps_y1": _rr_num(avg.get("currentYearEps")), "eps_y2": _rr_num(avg.get("nextYearEps")),
+        "np_y1":  _rr_num(avg.get("currentYearNetProfit")), "np_y2": _rr_num(avg.get("nextYearNetProfit")),
+        "pe_y1":  _rr_num(avg.get("currentYearPe")), "pe_y2": _rr_num(avg.get("nextYearPe")),
+    }
+
+    def _fmt_date(iso):
+        if not iso:
+            return None
+        try:
+            return _dt.fromisoformat(iso).strftime("%d %b %Y")
+        except ValueError:
+            return None
+
+    reports = []
+    for c in rows:
+        pdf = (c.get("lastResearchURL") or "").strip()
+        if not pdf.lower().startswith("https://"):
+            continue   # บางโบรกส่งตัวเลขแต่ไม่มีไฟล์ PDF
+        reports.append({
+            "broker":   c.get("brokerName"),
+            "analyst":  c.get("analystName"),
+            "date":     _fmt_date(c.get("lastUpdateDate")),
+            "rating":   c.get("recommend"),
+            "target":   _rr_num(c.get("targetPrice")),
+            "year":     f"{by1}/{by2}",
+            "rec":      c.get("recommend"),
+            "pdf_url":  pdf,
+            "_ts":      c.get("lastUpdateDate") or "",
+        })
+    reports.sort(key=lambda x: x["_ts"], reverse=True)
+    for c in reports:
+        c.pop("_ts", None)
+
+    if summary["last_price"] is None and not reports:
+        raise ValueError(f"settrade: ข้อมูล {sym} ไม่พอ")
+
+    return {
+        "symbol": sym,
+        "company_name": _rr_company_name(sym),
+        "summary": summary,
+        "year_labels": [by1, by2],
+        "reports": reports,
+        "source": "settrade",
+    }
+
+
+def _rr_from_9hoon(sym):
+    """fallback: scrape 9hoon.com/aset/view_research_reports.php — ใช้เมื่อ settrade
+    ล่ม/Incapsula เข้มขึ้น · 9hoon รวมลิงก์ PDF portal.settrade.com ให้ + สร้าง
+    แถวสรุปด้วย AI (อาจคลาดเคลื่อน) คืน dict รูปเดียวกับ _rr_from_settrade หรือ raise"""
+    import requests as req
+    import lxml.html as _lh
+
+    r = req.get("https://9hoon.com/aset/view_research_reports.php", params={"symbol": sym},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                timeout=25)
+    tree = _lh.fromstring(r.text)
+
+    def _t1(els):
+        return els[0].text_content().strip() if els else None
+
+    company_name = None
+    hdr = tree.xpath('//a[contains(@href,"analyst-consensus")]')
+    if hdr:
+        spans = hdr[0].getparent().xpath('./span')
+        if spans:
+            company_name = spans[0].text_content().strip()
+
+    summary = None
+    rows = tree.xpath('//table//tbody/tr')
+    if rows:
+        tds = rows[0].xpath('./td')
+        if len(tds) >= 12:
+            def _c(i):
+                return (tds[i].text_content().strip() or None) if i < len(tds) else None
+            bhs = tds[3].xpath('.//span')
+            summary = {
+                "market": _c(0), "last_price": _c(1), "coverage": _c(2),
+                "buy":  bhs[0].text_content().strip() if len(bhs) > 0 else None,
+                "hold": bhs[1].text_content().strip() if len(bhs) > 1 else None,
+                "sell": bhs[2].text_content().strip() if len(bhs) > 2 else None,
+                "rating": _c(4), "target_avg": _c(5), "target_median": _c(6), "upside": _c(7),
+                "eps_y1": _c(8), "eps_y2": _c(9), "np_y1": _c(10), "np_y2": _c(11),
+                "pe_y1": _c(12), "pe_y2": _c(13),
+            }
+
+    yr = tree.xpath('//table//thead/tr[2]/th')
+    year_labels = [x.text_content().strip() for x in yr if x.text_content().strip()]
+
+    reports = []
+    for ifr in tree.xpath('//iframe[contains(@class,"pdf-frame")]'):
+        card = ifr.getparent()
+        pdf = (ifr.get("src") or "").strip()
+        if pdf.startswith("//"):
+            pdf = "https:" + pdf
+        if not pdf.lower().startswith("https://"):
+            continue
+        rating = _t1(card.xpath('.//span[contains(@class,"rounded-full")]'))
+        dd = card.xpath('.//div[contains(@class,"text-xs") and contains(@class,"text-gray-400")]')
+        target = year = rec = None
+        meta = card.xpath('.//div[contains(@class,"bg-gray-50")][1]')
+        if meta:
+            mono = meta[0].xpath('.//span[contains(@class,"font-mono")]')
+            if mono:
+                target = mono[0].text_content().strip()
+            ital = meta[0].xpath('.//div[contains(@class,"italic")]')
+            if ital:
+                rec = ital[0].text_content().strip().strip('"')
+            for d in meta[0].xpath('./div'):
+                if 'ปี' in d.text_content():
+                    year = d.text_content().replace('ปี', '').strip()
+        reports.append({
+            "broker": _t1(card.xpath('.//div[contains(@class,"font-semibold")]')),
+            "analyst": None,
+            "date": dd[0].text_content().strip() if dd else None,
+            "rating": rating, "target": target, "year": year, "rec": rec, "pdf_url": pdf,
+        })
+
+    if summary is None and not reports:
+        raise ValueError(f"9hoon: ไม่พบบทวิเคราะห์สำหรับ {sym}")
+
+    return {
+        "symbol": sym, "company_name": company_name, "summary": summary,
+        "year_labels": year_labels, "reports": reports, "source": "9hoon",
+    }
+
+
 @app.route("/api/research-reports/<symbol>")
 def get_research_reports(symbol):
-    """บทวิเคราะห์รายหุ้น (PDF รายโบรก) + สรุปฉันทามติ จาก 9hoon.com
-    (view_research_reports.php) — โครงเดียวกับ /api/npdata: scrape สด + cache 3 ชม.
+    """บทวิเคราะห์รายหุ้น (PDF รายโบรก) + สรุปฉันทามตินักวิเคราะห์
 
-    9hoon รวมไฟล์ PDF จาก portal.settrade.com/brokerpage/AnalystConsensus ให้แล้ว
-    (SET/settrade เองอยู่หลัง Incapsula ยิงตรงจาก server ไม่ได้) — หน้า Valuation Band
-    ฝัง <iframe> ชี้ pdf_url ตรงๆ ให้เปิดอ่านในเว็บได้เลย"""
-    import requests as req, re as _re
-    import lxml.html as _lh
+    แหล่งหลัก = settrade IAA consensus (ทางการ, ข้อมูลครบกว่า — EPS/NP/PE/ปันผล
+    รายโบรก + ชื่อ analyst) · fallback = scrape 9hoon.com ถ้า settrade ล่ม/Incapsula
+    เข้มขึ้น · cache 3 ชม. เหมือน /api/npdata · ไฟล์ PDF โฮสต์ที่
+    portal.settrade.com — หน้า Valuation Band ฝัง <iframe> ชี้ pdf_url ตรงๆ"""
     from datetime import datetime as _dt
 
     sym = symbol.upper().strip()
@@ -984,105 +1234,23 @@ def get_research_reports(symbol):
         result["cached_at"] = cached["fetched_at"]
         return jsonify(result)
 
-    try:
-        r = req.get(
-            "https://9hoon.com/aset/view_research_reports.php",
-            params={"symbol": sym},
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-            timeout=25,
-        )
-        html = r.text
-        tree = _lh.fromstring(html)
+    result = err = None
+    for fn in (_rr_from_settrade, _rr_from_9hoon):
+        try:
+            result = fn(sym)
+            break
+        except Exception as e:
+            err = e
+            logging.info("[research-reports] %s %s: %s", sym, fn.__name__, e)
 
-        def _t1(els):
-            return els[0].text_content().strip() if els else None
+    if result is None:
+        return jsonify({"error": f"ไม่พบบทวิเคราะห์สำหรับ {sym} ({err})"}), 404
 
-        company_name = None
-        hdr = tree.xpath('//a[contains(@href,"analyst-consensus")]')
-        if hdr:
-            spans = hdr[0].getparent().xpath('./span')
-            if spans:
-                company_name = spans[0].text_content().strip()
-
-        # แถวสรุป (ตารางมีแถวข้อมูลเดียว) — ฉันทามติทั้งตลาด ไม่ใช่แค่บทที่มีลิงก์
-        summary = None
-        rows = tree.xpath('//table//tbody/tr')
-        if rows:
-            tds = rows[0].xpath('./td')
-            if len(tds) >= 12:
-                def _c(i):
-                    return (tds[i].text_content().strip() or None) if i < len(tds) else None
-                bhs = tds[3].xpath('.//span')
-                summary = {
-                    "market":        _c(0),
-                    "last_price":    _c(1),
-                    "coverage":      _c(2),
-                    "buy":  bhs[0].text_content().strip() if len(bhs) > 0 else None,
-                    "hold": bhs[1].text_content().strip() if len(bhs) > 1 else None,
-                    "sell": bhs[2].text_content().strip() if len(bhs) > 2 else None,
-                    "rating":        _c(4),
-                    "target_avg":    _c(5),
-                    "target_median": _c(6),
-                    "upside":        _c(7),
-                    "eps_y1":  _c(8),  "eps_y2":  _c(9),
-                    "np_y1":   _c(10), "np_y2":   _c(11),
-                    "pe_y1":   _c(12), "pe_y2":   _c(13),
-                }
-
-        yr = tree.xpath('//table//thead/tr[2]/th')
-        year_labels = [x.text_content().strip() for x in yr if x.text_content().strip()]
-
-        reports = []
-        for ifr in tree.xpath('//iframe[contains(@class,"pdf-frame")]'):
-            card = ifr.getparent()
-            pdf = (ifr.get("src") or "").strip()
-            if not pdf:
-                continue
-            # pdf_url ถูกฝังตรงๆ ใน <iframe src> / <a href> ฝั่ง frontend — รับเฉพาะ URL
-            # https:// สมบูรณ์ (9hoon ชี้ไป portal.settrade.com) กัน javascript:/data:/relative
-            # ถ้าต้นทาง 9hoon ถูก poison/เปลี่ยน markup (scraped HTML = untrusted)
-            if pdf.startswith("//"):
-                pdf = "https:" + pdf
-            if not pdf.lower().startswith("https://"):
-                continue
-            broker = _t1(card.xpath('.//div[contains(@class,"font-semibold")]'))
-            dd = card.xpath('.//div[contains(@class,"text-xs") and contains(@class,"text-gray-400")]')
-            date = dd[0].text_content().strip() if dd else None
-            rating = _t1(card.xpath('.//span[contains(@class,"rounded-full")]'))
-            target = year = rec = None
-            meta = card.xpath('.//div[contains(@class,"bg-gray-50")][1]')
-            if meta:
-                mono = meta[0].xpath('.//span[contains(@class,"font-mono")]')
-                if mono:
-                    target = mono[0].text_content().strip()
-                ital = meta[0].xpath('.//div[contains(@class,"italic")]')
-                if ital:
-                    rec = ital[0].text_content().strip().strip('"')
-                for d in meta[0].xpath('./div'):
-                    tc = d.text_content()
-                    if 'ปี' in tc:
-                        year = tc.replace('ปี', '').strip()
-            reports.append({
-                "broker": broker, "date": date, "rating": rating,
-                "target": target, "year": year, "rec": rec, "pdf_url": pdf,
-            })
-
-        if summary is None and not reports:
-            return jsonify({"error": f"ไม่พบบทวิเคราะห์สำหรับ {sym} บน 9hoon.com"}), 404
-
-        result = {
-            "symbol": sym,
-            "company_name": company_name,
-            "summary": summary,
-            "year_labels": year_labels,
-            "reports": reports,
-        }
-        fetched_at = _dt.now().strftime("%H:%M น.")
-        _rr_cache[sym] = {"ts": time.time(), "fetched_at": fetched_at, "data": result}
-        result["cached_at"] = None
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    fetched_at = _dt.now().strftime("%H:%M น.")
+    _rr_cache[sym] = {"ts": time.time(), "fetched_at": fetched_at, "data": result}
+    result = dict(result)
+    result["cached_at"] = None
+    return jsonify(result)
 
 
 def _strip_history_light(result, drop_keys, refreshing=False):
@@ -1936,10 +2104,11 @@ def etf_new_listings_ack():
     if not os.path.exists(ETF_NEW_LISTINGS_FILE):
         return jsonify({"ok": True})
     try:
-        with open(ETF_NEW_LISTINGS_FILE, encoding="utf-8") as f:
-            state = json.load(f)
-        state["pending_new"] = []
-        _atomic_write_json(ETF_NEW_LISTINGS_FILE, state)
+        with _etf_new_listings_lock:
+            with open(ETF_NEW_LISTINGS_FILE, encoding="utf-8") as f:
+                state = json.load(f)
+            state["pending_new"] = []
+            _atomic_write_json(ETF_NEW_LISTINGS_FILE, state)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return jsonify({"ok": True})

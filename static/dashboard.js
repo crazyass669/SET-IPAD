@@ -24275,7 +24275,7 @@ function loadBandPage() {
   const gate = document.getElementById('band-gate'), body = document.getElementById('band-body');
   if (!gate || !body) return;
   gate.style.display = ''; body.style.display = 'none';
-  gate.innerHTML = '📊 Valuation Band ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง (local) — ดึงข้อมูลสดจาก mrlikestock.com และ 9hoon.com ตอนค้นหา ไม่สามารถ bake เป็นไฟล์ static ล่วงหน้าได้ (ไม่รู้ล่วงหน้าว่าจะค้นหุ้นตัวไหน)';
+  gate.innerHTML = '📊 Valuation Band ใช้ได้เฉพาะเวอร์ชันรันบนเครื่อง (local) — ดึงข้อมูลสดจาก mrlikestock.com / 9hoon.com / settrade ตอนค้นหา ไม่สามารถ bake เป็นไฟล์ static ล่วงหน้าได้ (ไม่รู้ล่วงหน้าว่าจะค้นหุ้นตัวไหน)';
 }
 
 function _bandZone(cur, b) {
@@ -24351,7 +24351,7 @@ async function searchBand() {
   const rrTask = (async () => {
     try {
       const res  = await _fetchTimeout(`/api/research-reports/${encodeURIComponent(sym)}`, 30000,
-        'หมดเวลารอบทวิเคราะห์ (เกิน 30 วิ) — 9hoon.com อาจช้าหรือไม่ตอบสนอง ลองใหม่อีกครั้ง');
+        'หมดเวลารอบทวิเคราะห์ (เกิน 30 วิ) — settrade/9hoon อาจช้าหรือไม่ตอบสนอง ลองใหม่อีกครั้ง');
       const data = await res.json();
       if (myReq !== _bandReqSeq) return;
       if (data.error) {
@@ -24385,6 +24385,13 @@ function _renderResearchReports(data) {
   const body = document.getElementById('rr-body');
   card.style.display = 'block';
   body.style.display = 'block';
+
+  const srcEl = document.getElementById('rr-source');
+  if (srcEl) {
+    const src = data.source === 'settrade' ? 'settrade IAA consensus'
+      : data.source === '9hoon' ? '9hoon.com (สำรอง)' : '';
+    srcEl.textContent = src ? `· ${src}${data.cached_at ? ' · cache ' + data.cached_at : ''}` : '';
+  }
 
   const s = data.summary;
   const sEl = document.getElementById('rr-summary');
@@ -24430,7 +24437,8 @@ function _renderResearchReports(data) {
       <div class="rr-item-meta">
         ${r.target ? `<div><span class="rr-m-lbl">เป้าหมาย</span> <b>${_escHtml(r.target)}</b></div>` : ''}
         ${r.year ? `<div><span class="rr-m-lbl">ปี</span> ${_escHtml(r.year)}</div>` : ''}
-        ${r.rec ? `<div class="rr-m-rec">"${_escHtml(r.rec)}"</div>` : ''}
+        ${r.analyst ? `<div><span class="rr-m-lbl">นักวิเคราะห์</span> ${_escHtml(r.analyst)}</div>` : ''}
+        ${(r.rec && r.rec !== r.rating) ? `<div class="rr-m-rec">"${_escHtml(r.rec)}"</div>` : ''}
       </div>
       <iframe src="${pdf}" loading="lazy" title="บทวิเคราะห์ ${_escHtml(r.broker || '')}"></iframe>
       <a class="rr-item-open" href="${pdf}" target="_blank" rel="noopener noreferrer">เปิดฉบับเต็มในแท็บใหม่ ↗</a>
@@ -25425,7 +25433,7 @@ function _ackEtfNewListings() {
 async function checkEtfNewListingsBadge() {
   if (IS_STATIC) return;
   try {
-    const r = await fetch('/api/etf-new-listings');
+    const r = await _fetchTimeout('/api/etf-new-listings', 10000);
     const d = await r.json();
     const badge = document.getElementById('etf-new-badge');
     if (!badge) return;
@@ -26257,7 +26265,10 @@ function _etfLogoUrl(sym) {
 
 function loadETFPage() {
   _ackEtfNewListings();
-  if (_etfLoaded && _etfData) { renderETFTable(); return; }
+  // ต้องเช็ค .length ด้วย — ถ้ารอบก่อน /api/etf ตอบ stocks:[] (SET API + etf_prices.db
+  // ล่มพร้อมกัน) _etfData = [] ซึ่ง truthy ทำให้ return ทันที ไม่ยอม refetch ทั้ง session
+  // (bug เดียวกับที่ loadDRPage guard ไว้)
+  if (_etfLoaded && _etfData && _etfData.length) { renderETFTable(); return; }
   document.getElementById('etf-status').textContent = 'กำลังดึงข้อมูล...';
   document.getElementById('etf-table-wrap').innerHTML =
     '<div class="dr-loading"><span class="dr-load-spin"></span>กำลังโหลดข้อมูล ETF...</div>';
@@ -26291,7 +26302,22 @@ function _etfPollRefresh(attempt) {
     if (_etfPollActive) return;
     _etfPollActive = true;
   }
-  if (attempt >= 6) { _etfPollActive = false; return; }
+  if (attempt >= 6) {
+    _etfPollActive = false;
+    // poll หมดโควตา (~3 นาที) แต่ background rebuild ยังไม่เสร็จ — เลิก loop แล้วเก็บ
+    // suffix "⟳ กำลังดึงข้อมูลชุดใหม่เบื้องหลัง..." ที่ค้างอยู่ใน etf-status ออก
+    // ไม่งั้นผู้ใช้เข้าใจผิดว่ากำลังโหลดตลอดไป (indicator เดิมเคลียร์เฉพาะ path สำเร็จ)
+    const st = document.getElementById('etf-status');
+    if (st && _etfData) {
+      const ts0 = _etfTs ? _etfTs.replace('T', ' ').slice(0, 16) : '—';
+      st.innerHTML =
+        `อัปเดต: ${ts0} &nbsp;|&nbsp; ${_etfData.length} ETF &nbsp;|&nbsp; cache 2 ชั่วโมง ` +
+        `<span style="color:var(--text2)">(ยังดึงชุดใหม่ไม่เสร็จ — เปิดหน้านี้ใหม่ภายหลัง)</span>`;
+    }
+    const rf0 = document.getElementById('etfrot-refreshing');
+    if (rf0) rf0.style.display = 'none';
+    return;
+  }
   setTimeout(() => {
     _fetchTimeout('/api/etf', 30000).then(r => r.json()).then(d => {
       if (!d.stocks || !d.stocks.length) { _etfPollActive = false; return; }
@@ -26315,10 +26341,17 @@ function _etfPollRefresh(attempt) {
 }
 
 function reloadETFPage() {
-  fetch('/api/etf-full-refresh', { method: 'POST' }).catch(() => {});
   _etfLoaded = false;
   _etfData   = null;
-  loadETFPage();
+  document.getElementById('etf-status').textContent = 'กำลังดึงข้อมูลใหม่...';
+  document.getElementById('etf-table-wrap').innerHTML =
+    '<div class="dr-loading"><span class="dr-load-spin"></span>กำลังโหลดข้อมูล ETF...</div>';
+  // ต้องรอ POST ตั้ง ts=0 ให้เสร็จก่อนยิง GET /api/etf — ไม่งั้น GET อาจถึง get_etf_data
+  // ก่อน (คนละ worker thread) เห็น cache ยังไม่หมดอายุ แล้วตอบของเก่าโดยไม่ rebuild
+  // (bug + fix เดียวกับ confirmRefresh ของหน้า DR)
+  fetch('/api/etf-full-refresh', { method: 'POST' })
+    .catch(() => {})
+    .then(() => loadETFPage());
 }
 
 // ราคาสดระหว่างวัน — เรียก /api/live-price/<symbol> (fast_info, ไม่โหลดประวัติ/ไม่ยิง
@@ -26479,9 +26512,10 @@ function _renderETFHeatmap(stocks) {
       const txt    = cfg.txt(v);
       const lbl    = v != null ? cfg.fmt(v) : '—';
       const isLive = cfg.isLive ? cfg.isLive(s) : false;
+      const nm = _escHtml(s.name_th || '');
       const tip = isLive
-        ? `${s.symbol} — ${s.name_th || ''} — ⚡ ราคาสด ${lbl} (เทียบราคาปิดล่าสุด)`
-        : `${s.symbol} — ${s.name_th || ''} — ${lbl}`;
+        ? `${s.symbol} — ${nm} — ⚡ ราคาสด ${lbl} (เทียบราคาปิดล่าสุด)`
+        : `${s.symbol} — ${nm} — ${lbl}`;
       return `<div class="hm-cell" style="background:${bg};color:${txt}" title="${tip}" onclick="openETFChartModal('${s.symbol}')">
         <span style="font-size:11px;font-weight:700;line-height:1">${isLive ? '⚡' : ''}${s.symbol.slice(0,8)}</span>
         <span style="font-size:9px;line-height:1;opacity:0.85">${_drFmtPrice(s.live_price ?? s.price)}</span>
@@ -26504,8 +26538,9 @@ function _renderETFHeatmap(stocks) {
 
 function _etfCardGrid(stocks) {
   return stocks.map(s => {
-    const chgCls  = s.chg >= 0 ? 'green' : 'red';
+    const chgCls  = s.chg == null ? '' : (s.chg >= 0 ? 'green' : 'red');
     const chgStr  = s.chg != null ? (s.chg >= 0 ? '+' : '') + s.chg.toFixed(2) + '%' : '—';
+    const nameTh  = _escHtml(s.name_th || s.symbol);
     const color   = _drSymColor(s.symbol);
     const initials = s.symbol.slice(0, 4);
     const logoUrl = _etfLogoUrl(s.symbol);
@@ -26522,7 +26557,7 @@ function _etfCardGrid(stocks) {
         ${rsDisp ? `<div style="margin-left:auto;font-size:11px">${rsDisp}</div>` : ''}
         <a class="tv-link" href="https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(s.symbol)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="ดูใน TradingView" style="margin-left:${rsDisp?'6px':'auto'}">↗</a>
       </div>
-      <div class="dr-card-name">${s.name_th || s.symbol}</div>
+      <div class="dr-card-name">${nameTh}</div>
       <div class="dr-card-price-row">
         <span class="dr-card-price">${_drFmtPrice(s.price)}</span>
         <span class="dr-card-chg ${chgCls}">${chgStr}</span>
@@ -26585,7 +26620,7 @@ function renderETFTable() {
   </tr></thead>`;
 
   const rows = stocks.map(s => {
-    const chgCls = s.chg >= 0 ? 'green' : 'red';
+    const chgCls = s.chg == null ? '' : (s.chg >= 0 ? 'green' : 'red');
     const chgStr = s.chg != null ? (s.chg >= 0 ? '+' : '') + s.chg.toFixed(2) + '%' : '—';
     const color    = _drSymColor(s.symbol);
     const initials = s.symbol.slice(0, 4);
@@ -26608,7 +26643,7 @@ function renderETFTable() {
           <a class="tv-link" href="https://www.tradingview.com/chart/?symbol=SET:${encodeURIComponent(s.symbol)}&interval=D" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="ดูใน TradingView">↗</a>
         </div>
       </td>
-      <td style="font-size:11px">${s.name_th || s.symbol}${s.issuer ? '<br><span style="font-size:10px;color:var(--text2)">' + s.issuer + '</span>' : ''}</td>
+      <td style="font-size:11px">${_escHtml(s.name_th || s.symbol)}${s.issuer ? '<br><span style="font-size:10px;color:var(--text2)">' + _escHtml(s.issuer) + '</span>' : ''}</td>
       <td class="r" style="font-size:12px;font-weight:600">${_drFmtPrice(s.price)}${_drLiveTag(s)}</td>
       <td class="r ${chgCls}" style="font-size:12px;font-weight:600">${chgStr}</td>
       <td class="r">${rsNum}</td>
@@ -26643,11 +26678,11 @@ function _renderETFDescription(s) {
   box.style.display = 'block';
   box.innerHTML =
     (s.investment_policy ? `<div style="font-size:11px;color:var(--text2);margin-bottom:4px">📄 นโยบายการลงทุน (SET.or.th)</div>
-    <div style="font-size:12.5px;line-height:1.6">${s.investment_policy}</div>` : '') +
+    <div style="font-size:12.5px;line-height:1.6">${_escHtml(s.investment_policy)}</div>` : '') +
     // market maker เป็นตัวชี้คุณภาพสภาพคล่อง ETF ที่นักลงทุนใช้จริง (คอยดูแล spread ให้แคบ) —
     // ตัดตัดสินทรัพย์ที่ไม่มี market maker ระบุไว้ก็มักเป็นตัวที่เทรดเบามาก (ดู value_avg20 คู่กัน)
     (s.market_maker ? `<div style="font-size:11px;color:var(--text2);margin:10px 0 4px">🤝 Market Maker</div>
-    <div style="font-size:12.5px;line-height:1.6">${s.market_maker}</div>` : '');
+    <div style="font-size:12.5px;line-height:1.6">${_escHtml(s.market_maker)}</div>` : '');
 }
 
 function openETFChartModal(sym) {
