@@ -413,7 +413,7 @@ async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = nul
         }
         resetNhCache();
         // clear all page caches so next visit fetches fresh data
-        _idxData = null; _idxDataDone = false; _valData = null; _nvdrData = null;
+        _idxData = null; _idxDataDone = false; _idxDataFails = 0; _valData = null; _nvdrData = null;
         _shortData = null; _insData = null;
         // สัญญาณรวมคำนวณจาก short+NVDR+insider ที่เพิ่งล้างไป — ถ้าไม่ล้างด้วย หน้า
         // "🎯 สัญญาณรวม" (และ alert watchlist ที่เช็คทุก 5 นาที) จะค้างชุดเก่าทั้ง session
@@ -3081,33 +3081,41 @@ function renderSectors() {
 // เดียวกัน ไม่ยิงซ้ำถ้ากำลังโหลดอยู่ และเก็บ callback ของ "ทุก" หน้าที่แวะเรียกระหว่างรอ (ไม่ใช่
 // แค่หน้าแรก) เผื่อผู้ใช้สลับหน้าเร็วก่อน fetch จะเสร็จ ไม่งั้นหน้าหลังๆ จะไม่ได้ re-render อัตโนมัติ
 let _idxDataLoading = false;
-let _idxDataDone = false;          // ยิง /api/indices ไปแล้ว 1 รอบ (สำเร็จ/ล้มเหลวก็ตาม)
+let _idxDataDone = false;          // เลิก retry /api/indices ถาวรทั้ง session — ได้ข้อมูลแล้ว หรือ backend ยืนยันว่ายังไม่มี cache (404 {error})
+let _idxDataFails = 0;             // error ชั่วคราว (เน็ต/timeout/parse) ติดกันกี่ครั้ง — bound ไม่ให้ re-render loop ยิงรัว แต่ไม่ lock ถาวร
 let _idxDataWaiters = [];
 function _ensureIdxDataLoaded(onLoaded) {
   if (_idxData) return;
   // สำคัญ: waiter ที่เรียกกลับ (renderOverview/renderSectors/renderRotMulti) จะเรียก
-  // _ensureIdxDataLoaded ซ้ำที่บรรทัดแรกของตัวเอง — ถ้า fetch ล้มเหลวถาวร (ไม่มี
-  // indices_cache.json / 500 / timeout) แล้วยัง retry ทุกครั้ง จะกลายเป็น loop fetch+
-  // re-render ไม่รู้จบ ตัดจบที่รอบเดียว: หลังจากนั้น fallback เป็นค่าเฉลี่ยไม่ถ่วงน้ำหนัก
+  // _ensureIdxDataLoaded ซ้ำที่บรรทัดแรกของตัวเอง — ถ้า fetch ล้มแล้วยัง retry ทุกครั้ง
+  // จะกลายเป็น loop fetch+re-render ไม่รู้จบ
+  //  • backend ตอบ {error} (ไม่มี indices_cache.json): definitive → _idxDataDone เลิกถาวร
+  //  • error ชั่วคราว (timeout/500/parse): นับ _idxDataFails ตัดที่ 3 รอบ ไม่ mark done
+  //    ถาวร — Quick Update / เปิดหน้า "ดัชนีกลุ่ม" (loadIndicesPage เซ็ต _idxData เอง)
+  //    จะทำให้ override market-cap-weighted กลับมาทำงานเองโดยไม่ต้อง reload ทั้งหน้า
   if (_idxDataDone) return;
+  if (_idxDataFails >= 3) return;
   _idxDataWaiters.push(onLoaded);
   if (_idxDataLoading) return;
   _idxDataLoading = true;
   const _finish = () => {
     _idxDataLoading = false;
-    _idxDataDone = true;
     const waiters = _idxDataWaiters;
     _idxDataWaiters = [];
     waiters.forEach(fn => fn());   // เรียก re-render ต่อแม้ error แทนที่จะค้างเงียบๆ
   };
   _fetchTimeout('/api/indices').then(r => r.json()).then(d => {
-    if (!d.error) {
+    if (d && !d.error) {
       _idxData = d;
+      _idxDataFails = 0;
       renderDqBanner();   // เพิ่งมี _idxData ครั้งแรก — เช็คว่าเก่ากว่าราคาหุ้นไปหรือยัง
+    } else {
+      _idxDataDone = true;   // 404 {error} — ยังไม่เคยดาวน์โหลดดัชนี เลิก retry (มาโหลดใหม่ตอนกด download/Quick Update)
     }
     _finish();
   }).catch((e) => {
     console.warn('[_ensureIdxDataLoaded] /api/indices ล้มเหลว:', e);
+    _idxDataFails++;
     _finish();
   });
 }
@@ -27117,29 +27125,40 @@ function toggleIdxGuide() {
   if (nEl && DATA?.stocks?.length) nEl.textContent = DATA.stocks.length;
 }
 
-async function loadIndicesPage() {
+// in-flight guard: Overview เรียก _ensureIdxDataLoaded (ยิง /api/indices ~4.5MB) ตอน boot
+// อยู่แล้ว — ถ้าผู้ใช้กด nav "ดัชนีกลุ่ม" หรือคลิกการ์ด (openIdxChartModal) ก่อน request แรก
+// เสร็จ จะยิงซ้อนอีกก้อน (โหลด ~9MB) เก็บ promise ก้อนเดียวให้ caller ที่มาทีหลัง await ต่อ
+let _idxLoadingPromise = null;
+function loadIndicesPage() {
   _idxLoadFF();   // การ์ดเสริม FF-adjusted — แยกอิสระจากกริดหลัก ไม่ต้องรอ/ไม่บล็อคกัน
-  if (_idxData) { renderIdxGrid(); return; }
+  if (_idxData) { renderIdxGrid(); return Promise.resolve(); }
+  if (_idxLoadingPromise) return _idxLoadingPromise;
   const grid = document.getElementById('idx-grid');
   grid.innerHTML = '<div style="color:var(--text2);padding:20px">กำลังโหลดข้อมูลดัชนี...</div>';
-  try {
-    const res = await _fetchTimeout('/api/indices?t=' + Date.now());
-    const d   = await res.json();
-    if (d.error) {
-      grid.innerHTML = `<div style="padding:20px">
-        <div class="text2" style="margin-bottom:12px">${d.error}</div>
-        <button onclick="_idxDownloadFirstTime()" id="idx-first-download-btn" style="padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:#238636;color:#fff;cursor:pointer;font-size:12px">
-          ⟳ ดาวน์โหลดข้อมูล (ใช้เวลา ~30 วินาที)
-        </button>
-      </div>`;
-      return;
+  _idxLoadingPromise = (async () => {
+    try {
+      const res = await _fetchTimeout('/api/indices?t=' + Date.now());
+      const d   = await res.json();
+      if (d.error) {
+        grid.innerHTML = `<div style="padding:20px">
+          <div class="text2" style="margin-bottom:12px">${d.error}</div>
+          <button onclick="_idxDownloadFirstTime()" id="idx-first-download-btn" style="padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:#238636;color:#fff;cursor:pointer;font-size:12px">
+            ⟳ ดาวน์โหลดข้อมูล (ใช้เวลา ~30 วินาที)
+          </button>
+        </div>`;
+        return;
+      }
+      _idxData = d;
+      _idxDataFails = 0;
+      _setIdxUpdated();
+      renderIdxGrid();
+    } catch(e) {
+      grid.innerHTML = `<div style="color:var(--red)">โหลดไม่ได้: ${e.message}</div>`;
+    } finally {
+      _idxLoadingPromise = null;
     }
-    _idxData = d;
-    _setIdxUpdated();
-    renderIdxGrid();
-  } catch(e) {
-    grid.innerHTML = `<div style="color:var(--red)">โหลดไม่ได้: ${e.message}</div>`;
-  }
+  })();
+  return _idxLoadingPromise;
 }
 
 // ดัชนี Free-Float Adjusted (SET50FF ฯลฯ) จาก SET.or.th โดยตรง real-time — ดู
@@ -27200,7 +27219,11 @@ async function _idxDownloadFirstTime() {
     const res = await fetch('/api/indices-refresh', { method: 'POST' });
     const d   = await res.json();
     if (d.error) throw new Error(d.error);
-    _idxData = null; _idxDataDone = false;   // บังคับ loadIndicesPage + _ensureIdxDataLoaded ดึง /api/indices ใหม่
+    // TradingView ล่ม → _fetch_indices_tv คืน fetched==0 ไม่เขียนไฟล์ ตอบ {ok:false,
+    // warning:'ดึงไม่สำเร็จ N/N ดัชนี'} โดยไม่มี key 'error' — เดิม fall through ไป
+    // loadIndicesPage() ที่ได้ 404 ซ้ำ แล้วโชว์ปุ่ม download เดิมเงียบๆ เหมือนไม่มีอะไรเกิดขึ้น
+    if (d.ok === false) throw new Error(d.warning || 'ดึงข้อมูลจาก TradingView ไม่สำเร็จ — ลองใหม่อีกครั้ง');
+    _idxData = null; _idxDataDone = false; _idxDataFails = 0;   // บังคับ loadIndicesPage + _ensureIdxDataLoaded ดึง /api/indices ใหม่
     await loadIndicesPage();
   } catch (e) {
     grid.innerHTML = `<div style="padding:20px">
@@ -27483,7 +27506,14 @@ function renderIdxHeatmap(items) {
 
 function renderIdxGrid() {
   if (_idxView === 'compare') { renderSectorCompare(); return; }
-  if (!_idxData) return;
+  if (!_idxData) {
+    // ยังไม่มีข้อมูล (first-run ไม่มี cache / โหลดล้ม) แล้วผู้ใช้เพิ่งสลับกลับจากมุมมอง
+    // "⚖ เปรียบเทียบ Sector" ที่ renderSectorCompare เขียนทับ #idx-grid ไปแล้ว —
+    // เดิม return เปล่าทิ้งการ์ด compare ค้าง + ปุ่ม download หายถาวร (reload เท่านั้นถึงกลับมา)
+    // เรียก loadIndicesPage ใหม่เพื่อคืนปุ่มดาวน์โหลด/ข้อความสถานะ (มี in-flight guard กันยิงซ้อน)
+    loadIndicesPage();
+    return;
+  }
   let items = Object.values(_idxData);
   if (_idxGroup !== 'ALL') items = items.filter(x => x.group === _idxGroup);
 

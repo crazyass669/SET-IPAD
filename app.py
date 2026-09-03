@@ -7847,6 +7847,11 @@ def _fetch_indices_tv(existing: dict, full_refresh: bool = False) -> dict:
             "ret_1m": _ret(21), "ret_3m": _ret(63),
             "ret_6m": _ret(126), "ret_1y": _ret(250),
             "closes": old_vals, "dates": old_dates, "updated_at": updated,
+            # ยก rs_history ที่สะสมมาต่อ — เดิมสร้าง dict ใหม่ทิ้ง key นี้ ทำให้ทุกรอบ
+            # Quick Update/Full Refresh _compute_idx_rs เห็น hist=[] แล้ว regenerate จาก
+            # weekly backfill ใหม่ทั้งชุด จุดที่สะสมรายวัน (RS Trend arrow) ไม่เคยอยู่รอด
+            # (rs_set คำนวณใหม่ทุกรอบอยู่แล้วใน _compute_idx_rs ไม่ต้องยกมา)
+            "rs_history": (entry or {}).get("rs_history", []),
         }
 
     # ดึงแบบ parallel — สูงสุด 10 connections พร้อมกัน
@@ -7973,9 +7978,15 @@ def get_indices():
     """เสิร์ฟข้อมูลดัชนีจากไฟล์ หรือดึงใหม่ถ้าไม่มีไฟล์"""
     global _indices_cache
     data = _indices_cache.get("data")
-    first = next(iter(data.values()), {}) if data else {}
+    # เกจความพร้อม RS: ใช้ ^SET.BK (ประวัติ ~20 ปีเสมอ → rs_set ไม่เคยเป็น None) ไม่ใช่
+    # entry แรกของ dict ซึ่งลำดับสุ่มตาม completion order ตอนสร้างไฟล์ครั้งแรก — ถ้า entry
+    # แรกบังเอิญเป็นดัชนี sector ประวัติสั้น (rs_set=None) fast path ไม่เคยเข้าเลย ทุก
+    # request จะ re-read ไฟล์ + _compute_idx_rs (rank ~1200 หุ้น/ดัชนี) + เขียน disk ซ้ำ
+    def _rs_gate(d):
+        return (d or {}).get("^SET.BK") or next(iter((d or {}).values()), {})
+    g = _rs_gate(data)
     # ส่งจาก memory cache ถ้ามี rs_set และ rs_history ครบแล้ว
-    if data and first.get("rs_set") is not None and len(first.get("rs_history", [])) >= 4:
+    if data and g.get("rs_set") is not None and len(g.get("rs_history", [])) >= 4:
         return _indices_response(data)
     # โหลดจากไฟล์ (หรือ recompute ถ้า rs_history ยังน้อย)
     if os.path.exists(INDICES_FILE):
@@ -7983,8 +7994,8 @@ def get_indices():
             with open(INDICES_FILE, encoding="utf-8") as f:
                 saved = json.load(f)
             data = saved["data"]
-            first2 = next(iter(data.values()), {})
-            need_rs = first2.get("rs_set") is None or len(first2.get("rs_history", [])) < 4
+            g2 = _rs_gate(data)
+            need_rs = g2.get("rs_set") is None or len(g2.get("rs_history", [])) < 4
             if need_rs and data:
                 _compute_idx_rs(data)
                 # บันทึกกลับไฟล์เพื่อ cache rs_history
