@@ -8,7 +8,9 @@ static/dashboard.js) จาก JS มาเป็น Python แล้วรั�
 override ทั้งตลาดได้จาก UI — เว้นว่างช่องไหน = ใช้ 'ค่าจริงของหุ้นนั้น' จากงบ/factor_snapshot
 (พฤติกรรมเดิม), กรอกช่องไหน = บังคับใช้ตัวเลขเดียวกันกับหุ้นทุกตัว (ดู resolve_assumptions/
 compute_dcf_for_symbol) — เป็นการคัดกรองเบื้องต้นเท่านั้น ไม่ใช่คำแนะนำซื้อ/ขาย เพราะ Beta
-ค่าเริ่มต้นไม่ได้ปรับตาม risk จริงรายตัว (ปรับเองได้ผ่านช่อง WACC override)
+ค่าเริ่มต้นไม่ได้ปรับตาม risk จริงรายตัว และช่อง WACC override เองก็บังคับใช้ตัวเลขเดียวกันกับ
+หุ้นทุกตัวในตลาดเหมือนกัน (ดู compute_dcf_for_symbol) จึงไม่ได้ช่วยแยกความเสี่ยงรายตัวเช่นกัน —
+ต้องเปิด Tearsheet ปรับ WACC ต่อหุ้นเองถ้าต้องการ risk-adjusted จริงๆ
 
 ไม่ยิง network เพิ่มเลย — อ่านจาก financials.db (งบ Yahoo ที่ sync ไว้แล้ว) + factor_snapshot
 (rev_cagr/net_cash ที่คำนวณไว้แล้ว) + set_data.json (price/mkt_cap สด) ล้วนๆ จึงรันได้เร็ว
@@ -62,10 +64,13 @@ def _load_set_data_map(base_dir):
     out = {}
     try:
         with open(path, "r", encoding="utf-8") as f:
-            for s in json.load(f).get("stocks", []):
-                out[s["symbol"]] = s
-    except (OSError, json.JSONDecodeError, KeyError):
-        pass
+            stocks = json.load(f).get("stocks", [])
+    except (OSError, json.JSONDecodeError):
+        return out
+    for s in stocks:
+        sym = s.get("symbol")
+        if sym:
+            out[sym] = s
     return out
 
 
@@ -96,10 +101,13 @@ def compute_dcf_for_symbol(sym, entry, y_payload, snap_factors, is_financial,
     assumptions: dict จาก resolve_assumptions() เสมอ — แบ่ง 2 กลุ่ม:
     - rf_pct/beta/erp_pct/terminal_growth_pct/years: มีค่าเริ่มต้นเสมอ (ไม่มี "ค่าจริงของหุ้น"
       ให้ fallback เพราะเป็นสมมติฐานตลาด ไม่ใช่ตัวเลขในงบ)
-    - g13_pct/g45_pct/ebit_margin_pct/tax_rate_pct/da_pct/capex_pct/nwc_pct/wacc_pct: None ได้ —
+    - g13_pct/ebit_margin_pct/tax_rate_pct/da_pct/capex_pct/nwc_pct/wacc_pct: None ได้ —
       None = ใช้ 'ค่าจริงของหุ้นนั้น' จากงบ/factor_snapshot (พฤติกรรมเดิมก่อนมี override),
       ไม่ None = บังคับใช้ตัวเลขเดียวกันนี้กับหุ้นทุกตัวในตลาด (ตาราง input แบบหน้า reference
-      ที่ผู้ใช้ส่งมา — เว้นว่างในฟอร์ม = ปล่อยให้ระบบไปหาค่าประวัติศาสตร์ของหุ้นนั้นเอง)"""
+      ที่ผู้ใช้ส่งมา — เว้นว่างในฟอร์ม = ปล่อยให้ระบบไปหาค่าประวัติศาสตร์ของหุ้นนั้นเอง)
+    - g45_pct: เช่นกัน None = ไม่ override แต่ fallback ไม่ใช่ 'ค่าจริงของหุ้น' จากงบ/factor_snapshot
+      (ไม่มีตัวเลขปีที่ 4-5 แยกในงบ) — เป็นค่าประมาณ g13_pct_used * 0.6 (heuristic ลดทอน growth
+      รอบหลัง ไม่ใช่ข้อมูลจริง)"""
     a = assumptions or {}
     rf_pct = a.get("rf_pct", RISK_FREE_PCT)
     beta = a.get("beta", BETA)
@@ -160,7 +168,8 @@ def compute_dcf_for_symbol(sym, entry, y_payload, snap_factors, is_financial,
         wacc = ov_wacc / 100   # กรอก WACC ตรง = ข้ามการ build CAPM/capital structure ทั้งหมด
     else:
         cost_equity = rf_pct / 100 + beta * (erp_pct / 100)
-        kd_pretax = (forecast.get("cost_of_debt_pretax") or DEFAULT_COST_OF_DEBT_PRETAX_PCT) / 100
+        _kd = forecast.get("cost_of_debt_pretax")
+        kd_pretax = (_kd if _kd is not None else DEFAULT_COST_OF_DEBT_PRETAX_PCT) / 100
         cost_debt_after_tax = kd_pretax * (1 - tax)
         debt_val = forecast.get("total_debt") or 0
         eq_val = mkt_cap
@@ -283,21 +292,25 @@ def build_snapshot(base_dir, callback=None, assumptions=None):
     syms = sorted(set_map.keys())
     total = len(syms)
     rows = []
-    con = fs._connect(base_dir) if fs.db_exists(base_dir) else None
-    try:
-        for i, sym in enumerate(syms):
-            entry = set_map.get(sym)
-            y_payload = fs.get(base_dir, sym, "yahoo", is_dr=False, con=con) if con else None
+    # SELECT รวมครั้งเดียวแทนวน fs.get() ต่อหุ้น (~800 query round-trip) — ดู docstring
+    # iter_source_payloads ที่ทำไว้ให้ตรงจุดประสงค์นี้แล้ว (Data Health cross-check ก็ใช้แบบนี้)
+    yahoo_map = dict(fs.iter_source_payloads(base_dir, "yahoo", is_dr=False))
+    for i, sym in enumerate(syms):
+        entry = set_map.get(sym)
+        y_payload = yahoo_map.get(sym)
+        try:
             result, error = compute_dcf_for_symbol(
                 sym, entry, y_payload, snap_map.get(sym), sym in financial_syms, assumptions,
                 analyst_growth=_analyst_growth_pct(ac_map.get(sym)))
-            rows.append((sym, 0 if error else 1,
-                         json.dumps({**result, "error": error}, ensure_ascii=False)))
-            if callback and (i + 1) % 100 == 0:
-                callback(i + 1, total, f"DCF screener {i + 1}/{total} ({sym})")
-    finally:
-        if con:
-            con.close()
+        except Exception as exc:
+            # กันหุ้นตัวเดียวคำนวณพังแล้วทำให้ rebuild ทั้งตลาดล้มทั้งก้อน (เหมือน
+            # _financials_sankey_sector ใน app.py) — ตัวที่พังแสดง error แทนพัง 500 ทิ้งของทั้งชุด
+            result, error = {"symbol": sym, "name": entry.get("name") if entry else None,
+                              "sector": entry.get("sector") if entry else None}, f"คำนวณผิดพลาด: {exc}"
+        rows.append((sym, 0 if error else 1,
+                     json.dumps({**result, "error": error}, ensure_ascii=False)))
+        if callback and (i + 1) % 100 == 0:
+            callback(i + 1, total, f"DCF screener {i + 1}/{total} ({sym})")
 
     if not rows:
         print(f"[dcf_screener] rows ว่าง (0 ตัว) — ข้ามการเขียนทับ {TABLE} เก็บผลรอบก่อนหน้าไว้")
@@ -340,8 +353,12 @@ def get_snapshot(base_dir):
     return out
 
 
-def snapshot_meta(base_dir):
-    rows = get_snapshot(base_dir)
+def snapshot_meta(base_dir, rows=None):
+    """rows: ผลลัพธ์จาก get_snapshot() ที่มีอยู่แล้ว (กันอ่านตาราง dcf_screener ซ้ำ 2 รอบ
+    ในคำขอเดียว ซึ่งเสี่ยง race กับ rebuild ที่ DELETE+INSERT คั่นกลางระหว่าง 2 การอ่าน) —
+    ไม่ใส่ = อ่านเองเหมือนเดิม (เผื่อ caller อื่นเรียกตรงๆ โดยไม่มี rows พร้อมอยู่แล้ว)"""
+    if rows is None:
+        rows = get_snapshot(base_dir)
     ok_count = sum(1 for r in rows if not r.get("error"))
     at = fs._get_meta(base_dir, "dcf_screener_at")
     raw_assumptions = fs._get_meta(base_dir, "dcf_screener_assumptions")

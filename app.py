@@ -6763,12 +6763,17 @@ def tearsheet(market, symbol):
     })
 
 
+_dcf_screener_rebuild_lock = threading.Lock()
+_pbv_pe_screener_rebuild_lock = threading.Lock()
+
+
 @app.route("/api/dcf-screener")
 def dcf_screener_endpoint():
     """🎯 DCF Screener — ผลลัพธ์ DCF Model (พยากรณ์เต็มรูปแบบ) ที่คำนวณไว้แล้วทั้งตลาดหุ้นไทย
     (ดู sources/dcf_screener.py) อ่านจาก cache ในตาราง dcf_screener ตรงๆ ไม่คำนวณสด —
     กดปุ่ม "⟳ คำนวณ DCF ใหม่ทั้งตลาด" (POST /api/dcf-screener/rebuild) ก่อนถึงจะมีข้อมูล"""
-    return jsonify({"rows": dcf_screener.get_snapshot(BASE_DIR), "meta": dcf_screener.snapshot_meta(BASE_DIR)})
+    rows = dcf_screener.get_snapshot(BASE_DIR)
+    return jsonify({"rows": rows, "meta": dcf_screener.snapshot_meta(BASE_DIR, rows=rows)})
 
 
 @app.route("/api/dcf-screener/rebuild", methods=["POST"])
@@ -6776,10 +6781,15 @@ def dcf_screener_rebuild():
     """คำนวณ DCF ใหม่ทั้งตลาด — ไม่ยิง network เพิ่ม (อ่านจากงบที่ sync ไว้แล้ว) จึงรันแบบ sync
     ในคำขอเดียวได้เลย ไม่ต้อง background thread/progress bar เหมือน sync งบชุดใหญ่
 
-    body (ไม่ใส่ = ใช้ค่าเริ่มต้นทั้งหมด): {rf_pct, beta, erp_pct, terminal_growth_pct, years}
-    — resolve_assumptions() clamp/กันค่าพังให้แล้วฝั่ง dcf_screener"""
+    body (ไม่ใส่ = ใช้ค่าเริ่มต้นทั้งหมด): {rf_pct, beta, erp_pct, terminal_growth_pct, years,
+    g13_pct, g45_pct, ebit_margin_pct, tax_rate_pct, da_pct, capex_pct, nwc_pct, wacc_pct,
+    use_analyst_growth} — resolve_assumptions() clamp/กันค่าพังให้แล้วฝั่ง dcf_screener
+
+    ล็อกกันคำขอซ้อน (2 แท็บ/double-submit) ยิง rebuild พร้อมกัน — ตัวหลังรอคิวแทนที่จะรัน
+    DELETE+INSERT ชนกัน ผลลัพธ์สุดท้ายไม่แน่นอนว่าตาราง dcf_screener จะเหลือ assumptions ชุดไหน"""
     body = request.get_json(silent=True) or {}
-    result = dcf_screener.build_snapshot(BASE_DIR, assumptions=body)
+    with _dcf_screener_rebuild_lock:
+        result = dcf_screener.build_snapshot(BASE_DIR, assumptions=body)
     return jsonify(result)
 
 
@@ -6788,8 +6798,8 @@ def pbv_pe_screener_endpoint():
     """⚖️ Fair Value P/B·P/E — ผล Justified P/B + Justified P/E (ROE-based) ที่คำนวณไว้แล้ว
     ทั้งตลาดหุ้นไทย (ดู sources/pbv_pe_screener.py) อ่านจาก cache ในตาราง pbv_pe_screener ตรงๆ
     ไม่คำนวณสด — กดปุ่ม "⟳ คำนวณใหม่ทั้งตลาด" (POST /api/pbv-pe-screener/rebuild) ก่อนถึงจะมีข้อมูล"""
-    return jsonify({"rows": pbv_pe_screener.get_snapshot(BASE_DIR),
-                    "meta": pbv_pe_screener.snapshot_meta(BASE_DIR)})
+    rows = pbv_pe_screener.get_snapshot(BASE_DIR)
+    return jsonify({"rows": rows, "meta": pbv_pe_screener.snapshot_meta(BASE_DIR, rows=rows)})
 
 
 @app.route("/api/pbv-pe-screener/rebuild", methods=["POST"])
@@ -6798,9 +6808,13 @@ def pbv_pe_screener_rebuild():
     factor_snapshot + set_data.json ที่มีอยู่แล้ว) จึงรันแบบ sync ในคำขอเดียวได้เลย
 
     body (ไม่ใส่ = ใช้ค่าเริ่มต้นทั้งหมด): {g_pct, rf_pct, beta, erp_pct, coe_pct, roe_pct}
-    — resolve_assumptions() clamp/กันค่าพังให้แล้วฝั่ง pbv_pe_screener"""
+    — resolve_assumptions() clamp/กันค่าพังให้แล้วฝั่ง pbv_pe_screener
+
+    ล็อกกันคำขอซ้อน (2 แท็บ/double-submit) ยิง rebuild พร้อมกัน — เหมือน dcf_screener_rebuild
+    ด้านบน (ตัวหลังรอคิวแทนที่จะรัน DELETE+INSERT ชนกัน)"""
     body = request.get_json(silent=True) or {}
-    result = pbv_pe_screener.build_snapshot(BASE_DIR, assumptions=body)
+    with _pbv_pe_screener_rebuild_lock:
+        result = pbv_pe_screener.build_snapshot(BASE_DIR, assumptions=body)
     return jsonify(result)
 
 

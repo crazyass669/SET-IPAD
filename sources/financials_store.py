@@ -2259,7 +2259,7 @@ def _finn_load_ids():
         if _finn_ids:
             return _finn_ids
         for ex in ("TH", "US", "HK"):
-            d = _finn_get(f"/stock/list?exchange={ex}", timeout=90)
+            d = _finn_get(f"/stock/list?exchange={ex}&limit=100000", timeout=90)
             for row in d.get("data") or []:
                 nm = (row.get("name") or "").upper()
                 if nm and row.get("security_id"):

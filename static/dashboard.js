@@ -4731,7 +4731,9 @@ function _mtRenderGrowthTables() {
 // ============================================================
 // DCF SCREENER — DCF Model (พยากรณ์เต็มรูปแบบ) รันวนทุกหุ้นไทยที่คำนวณได้
 // ดู sources/dcf_screener.py + routes /api/dcf-screener* ใน app.py — สูตรเดียวกับ
-// _tsDcfModelRecalc ด้านบน (WACC โหมด 'คำนวณให้' เสมอ, Beta=1.00 คงที่ทุกตัว) พอร์ตไป Python
+// _tsDcfModelRecalc ด้านบน (WACC โหมด 'คำนวณให้' เป็นค่าเริ่มต้น, Beta=1.00 คงที่ทุกตัว — แต่
+// กรอกช่อง "WACC override" (DCF_SCR_OPTIONAL_FIELDS) ได้เพื่อบังคับ WACC ตรงๆ ทั้งตลาด ข้าม
+// CAPM/capital structure ทั้งหมด ดู compute_dcf_for_symbol) พอร์ตไป Python
 // แล้วรันเป็น batch คนละชุดโค้ดกัน ไม่ได้ derive จากตารางหน้า Tearsheet ตรงๆ — คำนวณฝั่ง server
 // ล้วนๆ หน้านี้แค่ fetch ผลลัพธ์ที่ cache ไว้แล้วมาแสดง/กรอง/เรียงเท่านั้น
 // ============================================================
@@ -4739,6 +4741,8 @@ let _dcfScreenerData = null;
 // เรียงตาม upside% มาก->น้อยเป็นค่าเริ่มต้น — กดหัวตารางเปลี่ยนได้ (asc/desc สลับกันทุกครั้งที่กด
 // คอลัมน์เดิมซ้ำ, กดคอลัมน์ใหม่เริ่มที่ desc เสมอยกเว้นชื่อ/ticker ที่เริ่ม asc เพราะเรียง A-Z อ่านง่ายกว่า)
 let _dcfScrSort = { key: 'upside_pct', dir: 'desc' };
+// |upside%| เกินนี้ = เตือน ⚠️ ในตาราง (ดู renderDcfScreener) — ค่าเดียวกับข้อความอธิบายท้ายตาราง
+const DCF_SCR_EXTREME_UPSIDE_PCT = 300;
 const DCF_SCR_COLS = [
   { key: 'symbol', label: 'หุ้น', align: 'left' },
   { key: 'name', label: 'ชื่อ', align: 'left' },
@@ -4748,11 +4752,6 @@ const DCF_SCR_COLS = [
   { key: 'wacc_pct', label: 'WACC', align: 'right' },
   { key: 'g13_pct', label: 'Growth ปี1-3', align: 'right' },
 ];
-
-function _dcfScrEsc(s) {
-  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
 
 function loadDcfScreenerPage() {
   if (_dcfScreenerData) { renderDcfScreener(); return; }
@@ -4796,12 +4795,17 @@ function fetchDcfScreener() {
     }
     renderDcfScreener();
   }).catch(() => {
+    // เคลียร์ cache เดิมทิ้งด้วย (ไม่ใช่แค่โชว์ error) กันรอบถัดไปที่กลับมาหน้านี้เจอ cache-hit
+    // branch ใน loadDcfScreenerPage() แล้วโชว์ข้อมูลเก่าเงียบๆ โดยไม่รู้ว่ารอบล่าสุด fetch ไม่สำเร็จ
+    _dcfScreenerData = null;
     if (box) box.innerHTML = '<div class="empty">โหลดข้อมูลไม่สำเร็จ</div>';
   });
 }
 
 // ค่าเริ่มต้นเดียวกับ RISK_FREE_PCT/BETA/ERP_PCT/TERMINAL_GROWTH_PCT/FORECAST_YEARS ใน
-// sources/dcf_screener.py — ต้องแก้คู่กันถ้าเปลี่ยนค่าเริ่มต้นฝั่งใดฝั่งหนึ่ง
+// sources/dcf_screener.py — ยังต้องแก้คู่กัน 3 ที่ถ้าเปลี่ยนค่าเริ่มต้นฝั่งใดฝั่งหนึ่ง: ค่าคงที่ฝั่ง
+// Python นี้, ก้อนนี้ (startDcfScreenerRebuild/resetDcfScreenerAssumptions อ้างจากตรงนี้จุดเดียว
+// แล้ว ไม่มี literal ซ้ำอีก), และ value="..."/selected ในฟอร์ม HTML (set_dashboard.html)
 const DCF_SCR_DEFAULTS = { rf_pct: 2.5, beta: 1.00, erp_pct: 5.5, terminal_growth_pct: 2.5, years: 5 };
 
 function resetDcfScreenerAssumptions() {
@@ -4834,18 +4838,27 @@ function startDcfScreenerRebuild() {
     return Number.isFinite(v) ? v : null;
   };
   const body = {
-    rf_pct: numVal('dcf-screener-rf', 2.5),
-    beta: numVal('dcf-screener-beta', 1.0),
-    erp_pct: numVal('dcf-screener-erp', 5.5),
-    terminal_growth_pct: numVal('dcf-screener-tg', 2.5),
-    years: parseInt(document.getElementById('dcf-screener-years')?.value || '5', 10),
+    rf_pct: numVal('dcf-screener-rf', DCF_SCR_DEFAULTS.rf_pct),
+    beta: numVal('dcf-screener-beta', DCF_SCR_DEFAULTS.beta),
+    erp_pct: numVal('dcf-screener-erp', DCF_SCR_DEFAULTS.erp_pct),
+    terminal_growth_pct: numVal('dcf-screener-tg', DCF_SCR_DEFAULTS.terminal_growth_pct),
+    years: parseInt(document.getElementById('dcf-screener-years')?.value || String(DCF_SCR_DEFAULTS.years), 10),
   };
   DCF_SCR_OPTIONAL_FIELDS.forEach(([id, key]) => { body[key] = optVal(id); });
   body.use_analyst_growth = !!document.getElementById('dcf-screener-use-analyst')?.checked;
   fetch('/api/dcf-screener/rebuild', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   }).then(r => r.json())
-    .then(() => fetchDcfScreener())
+    .then(result => {
+      // skipped_empty = server เจอ set_data.json ว่าง/อ่านไม่ได้ ข้ามการเขียนทับ ตารางยังเป็นผลรอบก่อน
+      // ต้องแจ้งผู้ใช้ตรงๆ ไม่งั้นดูเหมือนคำนวณสำเร็จทั้งที่ยังเป็นข้อมูลเก่า
+      if (result && result.skipped_empty) {
+        const meta = document.getElementById('dcf-screener-meta');
+        if (meta) meta.textContent = 'คำนวณใหม่ไม่สำเร็จ (อ่านรายชื่อหุ้นไม่ได้) — ยังแสดงผลรอบก่อนหน้าอยู่';
+        return;
+      }
+      return fetchDcfScreener();
+    })
     .catch(() => {
       const meta = document.getElementById('dcf-screener-meta');
       if (meta) meta.textContent = 'คำนวณไม่สำเร็จ ลองใหม่อีกครั้ง';
@@ -4910,21 +4923,24 @@ function renderDcfScreener() {
   if (!rows.length) { box.innerHTML = '<div class="empty">ไม่พบหุ้นตรงเงื่อนไข</div>'; return; }
 
   const rowsHtml = rows.map(r => {
+    const symHtml = _escHtml(r.symbol);
     if (r.error) {
       return `<tr style="opacity:.55">
-        <td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a>${tvLink(r.symbol)}</td>
-        <td>${_dcfScrEsc(r.name || '')}</td>
-        <td colspan="5" style="color:var(--text2)">— ${_dcfScrEsc(r.error)}</td>
+        <td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${symHtml}</a>${tvLink(r.symbol)}</td>
+        <td>${_escHtml(r.name || '')}</td>
+        <td colspan="5" style="color:var(--text2)">— ${_escHtml(r.error)}</td>
       </tr>`;
     }
     const up = r.upside_pct;
-    const color = up > 0 ? 'var(--green)' : 'var(--red)';
+    // upside เท่ากับ 0 พอดี (มูลค่าเหมาะสม = ราคาตลาดเป๊ะ) ควรเป็นสีกลาง ไม่ใช่แดง (bearish)
+    // เหมือน pattern สีอื่นในไฟล์นี้ เช่น d1>0?green:d1<0?red:text2
+    const color = up > 0 ? 'var(--green)' : (up < 0 ? 'var(--red)' : 'var(--text2)');
     // ผลลัพธ์เกิน ±300% ส่วนใหญ่มาจาก denominator ราคาเล็ก/หนี้-เงินสดผิดปกติ ไม่ใช่ signal จริง —
     // เตือนแทนการซ่อน (ยังอยากให้เห็นแถวไว้เผื่ออยากตรวจสอบเอง)
-    const extreme = Math.abs(up) > 300;
+    const extreme = Math.abs(up) > DCF_SCR_EXTREME_UPSIDE_PCT;
     return `<tr>
-      <td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a>${tvLink(r.symbol)}</td>
-      <td>${_dcfScrEsc(r.name || '')}</td>
+      <td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${symHtml}</a>${tvLink(r.symbol)}</td>
+      <td>${_escHtml(r.name || '')}</td>
       <td style="text-align:right">${r.price != null ? r.price.toFixed(2) : '—'}</td>
       <td style="text-align:right">${r.intrinsic != null ? r.intrinsic.toFixed(2) : '—'}</td>
       <td style="text-align:right;font-weight:700;color:${color}">${up != null ? (up > 0 ? '+' : '') + up.toFixed(1) + '%' : '—'}${extreme ? ' ⚠️' : ''}</td>
@@ -4939,7 +4955,7 @@ function renderDcfScreener() {
   box.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%">
     <thead><tr>${headHtml}</tr></thead>
     <tbody>${rowsHtml}</tbody></table></div>
-    <div style="font-size:10.5px;color:var(--text2);margin-top:6px">⚠️ = |upside| เกิน 300% — ส่วนใหญ่เกิดจากราคาต่อหุ้นเล็กมาก/โครงสร้างหนี้-เงินสดผิดปกติ ไม่ใช่ signal ที่เชื่อถือได้ตรงๆ ควรเปิด Tearsheet ตรวจดูก่อนเสมอ · กดหัวตารางเพื่อเรียงลำดับ</div>`;
+    <div style="font-size:10.5px;color:var(--text2);margin-top:6px">⚠️ = |upside| เกิน ${DCF_SCR_EXTREME_UPSIDE_PCT}% — ส่วนใหญ่เกิดจากราคาต่อหุ้นเล็กมาก/โครงสร้างหนี้-เงินสดผิดปกติ ไม่ใช่ signal ที่เชื่อถือได้ตรงๆ ควรเปิด Tearsheet ตรวจดูก่อนเสมอ · กดหัวตารางเพื่อเรียงลำดับ</div>`;
 }
 
 function exportDcfScreenerCsv() {
@@ -4982,6 +4998,9 @@ let _pbvPeScreenerData = null;
 // เรียงตาม Upside P/B มาก->น้อยเป็นค่าเริ่มต้น (Justified P/B = เป้าหมายหลักของหน้านี้ ตาม memory
 // pbv-pe-screener-plan) — กดหัวตารางเปลี่ยนได้ (asc/desc สลับทุกครั้งที่กดคอลัมน์เดิมซ้ำ)
 let _pbvPeScrSort = { key: 'jpb_upside_pct', dir: 'desc' };
+// |upside%| เกินนี้ = เตือน ⚠️ ในตาราง (ดู _pbvPeScrUpCell) — ค่าเดียวกับข้อความอธิบายท้ายตาราง
+// (เหมือน DCF_SCR_EXTREME_UPSIDE_PCT ด้านบน — คนละหน้า คนละค่าคงที่ แต่ตัวเลขบังเอิญเท่ากัน)
+const PBV_PE_SCR_EXTREME_UPSIDE_PCT = 300;
 const PBV_PE_SCR_COLS = [
   { key: 'symbol', label: 'หุ้น', align: 'left' },
   { key: 'name', label: 'ชื่อ', align: 'left' },
@@ -4995,11 +5014,6 @@ const PBV_PE_SCR_COLS = [
   { key: 'cur_ps', label: 'P/S', align: 'right',
     tip: 'Price-to-Sales ปัจจุบัน (มูลค่าตลาด ÷ รายได้ TTM) — ข้อมูลอ้างอิงเสริมเท่านั้น ไม่มี "Justified P/S"/Fair Value คำนวณคู่ให้ (สูตร Justified ของหน้านี้อิง ROE ซึ่งผูกกับ P/B และ P/E เท่านั้น)' },
 ];
-
-function _pbvPeScrEsc(s) {
-  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
 
 function loadPbvPeScreenerPage() {
   if (_pbvPeScreenerData) { renderPbvPeScreener(); return; }
@@ -5035,6 +5049,9 @@ function fetchPbvPeScreener() {
     }
     renderPbvPeScreener();
   }).catch(() => {
+    // เคลียร์ cache เดิมทิ้งด้วย (ไม่ใช่แค่โชว์ error) กันรอบถัดไปที่กลับมาหน้านี้เจอ cache-hit
+    // branch ใน loadPbvPeScreenerPage() แล้วโชว์ข้อมูลเก่าเงียบๆ โดยไม่รู้ว่ารอบล่าสุด fetch ไม่สำเร็จ
+    _pbvPeScreenerData = null;
     if (box) box.innerHTML = '<div class="empty">โหลดข้อมูลไม่สำเร็จ</div>';
   });
 }
@@ -5076,7 +5093,16 @@ function startPbvPeScreenerRebuild() {
   fetch('/api/pbv-pe-screener/rebuild', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   }).then(r => r.json())
-    .then(() => fetchPbvPeScreener())
+    .then(result => {
+      // skipped_empty = server เจอ set_data.json ว่าง/อ่านไม่ได้ ข้ามการเขียนทับ ตารางยังเป็นผลรอบก่อน
+      // ต้องแจ้งผู้ใช้ตรงๆ ไม่งั้นดูเหมือนคำนวณสำเร็จทั้งที่ยังเป็นข้อมูลเก่า
+      if (result && result.skipped_empty) {
+        const meta = document.getElementById('pbvpe-screener-meta');
+        if (meta) meta.textContent = 'คำนวณใหม่ไม่สำเร็จ (อ่านรายชื่อหุ้นไม่ได้) — ยังแสดงผลรอบก่อนหน้าอยู่';
+        return;
+      }
+      return fetchPbvPeScreener();
+    })
     .catch(() => {
       const meta = document.getElementById('pbvpe-screener-meta');
       if (meta) meta.textContent = 'คำนวณไม่สำเร็จ ลองใหม่อีกครั้ง';
@@ -5118,10 +5144,15 @@ function _pbvPeScrFilteredSorted() {
   return rows;
 }
 
+function _pbvPeScrFinBadge(r) {
+  return r.is_financial ? ' <span title="กลุ่มการเงิน — Justified P/B เหมาะกับกลุ่มนี้เป็นพิเศษ">🏦</span>' : '';
+}
+
 function _pbvPeScrUpCell(up) {
   if (up == null) return '<td style="text-align:right">—</td>';
-  const color = up > 0 ? 'var(--green)' : 'var(--red)';
-  const extreme = Math.abs(up) > 300;
+  // upside เท่ากับ 0 พอดี (มูลค่าเหมาะสม = ราคาตลาดเป๊ะ) ควรเป็นสีกลาง ไม่ใช่แดง (bearish)
+  const color = up > 0 ? 'var(--green)' : (up < 0 ? 'var(--red)' : 'var(--text2)');
+  const extreme = Math.abs(up) > PBV_PE_SCR_EXTREME_UPSIDE_PCT;
   return `<td style="text-align:right;font-weight:700;color:${color}">${(up > 0 ? '+' : '') + up.toFixed(1)}%${extreme ? ' ⚠️' : ''}</td>`;
 }
 
@@ -5151,16 +5182,16 @@ function renderPbvPeScreener() {
   if (countBox) countBox.textContent = `${rows.length} ตัว`;
   if (!rows.length) { box.innerHTML = '<div class="empty">ไม่พบหุ้นตรงเงื่อนไข</div>'; return; }
 
-  const fin = r => r.is_financial ? ' <span title="กลุ่มการเงิน — Justified P/B เหมาะกับกลุ่มนี้เป็นพิเศษ">🏦</span>' : '';
   const rowsHtml = rows.map(r => {
-    const symCell = `<td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${r.symbol}</a>${tvLink(r.symbol)}${fin(r)}</td>`;
+    const symHtml = _escHtml(r.symbol);
+    const symCell = `<td><a href="#" onclick="openInternalHash('#ts/th/${encodeURIComponent(r.symbol)}');return false">${symHtml}</a>${tvLink(r.symbol)}${_pbvPeScrFinBadge(r)}</td>`;
     if (r.error) {
       return `<tr style="opacity:.55">${symCell}
-        <td>${_pbvPeScrEsc(r.name || '')}</td>
-        <td colspan="8" style="color:var(--text2)">— ${_pbvPeScrEsc(r.error)}</td></tr>`;
+        <td>${_escHtml(r.name || '')}</td>
+        <td colspan="8" style="color:var(--text2)">— ${_escHtml(r.error)}</td></tr>`;
     }
     return `<tr>${symCell}
-      <td>${_pbvPeScrEsc(r.name || '')}</td>
+      <td>${_escHtml(r.name || '')}</td>
       <td style="text-align:right">${r.price != null ? r.price.toFixed(2) : '—'}</td>
       <td style="text-align:right">${r.jpb_fair != null ? r.jpb_fair.toFixed(2) : '—'}</td>
       ${_pbvPeScrUpCell(r.jpb_upside_pct)}
@@ -5174,12 +5205,12 @@ function renderPbvPeScreener() {
   const headHtml = PBV_PE_SCR_COLS.map(c => {
     const arrow = _pbvPeScrSort.key === c.key ? (_pbvPeScrSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
     const title = c.tip ? `${c.tip} (กดเรียงลำดับ)` : 'กดเรียงลำดับ';
-    return `<th style="text-align:${c.align};cursor:pointer;user-select:none;white-space:nowrap" onclick="_pbvPeScrSetSort('${c.key}')" title="${_pbvPeScrEsc(title)}">${c.label}${arrow}</th>`;
+    return `<th style="text-align:${c.align};cursor:pointer;user-select:none;white-space:nowrap" onclick="_pbvPeScrSetSort('${c.key}')" title="${_escHtml(title)}">${c.label}${arrow}</th>`;
   }).join('');
   box.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%">
     <thead><tr>${headHtml}</tr></thead>
     <tbody>${rowsHtml}</tbody></table></div>
-    <div style="font-size:10.5px;color:var(--text2);margin-top:6px">🏦 = กลุ่มการเงิน · ⚠️ = |upside| เกิน 300% (มักเกิดจากราคาต่อหุ้นเล็กมาก/BVPS เพี้ยน ไม่ใช่ signal ที่เชื่อถือได้ตรงๆ — เปิด Tearsheet ตรวจก่อน) · Justified P/E เป็นแบบ leading (ROE-based) คูณ EPS รายปีล่าสุด · กดหัวตารางเพื่อเรียงลำดับ</div>`;
+    <div style="font-size:10.5px;color:var(--text2);margin-top:6px">🏦 = กลุ่มการเงิน · ⚠️ = |upside| เกิน ${PBV_PE_SCR_EXTREME_UPSIDE_PCT}% (มักเกิดจากราคาต่อหุ้นเล็กมาก/BVPS เพี้ยน ไม่ใช่ signal ที่เชื่อถือได้ตรงๆ — เปิด Tearsheet ตรวจก่อน) · Justified P/E เป็นแบบ leading (ROE-based) คูณ EPS รายปีล่าสุด · กดหัวตารางเพื่อเรียงลำดับ</div>`;
 }
 
 function exportPbvPeScreenerCsv() {

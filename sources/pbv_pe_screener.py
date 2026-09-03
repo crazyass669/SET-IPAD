@@ -40,8 +40,8 @@ BETA = 1.00
 ERP_PCT = 5.5
 LONG_TERM_GROWTH_PCT = 3.0   # g "ถาวร" ทั้งตลาด (แนวเดียวกับ Terminal Growth 2.5% ของ DCF
                              # แต่ตั้งสูงกว่าเล็กน้อย = โต book value/กำไร nominal ระยะยาว)
-
-_EXTREME_UPSIDE_PCT = 300    # |upside| เกินเท่านี้ = มักเป็น noise (ราคาต่อหุ้นเล็ก/BVPS เพี้ยน)
+# หมายเหตุ: threshold "|upside| เกิน 300% = noise" บังคับใช้ฝั่ง static/dashboard.js เท่านั้น
+# (PBV_PE_SCR_EXTREME_UPSIDE_PCT) — ไม่มี field ผลลัพธ์ฝั่งนี้ที่ต้องใช้ค่านี้เลย
 
 
 def _connect(base_dir):
@@ -69,10 +69,13 @@ def _load_set_data_map(base_dir):
     out = {}
     try:
         with open(path, "r", encoding="utf-8") as f:
-            for s in json.load(f).get("stocks", []):
-                out[s["symbol"]] = s
-    except (OSError, json.JSONDecodeError, KeyError):
-        pass
+            stocks = json.load(f).get("stocks", [])
+    except (OSError, json.JSONDecodeError):
+        return out
+    for s in stocks:
+        sym = s.get("symbol")
+        if sym:
+            out[sym] = s
     return out
 
 
@@ -249,8 +252,12 @@ def get_snapshot(base_dir):
     return out
 
 
-def snapshot_meta(base_dir):
-    rows = get_snapshot(base_dir)
+def snapshot_meta(base_dir, rows=None):
+    """rows: ผลลัพธ์จาก get_snapshot() ที่มีอยู่แล้ว (กันอ่านตาราง pbv_pe_screener ซ้ำ 2 รอบ
+    ในคำขอเดียว ซึ่งเสี่ยง race กับ rebuild ที่ DELETE+INSERT คั่นกลางระหว่าง 2 การอ่าน) —
+    ไม่ใส่ = อ่านเองเหมือนเดิม (เผื่อ caller อื่นเรียกตรงๆ โดยไม่มี rows พร้อมอยู่แล้ว)"""
+    if rows is None:
+        rows = get_snapshot(base_dir)
     ok_count = sum(1 for r in rows if not r.get("error"))
     at = fs._get_meta(base_dir, "pbv_pe_screener_at")
     raw_assumptions = fs._get_meta(base_dir, "pbv_pe_screener_assumptions")
