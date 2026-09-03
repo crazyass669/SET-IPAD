@@ -17,7 +17,14 @@ us_prices.db/hk_prices.db/jp_prices.db (~440MB รวม) ต่างจาก 
 
 ใช้:
     python backup_financials_offsite.py D:\\Backups\\SET_Dashboard
+    python backup_financials_offsite.py "G:\\My Drive\\SET_Dashboard_Backup"
     (หรือดับเบิลคลิก backup_financials_offsite.bat แล้วพิมพ์ path เมื่อถาม)
+
+ปลายทางที่เป็น virtual "stream" filesystem (Google Drive for Desktop, OneDrive Files
+On-Demand) ไม่รองรับ random-write + file locking ที่ sqlite3 Online Backup API ต้องใช้
+— สคริปต์นี้เลยเขียนลง staging ในเครื่องก่อนเสมอ แล้วค่อย move ไฟล์ที่เขียนเสร็จ
+(sequential copy ล้วน) ไปปลายทาง ทีละไฟล์ ใช้พื้นที่ดิสก์ในเครื่องชั่วคราวแค่เท่าไฟล์
+ที่ใหญ่สุด (~700MB) — ปิดได้ด้วย --no-stage ถ้าปลายทางเป็นโฟลเดอร์ในเครื่องจริง
 
 แนะนำ: เดือนละครั้งพอ (หน้า Data Health ในแอปจะเตือนเองถ้าเกิน 35 วัน) —
 เก็บสำรอง 3 ชุดล่าสุดที่ปลายทาง ชุดเก่ากว่านั้นลบทิ้งอัตโนมัติกันโฟลเดอร์บวม
@@ -28,6 +35,7 @@ import os
 import sqlite3
 import sys
 import shutil
+import tempfile
 import time
 from datetime import datetime
 
@@ -68,7 +76,7 @@ def _backup_db_file(src, dest):
         src_con.close()
 
 
-def _backup_one(fname, required, dest_dir):
+def _backup_one(fname, required, dest_dir, stage_dir=None):
     src = os.path.join(BASE, fname)
     if not os.path.exists(src):
         if required:
@@ -78,11 +86,32 @@ def _backup_one(fname, required, dest_dir):
 
     stem, ext = os.path.splitext(fname)
     stamp = datetime.now().strftime("%Y%m%d")
-    dest = os.path.join(dest_dir, f"{stem}_{stamp}{ext}")
+    final_name = f"{stem}_{stamp}{ext}"
+    dest = os.path.join(dest_dir, final_name)
     size_mb = os.path.getsize(src) / 1024 / 1024
     print(f"[Backup] กำลังคัดลอก {fname} ({size_mb:.0f} MB) -> {dest} ...", flush=True)
     t0 = time.time()
-    if ext == ".db":
+    # ปลายทางที่เป็น virtual "stream" filesystem (Google Drive for Desktop /
+    # OneDrive Files On-Demand) ไม่รองรับ random-write + file locking ที่ sqlite3
+    # Online Backup API ต้องใช้ — เขียน .db ตรงๆ เสี่ยงได้ไฟล์ torn เปิดไม่ขึ้น
+    # เขียนลง staging ในเครื่องก่อน แล้ว move (sequential copy ล้วน) ไปปลายทาง
+    if stage_dir:
+        staged = os.path.join(stage_dir, final_name)
+        try:
+            if ext == ".db":
+                _backup_db_file(src, staged)
+            else:
+                shutil.copy2(src, staged)
+            if os.path.exists(dest):
+                os.remove(dest)
+            shutil.move(staged, dest)
+        finally:
+            if os.path.exists(staged):
+                try:
+                    os.remove(staged)
+                except OSError:
+                    pass
+    elif ext == ".db":
         _backup_db_file(src, dest)
     else:
         shutil.copy2(src, dest)
@@ -126,9 +155,13 @@ def main():
         i = args.index("--min-age-days")
         min_age_days = int(args[i + 1])
         del args[i:i + 2]
+    use_stage = True
+    if "--no-stage" in args:
+        use_stage = False
+        args.remove("--no-stage")
 
     if len(args) < 1:
-        print("ใช้: python backup_financials_offsite.py <โฟลเดอร์ปลายทาง> [--min-age-days N]")
+        print("ใช้: python backup_financials_offsite.py <โฟลเดอร์ปลายทาง> [--min-age-days N] [--no-stage]")
         print(r"เช่น: python backup_financials_offsite.py D:\Backups\SET_Dashboard --min-age-days 3")
         sys.exit(1)
     dest_dir = args[0]
@@ -137,6 +170,7 @@ def main():
         print(f"[Backup] สำรองล่าสุดยังใหม่กว่า {min_age_days} วัน — ข้ามรอบนี้ (ใช้กับ trigger 'At log on')", flush=True)
         return
 
+    stage_dir = None
     try:
         os.makedirs(dest_dir, exist_ok=True)
         # เช็คว่าเขียนปลายทางได้จริงก่อนเริ่มคัดลอกไฟล์ใหญ่ (กันเจอ error กลางทาง
@@ -146,9 +180,12 @@ def main():
             f.write("ok")
         os.remove(probe)
 
+        if use_stage:
+            stage_dir = tempfile.mkdtemp(prefix="set_offsite_")
+
         results = []
         for fname, required in FILES:
-            r = _backup_one(fname, required, dest_dir)
+            r = _backup_one(fname, required, dest_dir, stage_dir)
             if r:
                 results.append(r)
 
@@ -163,6 +200,9 @@ def main():
         run_log.record_run(BASE, "offsite_backup", False, str(e))
         print(f"[!] สำรองไม่สำเร็จ: {e}", flush=True)
         raise
+    finally:
+        if stage_dir:
+            shutil.rmtree(stage_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

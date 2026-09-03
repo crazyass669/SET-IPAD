@@ -361,7 +361,8 @@ _log_handler.setFormatter(
 logging.getLogger().addHandler(_log_handler)
 logging.getLogger().setLevel(logging.INFO)
 
-_dr_refresh_state = {"running": False, "error": None, "done": False}
+_dr_refresh_state = {"running": False, "error": None, "done": False,
+                     "n_total": None, "n_updated": None}
 # กัน race: 2 request ยิง /api/dr-quick-update พร้อมกัน (เดิม check-then-set ไม่มี lock
 # ต่างจาก _state/_indices_job_state ที่ห่อ with _lock: ครบ — เจอได้จริงตอนเปิดหลายแท็บ/
 # iPad+PC พร้อมกันกด Quick Update DR ชนกันยิง Yahoo ซ้อน)
@@ -1484,6 +1485,80 @@ def _compute_dr_metrics(closes, dates, vols, cur_year):
     }
 
 
+def _dr_refetch_full(yticker, region, cur_year):
+    """refetch ประวัติเต็ม (period=max) ของ DR underlying ตัวเดียว — ใช้ตอน quick-update
+    ตรวจพบ corporate action (แตกพาร์/รวมพาร์/หุ้นปันผล → Yahoo ปรับราคาย้อนหลังทั้งเส้น
+    เพราะ auto_adjust=True) หรือช่วงข้อมูลขาด (underlying พักเทรดนานแล้วกลับมา) — delta-merge
+    ปกติจะต่อแท่งใหม่ (คนละ basis) ทับฐานเก่า หรือทิ้งรูโหว่ไว้ ต้องดึงใหม่ทั้งเส้นแทน
+    คู่ขนานกับ _repair_ca_tickers (หุ้นไทย) + detect_ca_mismatch ใน _run_index_gap_update
+    (Heatmap US/HK/JP) — DR เป็น incremental-price pipeline เดียวที่ยังไม่มี split detector
+    ก่อนรีวิว 2026-09-04 (จุดที่ 8). คืน dict สำหรับ entry.update(...) หรือ None ถ้าดึงไม่ได้/
+    ข้อมูลสั้นผิดปกติ (caller ต้องคงข้อมูลเดิมไว้ ห้าม merge ต่อด้วย basis ที่ไม่ตรง)"""
+    import yfinance as yf
+    import pandas as pd
+    from sources.yahoo import _TimeoutSession
+
+    raw = yf.download([yticker], auto_adjust=True, session=_TimeoutSession(),
+                      progress=False, threads=False, group_by="ticker", period="max")
+    if raw is None or getattr(raw, "empty", True):
+        return None
+
+    def _s(field):
+        try:
+            return raw[yticker][field]
+        except (KeyError, TypeError):
+            try:
+                return raw[field]
+            except Exception:
+                return pd.Series(dtype=float)
+
+    close  = _s("Close").dropna()
+    if len(close) < 100:
+        return None
+    open_s = _s("Open").reindex(close.index).fillna(close)
+    high_s = _s("High").reindex(close.index).fillna(close)
+    low_s  = _s("Low").reindex(close.index).fillna(close)
+    vol_s  = _s("Volume").reindex(close.index).fillna(0)
+
+    # ตัดแท่งวันนี้ที่ยังไม่นิ่งออก แบบเดียวกับ path หลัก (_do_quick / _dr_do_rebuild)
+    if not is_latest_bar_stable(region) and len(close):
+        tdy = region_today_date(region)
+        if tdy is not None and close.index[-1].date() == tdy:
+            close  = close.iloc[:-1]
+            open_s, high_s, low_s, vol_s = (open_s.iloc[:-1], high_s.iloc[:-1],
+                                            low_s.iloc[:-1], vol_s.iloc[:-1])
+    if len(close) < 100:
+        return None
+
+    dates  = [str(d)[:10] for d in close.index.tolist()]
+    closes = [round(float(c), 6) for c in close.tolist()]
+    vols   = ([int(v) for v in vol_s.tolist()] if len(vol_s) == len(close)
+              else [0] * len(close))
+    price, prev = closes[-1], closes[-2]
+
+    n = min(30, len(close))
+    ohlc30 = []
+    for i in range(-n, 0):
+        try:
+            o = float(open_s.iloc[i]) if len(open_s) >= abs(i) else price
+            h = float(high_s.iloc[i]) if len(high_s) >= abs(i) else price
+            l = float(low_s.iloc[i])  if len(low_s)  >= abs(i) else price
+            v = float(vol_s.iloc[i])  if len(vol_s)  >= abs(i) else 0
+            ohlc30.append([round(o, 4), round(h, 4), round(l, 4),
+                           round(float(close.iloc[i]), 4), int(v)])
+        except Exception:
+            pass
+
+    out = {
+        "price": round(price, 2),
+        "chg":   round((price - prev) / prev * 100, 2) if prev else None,
+        "live_price": None, "live_chg": None,
+        "dates": dates, "closes": closes, "_full_vols": vols, "ohlc30": ohlc30,
+    }
+    out.update(_compute_dr_metrics(closes, dates, vols, cur_year))
+    return out
+
+
 def _dr_do_rebuild():
     import yfinance as yf
     import pandas as pd
@@ -2236,7 +2311,11 @@ def dr_quick_update():
     _snap = dict(_dr_cache)
     cached = _snap.get("result")
     if not cached or not cached.get("stocks"):
-        _dr_refresh_state["running"] = False
+        # เดิมรีเซ็ตแค่ running — เหลือ done=True + n_updated/n_total ของรอบก่อนค้างอยู่
+        # frontend poll เห็น !running && !error เลยขึ้น "✓ สำเร็จ N/M" หลอกทั้งที่ request นี้
+        # error 400 → เคลียร์ทั้ง state + ใส่ error ให้ตรงกับ HTTP body
+        _dr_refresh_state.update(running=False, done=False,
+                                 error="ยังไม่มี DR cache — กรุณาโหลดหน้า DR ก่อน")
         return jsonify({"error": "ยังไม่มี DR cache — กรุณาโหลดหน้า DR ก่อน"}), 400
     _ts_at_start = _snap.get("ts")
 
@@ -2289,6 +2368,8 @@ def dr_quick_update():
             stock_map = {s["sym"]: s for s in cached["stocks"]}
             updated = 0   # นับตัวที่อัปเดตราคาสำเร็จจริง — ให้ frontend โชว์ "สำเร็จ N/M ตัว"
                           # แบบเดียวกับปุ่ม "⚡ ราคาล่าสุด" ของ Watchlist (ดู wlRefreshLivePrices)
+            ca_refetch = 0   # เพดานกัน refetch period=max ทั้งกระดานถ้า overlap เพี้ยนทุกตัว
+                             # (แหล่งเปลี่ยน basis หมด) — เหมือน MAX_CA_REPAIR ของ services.refresh
             cur_year = _dt.now().year   # ใช้ตัด YTD — ปีเดียวกันตลอดทั้งรอบ ไม่ต้องคำนวณใหม่ทุกตัว
             for st in _universe:
                 sym, yticker = st["sym"], st["yf"]
@@ -2346,41 +2427,66 @@ def dr_quick_update():
 
                     price = float(close.iloc[-1])
                     prev  = float(close.iloc[-2])
-                    chg   = round((price - prev) / prev * 100, 2) if prev else 0
-                    live_chg = round((live_price - price) / price * 100, 2) if live_price and price else None
+                    chg   = round((price - prev) / prev * 100, 2) if prev else None
 
                     if entry:
-                        entry["price"] = round(price, 2)
-                        entry["chg"]   = chg
-                        if live_price is not None:
-                            entry["live_price"] = round(live_price, 2)
-                            entry["live_chg"]   = live_chg
-                        else:
-                            # เดิม pop() คีย์ทิ้ง — ทำให้ขนาด dict เปลี่ยนขณะที่ request อื่น
-                            # (เช่น GET /api/dr -> _dr_light) อาจกำลัง iterate s.items() ของ
-                            # entry ตัวเดียวกันอยู่พอดี (ไม่มี lock ร่วมกัน) เสี่ยง
-                            # RuntimeError: dictionary changed size during iteration -> 500
-                            # ทั้ง endpoint — เซ็ตเป็น None แทน (คีย์นี้มีอยู่แล้วเสมอตั้งแต่
-                            # _dr_do_rebuild บรรทัด ~1165-1166) ให้เป็นแค่ reassign ค่า
-                            # ไม่เปลี่ยนขนาด dict ปลอดภัยกว่า
-                            entry["live_price"] = None
-                            entry["live_chg"] = None
                         # ปัด 6 ตำแหน่งให้ตรงกับ _dr_do_rebuild (closes_all) — เดิมปัด 4
                         # ตำแหน่งตรงนี้ ทำให้ความละเอียดของ entry["closes"] ต่างกันไปตามว่า
                         # แท่งนั้นถูกเติมเข้ามาตอน full rebuild หรือ quick update
                         new_closes_raw = [round(float(c), 6) for c in close.tolist()]
                         new_dates_raw  = [str(d)[:10] for d in close.index.tolist()]
                         new_vols_raw   = [int(v) for v in vol_s.tolist()] if len(vol_s) == len(close) else [0] * len(close)
-                        # อัปเดต full history (+ volume คู่กัน สำหรับ _bullish_vol ฝั่ง client)
-                        # gap fetch ตั้งใจดึงทับแท่งสุดท้ายเดิมซ้ำ (overlap) — นับเฉพาะแท่งที่
-                        # วันที่ใหม่จริงๆ (appended_count) ไว้ใช้ merge close100/ohlc30 ต่อ
-                        # ไม่งั้นแท่งซ้ำจะถูกเบิ้ลเข้า close100 ทุกครั้งที่กดอัปเดต
                         old_dates  = entry.get("dates", [])
                         old_closes = entry.get("closes", [])
                         old_vols   = entry.get("_full_vols", [0] * len(old_dates))
+                        old_idx    = {d: i for i, d in enumerate(old_dates)}
+
+                        # ── split / gap detector (จุดที่ 8, รีวิว 2026-09-04) ──────────────
+                        # gap fetch ดึงแท่ง overlap (แท่งที่เก็บไว้แล้ว) มาด้วยเสมอ (ดู "ไม่ +1
+                        # วัน") — เทียบกับที่เก็บไว้: เพี้ยน >= 2 แท่ง = Yahoo ปรับราคาย้อนหลัง
+                        # (auto_adjust=True → แตกพาร์/รวมพาร์/หุ้นปันผลของ underlying) delta-merge
+                        # ปกติจะต่อแท่งใหม่คนละ basis ทับฐานเก่า → ret/EMA/ATH/RS/sparkline เพี้ยน
+                        # ยาวถึง full rebuild รอบถัดไป (4 ชม.) · ไม่มี overlap เลย (underlying
+                        # พักเทรดนานกว่าช่วง gap) = จะเกิดรูโหว่ในเส้นราคา — สองเคสนี้ต้อง
+                        # refetch period=max ทั้งเส้น (คู่ขนานกับ detect_ca_mismatch/
+                        # _repair_ca_tickers หุ้นไทย + _run_index_gap_update ของ Heatmap US/HK/JP
+                        # ที่มี split detector อยู่แล้ว — DR เป็น pipeline เดียวที่ยังไม่มี)
+                        mism = n_overlap = 0
+                        for d, cl in zip(new_dates_raw, new_closes_raw):
+                            j = old_idx.get(d)
+                            if j is None or j >= len(old_closes):
+                                continue
+                            oc = old_closes[j]
+                            if oc and oc > 0:
+                                n_overlap += 1
+                                if abs(cl - oc) / oc > 0.005:
+                                    mism += 1
+                        gap_hole = (n_overlap == 0 and old_dates and new_dates_raw
+                                    and new_dates_raw[0] > old_dates[-1])
+                        if old_closes and (mism >= 2 or gap_hole) and ca_refetch < 30:
+                            ca_refetch += 1
+                            why = "split/CA" if mism >= 2 else "gap"
+                            print(f"[DR quick] {sym}: {why} — refetch period=max")
+                            patch = _dr_refetch_full(yticker, st["region"], cur_year)
+                            if patch:
+                                entry.update(patch)
+                                updated += 1
+                            else:
+                                print(f"[DR quick] {sym}: refetch ไม่สำเร็จ — คงข้อมูลเดิม (รอ full rebuild)")
+                            continue
+
+                        # merge: overlap → update ทับในที่ (Yahoo revised ค่า ex-div เล็กน้อย
+                        # < 0.5% — ไม่ใช่ split เพราะผ่าน detector แล้ว) · แท่งใหม่ → append
+                        # นับ appended_count (แท่งใหม่จริง) ไว้ merge ohlc30 ต่อ เดิมแท่ง overlap
+                        # ไม่ถูกแตะเลย ทำให้ entry["price"] (จากแท่ง fetch) กับ metrics (จาก
+                        # old_closes[-1]) ขัดกันเองตอนไม่มีแท่งใหม่
                         appended_count = 0
                         for dt, cl, vv in zip(new_dates_raw, new_closes_raw, new_vols_raw):
-                            if not old_dates or dt > old_dates[-1]:
+                            j = old_idx.get(dt)
+                            if j is not None:
+                                if j < len(old_closes): old_closes[j] = cl
+                                if j < len(old_vols):   old_vols[j]   = vv
+                            elif not old_dates or dt > old_dates[-1]:
                                 old_dates.append(dt)
                                 old_closes.append(cl)
                                 old_vols.append(vv)
@@ -2388,9 +2494,27 @@ def dr_quick_update():
                         entry["dates"]  = old_dates
                         entry["closes"] = old_closes
                         entry["_full_vols"] = old_vols
+
+                        # ราคา/chg ยึดจาก history หลัง merge (closes[-1]/[-2]) ให้ตรงกับ anchor
+                        # ที่ _compute_dr_metrics ใช้
+                        if len(old_closes) >= 2:
+                            price = old_closes[-1]
+                            _pv   = old_closes[-2]
+                            chg   = round((price - _pv) / _pv * 100, 2) if _pv else None
+                        entry["price"] = round(price, 2)
+                        entry["chg"]   = chg
+                        if live_price is not None:
+                            entry["live_price"] = round(live_price, 2)
+                            entry["live_chg"]   = (round((live_price - price) / price * 100, 2)
+                                                   if price else None)
+                        else:
+                            # เดิม pop() คีย์ทิ้ง → ขนาด dict เปลี่ยนขณะ GET /api/dr iterate
+                            # s.items() อยู่ → RuntimeError: dictionary changed size -> 500
+                            # เซ็ต None แทน (คีย์มีอยู่แล้วเสมอจาก _dr_do_rebuild)
+                            entry["live_price"] = None
+                            entry["live_chg"] = None
                         # metrics (returns/52W/ATH/YTD/RS/EMA/price+vol history/close100)
                         # มาจาก helper กลางเดียวกับ _dr_do_rebuild — กัน 2 path drift กัน
-                        # (ดู comment ในนิยาม _compute_dr_metrics)
                         entry.update(_compute_dr_metrics(old_closes, old_dates, old_vols, cur_year))
                         # ต่อ ohlc30 เฉพาะแท่งที่ใหม่จริง (appended_count เดียวกับ close100/dates
                         # ด้านบน) — เดิมต่อแท่งที่ fetch มาทั้งหมดรวม overlap ทำให้ตัดฐานเก่า
@@ -2426,12 +2550,20 @@ def dr_quick_update():
             # ถ้า background full rebuild แทนที่ _dr_cache ไปแล้วระหว่างที่เรารันอยู่
             # (ts ไม่ตรงกับตอนเริ่ม) ผลของมันสดกว่าและครบกว่า `cached` ที่เรา mutate
             # มาตลอด — ข้ามการเขียนทับไปเลย ไม่งั้นจะเอาผล quick-update (เก่ากว่า) ไปทับ
-            if _dr_cache.get("ts") != _ts_at_start:
-                print("[DR quick] ข้ามการบันทึก — background full rebuild เสร็จก่อนแล้ว")
-            else:
-                cached["ts"] = _dt.now().isoformat()
-                _dr_cache.update(result=cached, ts=time.time())
-                _save_dr_cache_to_file(cached)
+            #
+            # check-then-write ต้องอยู่ใต้ _dr_rebuild_lock เดียวกับ _dr_do_rebuild
+            # (เขียน _dr_cache ใต้ lock นี้เสมอ ผ่าน _rebuild_dr_cache/_kick_dr_rebuild)
+            # เดิมสองบรรทัดนี้ไม่ atomic ต่อกัน — background rebuild หรือ
+            # /api/dr-full-refresh (ตั้ง ts=0) อาจ commit คั่นระหว่าง if กับ update()
+            # แล้วผลสดถูก quick-update ทับเงียบๆ ยาว 4 ชม. (torn read ครึ่งท้ายที่
+            # ยังเหลือจากรีวิวลำดับ 21)
+            with _dr_rebuild_lock:
+                if _dr_cache.get("ts") != _ts_at_start:
+                    print("[DR quick] ข้ามการบันทึก — background full rebuild เสร็จก่อนแล้ว")
+                else:
+                    cached["ts"] = _dt.now().isoformat()
+                    _dr_cache.update(result=cached, ts=time.time())
+                    _save_dr_cache_to_file(cached)
             _dr_refresh_state["done"] = True
             _dr_refresh_state["n_total"] = len(_universe)
             _dr_refresh_state["n_updated"] = updated
@@ -2442,7 +2574,14 @@ def dr_quick_update():
         finally:
             _dr_refresh_state["running"] = False
 
-    threading.Thread(target=_do_quick, daemon=True).start()
+    try:
+        threading.Thread(target=_do_quick, daemon=True).start()
+    except Exception as e:
+        # thread/resource exhaustion — _do_quick ไม่เคยรัน จึงไม่มี finally มา clear
+        # running=True ที่ตั้งไว้ด้านบน → ทุก request ถัดไปติด {"status":"running"} ถาวร
+        # จนกว่าจะ restart / job-reset
+        _dr_refresh_state.update(running=False, error=str(e))
+        return jsonify({"error": f"เริ่มงานอัปเดตไม่ได้: {e}"}), 500
     return jsonify({"status": "started"})
 
 

@@ -535,7 +535,7 @@ function confirmRefresh(period) {
   });
 }
 function startQuickUpdate() {
-  fetch('/api/dr-quick-update', { method: 'POST' }).catch(() => {});
+  _fetchTimeout('/api/dr-quick-update', 30000, null, { method: 'POST' }).catch(() => {});
   // ETF universe เล็ก (~13 ตัว) full-refresh เร็วพอจะยิงตรงๆ แทน incremental job แบบ DR —
   // แค่ล้าง cache เบื้องหลัง รอบถัดไปที่ /api/etf ถูกเรียก (เปิดหน้า ETF หรือ Rotation
   // แท็บ ETF) จะได้ข้อมูลสดแทนของเก่าอัตโนมัติ
@@ -26183,9 +26183,17 @@ function drQuickUpdate() {
   if (btn) { btn.disabled = true; btn.textContent = '⏳ กำลังอัปเดต...'; }
   const statusEl = document.getElementById('dr-status');
 
-  fetch('/api/dr-quick-update', { method: 'POST' })
+  _fetchTimeout('/api/dr-quick-update', 30000, null, { method: 'POST' })
     .then(r => r.json())
     .then(res => {
+      // 400 (ยังไม่มี DR cache ฯลฯ) — backend ส่ง {error} มา + เคลียร์ _dr_refresh_state แล้ว
+      // เดิมไม่เช็ค res.error เลย ปล่อยเข้า poll ต่อ แล้ว /api/dr-quick-status ของรอบก่อน
+      // (done=true, n_updated ค้าง) ทำให้ขึ้น "✓ สำเร็จ N/M" หลอก
+      if (res && res.error) {
+        if (btn) { btn.disabled = false; btn.textContent = '⚡ อัปเดตราคา'; }
+        if (statusEl) statusEl.textContent = 'อัปเดตไม่สำเร็จ: ' + res.error;
+        return;
+      }
       // status "running" = มีงาน DR quick-update ค้างอยู่แล้วจากที่อื่น (เช่นปุ่ม "⚡ Quick
       // Update" หลักที่ยิง /api/dr-quick-update คู่กันอัตโนมัติทุกครั้ง — ดู startQuickUpdate())
       // ปุ่มนี้เลยไม่ได้เริ่มงานใหม่ตามที่กด แค่ไปรอผลรอบเก่าแทน ต้องบอกผู้ใช้ตรงๆ กันเข้าใจผิด
@@ -26203,7 +26211,7 @@ function drQuickUpdate() {
           if (btn) { btn.disabled = false; btn.textContent = '⚡ อัปเดตราคา'; }
           return;
         }
-        fetch('/api/dr-quick-status').then(r => r.json()).then(s => {
+        _fetchTimeout('/api/dr-quick-status', 15000).then(r => r.json()).then(s => {
           if (!s.running) {
             clearInterval(poll);
             if (s.error) {
