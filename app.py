@@ -4763,14 +4763,20 @@ def financials_quarter_coverage_by_index():
         return jsonify({"error": str(e)}), 500
 
 
-def _warmup_fin_dependent_caches():
+def _warmup_fin_dependent_caches(mirror_universes=()):
     """เรียกซ้ำ endpoint ที่พึ่ง _fin_analytics_cache/_sector_compare_cache/_market_trend_cache
     ทันทีหลัง sync เคลียร์ cache พวกนี้ทิ้ง (แทนที่จะปล่อยให้ user คนแรกที่เปิดหน้าเจอ cold
     path เอง ~20-30 วิ) เรียกจาก thread เดิมของ sync ได้เลยเพราะ sync ก็รันใน background
-    thread อยู่แล้ว — ไม่บล็อก request อื่น"""
+    thread อยู่แล้ว — ไม่บล็อก request อื่น
+
+    mirror_universes: ('dr'|'us'|'hk'|'jp', ...) — งานที่เคลียร์ _qpl_mirror_caches ด้วย
+    (DR sync / index sync US/HK/JP / full refresh) ต้องระบุมา ไม่งั้น growth screener เวอร์ชัน
+    ต่างประเทศจะค้าง cold ให้ user คนแรกเจอ _compute_qpl_mirror_parsed เต็ม ๆ (~15-60 วิ/ตลาด)"""
     tc = app.test_client()
-    for ep in ("/api/financials-analytics", "/api/sector-compare", "/api/market-trend",
-               "/api/quarterly-growth-screener"):
+    eps = ["/api/financials-analytics", "/api/sector-compare", "/api/market-trend",
+           "/api/quarterly-growth-screener"]
+    eps += [f"/api/quarterly-growth-screener?universe={u}" for u in mirror_universes]
+    for ep in eps:
         try:
             t0 = time.time()
             tc.get(ep)
@@ -4794,7 +4800,10 @@ def _clear_fin_analytics_and_warm():
     การอุ่นจะไป hit cache เดิมของ 2 ตัวนั้นทันที ไม่มี cost เพิ่ม"""
     _fin_analytics_cache.clear()
     _clear_qpl_mirror_caches()   # งานกลุ่มนี้ sync finnomena_q/yahoo_q ของ mirror US/HK/JP
-    threading.Thread(target=_warmup_fin_dependent_caches, daemon=True).start()
+    # อุ่น growth screener เวอร์ชัน us/hk/jp ด้วย (เพิ่ง _clear_qpl_mirror_caches ไป) — daemon thread
+    # อยู่แล้ว ไม่บล็อกใคร · dr ไม่รวมเพราะงานกลุ่มนี้ไม่แตะ DR: keys (จะ recompute ตอนมีคนเปิดเอง)
+    threading.Thread(target=lambda: _warmup_fin_dependent_caches(mirror_universes=("us", "hk", "jp")),
+                     daemon=True).start()
 
 
 def _quarterly_bake_universe():
@@ -4861,7 +4870,8 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_dat
         _sector_compare_cache.clear()
         _qpl_parsed_cache.clear()
         _fin_quarterly_cache.clear()   # set_qpl เปลี่ยน — bake งบรายไตรมาสใหม่รอบถัดไป
-        _clear_qpl_mirror_caches()   # DR sync (is_dr=True) แตะ finnomena_q/yahoo_q ของ DR:
+        if is_dr:
+            _clear_qpl_mirror_caches()   # DR sync แตะ finnomena_q/yahoo_q ของ DR: — sync หุ้นไทยไม่แตะ
         _market_trend_cache.clear()
         _sector_trend_cache.clear()
         # rebuild factor snapshot ทันที (ไม่รอ debounce 300 วิ + ครอบ sync < 5 หุ้นที่เดิม
@@ -4876,7 +4886,7 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_dat
                 print(f"[FinancialsSync] build_snapshot ล้มเหลว (งบ sync สำเร็จแล้ว): {e}")
         if not is_dr and result.get("ok", 0) > 0:
             _bake_financials_quarterly_file()   # set_qpl หุ้นไทยเปลี่ยน -> re-bake ไฟล์เว็บมือถือ
-        _warmup_fin_dependent_caches()
+        _warmup_fin_dependent_caches(mirror_universes=("dr",) if is_dr else ())
         skipped = result.get("skipped", 0)
         _update(done=True,
                 message=f"เสร็จแล้ว! สำเร็จ {result['ok']}/{result['total']}"
@@ -10177,7 +10187,7 @@ def _run_financials_update_all():
         _clear_qpl_mirror_caches()
         _market_trend_cache.clear()
         _sector_trend_cache.clear()
-        _warmup_fin_dependent_caches()
+        _warmup_fin_dependent_caches(mirror_universes=("dr", "us", "hk", "jp"))
 
         elapsed_min = (time.time() - t0) / 60
         summary = (f"เสร็จแล้ว! หุ้นไทย {r_th['ok']}/{r_th['total']} (พลาด {r_th['fail']}, "

@@ -4381,7 +4381,7 @@
       <select id="growth-scr-quarter-select" class="scr-input" style="min-width:130px" onchange="_growthScrJumpQuarter(this.value)"></select>
       <button class="filter-btn" id="growth-scr-next-btn" onclick="_growthScrShiftQuarter(-1)" title="ไตรมาสถัดไป">▶</button>
     </div>
-    <input id="growth-scr-search" class="scr-input" style="width:180px;font-size:13px" placeholder="ค้น ticker/ชื่อ..." oninput="renderGrowthScreener()">
+    <input id="growth-scr-search" class="scr-input" style="width:180px;font-size:13px" placeholder="ค้น ticker/ชื่อ..." oninput="_growthScrSearchDebounced()">
     <select id="growth-scr-sector" class="scr-input" style="min-width:160px" onchange="renderGrowthScreener()">
       <option value="">ทุก Sector</option>
     </select>
@@ -5684,6 +5684,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260904a"></script>
+<script src="static/dashboard.js?v=20260904b"></script>
 </body>
 </html>

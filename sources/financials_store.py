@@ -3382,6 +3382,11 @@ def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_
             pass
     if target is None:
         target = _target_quarter(parsed)
+        # _target_quarter คือ mode ของ "งวดล่าสุดต่อหุ้น" ดิบ ๆ — อาจเป็น key 'อนาคต' ที่ mislabel
+        # (เช่น 2027-1 จากหุ้นปีบัญชีไม่ตรงปฏิทิน ดู docstring) ซึ่งถูกกรองออกจาก available ไปแล้ว
+        # ทำให้ quarter ที่คืนไม่มีใน available_quarters -> ปุ่ม ◀▶/dropdown ฝั่ง frontend ตายทั้งแผง
+        if available and target not in available:
+            target = available[0]
 
     rows = _qpl_stock_growth_rows(parsed, target)
     has_ocf = False

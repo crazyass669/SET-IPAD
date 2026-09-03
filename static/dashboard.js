@@ -5261,8 +5261,9 @@ function exportPbvPeScreenerCsv() {
 let _growthScrCache = {};
 let _growthScrUni = 'th';        // ตลาดที่กำลังดู (จาก <select id="growth-scr-universe">)
 let _growthScrQuarter = null;    // ไตรมาสที่กำลังดูอยู่ตอนนี้ (string "YYYY-Q")
-let _growthScrLoading = false;
+let _growthScrQuarterByUni = {}; // uni -> ไตรมาสที่ผู้ใช้ดูค้างไว้ตอนสลับออก (กู้กลับตอนสลับกลับมา ถ้ายังมีใน cache)
 let _growthScrLoadKeys = new Set();   // "uni|quarter" ที่กำลัง fetch อยู่ (กันยิงซ้ำอันเดิม แต่ยอมให้อันอื่นยิงพร้อมกัน)
+let _growthScrSearchTimer = null;   // debounce พิมพ์ค้นหา (universe US ~3,000 แถว — วาดใหม่ทุก keystroke หน่วง)
 let _growthScrSort = { key: 'profit_yoy', dir: 'desc' };
 const GROWTH_SCR_MIN_BASE = 50_000_000;   // บาท — ฐานเทียบขั้นต่ำกันโต % หลอกจากฐานจิ๋ว (เหมือน
                                            // _MT_PROFIT_GROWTH_MIN_BASE ใน Market Trend แต่ใช้กับทั้งรายได้/กำไร)
@@ -5335,22 +5336,33 @@ function _growthScrApplyUniUI() {
   _growthScrEnsureDrData();   // แท็บ DR ต้องมี _drData ไว้ทำลิงก์ TV + เปิด chart modal
 }
 
-// สลับ universe — reset ไตรมาส/sort กลับ default แล้วโหลดชุดใหม่ (หรือ render จาก cache ถ้าเคยโหลด)
+// สลับ universe — reset sort กลับ default, กู้ไตรมาสที่ดูค้างไว้ของ uni นั้น (ถ้ายังอยู่ใน cache)
+// แล้ว render จาก cache หรือโหลดชุดใหม่
 function _growthScrSwitchUniverse(uni) {
   if (uni === _growthScrUni) return;
+  clearTimeout(_growthScrSearchTimer);   // กัน debounced render ของ universe เดิมยิงทับหลังสลับ
+  if (_growthScrQuarter) _growthScrQuarterByUni[_growthScrUni] = _growthScrQuarter;
   _growthScrUni = uni;
   _growthScrQuarter = null;
   _growthScrSort = { key: 'profit_yoy', dir: 'desc' };
   _growthScrApplyUniUI();
   const cached = _growthScrCache[uni];
   if (cached && Object.keys(cached).length) {
-    // ไตรมาสล่าสุดที่โหลดไว้ของ uni นี้ (คีย์แรก = ผลรอบแรกเสมอ) — อ่านจาก field quarter ของ payload
-    _growthScrQuarter = Object.values(cached)[0].quarter;
-    _growthScrPopulateQuarterSelect(Object.values(cached)[0].available_quarters || []);
+    // กู้ไตรมาสที่ผู้ใช้ดูค้างไว้ก่อนสลับออก ถ้ายังมีใน cache — ไม่งั้นใช้ไตรมาสล่าสุด (คีย์แรก = ผลรอบแรก)
+    const want = _growthScrQuarterByUni[uni];
+    const pick = (want && cached[want]) ? cached[want] : Object.values(cached)[0];
+    _growthScrQuarter = pick.quarter;
+    _growthScrPopulateQuarterSelect(pick.available_quarters || []);
     _growthScrPopulateSectorSelect(_growthScrCur()?.stocks || []);
     renderGrowthScreener();
     return;
   }
+  // ยังไม่เคยโหลด uni นี้ — เคลียร์ตาราง/ตัวนับของ universe เดิมทิ้งทันที (fetchGrowthScreener ข้าม
+  // การขึ้น "กำลังโหลด..." ถ้า loadKey เดิมยัง in-flight อยู่ → ไม่งั้นตารางเก่าค้างพร้อม routing ผิด uni)
+  const box = document.getElementById('growth-screener-table');
+  if (box) box.innerHTML = '<div class="empty">กำลังโหลด...</div>';
+  const countBox = document.getElementById('growth-scr-count');
+  if (countBox) countBox.textContent = '';
   fetchGrowthScreener();
 }
 
@@ -5370,7 +5382,6 @@ function fetchGrowthScreener(quarter) {
   // ต้องยิงได้ (เดิม _growthScrLoading global บล็อกจน US cold ~15 วิ ทำให้สลับแล้วนิ่งเงียบ)
   if (_growthScrLoadKeys.has(loadKey)) return Promise.resolve();
   _growthScrLoadKeys.add(loadKey);
-  _growthScrLoading = true;
   const box = document.getElementById('growth-screener-table');
   if (box && !_growthScrQuarter) box.innerHTML = '<div class="empty">กำลังโหลด...</div>';
   const params = [];
@@ -5396,14 +5407,16 @@ function fetchGrowthScreener(quarter) {
     })
     .finally(() => {
       _growthScrLoadKeys.delete(loadKey);
-      _growthScrLoading = _growthScrLoadKeys.size > 0;
     });
 }
 
+// หุ้นไทย (th) โชว์ปี พ.ศ. · ต่างประเทศ (dr/us/hk/jp) เป็นไตรมาสปีบัญชีของบริษัทต่างชาติ — โชว์ ค.ศ.
+// (เหมือนแท็บงบใน chart modal) ไม่งั้น Q2/2025 ของ Apple กลายเป็น Q2/2568 อ่านผิดยุค
 function _growthScrQuarterLabel(q) {
   if (!q) return '—';
   const [y, qq] = q.split('-');
-  return `Q${qq}/${parseInt(y, 10) + 543}`;   // ปี พ.ศ.
+  const yr = parseInt(y, 10);
+  return _growthScrUni === 'th' ? `Q${qq}/${yr + 543}` : `Q${qq}/${yr}`;
 }
 
 function _growthScrPopulateQuarterSelect(list) {
@@ -5584,6 +5597,7 @@ function _growthScrFilteredSorted() {
 // ปุ่ม "↺ ล้างตัวกรอง" — คืนช่องค้น/Sector/ช่องติ๊กทุกช่องกลับค่าเริ่มต้น (min-base ติ๊กไว้เป็น default,
 // ที่เหลือไม่ติ๊ก) ไม่แตะ dropdown ไตรมาส (นั่นคือ navigation ไม่ใช่ filter) แล้ว re-render 1 รอบ
 function resetGrowthScrFilters() {
+  clearTimeout(_growthScrSearchTimer);   // กัน debounced render ที่ค้างอยู่ยิงทับหลังรีเซ็ต
   const s = document.getElementById('growth-scr-search'); if (s) s.value = '';
   const sec = document.getElementById('growth-scr-sector'); if (sec) sec.value = '';
   const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = val; };
@@ -5648,14 +5662,23 @@ function _growthScrOcfCell(r) {
 // โหลด _drData (จาก /api/dr — เหมือน renderWatchlist/Screener+ ทำ) แบบ lazy ครั้งเดียว
 // แล้ว re-render ตาราง DR ทับให้เอง — ต้องมีก่อนถึงจะทำลิงก์ TradingView (ต้องรู้ yf จริง เช่น
 // sym='GIGA' -> yf='3986.HK') และเปิด openDRChartModal ได้ (มัน find(x=>x.sym===sym) ใน _drData)
+// โหลด /api/dr เข้า _drData ครั้งเดียว (คืน Promise เสมอ — ใช้ร่วมกันโดย _growthScrEnsureDrData
+// ที่ re-render ทับ กับ _growthScrOpenSymbol ที่รอ _drData ก่อนเปิด chart modal)
+function _growthScrFetchDrData() {
+  return _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000)
+    .then(r => r.json())
+    .then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; } })
+    .catch(() => {});
+}
+
 let _growthScrDrLoading = false;
 function _growthScrEnsureDrData() {
   if (_growthScrUni !== 'dr' || _drData || _growthScrDrLoading) return;
   _growthScrDrLoading = true;
-  _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000)
-    .then(r => r.json())
-    .then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; if (_growthScrUni === 'dr') renderGrowthScreener(); } })
-    .catch(() => {})
+  _growthScrFetchDrData()
+    // re-render เฉพาะเมื่อตาราง DR ขึ้นแล้วจริง (เติมลิงก์ TV/ชื่อ) — ไม่งั้น _growthScrCur() ยัง
+    // undefined ระหว่างที่ fetchGrowthScreener ยังโหลดไม่เสร็จ จะวาดทับด้วย "ไม่มีข้อมูล..." หลอกๆ
+    .then(() => { if (_growthScrUni === 'dr' && _growthScrCur()) renderGrowthScreener(); })
     .finally(() => { _growthScrDrLoading = false; });
 }
 
@@ -5702,11 +5725,7 @@ function _growthScrOpenSymbol(symbol) {
       else openInternalHash('#fin/dr/' + encodeURIComponent(symbol));
     };
     if (_drData) { openDr(); return; }
-    _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000)
-      .then(r => r.json())
-      .then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; } })
-      .catch(() => {})
-      .finally(openDr);
+    _growthScrFetchDrData().finally(openDr);
     return;
   }
   const s = typeof DATA !== 'undefined' && DATA && DATA.stocks && DATA.stocks.find(x => x.symbol === symbol);
@@ -5739,6 +5758,13 @@ function _growthScrCellHtml(r, key) {
     case 'ps': return _scrFmtX(r.ps);
     default: return '';
   }
+}
+
+// พิมพ์ค้นหา — debounce กันวาดตารางใหม่ทุก keystroke (universe US ~3,000 แถว, filter/sort/innerHTML
+// รอบละหลายสิบ ms) เหมือน _shortSearchDebounced ในเมนู Short
+function _growthScrSearchDebounced() {
+  clearTimeout(_growthScrSearchTimer);
+  _growthScrSearchTimer = setTimeout(renderGrowthScreener, 180);
 }
 
 function renderGrowthScreener() {
@@ -7678,6 +7704,7 @@ function _invalidateFinClientCaches() {
   _marketTrendData = null;
   _sectorCmpData = null;
   _growthScrCache = {};
+  _growthScrQuarterByUni = {};
   _fsRows = null; _fsLoaded = false;
   _dcfScreenerData = null;
   _pbvPeScreenerData = null;
