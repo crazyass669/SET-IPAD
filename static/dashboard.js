@@ -16902,12 +16902,39 @@ function _loadCmFin() {
     _cmFinBandSym = sym;
     _loadCmFinBand(sym, qs, finSym);
   }
-  // รายปี: Finnomena รายปีก่อน (รวมจากไตรมาส ย้อน ~16-20 ปี แทน Yahoo ~4-5 ปี) fallback Yahoo รายปี
-  // รายไตรมาส: Finnomena รายไตรมาสก่อน fallback Yahoo รายไตรมาส (ตลาดที่ Finnomena ไม่ครอบ เช่น JP/EU
-  // หรือหุ้นที่ยังไม่ sync) — ผู้ใช้ไม่ต้องกดอะไรเพิ่ม
+  // หุ้นไทยแท้ (ไม่ใช่ DR / mirror US-HK-JP) → ใช้ "งบรวมทุกแหล่ง" (Finnomena + Yahoo + SET.or.th
+  // official) แทน Finnomena ล้วน — SET ลงงวดใหม่เร็วกว่า Finnomena/Yahoo หลายสัปดาห์ + เป็นเลข
+  // ทางการ (ทับก่อนเสมอ) · ประวัติยังยาวเท่าเดิม (ฐานยังเป็น Finnomena ~16-20 ปี SET แค่ overlay
+  // งวดล่าสุด) · endpoint คืน quarters + years มาพร้อมกัน — cacheKey ยังกันโหลดซ้ำงวดเดิมอยู่
+  if (!isDrSym && !mirMarket) {
+    _fetchTimeout(`/api/financials-merged-report/${encodeURIComponent(sym)}`, 30000)
+      .then(r => r.json())
+      .then(d => {
+        if (_cmStock?.symbol !== sym) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
+        if (d.error) throw new Error(d.error);
+        if (!(isQ ? d.quarters : d.years)?.length) throw new Error('no-merged-rows');
+        document.getElementById('cm-fin-loading').style.display = 'none';
+        _cmFinLoaded = cacheKey;
+        document.getElementById('cm-fin-body').innerHTML = _renderCmMerged(d, isQ);
+        _qplScrollToLatest(isQ ? 'cm-merged-scroll-q' : 'cm-merged-scroll-y');
+        requestAnimationFrame(() => _drawCmMergedChart(d, isQ));
+      })
+      .catch(() => {
+        if (_cmStock?.symbol !== sym) return;
+        _loadCmFinLegacy(sym, finSym, qs, isQ, cacheKey);   // merged พลาด → Finnomena/Yahoo ตามเดิม
+      });
+    return;
+  }
+  _loadCmFinLegacy(sym, finSym, qs, isQ, cacheKey);
+}
+
+// เส้นทางเดิม: Finnomena ก่อน (รายปีรวมจากไตรมาส ย้อน ~16-20 ปี · รายไตรมาส) fallback Yahoo —
+// ใช้กับ DR + mirror US/HK/JP (ไม่มี SET.or.th) และเป็น fallback ของหุ้นไทยเวลา merged-report พลาด
+function _loadCmFinLegacy(sym, finSym, qs, isQ, cacheKey) {
   const srcMain = isQ ? 'finnomena_q' : 'finnomena_y';
   const srcAlt  = isQ ? 'yahoo_q'     : 'yahoo';
   const showFin = (d, source) => {
+    if (_cmStock?.symbol !== sym) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
     document.getElementById('cm-fin-loading').style.display = 'none';
     _cmFinLoaded = cacheKey;
     document.getElementById('cm-fin-body').innerHTML = _renderCmFin(d, source);
@@ -16923,11 +16950,13 @@ function _loadCmFin() {
       _fetchTimeout(`/api/financials-full/${encodeURIComponent(finSym)}?source=${srcAlt}${qs}`, 30000)
         .then(r => r.json())
         .then(d => {
+          if (_cmStock?.symbol !== sym) return;
           if (d.error) { document.getElementById('cm-fin-loading').style.display = 'none';
             document.getElementById('cm-fin-body').innerHTML = `<div style="color:var(--text2);padding:16px">${d.error}</div>`; return; }
           showFin(d, srcAlt);
         })
         .catch(e => {
+          if (_cmStock?.symbol !== sym) return;
           document.getElementById('cm-fin-loading').style.display = 'none';
           document.getElementById('cm-fin-body').innerHTML = `<div style="color:var(--red);padding:16px">โหลดไม่สำเร็จ: ${e.message}</div>`;
         });
@@ -17223,6 +17252,101 @@ function _drawCmFinChart(d, source = 'yahoo') {
           ticks: { color: '#e8b84b', font: { size: 10 }, callback: v => v + '%' },
           grid: { drawOnChartArea: false }
         }
+      }
+    }
+  });
+}
+
+// แท็บ 🧾 งบการเงิน ของ popup กราฟ — เฉพาะหุ้นไทย ใช้ payload "งบรวมทุกแหล่ง"
+// (/api/financials-merged-report) แทน _renderCmFin: ตาราง P&L + งบดุล + กระแสเงินสด ผสาน
+// Finnomena+Yahoo+SET.or.th reuse _qplTableCore/_mergedExtraQuarterlyRows/_mergedTableAnnual
+// ตัวเดียวกับหน้า 🧩 เต็ม (คืน HTML string ล้วน ไม่มี dependency DOM/canvas ของหน้านั้น) —
+// scrollId ตั้งเฉพาะ popup (cm-merged-scroll-*) กัน getElementById ชนกับหน้างบเต็ม
+function _renderCmMerged(d, isQ) {
+  const cur = d.currency || '';
+  let tableHtml;
+  if (isQ) {
+    const qs = d.quarters || [];
+    tableHtml = qs.length
+      ? _qplTableCore(qs, 'cm-merged-scroll-q', _mergedExtraQuarterlyRows).html
+      : '<div style="color:var(--text2);padding:16px">ไม่พบข้อมูลรายไตรมาส</div>';
+  } else {
+    const ys = d.years || [];
+    tableHtml = ys.length
+      ? _mergedTableAnnual(ys, 'cm-merged-scroll-y')
+      : '<div style="color:var(--text2);padding:16px">ไม่พบข้อมูลรายปี</div>';
+  }
+  return `
+    <div style="font-size:11px;color:var(--text2);margin-bottom:8px">${_escHtml(d.name || d.sym || '')} · ${_escHtml(cur)}</div>
+    <div style="position:relative;height:210px;margin-bottom:14px"><canvas id="cm-fin-chart"></canvas></div>
+    ${tableHtml}
+    <div style="font-size:10px;color:var(--text2);margin-top:10px;line-height:1.6">
+      หน่วย: พัน${_finCurWord(cur)} · งบผสานทุกแหล่ง — P&amp;L: Finnomena + Yahoo + SET.or.th (SET ทางการ ทับก่อนเสมอ) ·
+      งบดุล/กระแสเงินสด: Finnomena + Yahoo${isQ ? ' · ค่าเป็นเฉพาะไตรมาสนั้น (ไม่ใช่ยอดสะสม)' : ''} · เลื่อนซ้ายเพื่อดูงวดเก่ากว่า
+    </div>`;
+}
+
+// กราฟรายได้ (แท่ง) + Net Margin % (เส้น) จาก payload งบรวมทุกแหล่ง — สไตล์เดียวกับ _drawCmFinChart
+// แต่อ่านฟิลด์ตรง (revenue/net_profit/npm) จาก d.quarters / d.years ไม่ใช่โครง income/balance/cashflow
+function _drawCmMergedChart(d, isQ) {
+  const canvas = document.getElementById('cm-fin-chart');
+  if (!canvas) return;
+  if (_cmFinChartInst) { _cmFinChartInst.destroy(); _cmFinChartInst = null; }
+
+  const rows = (isQ ? d.quarters : d.years) || [];
+  if (!rows.length) return;
+  const sorted = [...rows].sort((a, b) => isQ ? (a.year_be * 4 + a.q) - (b.year_be * 4 + b.q) : a.year_ad - b.year_ad);
+  const win = sorted.slice(isQ ? -16 : -12);
+  const labels = win.map(c => isQ ? `Q${c.q}/${String(c.year_be).slice(-2)}` : String(c.year_be));
+  const revVals = win.map(c => c.revenue ?? null);
+  const marginVals = win.map(c => c.npm != null ? c.npm
+    : (c.revenue && c.net_profit != null) ? parseFloat((c.net_profit / c.revenue * 100).toFixed(2)) : null);
+
+  const fmtShort = v => {
+    if (v == null) return '';
+    const a = Math.abs(v);
+    if (a >= 1e12) return (v / 1e12).toFixed(1) + 'T';
+    if (a >= 1e9)  return (v / 1e9).toFixed(2) + 'B';
+    if (a >= 1e6)  return (v / 1e6).toFixed(0) + 'M';
+    return (v / 1e3).toFixed(0) + 'K';
+  };
+
+  _cmFinChartInst = new Chart(canvas, {
+    data: {
+      labels,
+      datasets: [
+        { type: 'bar', label: 'Revenue', data: revVals, backgroundColor: 'rgba(31,111,235,0.85)',
+          borderColor: '#1f6feb', borderWidth: 1, borderRadius: 4, yAxisID: 'yRev', order: 2 },
+        { type: 'line', label: 'Net Margin %', data: marginVals, borderColor: '#e8b84b',
+          backgroundColor: 'rgba(232,184,75,0.15)', borderWidth: 2.5, pointRadius: 4, pointHoverRadius: 6,
+          pointBackgroundColor: marginVals.map(v => v == null ? 'transparent' : v >= 0 ? '#3fb950' : '#f85149'),
+          pointBorderColor: marginVals.map(v => v == null ? 'transparent' : v >= 0 ? '#3fb950' : '#f85149'),
+          tension: 0.3, yAxisID: 'yMargin', order: 1, spanGaps: true },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#8b949e', font: { size: 11 }, boxWidth: 14, padding: 16 } },
+        tooltip: {
+          backgroundColor: '#1c2128', borderColor: '#30363d', borderWidth: 1,
+          titleColor: '#e6edf3', bodyColor: '#8b949e',
+          callbacks: {
+            label: ctx => {
+              if (ctx.dataset.yAxisID === 'yRev') return ` Revenue: ${fmtShort(ctx.raw)}`;
+              if (ctx.raw == null) return null;
+              return ` Net Margin: ${ctx.raw.toFixed(2)}%`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#8b949e', font: { size: 11 } }, grid: { color: '#1e2736' } },
+        yRev: { type: 'linear', position: 'left',
+          ticks: { color: '#5a6476', font: { size: 10 }, callback: v => fmtShort(v) }, grid: { color: '#1e2736' } },
+        yMargin: { type: 'linear', position: 'right',
+          ticks: { color: '#e8b84b', font: { size: 10 }, callback: v => v + '%' }, grid: { drawOnChartArea: false } },
       }
     }
   });
@@ -30218,46 +30342,71 @@ function setShortSort(s, btn) {
   _shortSort = s; _shortSortDir = -1;
   document.querySelectorAll('[id^="short-sort-"]').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
+  // Squeeze Radar มี sort คงที่ของตัวเอง (short_pos_pct มาก→น้อย) ไม่อิง _shortSort
+  // จึงไม่ต้อง re-render ตอนเปลี่ยนการเรียงตาราง
   renderShortTable();
-  renderShortSqueeze();
+}
+
+let _shortPageLoading = false;
+
+// พิมพ์ค้นหาในตาราง Short — debounce กันรื้อ #short-table-wrap ทั้งก้อน + วาด sparkline
+// canvas ทุกแถวใหม่ทุก keystroke (หลายร้อยแถว = jank เห็นชัดบน iPad)
+let _shortSearchTimer = null;
+function _shortSearchDebounced() {
+  clearTimeout(_shortSearchTimer);
+  _shortSearchTimer = setTimeout(renderShortTable, 180);
 }
 
 async function loadShortPage() {
-  document.getElementById('short-table-wrap').innerHTML =
-    '<div style="padding:20px;color:var(--muted);font-size:13px;text-align:center">กำลังโหลด...</div>';
-  const data = await loadShortData();
-  if (!data) {
-    document.getElementById('short-table-wrap').innerHTML =
-      '<div style="padding:20px;color:var(--red);font-size:13px">ไม่พบข้อมูล — กรุณารัน import_short_sales.py ก่อน</div>';
-    return;
-  }
+  // กันเรียกซ้อน: showPage('short') + _startJob onDone ยิงพร้อมกันได้ (nav double-tap /
+  // Quick Update เสร็จตอนเพิ่งเข้าหน้า) เดิมต่างคนต่าง fetch + render เต็มรอบ
+  if (_shortPageLoading) return;
+  _shortPageLoading = true;
   try {
-    const upd  = data.last_api_update ? `อัพเดท API ${data.last_api_update}` : 'ยังไม่มี daily update';
-    const shortStatusEl = document.getElementById('short-status');
-    shortStatusEl.textContent = `ข้อมูล ${data.period_from} ถึง ${data.period_to} · ${upd}`;
-    const shortStaleBadge = _staleTradeDateBadge(data.last_api_update);
-    if (shortStaleBadge) shortStatusEl.appendChild(shortStaleBadge);
-    // ปุ่มเรียงเป็น HTML คงที่ — เขียนป้ายช่วงจริงทับ (ที่เหลือ render จาก JS อยู่แล้ว)
-    const valSortBtn = document.getElementById('short-sort-val');
-    if (valSortBtn) {
-      valSortBtn.textContent = `% Vol ${_shortPeriodTag()}`;
-      valSortBtn.title = `เรียงตาม % Short ต่อมูลค่าซื้อขายรวม ช่วง ${_shortPeriodRange()}`;
+    // แฟลช "กำลังโหลด..." เฉพาะรอบแรกที่ยังไม่มีข้อมูล — กลับเข้าหน้าเดิมที่ warm แล้ว
+    // ไม่ต้องกระพริบ spinner (pattern เดียวกับ loadInsiderPage)
+    if (!_shortData) {
+      document.getElementById('short-table-wrap').innerHTML =
+        '<div style="padding:20px;color:var(--muted);font-size:13px;text-align:center">กำลังโหลด...</div>';
     }
-    // Squeeze Radar ต้องใช้ _insAccum (insider) + _nvdrData ด้วย — เดิมต้องเข้าหน้า
-    // Insider/NVDR ก่อนถึงจะมีข้อมูล (แถว NVDR% ในการ์ด squeeze หายเงียบๆ)
-    // โหลดให้อัตโนมัติตรงนี้เลย ไม่ต้องพึ่งลำดับที่ผู้ใช้กดหน้าไหนก่อน
-    if (!_insData) await fetchInsiderData();
-    if (!_nvdrData) await loadNvdrData();
-    renderShortSummary();
-    renderShortSqueeze();
-    renderShortTable();
-  } catch (e) {
-    // กัน render พังแล้วค้าง "กำลังโหลด..." ถาวรแบบไม่มี error โชว์เลย — แอปนี้ไม่มี
-    // window.onunhandledrejection ดักจับ promise ที่ throw ไว้เลย (ต่างจาก fetchInsiderData/
-    // loadFlowPage ที่มี try/catch ห่ออยู่แล้ว หน้านี้เคยไม่มี)
-    console.error('loadShortPage render error:', e);
-    document.getElementById('short-table-wrap').innerHTML =
-      `<div style="padding:20px;color:var(--red);font-size:13px">เกิดข้อผิดพลาดขณะแสดงผล: ${e.message}</div>`;
+    const data = await loadShortData();
+    if (!data) {
+      document.getElementById('short-table-wrap').innerHTML =
+        '<div style="padding:20px;color:var(--red);font-size:13px">ไม่พบข้อมูล — กรุณารัน import_short_sales.py ก่อน</div>';
+      return;
+    }
+    try {
+      const upd  = data.last_api_update ? `อัพเดท API ${data.last_api_update}` : 'ยังไม่มี daily update';
+      const shortStatusEl = document.getElementById('short-status');
+      const rangeStr = (data.period_from && data.period_to)
+        ? `${data.period_from} ถึง ${data.period_to}` : 'ช่วงสะสมล่าสุด';
+      shortStatusEl.textContent = `ข้อมูล ${rangeStr} · ${upd}`;
+      const shortStaleBadge = _staleTradeDateBadge(data.last_api_update);
+      if (shortStaleBadge) shortStatusEl.appendChild(shortStaleBadge);
+      // ปุ่มเรียงเป็น HTML คงที่ — เขียนป้ายช่วงจริงทับ (ที่เหลือ render จาก JS อยู่แล้ว)
+      const valSortBtn = document.getElementById('short-sort-val');
+      if (valSortBtn) {
+        valSortBtn.textContent = `% Vol ${_shortPeriodTag()}`;
+        valSortBtn.title = `เรียงตาม % Short ต่อมูลค่าซื้อขายรวม ช่วง ${_shortPeriodRange()}`;
+      }
+      // Squeeze Radar ต้องใช้ _insAccum (insider) + _nvdrData ด้วย — เดิมต้องเข้าหน้า
+      // Insider/NVDR ก่อนถึงจะมีข้อมูล (แถว NVDR% ในการ์ด squeeze หายเงียบๆ)
+      // โหลดให้อัตโนมัติตรงนี้เลย ไม่ต้องพึ่งลำดับที่ผู้ใช้กดหน้าไหนก่อน
+      if (!_insData) await fetchInsiderData();
+      if (!_nvdrData) await loadNvdrData();
+      renderShortSummary();
+      renderShortSqueeze();
+      renderShortTable();
+    } catch (e) {
+      // กัน render พังแล้วค้าง "กำลังโหลด..." ถาวรแบบไม่มี error โชว์เลย — แอปนี้ไม่มี
+      // window.onunhandledrejection ดักจับ promise ที่ throw ไว้เลย (ต่างจาก fetchInsiderData/
+      // loadFlowPage ที่มี try/catch ห่ออยู่แล้ว หน้านี้เคยไม่มี)
+      console.error('loadShortPage render error:', e);
+      document.getElementById('short-table-wrap').innerHTML =
+        `<div style="padding:20px;color:var(--red);font-size:13px">เกิดข้อผิดพลาดขณะแสดงผล: ${e.message}</div>`;
+    }
+  } finally {
+    _shortPageLoading = false;
   }
 }
 
@@ -30396,7 +30545,7 @@ function renderShortSqueeze() {
               </div>
               ${r.nvdr ? `<div style="display:flex;justify-content:space-between" title="NVDR% = ต่างชาติถือผ่าน NVDR">
                 <span style="font-size:11px;color:var(--muted)">NVDR%</span>
-                <span style="font-size:11px;color:#5ab4ff">${r.nvdr.nvdr_pct.toFixed(2)}%</span>
+                <span style="font-size:11px;color:#5ab4ff">${(r.nvdr.nvdr_pct ?? 0).toFixed(2)}%</span>
               </div>` : ''}
             </div>`;
         }).join('')}
@@ -30534,7 +30683,7 @@ function _renderShortSparklines(rows) {
       if (!tail || tail.length < 2) return;
       const canvas = row.querySelector('.short-spark-canvas');
       if (!canvas) return;
-      const prices = tail.map(t => [t[0], t[1]]);   // [date, short_pos]
+      const prices = tail.map(t => [t[0], t[1] ?? 0]);   // [date, short_pos] — กัน null จากไฟล์สะสมเพี้ยน
       const trend = prices[prices.length-1][1] - prices[0][1];
       drawSparkline(canvas, prices, -trend);   // กลับเครื่องหมาย: short ลด = เขียว
     });
@@ -30542,8 +30691,10 @@ function _renderShortSparklines(rows) {
 }
 
 let _shortDetailSym = null;
+let _shortDetailSeq = 0;   // กด row รัวๆ -> response ที่ช้ากว่ามาทีหลังทับ panel ของ row ล่าสุด
 
 async function showShortDetail(sym, rowEl) {
+  const seq = ++_shortDetailSeq;
   // highlight row
   document.querySelectorAll('#short-table-wrap tr.selected-row')
     .forEach(r => { r.classList.remove('selected-row'); r.style.background = ''; });
@@ -30562,17 +30713,23 @@ async function showShortDetail(sym, rowEl) {
   // ทำให้ panel โชว์ undefined%/NaN บนเว็บ)
   try {
     const r = await _fetchTimeout(`/api/short-sales/${encodeURIComponent(sym)}`, 15000, 'หมดเวลารอข้อมูล Short Sale รายตัว (เกิน 15 วิ) — ลองใหม่อีกครั้ง');
+    if (seq !== _shortDetailSeq) return;   // มี row ใหม่กว่าถูกกดระหว่างรอ — ทิ้งผลนี้
     let d = await r.json();
+    if (seq !== _shortDetailSeq) return;
+    let capped = false;   // true = เวอร์ชันเว็บ ใช้ daily_tail ที่ตัดไว้ 21 วัน
     if (d.error) {
       const v = _shortData?.stocks?.[sym];
       if (!v) throw new Error(d.error);
+      capped = (v.daily_count || 0) > (v.daily_tail || []).length;
       d = { ...v, daily: (v.daily_tail || []).map(t => ({ date: t[0], short_pos: t[1], short_pos_pct: t[2] })) };
     }
     const daily = d.daily || [];
+    // เวอร์ชันเว็บส่ง daily_tail แค่ 21 วัน — โชว์ count จริงจาก daily_count ไม่ใช่ความยาว tail
+    const snapCount = (capped && d.daily_count) ? d.daily_count : daily.length;
 
     document.getElementById('short-detail-sub').textContent =
       daily.length > 0
-        ? `${daily.length} snapshots (${daily[0].date} → ${daily[daily.length-1].date})`
+        ? `${snapCount} snapshots${capped ? ' (แสดง 21 ล่าสุด)' : ''} (${daily[0].date} → ${daily[daily.length-1].date})`
         : 'ยังไม่มี daily snapshots — กด Quick Update เพื่อเริ่มเก็บข้อมูล';
 
     // stats
@@ -30614,7 +30771,10 @@ function drawShortTrendChart(daily) {
   if (!daily || daily.length === 0) {
     // ยังไม่มีข้อมูล — แสดง placeholder
     ctx.fillStyle = 'rgba(255,255,255,0.06)';
-    ctx.roundRect(0, 0, W, H, 8);
+    ctx.beginPath();
+    // roundRect ไม่มีบน Safari < 16 (iPad รุ่นเก่า) — เช็คก่อนเหมือน call site อื่นทั้งหมด
+    if (ctx.roundRect) ctx.roundRect(0, 0, W, H, 8);
+    else ctx.rect(0, 0, W, H);
     ctx.fill();
     ctx.fillStyle = '#607080';
     ctx.font = '12px sans-serif';
@@ -30626,7 +30786,7 @@ function drawShortTrendChart(daily) {
     return;
   }
 
-  const points = daily.map(d => ({ date: d.date, val: d.short_pos }));
+  const points = daily.map(d => ({ date: d.date, val: d.short_pos ?? 0 }));
   if (points.length < 2) {
     ctx.fillStyle = '#607080';
     ctx.font = '12px sans-serif';
@@ -30724,7 +30884,7 @@ function drawShortTrendChart(daily) {
   const first = points[0].val, last = points[points.length-1].val;
   // กัน Infinity%/NaN% ตอน snapshot แรกสุดเป็น 0 หุ้น (เพิ่งเริ่มมี short position) —
   // ไม่มีฐานให้คิดเป็น % เปลี่ยนแปลงได้ โชว์ "n/a" แทน
-  const chgPct = first !== 0 ? ((last - first) / first * 100).toFixed(1) : null;
+  const chgPct = first ? ((last - first) / first * 100).toFixed(1) : null;
   const chgCol = last < first ? '#3ab464' : last > first ? '#e05252' : '#8090a0';
   const arrow  = last < first ? '▼' : last > first ? '▲' : '–';
   ctx.font = 'bold 11px sans-serif';

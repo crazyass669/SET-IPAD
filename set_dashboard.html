@@ -30,7 +30,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260903p">
+<link rel="stylesheet" href="static/dashboard.css?v=20260903u">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -2667,7 +2667,7 @@
     </div></span>
     <span id="short-status" style="font-size:11px;color:var(--muted)"></span>
     <input id="short-search" type="text" placeholder="ค้นหาหุ้น..."
-      oninput="renderShortTable()"
+      oninput="_shortSearchDebounced()"
       style="padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);
              color:var(--fg);font-size:12px;width:130px;outline:none">
     <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
@@ -5684,6 +5684,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260903r"></script>
+<script src="static/dashboard.js?v=20260903u"></script>
 </body>
 </html>

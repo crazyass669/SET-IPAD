@@ -559,8 +559,15 @@ def _payload_latest_period(source, payload):
             return max(dates) if dates else None
         if source in ("yahoo", "yahoo_q", "finnomena_q"):
             inc = payload.get("income") or {}
-            dstrs = {d for field_map in inc.values() if isinstance(field_map, dict)
-                     for d in field_map}
+            # ยึดงวดล่าสุดจาก 'บรรทัดงบหลัก' เท่านั้น — Finnomena (และบางที Yahoo) เผยแพร่
+            # Basic EPS ของไตรมาสล่วงหน้าก่อนบรรทัดงบจริง (Revenue/Net Income ยังว่าง) ถ้านับ
+            # ทุก field จะได้งวดล่วงหน้าที่ยังไม่มีงบจริง ทำให้ skip_up_to_date (+ get_quarter_coverage)
+            # ข้ามการ sync งบไตรมาสนั้นไปถาวรทั้งที่ยังไม่เข้า (เจอ ~445 หุ้นไทย, IVL Q2/2026)
+            anchors = [inc.get(k) for k in ("Total Revenue", "Net Income")]
+            dstrs = {d for m in anchors if isinstance(m, dict) for d in m}
+            if not dstrs:   # payload เก่า/ทรงแปลกที่ไม่มี anchor — คงพฤติกรรมเดิม
+                dstrs = {d for field_map in inc.values() if isinstance(field_map, dict)
+                         for d in field_map}
             return date.fromisoformat(max(dstrs)[:10]) if dstrs else None
     except Exception:
         return None

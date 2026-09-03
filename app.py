@@ -11790,9 +11790,10 @@ def check_foreign_room():
 _SHORT_DATA_FILE = os.path.join(BASE_DIR, "short_sales_data.json")
 _short_data_cache = None
 _short_data_ts    = 0.0
-_SHORT_DATA_TTL   = 3600  # re-read file ทุก 1 ชั่วโมง
 
 def _load_short_data():
+    # cache invalidation อิง mtime ล้วน (ไม่มี TTL) — เขียนไฟล์ใหม่เมื่อไหร่ mtime เปลี่ยน
+    # รอบถัดไปโหลดใหม่เอง
     global _short_data_cache, _short_data_ts
     if not os.path.exists(_SHORT_DATA_FILE):
         return None
@@ -11802,7 +11803,9 @@ def _load_short_data():
     try:
         with open(_SHORT_DATA_FILE, encoding="utf-8") as f:
             _short_data_cache = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
+    # ValueError ครอบทั้ง json.JSONDecodeError และ UnicodeDecodeError (อ่านโดนกลางไฟล์
+    # ที่ import_short_sales.py กำลังเขียน multi-byte อยู่) — คืน cache เดิมแทน 500
+    except (ValueError, OSError) as e:
         print(f"[Short Sales] failed to load {_SHORT_DATA_FILE}: {e}")
         return _short_data_cache
     _short_data_ts = mtime
@@ -11955,6 +11958,15 @@ def short_sales_daily_update():
                     "short_pos_local": 0, "short_pos_nvdr": 0, "short_pos_pct": 0, "daily": [],
                 })
                 _merge_daily_tail(s.setdefault("daily", []), tail, ["short_pos", "short_pos_pct"])
+                # หุ้นที่เพิ่งสร้างจาก fallback ล้วนๆ (ไม่โผล่ในชุด live วันนี้) top-level
+                # short_pos/short_pos_pct จะค้าง 0 ทั้งที่ .daily มีค่าจริง -> /api/short-sales
+                # จะคืน 0/0 แล้วโดน default filter ของตารางซ่อนหาย sync ให้ตรง snapshot ล่าสุด
+                # (เทียบ nvdr_daily_update ที่ทำแบบเดียวกัน) — ตัวที่อยู่ในชุด live วันนี้ถูก
+                # เขียนทับด้วยค่าสดในลูปด้านล่างอยู่แล้ว
+                if s["daily"]:
+                    _last = s["daily"][-1]
+                    s["short_pos"]     = _last.get("short_pos", 0)
+                    s["short_pos_pct"] = _last.get("short_pos_pct", 0)
         except Exception as e:
             print(f"[short-sales] GitHub fallback ไม่ได้ ({e})")
 
