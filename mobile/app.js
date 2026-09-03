@@ -311,7 +311,11 @@ function setScrHeader(scr) {
     $('#scrSub').textContent = s;
   }
 }
-function go(scr) {
+// จำตำแหน่งเลื่อน (window.scrollY) ของแต่ละ screen ตอนออกจากจอนั้น —
+// กดเข้าดูหุ้นรายตัวแล้วกดปุ่ม ‹ กลับ ให้ค้างตำแหน่งเดิม ไม่เด้งขึ้นบนสุด
+const _scrollMem = {};
+function go(scr, restore) {
+  if (curScreen && curScreen !== scr) _scrollMem[curScreen] = window.scrollY;
   curScreen = scr;
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   $('#s-' + scr).classList.add('active');
@@ -330,7 +334,14 @@ function go(scr) {
   else if (scr === 'heatmap') renderHeatmap();
   else if (scr === 'flow') renderFlow();
   else if (scr === 'screener') renderScreener();
-  window.scrollTo(0, 0);
+  // restore = กดปุ่ม ‹ กลับจากหน้ารายละเอียดหุ้น (หรือ subpage) — คืนตำแหน่งเลื่อนเดิม
+  const memY = restore ? _scrollMem[scr] : null;
+  if (memY != null && memY > 0) {
+    window.scrollTo(0, memY);
+    requestAnimationFrame(() => window.scrollTo(0, memY));
+  } else {
+    window.scrollTo(0, 0);
+  }
 }
 function openDetail(id) {
   if (!D.byId[id]) return;
@@ -340,7 +351,7 @@ function openDetail(id) {
 }
 function wireNav() {
   $('#tabbar').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.scr); });
-  $('#backBtn').addEventListener('click', () => go(curScreen === 'detail' ? detailFrom : 'more'));
+  $('#backBtn').addEventListener('click', () => go(curScreen === 'detail' ? detailFrom : 'more', true));
   $('#infoBtn').addEventListener('click', () => { $('#scrim').classList.add('open'); $('#sheet').classList.add('open'); });
   $('#scrim').addEventListener('click', () => { $('#scrim').classList.remove('open'); $('#sheet').classList.remove('open'); });
 }
