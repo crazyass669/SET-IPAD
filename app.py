@@ -5761,7 +5761,7 @@ def _peer_group_quarters(sym, con=None):
         try:
             fresh = financials_store.fetch_yahoo_quarterly(sym)
             financials_store.upsert(BASE_DIR, sym, "yahoo_q", fresh)
-            yq = financials_store.get(BASE_DIR, sym, "yahoo_q")
+            yq = financials_store.get(BASE_DIR, sym, "yahoo_q", con=con)
         except Exception:
             yq = None
     if not finn and not yq:
@@ -5803,6 +5803,19 @@ def _ttm_sum(qmap, anchor_key, field):
             return None
         vals.append(row[field])
     return sum(vals)
+
+
+def _latest_ttm_anchor(qmap, anchor_key, field, lookback=4):
+    """anchor ล่าสุด (<= anchor_key, ย้อนได้สูงสุด lookback ไตรมาสปฏิทินจริง) ที่ _ttm_sum(field)
+    ครบ 4 ไตรมาสจริง — งบกระแสเงินสด/งบดุลจาก Yahoo มักตามหลัง P&L (SET/Finnomena) 1 งวด ทำให้
+    anchor ที่ยึดไตรมาส P&L ล่าสุดได้ cfo/cfi TTM = None ทั้งที่มีงบครบถึงงวดก่อนหน้า (ไตรมาส
+    ใหม่สุดในงบผสานของหุ้นไทยส่วนใหญ่เป็น SET P&L ล้วน) คืน None ถ้าย้อนครบ lookback แล้วยังไม่มี
+    ช่วง TTM ไหนครบ"""
+    for off in range(lookback):
+        k = anchor_key - off
+        if _ttm_sum(qmap, k, field) is not None:
+            return k
+    return None
 
 
 def _peer_group_pct_change(cur, prev):
@@ -5903,9 +5916,13 @@ def _peer_group_detail_row(sym, entry, f, con):
     gp_ttm = _ttm_sum(qmap, anchor, "gross_profit")
     op_ttm = _ttm_sum(qmap, anchor, "operating_profit")
     cogs_ttm = _ttm_sum(qmap, anchor, "cogs")
-    cfo_ttm = _ttm_sum(qmap, anchor, "cfo")
-    cfi_ttm = _ttm_sum(qmap, anchor, "cfi")
-    capex_ttm = _ttm_sum(qmap, anchor, "capex")
+    # งบกระแสเงินสด (Yahoo) ตามหลัง P&L 1 งวดเสมอ — ยึด anchor ของ CFO เอง (งวดล่าสุดที่มี TTM
+    # ครบ 4 ไตรมาส) ไม่ใช่ anchor ของ P&L ไม่งั้น CFO/FCF/margin ทั้งกลุ่มขึ้น "–" เกือบทุกตัว
+    # เมื่อไตรมาสใหม่สุดเป็น SET P&L ล้วน · cfi/capex ใช้ anchor เดียวกับ cfo ให้ FCF สอดคล้องกัน
+    cf_anchor = _latest_ttm_anchor(qmap, anchor, "cfo")
+    cfo_ttm = _ttm_sum(qmap, cf_anchor, "cfo") if cf_anchor is not None else None
+    cfi_ttm = _ttm_sum(qmap, cf_anchor, "cfi") if cf_anchor is not None else None
+    capex_ttm = _ttm_sum(qmap, cf_anchor, "capex") if cf_anchor is not None else None
     fcf_approx = (cfo_ttm + cfi_ttm) if (cfo_ttm is not None and cfi_ttm is not None) else None
 
     equity_avg = _avg_last4(qmap, anchor, "total_equity")
@@ -5923,6 +5940,7 @@ def _peer_group_detail_row(sym, entry, f, con):
     equity_latest = _latest_value(qmap, anchor, "total_equity")
     pbv = (mkt_cap / equity_latest) if (mkt_cap and equity_latest and equity_latest > 0) else f.get("pbv_value")
     ibd_latest = _latest_value(qmap, anchor, "total_debt")
+    assets_latest = _latest_value(qmap, anchor, "total_assets")
     current_assets_latest = _latest_value(qmap, anchor, "current_assets")
     current_liabilities_latest = _latest_value(qmap, anchor, "current_liabilities")
     cash_latest = _latest_value(qmap, anchor, "cash")
@@ -5969,8 +5987,10 @@ def _peer_group_detail_row(sym, entry, f, con):
         "cash_cycle": f.get("cash_cycle"), "dio": f.get("dio"), "dso": f.get("dso"), "dpo": f.get("dpo"),
         "q_revenue": last.get("revenue"), "q_cogs": last.get("cogs"), "q_sga": last.get("sga_total"),
         "q_ebit": last.get("operating_profit"), "q_net_profit": last.get("net_profit"),
-        "q_cfo": last.get("cfo"), "total_assets": last.get("total_assets"),
-        "total_equity": last.get("total_equity"), "ibd": last.get("total_debt"),
+        # งบดุล ณ จุดเวลา — ใช้งวดล่าสุดที่ "มีค่าจริง" (Yahoo ตามหลัง P&L 1 งวด) ไม่ใช่ last
+        # ตรงๆ ไม่งั้นคอลัมน์ Assets/Equity/IBD เป็น "–" เมื่อไตรมาสใหม่สุดเป็น SET P&L ล้วน
+        "q_cfo": last.get("cfo"), "total_assets": assets_latest,
+        "total_equity": equity_latest, "ibd": ibd_latest,
         "q_net_profit_qoq": _peer_group_pct_change(last.get("net_profit"), (prior_q or {}).get("net_profit")),
         "q_net_profit_yoy": _peer_group_pct_change(last.get("net_profit"), (yoy_q or {}).get("net_profit")),
         "q_revenue_qoq": _peer_group_pct_change(last.get("revenue"), (prior_q or {}).get("revenue")),

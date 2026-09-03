@@ -10155,22 +10155,23 @@ async function _peerBuildDatalist() {
     dl.dataset.key = key;
     return;
   }
-  const dataVar = _peerMarket === 'US' ? '_usData' : _peerMarket === 'HK' ? '_hkData' : '_jpData';
-  const metricsUrl = _peerMarket === 'US' ? '/api/us-index-metrics'
-    : _peerMarket === 'HK' ? '/api/hk-index-metrics' : '/api/jp-index-metrics';
+  // _usData/_hkData/_jpData เป็น top-level `let` ไม่ใช่ property ของ window — window['_usData']
+  // undefined เสมอ (เดิม sector dropdown/autocomplete US/HK/JP ตายสนิท + ยิง index-metrics ซ้ำ
+  // ทุกครั้งที่สลับแท็บ) ใช้ getter/setter ผ่าน _FS_MIRROR_IDX เหมือน Tearsheet/Screener+ + เช็ค
+  // d.error ก่อน cache (route คืน {error} 500 ตอนไฟล์ metrics หาย)
+  const idx = _FS_MIRROR_IDX[_peerMarket.toLowerCase()];
   let justLoaded = false;
-  if (!window[dataVar]) {
+  if (!idx.get()) {
     try {
-      const d = await (await fetch(metricsUrl)).json();
-      if (_peerMarket === 'US') _usData = d; else if (_peerMarket === 'HK') _hkData = d; else _jpData = d;
-      justLoaded = true;
+      const d = await (await fetch(idx.endpoint)).json();
+      if (d && !d.error && d.stocks) { idx.set(d); justLoaded = true; }
     } catch { return; }
   }
-  // sector select ถูกเรียกคู่กันตอนเปิดหน้า/สลับแท็บ แต่ตอนนั้น window[dataVar] ยังไม่มา (async
+  // sector select ถูกเรียกคู่กันตอนเปิดหน้า/สลับแท็บ แต่ตอนนั้นข้อมูลตลาดยังไม่มา (async
   // ด้านบน) เลยออกจากฟังก์ชันไปเปล่าๆ — ถ้าเพิ่งโหลดเสร็จรอบนี้ต้อง rebuild sector select เอง
   // ไม่งั้น dropdown ค้างว่างจนกว่าจะสลับแท็บไปมา
   if (justLoaded) _peerBuildSectorSelect();
-  const stocks = window[dataVar]?.stocks || [];
+  const stocks = idx.get()?.stocks || [];
   const mirror = (await _loadMirrorSymbols())[_peerMarket] || [];
   const key = _peerMarket + ':' + stocks.length + ':' + mirror.length;
   if (dl.dataset.key === key) return;
@@ -10205,8 +10206,8 @@ function _peerBuildSectorSelect() {
     if (!DATA || !DATA.stocks) return;
     sectors = [...new Set(DATA.stocks.map(s => s.sector).filter(Boolean))].sort();
   } else {
-    const dataVar = _peerMarket === 'US' ? '_usData' : _peerMarket === 'HK' ? '_hkData' : '_jpData';
-    const stocks = window[dataVar]?.stocks;
+    // ผ่าน _FS_MIRROR_IDX getter — _usData/_hkData/_jpData ไม่ใช่ property ของ window
+    const stocks = _FS_MIRROR_IDX[_peerMarket.toLowerCase()].get()?.stocks;
     if (!stocks) return;   // ยังไม่โหลด — _peerBuildDatalist ที่เรียกคู่กันจะโหลดให้แล้ว rerun เอง
     sectors = [...new Set(stocks.map(s => s.sector).filter(Boolean))].sort();
   }
@@ -10222,7 +10223,9 @@ function setPeerPreset(preset, btn) {
   _peerPreset = preset;
   document.querySelectorAll('#page-peer .filter-btn[id^="peer-preset-"]').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
-  if (_peerRows.length) renderPeerResults();
+  // พรีเซ็ตคอลัมน์มีผลแค่มุมมอง "ตาราง" — ในมุมมอง scatter/group/workspace การกดพรีเซ็ตไม่เปลี่ยน
+  // อะไร แต่ renderPeerResults จะไปยิง /api/peer-group-detail ใหม่โดยเปล่าประโยชน์
+  if (_peerRows.length && _peerViewMode === 'table') renderPeerResults();
 }
 
 function setPeerViewMode(mode, btn) {
@@ -10255,13 +10258,15 @@ function _peerRenderMeta() {
   // widen ทำได้เฉพาะตลาด TH เท่านั้น — US/HK/JP มีแค่ sector ชั้นเดียว (ดู comment ใน
   // /api/peer-compare) ก่อนหน้านี้ลิงก์นี้โผล่ในตลาดอื่นด้วยทั้งที่กดแล้วไม่มีผลอะไรเลย
   const canWiden = _peerMeta.market === 'TH' && !_peerMeta.widened && _peerMeta.level === 'sector' && rows.length < 8;
+  // ondemand_note/dr_symbol/base_symbol/group มาจาก backend ที่ echo symbol/sector ที่ผู้ใช้พิมพ์
+  // (จาก hash หรือช่อง input) กลับมาดิบ — escape ทุกจุดก่อนยัดเข้า innerHTML กัน XSS
   const ondemandNote = _peerMeta.ondemand_note
-    ? `<div style="font-size:11px;color:#d29922;margin-bottom:6px">⚠ ${_peerMeta.ondemand_note}</div>` : '';
+    ? `<div style="font-size:11px;color:#d29922;margin-bottom:6px">⚠ ${_escHtml(_peerMeta.ondemand_note)}</div>` : '';
   const drNote = _peerMeta.dr_symbol
-    ? `<div style="font-size:11px;color:var(--text2);margin-bottom:6px">ℹ DR "${_peerMeta.dr_symbol}" อ้างอิงหุ้น underlying "${_peerMeta.base_symbol}" (ตลาด ${_peerMeta.market}) — กลุ่มเพื่อนด้านล่างคือเพื่อนของ underlying</div>` : '';
+    ? `<div style="font-size:11px;color:var(--text2);margin-bottom:6px">ℹ DR "${_escHtml(_peerMeta.dr_symbol)}" อ้างอิงหุ้น underlying "${_escHtml(_peerMeta.base_symbol)}" (ตลาด ${_escHtml(_peerMeta.market)}) — กลุ่มเพื่อนด้านล่างคือเพื่อนของ underlying</div>` : '';
   meta.innerHTML = ondemandNote + drNote +
-    `พบ ${rows.length} หุ้น ใน ${_peerMeta.level === 'industry' ? 'Industry' : 'Sector'} "<b>${_peerMeta.group}</b>"` +
-    (_peerMeta.computed_at ? ` · คำนวณเมื่อ ${_peerMeta.computed_at}` : '') +
+    `พบ ${rows.length} หุ้น ใน ${_peerMeta.level === 'industry' ? 'Industry' : 'Sector'} "<b>${_escHtml(_peerMeta.group)}</b>"` +
+    (_peerMeta.computed_at ? ` · คำนวณเมื่อ ${_escHtml(_peerMeta.computed_at)}` : '') +
     (canWiden ? ` &nbsp;<a href="#" onclick="_peerWiden();return false" style="color:var(--blue)">ขยับไปดูระดับ Industry (กลุ่มใหญ่ขึ้น)</a>` : '');
 }
 
@@ -10308,7 +10313,12 @@ async function _peerFetch(url) {
     const d = await r.json();
     if (token !== _peerFetchToken) return;   // มี request ใหม่กว่าแซงไปแล้ว ทิ้งผลลัพธ์นี้
     if (!d.rows || !d.rows.length) {
-      box.innerHTML = `<div class="empty">${(d.meta && d.meta.note) || 'ไม่พบข้อมูลกลุ่มนี้'}</div>`;
+      // ล้าง state กลุ่มเดิมทิ้งก่อน return — ไม่งั้นกด preset/view-mode/widen ต่อจะ resurrect
+      // กลุ่มเก่าจาก _peerRows/_peerMeta ที่ยังค้าง (guard `if (_peerRows.length)` ยังจริงอยู่)
+      _peerRows = []; _peerMedian = null; _peerMeta = null; _peerSort = null;
+      _peerGroupSyms = null; _peerGroupRows = null; _peerGroupSort = {};
+      // note มาจาก backend ที่ echo symbol/sector ที่ผู้ใช้พิมพ์ (จาก hash) กลับมาดิบ — escape กัน XSS
+      box.innerHTML = `<div class="empty">${_escHtml((d.meta && d.meta.note) || 'ไม่พบข้อมูลกลุ่มนี้')}</div>`;
       return;
     }
     _peerRows = d.rows;
@@ -10326,9 +10336,21 @@ async function _peerFetch(url) {
   }
 }
 
+// คอลัมน์ "ยิ่งน้อยยิ่งดี" ที่ค่า <= 0 คือผิดปกติ (ขาดทุน → P/E,PEG ติดลบ · ส่วนผู้ถือหุ้นติดลบ →
+// PBV,D/E,IBD/E ติดลบ) ไม่ใช่ "ถูก/ปลอดภัยที่สุด" — ต้องถือเป็นแย่สุดของกลุ่ม ไม่ใช่ดีสุด
+const _PEER_NEG_INVALID = new Set(['pe', 'pbv', 'peg', 'de_ratio', 'ibd_equity']);
+
 // percentile ของ val ภายในกลุ่ม arr (0 = แย่สุด, 1 = ดีสุด — ปรับทิศตาม lowerBetter)
-function _peerPercentile(val, arr, lowerBetter) {
+// negInvalid: คอลัมน์ที่ค่า <= 0 = พยาธิสภาพ (ดู _PEER_NEG_INVALID) → คืน 0 (แย่สุด) และตัดค่า
+// <= 0 ออกจากฐานเปรียบเทียบ ไม่งั้นหุ้นขาดทุน (P/E ติดลบ) จะได้ percentile ~1.0 ดูเหมือนถูกสุด
+function _peerPercentile(val, arr, lowerBetter, negInvalid) {
   if (val == null || arr.length < 2) return null;
+  if (negInvalid && lowerBetter) {
+    if (val <= 0) return 0;
+    const pool = arr.filter(v => v > 0);
+    if (pool.length < 2) return null;
+    return 1 - pool.filter(v => v < val).length / (pool.length - 1);
+  }
   const cntBetter = lowerBetter ? arr.filter(v => v < val).length : arr.filter(v => v > val).length;
   return 1 - cntBetter / (arr.length - 1);
 }
@@ -10366,7 +10388,7 @@ function renderPeerTable() {
   cols.forEach(c => { arrays[c.k] = rows.map(r => r[c.k]).filter(v => typeof v === 'number'); });
 
   const widenNote = (_peerMeta && _peerMeta.widened)
-    ? `<div style="font-size:11px;color:#d29922;margin-bottom:6px">⚠ sector เดิมมีสมาชิกน้อยกว่า 4 ตัว — ขยับไปเทียบระดับ industry "${_peerMeta.group}" แทนอัตโนมัติ</div>` : '';
+    ? `<div style="font-size:11px;color:#d29922;margin-bottom:6px">⚠ sector เดิมมีสมาชิกน้อยกว่า 4 ตัว — ขยับไปเทียบระดับ industry "${_escHtml(_peerMeta.group)}" แทนอัตโนมัติ</div>` : '';
 
   const finNote = rows.some(r => r.is_financial_sector)
     ? '<div style="font-size:11px;color:var(--text2);margin-bottom:6px">ℹ กลุ่มนี้มีหุ้นสถาบันการเงิน — Z-Score/margin บางตัวตีความต่างจากกลุ่มอื่น เทียบตรง ๆ ระวัง</div>' : '';
@@ -10404,7 +10426,7 @@ function renderPeerTable() {
       const v = r[c.k];
       let bg = '';
       if (!isMedian) {
-        const pct = _peerPercentile(v, arrays[c.k], c.lowerBetter);
+        const pct = _peerPercentile(v, arrays[c.k], c.lowerBetter, _PEER_NEG_INVALID.has(c.k));
         bg = _peerCellColor(pct);
       }
       let display = _peerFmt(v);
@@ -10443,11 +10465,15 @@ function renderPeerTable() {
     });
   }
   let bodyRows = sortedRows.map(r => rowHtml(r, false));
+  // ปักหมุดหุ้นตั้งต้นไว้บนสุด — เฉพาะตอนที่มันอยู่ในกลุ่มจริง (base อาจหลุดกลุ่มได้หลัง widen
+  // industry) ไม่งั้น MEDIAN จะถูกแทรกที่ index 1 ทั้งที่ไม่มีแถว base ปักหมุดอยู่ข้างบน
+  let basePinned = false;
   if (baseSym) {
     const idx = sortedRows.findIndex(r => r.symbol === baseSym);
-    if (idx > 0) { const [x] = bodyRows.splice(idx, 1); bodyRows.unshift(x); }
+    if (idx > 0) { const [x] = bodyRows.splice(idx, 1); bodyRows.unshift(x); basePinned = true; }
+    else if (idx === 0) basePinned = true;
   }
-  if (_peerMedian) bodyRows.splice(baseSym ? 1 : 0, 0, rowHtml(_peerMedian, true));
+  if (_peerMedian) bodyRows.splice(basePinned ? 1 : 0, 0, rowHtml(_peerMedian, true));
 
   document.getElementById('peer-results').innerHTML = widenNote + finNote + govNote +
     `<div style="overflow:auto;max-height:70vh;border:1px solid var(--border);border-radius:8px">
@@ -10599,7 +10625,12 @@ function openPeerFromModal() {
   // จาก response (meta.market/base_symbol) จะเป็น US/HK ตรงแล้ว ปุ่ม "ขยายกลุ่ม" ครั้งถัดไปเลย
   // ใช้ _peerMarket ปกติได้
   const isDr = !!_cmStock._isDR;
-  const tabMkt = isDr ? (_cmStock.region === 'HK' ? 'HK' : 'US') : (_cmStock._isUSIdx ? 'US' : _cmStock._isHKIdx ? 'HK' : _cmStock._isJPIdx ? 'JP' : 'TH');
+  // DR: region จาก dr_universe บอกตลาด underlying — JP ต้องแยกออกมา ไม่งั้นตกไปแท็บ US
+  // (_peerMarket='US' ทำให้ _peerTvLink/closePeerAndOpenChart สร้างลิงก์/เปิดกราฟผิดตลาดสำหรับ
+  //  ticker แบบ 7203.T) · backend รองรับ region JP อยู่แล้ว
+  const tabMkt = isDr
+    ? (_cmStock.region === 'HK' ? 'HK' : _cmStock.region === 'JP' ? 'JP' : 'US')
+    : (_cmStock._isUSIdx ? 'US' : _cmStock._isHKIdx ? 'HK' : _cmStock._isJPIdx ? 'JP' : 'TH');
   // โหมด "🗗 แท็บใหม่" — ส่ง deep-link #peer/ ไปแท็บใหม่ คากราฟที่ดูอยู่ไว้ในแท็บนี้ (DR ไปทางเดิม)
   if (!isDr && navOpenMode() === 'new') {
     openInternalHash(`#peer/${tabMkt.toLowerCase()}/${encodeURIComponent(_cmStock.symbol)}`, true);
@@ -10628,7 +10659,7 @@ let _peerGroupCharts = [];    // Chart.js instances — ทำลายก่อ
 
 // รายการ "ยิ่งน้อยยิ่งดี" — ที่เหลือ (revenue/margin/CFO/DPO ฯลฯ) ถือว่ายิ่งมากยิ่งดี ตาม
 // convention เดียวกับ FIN_INVERT_KEYS ที่ใช้ในตารางเทียบหุ้น 2 ตัว
-const _PEER_GROUP_LOWER_BETTER = new Set(['de_ratio', 'pe', 'pbv', 'cash_cycle', 'dio', 'dso', 'ibd', 'q_cogs', 'q_sga', 'ibd_equity', 'capex_rev']);
+const _PEER_GROUP_LOWER_BETTER = new Set(['de_ratio', 'pe', 'pbv', 'peg', 'cash_cycle', 'dio', 'dso', 'ibd', 'q_cogs', 'q_sga', 'ibd_equity', 'capex_rev']);
 // mkt_cap ใหญ่กว่า/เล็กกว่าไม่ใช่ "ดีกว่า/แย่กว่า" ในเชิงลงทุน — โชว์เฉยๆ ไม่ไล่สีเทียบ base
 const _PEER_GROUP_NEUTRAL = new Set(['mkt_cap']);
 
@@ -10636,6 +10667,13 @@ function _peerGroupCellColor(key, val, baseVal) {
   if (_PEER_GROUP_NEUTRAL.has(key)) return '';
   if (val == null || baseVal == null || val === baseVal) return '';
   const lowerBetter = _PEER_GROUP_LOWER_BETTER.has(key);
+  // P/E,PBV,PEG,D/E,IBD/E ติดลบ = ขาดทุน/ส่วนผู้ถือหุ้นติดลบ ไม่ใช่ "ถูก/ปลอดภัยที่สุด" — ถือเป็นแย่กว่า
+  if (lowerBetter && _PEER_NEG_INVALID.has(key)) {
+    const valBad = val <= 0, baseBad = baseVal <= 0;
+    if (valBad && baseBad) return '';
+    if (valBad) return 'var(--red,#f85149)';
+    if (baseBad) return 'var(--green,#3fb950)';
+  }
   const better = lowerBetter ? val < baseVal : val > baseVal;
   return better ? 'var(--green,#3fb950)' : 'var(--red,#f85149)';
 }
@@ -10790,6 +10828,18 @@ let _peerGroupFetchToken = 0;   // กัน response เก่าที่ม�
 async function _peerGroupFetch() {
   const bodyId = _peerViewMode === 'workspace' ? 'peer-workspace-body' : 'peer-group-body';
   const baseSym = (_peerMeta && _peerMeta.base_symbol) || '';
+  // หุ้นที่เลือกตอนนี้เป็น subset ของชุดที่ fetch มาแล้วครบ (เพิ่งติ๊กออกบางตัว / สลับ view mode
+  // ไปมา) — กรอง cache เดิมฝั่ง client ไม่ต้องยิง /api/peer-group-detail ใหม่ (แต่ละ request
+  // คำนวณ TTM สดต่อหุ้น ~60 วิ ไม่มี server cache) · การเพิ่มหุ้นใหม่ที่ยังไม่เคย fetch จะไม่ผ่าน
+  // เงื่อนไขนี้ → ตกไปยิงจริงตามเดิม
+  if (_peerGroupRows && _peerGroupSyms.length &&
+      _peerGroupSyms.every(s => _peerGroupRows.some(r => r.symbol === s))) {
+    ++_peerGroupFetchToken;   // ทิ้ง response ของ fetch เดิมที่อาจยังค้างอยู่ (จะได้ไม่เขียน rows เต็มทับ)
+    _peerGroupRows = _peerGroupRows.filter(r => _peerGroupSyms.includes(r.symbol));
+    if (_peerViewMode === 'workspace') _peerWorkspaceRenderBody();
+    else _peerGroupRenderBody();
+    return;
+  }
   const token = ++_peerGroupFetchToken;
   try {
     const url = `/api/peer-group-detail?market=TH&symbols=${encodeURIComponent(_peerGroupSyms.join(','))}&base=${encodeURIComponent(baseSym)}`;
@@ -10814,7 +10864,7 @@ async function _peerGroupFetch() {
 
 function _peerGroupHeaderHtml(rows, baseSym) {
   const level = _peerMeta.level === 'industry' ? 'Industry' : 'Sector';
-  const group = _peerMeta.group || '';
+  const group = _escHtml(_peerMeta.group || '');
   const tip = `<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:270px">
     ตัวเลขคำนวณสด (TTM) จากงบการเงินรายไตรมาสของแต่ละบริษัท ผสาน ณ ตอนเปิดหน้านี้ — ไม่ใช่ค่าที่เก็บไว้ล่วงหน้า จึงรองรับเฉพาะหุ้นไทย<br><br>
     คลิกหัวคอลัมน์เพื่อเรียงลำดับ (หุ้นตั้งต้น ⭐ ปักหมุดบนสุดเสมอ)<br>
@@ -10822,7 +10872,7 @@ function _peerGroupHeaderHtml(rows, baseSym) {
   </div></span>`;
   return `<div class="card" style="padding:12px 14px;margin-bottom:12px">
     <div style="font-weight:700;font-size:14px;display:flex;align-items:center;gap:2px">${level}: ${group}${tip}</div>
-    <div style="font-size:12px;color:var(--text2);margin-top:4px">เทียบ ${rows.length} ตัวในกลุ่ม | ⭐ = หุ้นที่ดูอยู่ | <span style="color:var(--green,#3fb950)">เขียว</span>=ดีกว่า <span style="color:var(--red,#f85149)">แดง</span>=แย่กว่า เทียบกับ ${baseSym || '-'}</div>
+    <div style="font-size:12px;color:var(--text2);margin-top:4px">เทียบ ${rows.length} ตัวในกลุ่ม | ⭐ = หุ้นที่ดูอยู่ | <span style="color:var(--green,#3fb950)">เขียว</span>=ดีกว่า <span style="color:var(--red,#f85149)">แดง</span>=แย่กว่า เทียบกับ ${_escHtml(baseSym || '-')}</div>
   </div>`;
 }
 
@@ -11056,7 +11106,7 @@ function _peerGroupRenderBody() {
   }
   rows.sort((a, b) => (b.mkt_cap || 0) - (a.mkt_cap || 0));
   const missingNote = missing.length
-    ? `<div style="font-size:11px;color:#d29922;margin-bottom:8px">⚠ ไม่มีข้อมูลงบการเงินเพียงพอสำหรับ: ${missing.join(', ')}</div>` : '';
+    ? `<div style="font-size:11px;color:#d29922;margin-bottom:8px">⚠ ไม่มีข้อมูลงบการเงินเพียงพอสำหรับ: ${_escHtml(missing.join(', '))}</div>` : '';
 
   body.innerHTML = missingNote +
     _peerGroupHeaderHtml(rows, baseSym) +
@@ -11221,7 +11271,7 @@ function _workspaceComputeComposite(rows) {
   _WORKSPACE_HEATMAP_METRICS.forEach(m => { arrays[m.k] = rows.map(r => r[m.k]).filter(v => v != null); });
   rows.forEach(r => {
     const pcts = _WORKSPACE_HEATMAP_METRICS
-      .map(m => _peerPercentile(r[m.k], arrays[m.k], m.lowerBetter))
+      .map(m => _peerPercentile(r[m.k], arrays[m.k], m.lowerBetter, _PEER_NEG_INVALID.has(m.k)))
       .filter(p => p != null);
     r._composite = pcts.length ? Math.round(pcts.reduce((s, v) => s + v, 0) / pcts.length * 100) : null;
   });
@@ -11271,7 +11321,7 @@ function _workspaceHeatmapTableHtml(rows) {
 
   const bodyRows = sorted.map(r => {
     const cells = _WORKSPACE_HEATMAP_METRICS.map(m => {
-      const color = _peerCellColor(_peerPercentile(r[m.k], metricArrays[m.k], m.lowerBetter));
+      const color = _peerCellColor(_peerPercentile(r[m.k], metricArrays[m.k], m.lowerBetter, _PEER_NEG_INVALID.has(m.k)));
       const v = r[m.k];
       const txt = v == null ? '–' : (m.unit === 'x' ? v.toFixed(2) + 'x' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%');
       return `<td style="text-align:right;background:${color}">${txt}</td>`;
@@ -11418,9 +11468,10 @@ function _peerWorkspaceRenderBody() {
     return;
   }
   const missingNote = missing.length
-    ? `<div style="font-size:11px;color:#d29922;margin-bottom:8px">⚠ ไม่มีข้อมูลงบการเงินเพียงพอสำหรับ: ${missing.join(', ')}</div>` : '';
+    ? `<div style="font-size:11px;color:#d29922;margin-bottom:8px">⚠ ไม่มีข้อมูลงบการเงินเพียงพอสำหรับ: ${_escHtml(missing.join(', '))}</div>` : '';
   const level = _peerMeta.level === 'industry' ? 'Industry' : 'Sector';
-  const group = _peerMeta.group || '';
+  const groupRaw = _peerMeta.group || '';       // ค่าดิบ — ใช้ยิง /api/sector-trend ตอนท้าย
+  const group = _escHtml(groupRaw);             // escape สำหรับ innerHTML เท่านั้น
   const shareStats = _workspaceComputeShares(rows);   // เขียน _rev_share/_profit_share ลง rows ก่อน render กราฟ
   _workspaceComputeComposite(rows);                   // เขียน _composite ลง rows ก่อน render heatmap
 
@@ -11445,7 +11496,7 @@ function _peerWorkspaceRenderBody() {
   _workspaceRenderHeatmapTable();
   _workspaceRenderRankCharts(rows);
   _workspaceRenderContributionChart(rows);
-  if (_peerMeta.level === 'sector') _workspaceFetchAndRenderTrend(group);
+  if (_peerMeta.level === 'sector') _workspaceFetchAndRenderTrend(groupRaw);
 }
 
 // เทรนด์ย้อนหลัง 20 ไตรมาสของทั้ง sector ไม่ขึ้นกับหุ้นที่ติ๊กเลือก/ตัดออก (ต่างจากการ์ด KPI/กราฟ
