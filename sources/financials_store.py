@@ -982,11 +982,17 @@ def fetch_earnings_calendar(sym, market=None):
     from sources.dr_descriptions import resolve_yf_ticker
 
     sym = sym.upper().strip()
+    mkt = (market or "TH").upper()
     yf_ticker, _is_etf = resolve_yf_ticker(_PROJECT_ROOT, sym, market=market)
+    out = []
     if not yf_ticker:
+        # resolve ไม่ได้ = ไม่ใช่ TH/SET, ไม่อยู่ DR universe, และไม่ใช่ US/HK/JP — เดา '.BK'
+        # ได้เฉพาะตอนตั้งใจให้เป็นหุ้นไทยเท่านั้น ไม่งั้นจะไปดึง earnings หุ้นไทยผิดตัวมาเก็บ
+        # ใต้ market ต่างประเทศ (เช่น DR: ที่รหัสไม่อยู่ใน DR universe)
+        if mkt not in ("TH", "SET"):
+            return out
         yf_ticker = sym + ".BK"
 
-    out = []
     try:
         df = yf.Ticker(yf_ticker).get_earnings_dates(limit=8)
     except Exception:

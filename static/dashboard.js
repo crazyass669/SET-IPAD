@@ -13880,7 +13880,7 @@ async function _tsLoadCalendarWeek(sym, mkt) {
     if (!events.length) { el.innerHTML = ''; return; }
     // e.detail มาจากข้อความสด (agenda ประชุมผู้ถือหุ้นจาก SET.or.th / EPS ประมาณการจาก yfinance)
     // ต้อง escape ก่อนแทรกเป็น HTML content เหมือน _calRenderList ในหน้า 📅 ปฏิทิน
-    const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const esc = _escHtml;
     const rows = events.map(e => {
       const dLeft = Math.round((e._dt - today) / 86400000);
       const dayLabel = dLeft === 0 ? 'วันนี้' : `อีก ${dLeft} วัน`;
@@ -22772,13 +22772,30 @@ function _calSetDirection(dir, btn) {
   _calRenderFromCache();
 }
 
+// ซิงก์การแสดง/ซ่อนแถวตัวกรองทั้งหมดตาม _calScope + _calView ปัจจุบัน — เรียกจากทั้ง
+// _calSetView และ _calSetScope กันตรรกะ visibility กระจายซ้ำ (เดิม _calSetScope ตั้ง
+// direction/range เป็น '' โดยไม่สน _calView ทำให้ grid view โชว์แถวที่ควรซ่อน และไม่เคย
+// ซ่อน cal-month-nav ตอนเข้า scope ipo → ปุ่ม ◀▶ ค้างทับตาราง IPO)
+function _calSyncFilterRows() {
+  const ipo = _calScope === 'ipo';
+  const grid = _calView === 'grid';
+  const set = (id, show) => { const el = document.getElementById(id); if (el) el.style.display = show ? 'flex' : 'none'; };
+  const viewRow = document.getElementById('cal-view-list') && document.getElementById('cal-view-list').closest('.filter-row');
+  if (viewRow) viewRow.style.display = ipo ? 'none' : 'flex';
+  set('cal-direction-row', !ipo && !grid);
+  set('cal-range-row', !ipo && !grid);
+  set('cal-month-nav', !ipo && grid);
+  const marketRow = document.getElementById('cal-scope-market-row');
+  if (marketRow) marketRow.style.display = (!ipo && _calScope === 'market') ? 'flex' : 'none';
+  const refreshBtn = document.getElementById('cal-refresh-btn');
+  if (refreshBtn) refreshBtn.style.display = _calScope === 'watchlist' ? '' : 'none';
+}
+
 function _calSetView(view, btn) {
   _calView = view;
   document.querySelectorAll('#cal-view-list,#cal-view-grid').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  document.getElementById('cal-direction-row').style.display = view === 'list' ? 'flex' : 'none';
-  document.getElementById('cal-range-row').style.display = view === 'list' ? 'flex' : 'none';
-  document.getElementById('cal-month-nav').style.display = view === 'grid' ? 'flex' : 'none';
+  _calSyncFilterRows();
   _calRenderFromCache();
 }
 
@@ -22791,6 +22808,7 @@ function _calMonthNav(delta, toToday) {
 
 let _calCache = [];   // flat: [{symbol(display), market, type, date, confidence, source, detail}]
 let _calFetchToken = 0;   // กัน request เก่า (สลับ scope เร็วๆ ก่อนของเดิม resolve) เขียนทับ _calCache ใหม่กว่า
+let _calCacheKey = null;   // scope+market(+watchlist) ที่ _calCache ถือข้อมูลอยู่ — กันดึงซ้ำทุกครั้งที่เปิดหน้า
 
 // ตัวกรองขอบเขต — เฟส A เดิมล็อกตายตัวที่ watchlist เท่านั้น ตอนนี้เพิ่มเลือกได้ 3 แบบ (ดู
 // PLAN_stock_study_suite.txt งาน #4 ช่วง "Filter: watchlist-only (default ON) / ทั้งหมดที่มี
@@ -22804,20 +22822,7 @@ function _calSetScope(scope, btn) {
   _calScope = scope;
   document.querySelectorAll('#cal-scope-watchlist,#cal-scope-all,#cal-scope-market,#cal-scope-ipo').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  const marketRow = document.getElementById('cal-scope-market-row');
-  if (marketRow) marketRow.style.display = scope === 'market' ? 'flex' : 'none';
-  const refreshBtn = document.getElementById('cal-refresh-btn');
-  if (refreshBtn) refreshBtn.style.display = scope === 'watchlist' ? '' : 'none';
-  // scope IPO เป็นตาราง 2 ก้อน (กำลังเข้า/เพิ่งเข้าตลาด) ไม่ใช่ event list ตามปกติ —
-  // ซ่อนตัวกรองมุมมอง/ทิศทาง/ช่วงเวลาที่ใช้ไม่ได้กับข้อมูลชุดนี้
-  ['cal-view-list', 'cal-view-grid'].forEach(id => {
-    const el = document.getElementById(id)?.closest('.filter-row');
-    if (el) el.style.display = scope === 'ipo' ? 'none' : '';
-  });
-  const dirRow = document.getElementById('cal-direction-row');
-  if (dirRow) dirRow.style.display = scope === 'ipo' ? 'none' : '';
-  const rangeRow = document.getElementById('cal-range-row');
-  if (rangeRow) rangeRow.style.display = scope === 'ipo' ? 'none' : '';
+  _calSyncFilterRows();
   loadCalendarPage();
 }
 
@@ -22876,16 +22881,27 @@ function _calDedupeEvents(events) {
   return [...seen.values()];
 }
 
+function _calCurrentCacheKey() {
+  if (_calScope === 'watchlist') return 'watchlist:' + watchlist.join(',');
+  if (_calScope === 'market') return 'market:' + _calScopeMarket;
+  return _calScope;   // 'all'
+}
+
 async function loadCalendarPage(refresh) {
   const box = document.getElementById('cal-result');
   const note = document.getElementById('cal-fetch-note');
   if (note) note.textContent = '';
 
-  if (_calScope === 'ipo') { _calLoadIPO(); return; }
-
-  // กัน request เก่าเขียนทับใหม่กว่า — สลับ scope (watchlist/all/market) เร็วๆ ก่อนของเดิม
-  // resolve (watchlist ยิง Promise.all รวมหลายหุ้น มักช้ากว่า scope อื่นที่ fetch ก้อนเดียว)
+  // กัน request เก่าเขียนทับใหม่กว่า — สลับ scope เร็วๆ ก่อนของเดิม resolve (watchlist ยิง
+  // Promise.all รวมหลายหุ้น มักช้ากว่า scope อื่น) — bump ก่อน early-return ของ scope 'ipo'
+  // ด้วย ไม่งั้น watchlist fetch ที่ค้างอยู่ resolve ทีหลังแล้ว render ทับตาราง IPO
   const token = ++_calFetchToken;
+
+  if (_calScope === 'ipo') { _calLoadIPO(token); return; }
+
+  // เปิดหน้าเดิมซ้ำ (scope/ตลาด/watchlist ไม่เปลี่ยน) — render จาก cache เดิมเลย ไม่ยิงซ้ำ
+  const cacheKey = _calCurrentCacheKey();
+  if (!refresh && _calCacheKey === cacheKey && _calCache.length) { _calRenderFromCache(); return; }
 
   if (_calScope === 'watchlist') {
     const { list } = _calResolveWatchlist();
@@ -22904,13 +22920,16 @@ async function loadCalendarPage(refresh) {
       try {
         const r = await _fetchTimeout(`/api/calendar-events/${it.market}/${encodeURIComponent(it.symbol)}${qs}`, 15000);
         const d = await r.json();
+        // HTTP 200 แต่ backend ดึงสดจาก yfinance/SET ไม่สำเร็จ (เช่นโดน rate-limit) — d.fetch_error
+        // มีค่า, events ที่ได้อาจว่างหรือเป็นชุดเก่า ต้องนับเป็น fail ด้วย ไม่ใช่แค่ตอน throw
+        if (d && d.fetch_error) failCount++;
         return (d.events || []).map(e => ({ ...e, symbol: it.symbol, market: it.market }));
       } catch (e) { failCount++; return []; }
     }));
     if (token !== _calFetchToken) return;   // มี request ใหม่กว่าแซงไปแล้ว ทิ้งผลลัพธ์นี้
     const deduped = _calDedupeEvents(results.flat());
     _calCache = deduped.map(e => ({ ...e, symbol: _calDisplayFor(e.market, e.symbol) }));
-    if (note && failCount) note.textContent = `⚠ ดึงไม่สำเร็จ ${failCount}/${list.length} ตัว (timeout/error) — ปฏิทินที่เห็นอาจไม่ครบ ลองกด "ดึงข้อมูลใหม่ทั้งหมด" อีกครั้ง`;
+    if (note && failCount) note.textContent = `⚠ ดึง/รีเฟรชไม่สำเร็จ ${failCount}/${list.length} ตัว (timeout/error/แหล่งข้อมูลล่ม) — ปฏิทินที่เห็นอาจไม่ครบหรือไม่ใช่ล่าสุด ลองกด "ดึงข้อมูลใหม่ทั้งหมด" อีกครั้ง`;
   } else {
     box.innerHTML = `<div class="empty" style="padding:24px">กำลังโหลดปฏิทิน...</div>`;
     const qs = _calScope === 'market' ? `?market=${_calScopeMarket}` : '';
@@ -22926,13 +22945,15 @@ async function loadCalendarPage(refresh) {
     }
   }
   if (token !== _calFetchToken) return;
+  _calCacheKey = cacheKey;
   _calRenderFromCache();
 }
 
 // หุ้น IPO กำลังจะเข้า/เพิ่งเข้าตลาด จาก SET.or.th (ดึงสด ไม่เก็บสะสม, ดู
 // PLAN_set_api_expansion.txt งาน #6) — เติมช่องว่างฝั่งตรงข้ามของ delisted_log
-// (ตัวออก) ระบบไม่มีตัวติดตาม "หุ้นเข้าใหม่" มาก่อนเลย
-async function _calLoadIPO() {
+// (ตัวออก) ระบบไม่มีตัวติดตาม "หุ้นเข้าใหม่" มาก่อนเลย — token จาก loadCalendarPage กัน
+// watchlist/all fetch ที่ค้างอยู่ (หรือการสลับ scope กลับ) render ทับตาราง IPO นี้
+async function _calLoadIPO(token) {
   const box = document.getElementById('cal-result');
   const note = document.getElementById('cal-fetch-note');
   if (note) note.textContent = '';
@@ -22940,6 +22961,7 @@ async function _calLoadIPO() {
   try {
     const r = await _fetchTimeout('/api/ipo-list', 25000);
     const d = await r.json();
+    if (token != null && token !== _calFetchToken) return;
     if (!d.ok) throw new Error(d.error || 'โหลดไม่สำเร็จ');
     const up = d.upcoming || [], rec = d.recently || [];
 
@@ -22987,7 +23009,8 @@ async function _calLoadIPO() {
     box.innerHTML = upHtml + recHtml;
     if (note) note.textContent = `ข้อมูล ณ ${d.as_of_date || '—'} · ดึงสดจาก SET.or.th ทุกครั้งที่เปิด (ไม่เก็บสะสม)`;
   } catch (e) {
-    box.innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</div>`;
+    if (token != null && token !== _calFetchToken) return;
+    box.innerHTML = `<div class="empty" style="padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${_escHtml(e.message)}</div>`;
   }
 }
 
@@ -22999,8 +23022,10 @@ function _calScopeEmptyLabel() {
 
 const _CAL_TYPE_BADGE = { earnings: '📊 งบ', xd: '💵 XD', pay: '💰 จ่ายปันผล',
   xm: '🗳️ ประชุมผู้ถือหุ้น', xb: '📜 สิทธิจองซื้อ (XB)', xb_pay: '💳 ชำระค่าจองซื้อ' };
-const _CAL_CONF_LABEL = { confirmed: 'ยืนยันแล้ว', estimated: 'ประมาณการ', guessed: 'คาดการณ์' };
-const _CAL_CONF_COLOR = { confirmed: 'var(--green)', estimated: 'var(--blue)', guessed: 'var(--text2)' };
+// backend ปล่อยแค่ 'confirmed' (SET.or.th corporate action) กับ 'estimated' (yfinance earnings)
+// เท่านั้น — ไม่มี 'guessed' (fallback `|| e.confidence` รองรับค่าอื่นที่ไม่รู้จักอยู่แล้ว)
+const _CAL_CONF_LABEL = { confirmed: 'ยืนยันแล้ว', estimated: 'ประมาณการ' };
+const _CAL_CONF_COLOR = { confirmed: 'var(--green)', estimated: 'var(--blue)' };
 // ลิงก์ไปดูงบจริงไม่ใช่ scrape/parse เอง เพราะ SET.or.th มี WAF (Incapsula) กับ API รายชื่อข่าว
 // ต้องใช้ token ที่ดึงอัตโนมัติไม่ได้ (ต้อง login flow ผ่านเบราว์เซอร์จริง) — ปล่อยให้ผู้ใช้กด
 // ลิงก์ไปดูเองในเบราว์เซอร์ตัวเองง่ายกว่ามาก ต้องมีข้อมูลย้อนหลังพอ (ดู _CALENDAR_LOOKBACK_DAYS
@@ -23096,9 +23121,10 @@ function _calRenderList() {
       return dir === 1 ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
     });
   }
-  // e.detail มาจากข้อความสด (agenda ประชุมผู้ถือหุ้นจาก SET.or.th / EPS ประมาณการจาก yfinance)
-  // ไม่ใช่ literal ที่เราคุมเองเหมือน type/confidence — ต้อง escape ก่อนแทรกเป็น HTML content
-  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  // e.detail/e.symbol/e.market มาจากข้อความสด (agenda จาก SET.or.th / EPS จาก yfinance / market
+  // = path segment ที่ถูก persist ดิบๆ) — ไม่ใช่ literal ที่เราคุมเอง ต้อง escape ก่อนแทรก HTML
+  // ใช้ _escHtml ตัวกลาง (escape ครบ 5 อักขระ) แทน escaper บางส่วนที่เคย copy ซ้ำ 3 จุด
+  const esc = _escHtml;
   const rows = flat.map(e => {
     const dt = new Date(e.date + 'T00:00:00');
     const dLeft = Math.round((dt - today) / 86400000);
@@ -23109,7 +23135,7 @@ function _calRenderList() {
       : '';
     return `<tr>
       <td style="padding:8px 10px;white-space:nowrap">${e.date} <span style="color:var(--text2);font-size:11px">${dLeftLabel}</span></td>
-      <td style="padding:8px 10px"><b>${esc(e.symbol)}</b> <span style="color:var(--text2);font-size:11px">${e.market}</span></td>
+      <td style="padding:8px 10px"><b>${esc(e.symbol)}</b> <span style="color:var(--text2);font-size:11px">${esc(e.market)}</span></td>
       <td style="padding:8px 10px">${_CAL_TYPE_BADGE[e.type] || e.type}</td>
       <td style="padding:8px 10px;color:var(--text2)">${esc(e.detail)}</td>
       <td style="padding:8px 10px;text-align:right"><span style="color:${_CAL_CONF_COLOR[e.confidence] || 'var(--text2)'};font-size:11px">${_CAL_CONF_LABEL[e.confidence] || e.confidence}</span></td>
@@ -23186,10 +23212,10 @@ function _calGridRows(year, month, byDate, today) {
       const iso = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
       const isToday = cellDate.getTime() === today.getTime();
       const dayEvents = byDate[iso] || [];
-      // title เป็น attribute (ไม่ใช่ HTML content) แต่เดิม escape แค่ " ยังเหลือ < และ & ที่
-      // browser อาจตีความเป็นจุดเริ่ม entity ได้ในบางเคส — escape ให้ครบเหมือนจุดอื่นที่แทรก
-      // e.detail (ข้อความสดจาก SET.or.th/yfinance ไม่ใช่ literal ที่เราคุมเอง)
-      const escAttr = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+      // title/symbol แทรกใน attribute + content — ใช้ _escHtml ตัวกลาง (escape ครบ 5 อักขระ
+      // รวม ' และ >) แทน escaper บางส่วนที่เคย copy ซ้ำ กัน e.detail/e.symbol (ข้อความสดจาก
+      // SET.or.th/yfinance ไม่ใช่ literal ที่เราคุมเอง) หลุด
+      const escAttr = _escHtml;
       const chips = dayEvents.slice(0, 3).map(e => {
         const link = _calSourceLink(e);
         const title = escAttr(`${e.symbol} ${e.detail || ''}${link ? ' — คลิกดูงบจริงที่ SET.or.th' : ''}`);
