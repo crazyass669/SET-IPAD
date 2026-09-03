@@ -285,7 +285,10 @@ def _merge_factsheet_period_list(old_list, new_list):
                 merged_data[d["account_name"]] = d
         old_p["data"] = list(merged_data.values())
         for f in ("as_of_date", "fs_type", "begin_date", "end_date", "is_restatement"):
-            old_p[f] = new_p.get(f)
+            nv = new_p.get(f)
+            if nv is not None:
+                old_p[f] = nv   # อย่าทับด้วย None — รอบ fetch ถัดไปที่ SET คืน period นั้นมาไม่ครบ
+                                # ทุก key (เช่นไม่มี is_restatement/begin_date) จะล้างค่าเดิมที่ดีอยู่
     return sorted(old_by_key.values(), key=lambda p: p.get("as_of_date") or "")
 
 
@@ -309,7 +312,9 @@ def _merge_set_factsheet_payload(old, new):
     """ผสาน SET factsheet (source='set_factsheet') สะสมข้ามรอบ sync — รวม 5 sub-endpoint
     (cash_cycle/financial_ratio/financial_growth/trading_stat ใช้ merge สะสม เพราะแต่ละรอบ
     ได้แค่หน้าต่างแคบ, price_performance เป็น snapshot ปัจจุบันล้วนๆ ไม่มีประวัติ overwrite
-    ทั้งก้อนทุกครั้ง) key ไหน fetch พลาดรอบนี้ (None) ใช้ของเก่าต่อ ไม่ลบทิ้ง"""
+    ทั้งก้อนเมื่อรอบนี้ได้ค่าจริง — ถ้ารอบนี้ None (fetch พลาด/body ว่าง, ดู
+    fetch_factsheet_price_performance ที่คืน None เมื่อทุก field เป็น None) ใช้ของเก่าต่อ)
+    key ไหน fetch พลาดรอบนี้ (None) ใช้ของเก่าต่อ ไม่ลบทิ้ง"""
     if old is None:
         return new
     return {
@@ -2069,16 +2074,21 @@ def fetch_set_qpl_series(symbol, ctx=None, hdr=None):
     (ล่าสุด+อนุพันธ์ ละเอียด ทับ chart ทั้งแถวสำหรับงวดที่มีของละเอียดกว่า) เงียบถ้าพังทั้งคู่
     (caller ยังมี Yahoo/Finnomena เป็นฐานอยู่แล้ว ไม่ใช่จุดเดียวที่พังแล้วทั้งตารางหาย)
 
-    ctx/hdr: ส่งมาเองได้เพื่อ reuse cookie เดียวข้ามหลาย symbol ตอน bulk sync (ดู sync_all)"""
+    ctx/hdr: ส่งมาเองได้เพื่อ reuse cookie เดียวข้ามหลาย symbol ตอน bulk sync (ดู sync_all)
+
+    ถ้าทั้ง chart+detail raise (SET.or.th ล่ม/บล็อก IP/cookie หมดอายุ) — re-raise ให้ caller
+    รู้ว่า fetch พังจริง ไม่ใช่ 'หุ้นนี้ไม่มีงบ QPL' (ก่อนหน้านี้คืน {} เงียบ ทำให้ sync_all นับ
+    เป็น ok ทั้งที่ยิงไม่ผ่านสักครั้ง — สรุปผล sync เขียวหลอกตอน SET.or.th ล่มทั้งรอบ)
+    live path (_sync_set_series) ห่อ try/except คืนของสะสมเดิมจาก DB อยู่แล้ว ไม่กระทบ"""
     out = {}
-    try:
-        out.update(fetch_set_qpl_chart_series(symbol, ctx=ctx, hdr=hdr))
-    except Exception:
-        pass
-    try:
-        out.update(fetch_set_qpl_detail_series(symbol, ctx=ctx, hdr=hdr))
-    except Exception:
-        pass
+    errs = 0
+    for _fn in (fetch_set_qpl_chart_series, fetch_set_qpl_detail_series):
+        try:
+            out.update(_fn(symbol, ctx=ctx, hdr=hdr))
+        except Exception:
+            errs += 1
+    if errs == 2 and not out:
+        raise RuntimeError(f"SET QPL fetch ล้มเหลวทั้ง chart+detail สำหรับ {symbol}")
     return out
 
 
@@ -2258,12 +2268,18 @@ def _finn_load_ids():
     with _finn_ids_lock:
         if _finn_ids:
             return _finn_ids
+        loaded = {}
         for ex in ("TH", "US", "HK"):
             d = _finn_get(f"/stock/list?exchange={ex}&limit=100000", timeout=90)
             for row in d.get("data") or []:
                 nm = (row.get("name") or "").upper()
                 if nm and row.get("security_id"):
-                    _finn_ids[(ex, nm)] = row["security_id"]
+                    loaded[(ex, nm)] = row["security_id"]
+        # เขียนลง _finn_ids ครั้งเดียวหลังโหลดครบทั้ง 3 ตลาด — ถ้าตลาดใดตลาดหนึ่ง raise
+        # กลางทาง (เช่น timeout ลิสต์ US ที่ใหญ่สุด) _finn_ids ยังว่าง รอบหน้า retry ใหม่ทั้งชุด
+        # (เดิม assign ทีละตลาด → พังหลังโหลด TH เสร็จ = ทั้งโปรเซสได้ map เฉพาะ TH ค้างถาวร
+        # US/HK ทุกตัวเลยตก fallback ยิง quote รายตัวช้าๆ)
+        _finn_ids.update(loaded)
         return _finn_ids
 
 
@@ -2469,7 +2485,12 @@ def refresh_mirror_stock(base_dir, symbol):
         if not sid:
             continue
         rows = (_finn_get(f"/stock/summary/{sid}") or {}).get("data") or []
-        payload = _finn_map_rows(rows, name, name, "mirror",
+        # ชื่อบริษัท: /stock/summary ไม่ให้ชื่อเต็ม (name = ticker ล้วน) — เก็บชื่อเดิมที่ mirror
+        # bulk sync เคยลงไว้ ไม่งั้น merge (ใช้ metadata ล่าสุดเสมอ) จะทับด้วย ticker เปล่า แล้ว
+        # _load_mirror_qpl_all ทิ้ง (เงื่อนไข nm != bare) → growth screener โชว์ ticker แทนชื่อ
+        old = _get_raw_payload(base_dir, mkey, "finnomena_q") or {}
+        disp_name = old.get("name") or name
+        payload = _finn_map_rows(rows, name, disp_name, "mirror",
                                  {"US": "USD", "HK": "HKD"}.get(ex, "THB"))
         if payload is not None:
             upsert(base_dir, mkey, "finnomena_q", payload, is_dr=False)
@@ -3949,6 +3970,11 @@ def sync_all(base_dir, symbols, sources=("yahoo", "set"), workers=6, callback=No
                     payload = fetch_financial_factsheet(sym, ctx=set_ctx, hdr=set_hdr)
                 finally:
                     time.sleep(0.2)  # 5 sub-call sequential ในฟังก์ชันเดียว ใช้ gate คลุมทั้งก้อนครั้งเดียว
+            # ทั้ง 5 sub-endpoint คืน None หมด = fetch พังจริง (SET.or.th ล่ม/cookie หมด) ไม่ใช่
+            # 'หุ้นนี้ไม่มี factsheet' — raise ให้ sync_all นับเป็น fail (เดิม fetch_financial_factsheet
+            # กลืน exception รายตัวหมด → payload None-ล้วน → _empty → ข้าม upsert แต่ยังนับ ok หลอก)
+            if not any(payload.get(k) is not None for k in _FACTSHEET_KEYS):
+                raise RuntimeError(f"factsheet ทั้ง 5 sub-endpoint ล้มเหลวสำหรับ {sym}")
         else:
             payload = fetch_set_full(sym, set_ctx, set_hdr)
             time.sleep(0.15)  # throttle เบาๆ กัน SET.or.th block IP

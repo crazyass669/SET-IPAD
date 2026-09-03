@@ -21,8 +21,8 @@
 
   ชั้นที่ 3 — ไฟล์ที่ "สร้างใหม่ไม่ได้" (financials.db, set_prices.db,
     sec_filings.db, delisted_log.json)
-    → ✅ อัตโนมัติผ่าน Windows Task Scheduler ทุกอาทิตย์ (จันทร์ 02:00)
-    → สำรองไปที่ C:\Users\joeki\OneDrive\SET_Dashboard_Backup — ดู ส่วนที่ 3
+    → ✅ อัตโนมัติผ่าน Windows Task Scheduler (จันทร์+พฤหัส 23:00 + at log on)
+    → สำรองไปที่ C:\SET_Dashboard_backup (โฟลเดอร์ Google Drive) — ดู ส่วนที่ 3
 
   งานเสริม — refresh ข้อมูลก้อนใหญ่ไตรมาสละครั้ง (20 ก.พ./พ.ค./ส.ค./พ.ย.)
     → ✅ อัตโนมัติผ่าน Task Scheduler เช่นกัน — ดู ส่วนที่ 4
@@ -74,16 +74,20 @@
 ################################################################################
 
 ┌─ งานที่ตั้งไว้: Backup_Offsite_Weekly ─────────────────────────────────────
-  ความถี่:    ทุกวันจันทร์ 02:00 (Task Scheduler ต้องเปิดเครื่อง+ล็อกอินอยู่ตอนนั้น)
+  ความถี่:    ทุกวันจันทร์+พฤหัส 23:00 + ตอน log on (ถ้าสำรองล่าสุดเกิน 3 วัน)
+              (Task Scheduler ต้องเปิดเครื่อง+ล็อกอินอยู่ตอนนั้น)
   รันอะไร:    task_backup_offsite.bat
-              → python backup_financials_offsite.py "C:\Users\joeki\OneDrive\SET_Dashboard_Backup"
-  สำรองไฟล์:  financials.db (~630MB, บังคับต้องมี), set_prices.db (~330MB,
-              บังคับต้องมี), sec_filings.db (ข้ามเงียบๆ ถ้าไม่เจอ),
-              delisted_log.json (ข้ามเงียบๆ ถ้าไม่เจอ)
+              → python backup_financials_offsite.py "C:\SET_Dashboard_backup" --min-age-days 3
+  สำรองไฟล์:  financials.db (~700MB, บังคับต้องมี), set_prices.db (~330MB,
+              บังคับต้องมี), sec_filings.db + delisted_log.json +
+              us/hk/jp_prices.db (ข้ามเงียบๆ ถ้าไม่เจอ)
   ตั้งชื่อไฟล์: <ชื่อเดิม>_YYYYMMDD.<นามสกุล> เช่น financials_20260718.db
   เก็บกี่ชุด:  3 ชุดล่าสุดต่อไฟล์ — เก่ากว่านั้นลบทิ้งอัตโนมัติกันโฟลเดอร์บวม
-  ปลายทาง:    C:\Users\joeki\OneDrive\SET_Dashboard_Backup (sync ขึ้น cloud เอง
-              ผ่าน OneDrive แล้ว = มีสำเนาทั้งในเครื่องนี้และบน cloud)
+  ปลายทาง:    C:\SET_Dashboard_backup — โฟลเดอร์ mirror ของ Google Drive for
+              Desktop (สำเนาในเครื่อง C: + sync ขึ้น Google Drive ใต้ "Computers")
+              ย้ายมาจาก OneDrive เมื่อ 2026-09-04 เพราะพื้นที่ OneDrive เต็ม
+  staging:    สคริปต์เขียนไฟล์ลง %TEMP% ในเครื่องก่อน แล้ว move ไปปลายทาง (กัน
+              DriveFS เห็นไฟล์ .db ที่เขียนยังไม่เสร็จ) — ปิดด้วย --no-stage ได้
   บันทึกผล:   ผ่าน core/run_log.py → หน้า Data Health เห็นว่าสำรองล่าสุดเมื่อไหร่
               (เตือนเหลือง 35 วัน / แดง 60 วัน ถ้าไม่มีรอบไหนสำเร็จเลย)
   log ไฟล์:   logs\task_backup_offsite.log
@@ -91,7 +95,7 @@
 ┌─ ถ้าอยากรันสำรองเองตอนนี้เลย (ไม่ต้องรอวันจันทร์) ──────────────────────────
   ดับเบิลคลิก backup_financials_offsite.bat แล้วพิมพ์ path ปลายทางตอนถาม
   หรือรันคำสั่ง:
-      python backup_financials_offsite.py "C:\Users\joeki\OneDrive\SET_Dashboard_Backup"
+      python backup_financials_offsite.py "C:\SET_Dashboard_backup"
 
 
 ################################################################################
@@ -158,7 +162,7 @@
   ไหนจำเป็น/ไฟล์ไหนข้ามได้ + ขั้นตอนติดตั้งเครื่องใหม่ทีละสเต็ป
 
 ┌─ กรณี B: financials.db / set_prices.db เสียหาย หรือหายจากเครื่องนี้ ─────────
-  1. เปิด C:\Users\joeki\OneDrive\SET_Dashboard_Backup
+  1. เปิด C:\SET_Dashboard_backup (หรือดาวน์โหลดจากเว็บ Google Drive > Computers)
   2. เลือกไฟล์วันที่ล่าสุด เช่น financials_20260718.db
   3. คัดลอกกลับมาที่โฟลเดอร์โปรเจกต์ แล้วเปลี่ยนชื่อกลับเป็น financials.db
      (หรือ set_prices.db ตามไฟล์ที่หาย)
@@ -174,8 +178,9 @@
 
 ┌─ กรณี D: ฮาร์ดดิสก์/เครื่องพังทั้งลูก (worst case) ───────────────────────────
   1. โค้ด → git clone https://github.com/crazyass669/SET-IPAD.git บนเครื่องใหม่
-  2. financials.db/set_prices.db/sec_filings.db/delisted_log.json → คัดลอกจาก
-     OneDrive (sync ไป cloud แล้วเปิดจากเครื่องไหนก็ได้ที่ล็อกอิน OneDrive เดียวกัน)
+  2. financials.db/set_prices.db/sec_filings.db/delisted_log.json → ดาวน์โหลดจาก
+     Google Drive (เว็บ drive.google.com > Computers > เครื่องนี้ > SET_Dashboard_backup
+     — หรือลง Google Drive for Desktop บนเครื่องใหม่แล้วเปิดจากโฟลเดอร์ mirror)
   3. ข้อมูลรายวัน → กด Full Refresh ครั้งแรก (~1-2 ชม.)
   4. ตั้ง Task Scheduler ใหม่ 3 งาน (ดู ส่วนที่ 4) — ไม่ได้ตามมาโดยอัตโนมัติ
      เพราะ Task Scheduler เป็นการตั้งค่าระดับ Windows ไม่ใช่ไฟล์ในโปรเจกต์
@@ -198,7 +203,8 @@
 ################################################################################
 
   [ ] เปิดแอป → Data Health → ไม่มีแดง                    (เช็คได้ทุกวัน)
-  [ ] OneDrive\SET_Dashboard_Backup มีไฟล์ 4 ตัว วันที่ล่าสุดไม่เกิน 7 วัน
+  [ ] C:\SET_Dashboard_backup มีไฟล์ครบ วันที่ล่าสุดไม่เกิน 7 วัน + ไอคอน sync
+      เขียวใน Google Drive (ไม่ใช่ค้าง pending)
   [ ] Task Scheduler → SET_Dashboard folder → ทั้ง 3 งาน "Next Run Time" เป็น
       อนาคตเสมอ                                            (เช็คเดือนละครั้งพอ)
   [ ] git status สะอาด + push ล่าสุดขึ้น GitHub แล้ว          (เช็คหลังแก้โค้ด)

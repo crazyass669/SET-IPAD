@@ -751,9 +751,15 @@ def fetch_factsheet_price_performance(symbol, ctx=None, hdr=None):
                 "ytd_percent_change": b.get("ytdPercentChange"),
                 "pe_ratio": b.get("peRatio"), "pb_ratio": b.get("pbRatio"),
                 "turnover_ratio": b.get("turnoverRatio")}
-    return {"stock": _block((d or {}).get("stock")),
-            "sector": _block((d or {}).get("sector")),
-            "market": _block((d or {}).get("market"))}
+    out = {"stock": _block((d or {}).get("stock")),
+           "sector": _block((d or {}).get("sector")),
+           "market": _block((d or {}).get("market"))}
+    # endpoint คืน 200 + body ว่าง/null ได้ (ทุก field เป็น None) — คืน None เหมือน sub-endpoint
+    # อีก 4 ตัว ให้ caller (_merge_set_factsheet_payload / _empty check ใน sync_all) แยก
+    # "ยิงไม่ได้ข้อมูล" ออกจาก "มีข้อมูลจริง" ได้ ไม่งั้น dict None-ล้วนจะทับ snapshot เดิมที่ดีอยู่
+    if not any(v is not None for blk in out.values() for v in blk.values()):
+        return None
+    return out
 
 
 def fetch_financial_factsheet(symbol, ctx=None, hdr=None):

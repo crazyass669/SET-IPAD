@@ -187,8 +187,13 @@ def _qpl_mirror_slot(uni):
     return slot, _qpl_mirror_locks[uni]
 
 
-def _clear_qpl_mirror_caches():
-    for slot in list(_qpl_mirror_caches.values()):
+def _clear_qpl_mirror_caches(unis=None):
+    """ล้าง result/ts ของ growth-screener mirror cache — unis=None ล้างทุก universe,
+    unis=("dr",) ล้างเฉพาะที่ระบุ (งาน sync ที่แตะแค่บาง namespace เช่น DR sync ไม่แตะ
+    FINN:US/HK/JP จึงไม่ควร invalidate ตัวอื่นให้ recompute cold โดยเปล่าประโยชน์)"""
+    for uni, slot in list(_qpl_mirror_caches.items()):
+        if unis is not None and uni not in unis:
+            continue
         slot.pop("result", None)
         slot.pop("ts", None)
 
@@ -4958,14 +4963,33 @@ def _quarterly_bake_universe():
 def _bake_financials_quarterly_file():
     """re-bake data/financials_quarterly.json (งบ P&L รายไตรมาส SET.or.th ให้เวอร์ชันมือถือ)
     เรียกท้ายงาน sync งบไทยทุกจุด (ปุ่ม Data Health / CLI) — set_qpl เพิ่งเปลี่ยน
-    non-fatal: ล้มก็ปล่อย (ไฟล์เดิมยังอยู่) ไม่ให้กระทบงาน sync ที่สำเร็จแล้ว"""
+    non-fatal: ล้มก็ปล่อย (ไฟล์เดิมยังอยู่) ไม่ให้กระทบงาน sync ที่สำเร็จแล้ว
+
+    guard: ไฟล์นี้ git-tracked + push ขึ้นเว็บมือถือ และ set_qpl รายไตรมาสเก่าดึงย้อนหลัง
+    ไม่ได้ — ถ้า bake ได้ 0 หุ้น หรือหด <80% ของไฟล์เดิม (financials.db restore จาก backup
+    เก่าก่อนมี set_qpl / set_data.json ว่างชั่วคราว) ห้ามเขียนทับ (เหมือน core.store._check_stock_count)
+    เขียนแบบ atomic (.tmp + os.replace) กันไฟล์ค้างสภาพ truncate ถ้า process ตายกลาง json.dump"""
+    path = os.path.join(BASE_DIR, "data", "financials_quarterly.json")
     try:
         fq = financials_store.bake_quarterly_pl(BASE_DIR, _quarterly_bake_universe())
+        new_count = len(fq.get("set", {}))
+        old_count = 0
+        try:
+            with open(path, encoding="utf-8") as f:
+                old_count = len(json.load(f).get("set", {}))
+        except Exception:
+            old_count = 0
+        if new_count == 0 or (old_count > 50 and new_count < old_count * 0.8):
+            print(f"[FinancialsQuarterly] ข้าม bake — ได้ {new_count} หุ้น (เดิม {old_count}) "
+                  f"ผิดปกติ ไม่เขียนทับไฟล์สะสม")
+            return
         os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
-        with open(os.path.join(BASE_DIR, "data", "financials_quarterly.json"), "w", encoding="utf-8") as f:
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(fq, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, path)
         _fin_quarterly_cache.clear()
-        print(f"[FinancialsQuarterly] bake data/financials_quarterly.json — {len(fq['set'])} หุ้น")
+        print(f"[FinancialsQuarterly] bake data/financials_quarterly.json — {new_count} หุ้น")
     except Exception as e:
         print(f"[FinancialsQuarterly] bake ล้มเหลว (ข้าม): {e}")
 
@@ -5010,7 +5034,7 @@ def _run_financials_sync(symbols=None, sources=None, is_dr=False, skip_up_to_dat
         _qpl_parsed_cache.clear()
         _fin_quarterly_cache.clear()   # set_qpl เปลี่ยน — bake งบรายไตรมาสใหม่รอบถัดไป
         if is_dr:
-            _clear_qpl_mirror_caches()   # DR sync แตะ finnomena_q/yahoo_q ของ DR: — sync หุ้นไทยไม่แตะ
+            _clear_qpl_mirror_caches(unis=("dr",))   # DR sync แตะแค่ DR: keys — us/hk/jp ไม่กระทบ
         _market_trend_cache.clear()
         _sector_trend_cache.clear()
         # rebuild factor snapshot ทันที (ไม่รอ debounce 300 วิ + ครอบ sync < 5 หุ้นที่เดิม
@@ -9208,16 +9232,15 @@ def _compute_data_health(fresh=False):
                           ("set", "SET company-highlight"), ("set_qpl", "SET P&L รายไตรมาส"),
                           ("set_cashflow", "SET กระแสเงินสด"), ("set_balance", "SET งบดุล"),
                           ("set_health", "SET Financial Health"), ("set_factsheet", "SET Factsheet")]
-        # set_factsheet ไม่ต้องเข้า _fin_cov_informational เหมือน set_health — แม้ sub-key
-        # cash_cycle 404 ทั้งกลุ่มการเงิน/REIT (~30-40% ของตลาด) แต่ payload รวมยังนับว่า "มี"
-        # เพราะอีก 4 sub-key (financial_ratio/growth/trading_stat/price_performance) ครอบคลุม
-        # เต็มตลาด — coverage ของ row นี้จึงไม่ถูกบังคับเพดานต่ำแบบ set_health
-        # set_health ไม่นับเข้า worst_pct/สถานะรวม — SET.or.th endpoint นี้ไม่ครอบกลุ่มการเงิน/
-        # ประกัน/REIT เลย (404 เป็นระบบ วัดจริง 2026-08-26: ~30-40% ของตลาด) เพดาน coverage ของ
-        # source นี้จะต่ำกว่า 100% ถาวรแม้ sync ครบทุกตัวที่ทำได้แล้วก็ตาม — ถ้านับรวมจะทำให้ item
-        # นี้ค้างสถานะแดงตลอดไปทั้งที่ไม่มีอะไรผิดปกติ (เหมือนที่ ESG กันปัญหาเดียวกันไว้ใน
-        # PLAN_set_api_expansion.txt งาน #3) ยังโชว์ตัวเลขให้เห็นตามปกติ แค่ไม่ใช้ตัดสิน status
-        _fin_cov_informational = {"set_health"}
+        # set_health/set_factsheet ไม่นับเข้า worst_pct/สถานะรวม — เป็น informational เฉยๆ:
+        #  · set_health: SET.or.th endpoint นี้ไม่ครอบกลุ่มการเงิน/ประกัน/REIT เลย (404 เป็นระบบ
+        #    วัดจริง 2026-08-26: ~30-40% ของตลาด) เพดาน coverage ต่ำกว่า 100% ถาวร
+        #  · set_factsheet: หุ้นที่เพิ่ง IPO (ยังไม่มีงบยื่น → ratio/growth/cash_cycle ว่าง) หรือ
+        #    ตราสารผิดแบบ อาจไม่มีแถวเลย ทำให้ % หล่นต่ำกว่า 99.5 → row ค้างเหลืองถาวร ทั้งที่
+        #    sync ครบทุกตัวที่ทำได้แล้ว (false alarm แบบเดียวกับ set_health / ESG งาน #3)
+        # ถ้านับรวมจะทำให้ item นี้ค้างสถานะเหลือง/แดงตลอดไปทั้งที่ไม่มีอะไรผิดปกติ — ยังโชว์
+        # ตัวเลขให้เห็นตามปกติ (มี ' *') แค่ไม่ใช้ตัดสิน status
+        _fin_cov_informational = {"set_health", "set_factsheet"}
         _fin_cov = financials_store.get_coverage(BASE_DIR, _financials_universe(),
                                                   sources=[k for k, _ in _fin_cov_srcs])
         _fin_cov_rows = []
@@ -9236,8 +9259,9 @@ def _compute_data_health(fresh=False):
                 f'{_c["covered"]}/{_total} ({_pct:.1f}%)</td></tr>')
         _fin_cov_status = _dh_pct_status(_fin_cov_worst_pct)
         _fin_cov_extra = ('<div style="margin-top:6px;color:var(--text2);font-size:11px">'
-                           '* SET Financial Health ไม่ครอบกลุ่มการเงิน/ประกัน/REIT (~30-40% ของตลาด) '
-                           'เพดาน coverage ต่ำกว่า 100% ถาวรโดยไม่ใช่บั๊ก — ไม่นับรวมในสถานะข้างบน</div>')
+                           '* SET Financial Health (ไม่ครอบกลุ่มการเงิน/ประกัน/REIT ~30-40% ของตลาด) '
+                           'และ SET Factsheet (หุ้น IPO ใหม่ยังไม่มีงบยื่น) เพดาน coverage ต่ำกว่า 100% '
+                           'ถาวรโดยไม่ใช่บั๊ก — ไม่นับรวมในสถานะข้างบน</div>')
         if _fin_cov_worst_pct < 90:
             _fin_cov_extra += ('<div style="margin-top:6px">ยังไม่ sync ทั้งตลาด — กดปุ่ม '
                                '"🔄 อัพเดทงบการเงินทั้งหมด" ด้านล่างเพื่อ sync ให้ครบ '
@@ -9902,14 +9926,14 @@ def backup_files_status():
     # "เข้าไม่ถึงโฟลเดอร์ปลายทาง" หมายถึงปลายทางจริงพังเสมอ (code review 2026-09-02)
     _dest_dir_guessed = not dest_dir
     if not dest_dir:
-        dest_dir = r"C:\Users\joeki\OneDrive\SET_Dashboard_Backup"
+        dest_dir = r"C:\SET_Dashboard_backup"  # โฟลเดอร์ mirror ของ Google Drive for Desktop
     _guess_note = (" (เดาจาก path เริ่มต้น — ไม่พบ dest_dir ที่บันทึกไว้จาก run_log จริง)"
                    if _dest_dir_guessed else "")
 
     if not os.path.isdir(dest_dir):
         return jsonify({"dest_dir": dest_dir, "files": [],
                          "note": f"เข้าไม่ถึงโฟลเดอร์ปลายทาง{(' ' + dest_dir) if dest_dir else ''}"
-                                 f"{_guess_note} — external drive ถอดอยู่หรือ OneDrive ยังไม่ sync?"})
+                                 f"{_guess_note} — external drive ถอดอยู่หรือ Google Drive ยังไม่ sync?"})
 
     try:
         entries = os.listdir(dest_dir)
@@ -10309,17 +10333,27 @@ def _run_financials_update_all():
         except Exception as e:
             print(f"[FinancialsUpdateAll] analyst consensus sync error (ข้าม): {e}")
 
+        # build_snapshot / build_mirror_snapshot* non-fatal — งบ Yahoo/SET/Finnomena sync
+        # สำเร็จแล้ว ณ จุดนี้ ถ้า snapshot พัง (payload เสีย/ดิสก์เต็ม) ไม่ควรทำให้ทั้ง run
+        # นับล้มเหลว + ข้าม _bake_financials_quarterly_file()/เคลียร์ cache ท้ายงานไปด้วย
+        # (pattern เดียวกับ _run_financials_sync L5022 + _run_us_index_sync)
         _update(current=93, total=100, message="กำลังคำนวณ factor snapshot ใหม่...")
-        factor_snapshot.build_snapshot(BASE_DIR)
+        try:
+            factor_snapshot.build_snapshot(BASE_DIR)
+        except Exception as e:
+            print(f"[FinancialsUpdateAll] build_snapshot ล้มเหลว (งบ sync สำเร็จแล้ว ข้าม): {e}")
         _bake_financials_quarterly_file()   # re-bake data/financials_quarterly.json (งบไตรมาสเว็บมือถือ)
         idx_changed = bool(r_idx["ok"] or r_idx["fail"])
-        if refreshed_mirror or idx_changed:
-            _update(current=97, total=100, message="กำลัง rebuild mirror snapshot US/HK...")
-            factor_snapshot.build_mirror_snapshot(BASE_DIR, exchanges=("US", "HK"))
-        if idx_changed:
-            _update(current=99, total=100, message="กำลัง rebuild mirror snapshot JP...")
-            factor_snapshot.build_mirror_snapshot_yahoo_only(
-                BASE_DIR, "JP", jp_syms, price_by_ticker=jp_price_by_ticker)
+        try:
+            if refreshed_mirror or idx_changed:
+                _update(current=97, total=100, message="กำลัง rebuild mirror snapshot US/HK...")
+                factor_snapshot.build_mirror_snapshot(BASE_DIR, exchanges=("US", "HK"))
+            if idx_changed:
+                _update(current=99, total=100, message="กำลัง rebuild mirror snapshot JP...")
+                factor_snapshot.build_mirror_snapshot_yahoo_only(
+                    BASE_DIR, "JP", jp_syms, price_by_ticker=jp_price_by_ticker)
+        except Exception as e:
+            print(f"[FinancialsUpdateAll] build_mirror_snapshot ล้มเหลว (ข้าม): {e}")
         _fin_analytics_cache.clear()
         _sector_compare_cache.clear()
         _qpl_parsed_cache.clear()

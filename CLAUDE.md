@@ -24,7 +24,9 @@
 ถ้าต้องการ DB ว่าง/สภาพแวดล้อมทดสอบ ให้ **copy ไฟล์ไป scratchpad ก่อนเสมอ** แล้ว
 ทดสอบกับสำเนานั้น ห้ามแตะไฟล์จริงที่ root โดยตรง
 
-Backup นอกเครื่องอยู่ที่ `C:\Users\joeki\OneDrive\SET_Dashboard_Backup\`
+Backup นอกเครื่องอยู่ที่ `C:\SET_Dashboard_backup\` — โฟลเดอร์ mirror ของ Google
+Drive for Desktop (สำเนาในเครื่อง + sync ขึ้น Google Drive ใต้ "Computers")
+ย้ายมาจาก OneDrive เมื่อ 2026-09-04 เพราะพื้นที่ OneDrive เต็ม
 (อัตโนมัติทุกจันทร์/พฤหัส 23:00 + ตอน log on ถ้าของเดิมเกิน 3 วัน ผ่าน Windows Task
 Scheduler "Backup_Offsite_Weekly") — แต่ backup อาจ lag ได้ถึงหลายวัน **ห้ามใช้การมี
 backup เป็นข้ออ้างในการเสี่ยงลบไฟล์จริง**
