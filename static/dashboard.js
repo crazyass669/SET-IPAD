@@ -413,7 +413,7 @@ async function _startJob(apiEndpoint, btnId, btnLabel, body = null, onDone = nul
         }
         resetNhCache();
         // clear all page caches so next visit fetches fresh data
-        _idxData = null; _valData = null; _nvdrData = null;
+        _idxData = null; _idxDataDone = false; _valData = null; _nvdrData = null;
         _shortData = null; _insData = null;
         // สัญญาณรวมคำนวณจาก short+NVDR+insider ที่เพิ่งล้างไป — ถ้าไม่ล้างด้วย หน้า
         // "🎯 สัญญาณรวม" (และ alert watchlist ที่เช็คทุก 5 นาที) จะค้างชุดเก่าทั้ง session
@@ -988,11 +988,17 @@ function stageBadge(stage) {
 // หุ้นที่มี RS ถูกต้องเสมอจะมี RS≥80 ไม่ว่าตลาดจะ bull/bear แค่ไหน — แทบไม่แปรผันจริง
 // เปลี่ยนเป็น % หุ้นที่ ret_3m เป็นบวก (magnitude-based เหมือน pctPos1m) ซึ่งแปรตามสภาพตลาดจริง
 function calcMarketRegime(stocks) {
-  const n = stocks.length || 1;
-  const pct200 = stocks.filter(s => s.above_ema200).length / n * 100;
-  const pct50  = stocks.filter(s => s.above_ema50).length  / n * 100;
-  const pctPos3m = stocks.filter(s => (s.ret_3m||0) > 0).length / n * 100;
-  const pctPos1m = stocks.filter(s => (s.ret_1m||0) > 0).length / n * 100;
+  // เศษ/ส่วนนับเฉพาะหุ้นที่ค่านั้นไม่ใช่ null — หุ้น IPO ใหม่ (< period แท่ง → above_emaXXX = null,
+  // < 63 แท่ง → ret_3m = null) เดิมถูกนับเข้า "ส่วน" แต่ไม่เคยเข้า "เศษ" ทำให้ score เอนไป Bear
+  // ~1-4 แต้มถาวร (หนักช่วงหุ้นเข้าใหม่เป็นชุด) — สอดคล้องกับ core/metrics.pct_above_ema50
+  const frac = (key, test) => {
+    const w = stocks.filter(s => s[key] != null);
+    return w.length ? w.filter(test).length / w.length * 100 : 0;
+  };
+  const pct200 = frac('above_ema200', s => s.above_ema200);
+  const pct50  = frac('above_ema50',  s => s.above_ema50);
+  const pctPos3m = frac('ret_3m', s => s.ret_3m > 0);
+  const pctPos1m = frac('ret_1m', s => s.ret_1m > 0);
   const score = Math.round(pct200 * 0.35 + pct50 * 0.25 + pctPos3m * 0.25 + pctPos1m * 0.15);
   const capped = Math.min(100, score);
   let desc = '';
@@ -1164,10 +1170,20 @@ function fmtValuation(val, type) {
 function calcFGI(stocks) {
   const n = stocks.length;
   if (!n) return { score: 50, c1: 50, c2: 50, c3: 50, c4: 50, c5: 50 };
-  const c1 = stocks.filter(s => s.above_ema50).length / n * 100;
-  const c2 = stocks.filter(s => (s.ret_1w || 0) > 0).length / n * 100;
-  const c3 = stocks.filter(s => s.above_ema200).length / n * 100;
-  const c4 = stocks.filter(s => (s.ret_3m || 0) > 0).length / n * 100;
+  // ทุก component ตัดหุ้นที่ค่านั้นเป็น null ออกจากทั้งเศษและส่วน (เหมือน c5 ที่ทำอยู่แล้ว +
+  // การ filter null ของ RS distribution) — ไม่งั้นหุ้น IPO ใหม่ถ่วง c1/c3 ให้ต่ำเกินจริง
+  const pctAboveOf = key => {
+    const w = stocks.filter(s => s[key] != null);
+    return w.length ? w.filter(s => s[key]).length / w.length * 100 : 50;
+  };
+  const pctPosOf = key => {
+    const w = stocks.filter(s => s[key] != null);
+    return w.length ? w.filter(s => s[key] > 0).length / w.length * 100 : 50;
+  };
+  const c1 = pctAboveOf('above_ema50');
+  const c2 = pctPosOf('ret_1w');
+  const c3 = pctAboveOf('above_ema200');
+  const c4 = pctPosOf('ret_3m');
   const w1m = stocks.filter(s => s.ret_1m != null);
   const avg1m = w1m.length ? w1m.reduce((a, s) => a + s.ret_1m, 0) / w1m.length : 0;
   const c5 = Math.max(0, Math.min(100, (avg1m + 15) / 30 * 100));
@@ -1178,6 +1194,18 @@ function calcFGI(stocks) {
 // ============================================================
 // OVERVIEW
 // ============================================================
+// % หุ้นเหนือเส้น EMA — นับเฉพาะหุ้นที่คำนวณ EMA ได้ (above_emaXXX != null); หุ้นที่ราคายังสั้น
+// กว่า period จะเป็น null ต้องตัดออกจากทั้งเศษและส่วน ไม่งั้น breadth เพี้ยนต่ำ + card โชว์
+// "n จาก total" ผิด (total ควรเป็นจำนวนหุ้นที่มีเส้น ไม่ใช่หุ้นทั้งตลาด)
+function _pctAboveEma(stocks, key) {
+  let n = 0, total = 0;
+  for (const s of stocks) {
+    if (s[key] == null) continue;
+    total++;
+    if (s[key]) n++;
+  }
+  return { n, total, pct: total ? Math.round(n / total * 100) : 0 };
+}
 function renderOverview() {
   if (!DATA) return;
   _ensureIdxDataLoaded(renderOverview);
@@ -1185,10 +1213,10 @@ function renderOverview() {
   const total  = stocks.length;
 
   // --- stat cards ---
-  const above50  = stocks.filter(s => s.above_ema50).length;
-  const above200 = stocks.filter(s => s.above_ema200).length;
-  const rs80     = stocks.filter(s => (s.rs_score||0) >= 80).length;
-  const rs90     = stocks.filter(s => (s.rs_score||0) >= 90).length;
+  const ema50  = _pctAboveEma(stocks, 'above_ema50');
+  const ema200 = _pctAboveEma(stocks, 'above_ema200');
+  const ema20  = _pctAboveEma(stocks, 'above_ema20');
+  const rs80   = stocks.filter(s => (s.rs_score||0) >= 80).length;
 
   const stocks1m = stocks.filter(s => s.ret_1m != null);
   const stocks1d = stocks.filter(s => s.ret_1d != null);
@@ -1224,9 +1252,9 @@ function renderOverview() {
     </div>
     <div class="card">
       <div class="card-title">Market Breadth</div>
-      <div class="stat-val blue">${Math.round(above50/total*100)}%</div>
+      <div class="stat-val blue">${ema50.pct}%</div>
       <div class="stat-label">% เหนือ EMA50</div>
-      <div class="stat-sub">${Math.round(above200/total*100)}% เหนือ EMA200</div>
+      <div class="stat-sub">${ema200.pct}% เหนือ EMA200</div>
     </div>
   `;
 
@@ -1287,21 +1315,20 @@ function renderOverview() {
     </div>`;
 
   // --- breadth bars ---
-  const above20  = stocks.filter(s => s.above_ema20).length;
   const bars = [
-    { label:"EMA20",  n: above20,  total, color:"#bc8cff" },
-    { label:"EMA50",  n: above50,  total, color:"var(--blue)" },
-    { label:"EMA200", n: above200, total, color:"var(--green)" },
+    { label:"EMA20",  d: ema20,  color:"#bc8cff" },
+    { label:"EMA50",  d: ema50,  color:"var(--blue)" },
+    { label:"EMA200", d: ema200, color:"var(--green)" },
   ];
   document.getElementById("breadth-bars").innerHTML = bars.map(b => {
-    const pct = Math.round(b.n/b.total*100);
+    const pct = b.d.pct;
     return `
       <div class="breadth-row">
         <div class="breadth-label">${b.label}</div>
         <div class="breadth-track"><div class="breadth-fill" style="width:${pct}%;background:${b.color}"></div></div>
         <div class="breadth-pct" style="color:${b.color}">${pct}%</div>
       </div>
-      <div style="font-size:10px;color:var(--text2);margin:-4px 0 8px 80px">${b.n} จาก ${b.total} ตัว</div>
+      <div style="font-size:10px;color:var(--text2);margin:-4px 0 8px 80px">${b.d.n} จาก ${b.d.total} ตัว</div>
     `;
   }).join("");
 
@@ -1318,9 +1345,13 @@ function renderOverview() {
   // (s.rs_score||0) เดิมทำหุ้นที่ยังไม่มี rs_score (ineligible/ถูกกันออกจาก RS Rank) ตกไป
   // นับรวมใน bin "0-19" ทั้งที่ไม่ควรถูกนับเลย — filter ตัว null ออกก่อน
   const binCounts = bins.map(b => stocks.filter(s => s.rs_score != null && s.rs_score >= b.min && s.rs_score < b.max).length);
-  const maxBin = Math.max(...binCounts);
+  // แท่งสูงตาม "ความหนาแน่น" (จำนวนหุ้นต่อช่วง 10 แต้ม) ไม่ใช่จำนวนดิบ — bin 0-19/20-39/40-59
+  // กว้าง 20 แต้ม ถ้าพล็อตจำนวนดิบด้วยแท่งกว้างเท่ากันจะสูงเกินจริง ~2 เท่าเสมอ (rs_score เป็น
+  // percentile กระจายสม่ำเสมอ) ทำให้กราฟดูเอนซ้าย/อ่อนแรงตลอดทั้งที่เป็น artifact ของความกว้าง bin
+  const binDensity = bins.map((b, i) => binCounts[i] / ((b.max - b.min) / 10));
+  const maxDensity = Math.max(...binDensity, 1);
   document.getElementById("rs-dist-bars").innerHTML = bins.map((b,i) => {
-    const h = Math.round(binCounts[i]/maxBin*56) + 4;
+    const h = Math.round(binDensity[i]/maxDensity*56) + 4;
     return `<div class="rs-bar" style="background:${b.color};height:${h}px" title="${b.label}: ${binCounts[i]} ตัว"></div>`;
   }).join("");
   document.getElementById("rs-dist-labels").innerHTML = bins.map(b => `<div class="rs-lbl">${b.label}</div>`).join("");
@@ -1331,8 +1362,11 @@ function renderOverview() {
   // กัน penny stock ออก เหมือน RS leaders preview ด้านล่าง — tick เดียวของหุ้นราคา
   // ไม่กี่สตางค์ทำให้ ret_1d กระโดด ±20-50% ครองอันดับทั้งที่ไม่ใช่การเคลื่อนไหวจริง
   const sorted1d = stocks.filter(s => s.ret_1d != null && !_dqIsPenny(s)).sort((a,b) => b.ret_1d - a.ret_1d);
-  const gainers = sorted1d.slice(0,20);
-  const losers  = sorted1d.slice(-20).reverse();
+  // กันช่วงซ้อนกันเมื่อหุ้นที่ผ่านตัวกรอง < 40 ตัว (วันข้อมูลบาง / null เยอะ) ไม่งั้นหุ้นตัวเดียว
+  // จะโผล่ทั้งตาราง Top Gainers และ Top Losers
+  const nG = Math.min(20, sorted1d.length);
+  const gainers = sorted1d.slice(0, nG);
+  const losers  = sorted1d.slice(Math.max(nG, sorted1d.length - 20)).reverse();
 
   const miniTbl = (rows, isGainer) => `
     <thead><tr><th>Symbol${colTipIcon('symbol')}</th><th>Sector${colTipIcon('sector')}</th><th class="r">1D%${colTipIcon('ret_1d')}</th><th class="r">RS${colTipIcon('rs_score')}</th></tr></thead>
@@ -2739,24 +2773,49 @@ function renderEmergingLeaders() {
 
 // ── 52W New High Chart ─────────────────────────────────────────
 let _nhLoaded = false;
+let _nhData = null;   // ผลรอบล่าสุด เก็บไว้วาดซ้ำตอน resize/หมุนจอ/กลับเข้าหน้า overview
 function resetNhCache() { _nhLoaded = false; }  // call after Quick Update
 async function loadNewHighChart() {
   if (_nhLoaded) return;
   try {
     const r = await _fetchTimeout("/api/market-internals", 30000,
       "หมดเวลารอ New High/New Low (เกิน 30 วิ) — ลองใหม่อีกครั้ง");
-    if (!r.ok) { document.getElementById("new-high-loading").textContent = "ไม่สามารถโหลดได้"; return; }
+    if (!r.ok)   { _nhError("ไม่สามารถโหลดได้"); return; }
     const d = await r.json();
-    if (d.error) { document.getElementById("new-high-loading").textContent = d.error; return; }
+    if (d.error) { _nhError(d.error); return; }
+    _nhData = d;
     _nhLoaded = true;
-    document.getElementById("new-high-loading").style.display = "none";
     const canvas = document.getElementById("new-high-chart");
-    canvas.style.display = "block";
-    drawNewHighChart(canvas, d);
+    document.getElementById("new-high-loading").style.display = "none";
+    if (canvas) canvas.style.display = "block";
+    _nhDraw();
   } catch(e) {
-    document.getElementById("new-high-loading").textContent = "โหลดไม่สำเร็จ: " + e.message;
+    _nhError("โหลดไม่สำเร็จ: " + e.message);
   }
 }
+
+// error branch: คืน div loading กลับมาแสดง (รอบก่อนอาจ set display:none) + ซ่อน canvas
+// เฉพาะตอนยังไม่เคยมีชาร์ต — ถ้ามีชาร์ตเก่าอยู่แล้วปล่อยค้างไว้ ดีกว่าจอว่างเปล่า
+function _nhError(msg) {
+  const loadingEl = document.getElementById("new-high-loading");
+  const canvas = document.getElementById("new-high-chart");
+  if (loadingEl) { loadingEl.style.display = ""; loadingEl.textContent = msg; }
+  if (canvas && !_nhData) canvas.style.display = "none";
+}
+
+// วาด/วาดซ้ำจาก _nhData — canvas เป็น bitmap ขนาดตายตัว ถ้าวาดตอนหน้า/การ์ดถูกซ่อน
+// (offsetWidth = 0) จะได้ 800px ค้าง หรือถูก CSS ยืดเบลอหลังหมุนจอ — เลื่อนไปวาดตอนมองเห็นจริง
+function _nhDraw() {
+  const canvas = document.getElementById("new-high-chart");
+  if (!canvas || !_nhData) return;
+  if (canvas.offsetParent === null || !canvas.offsetWidth) return;
+  try { drawNewHighChart(canvas, _nhData); }
+  catch (e) { console.error("[drawNewHighChart]", e); }
+}
+(() => {
+  let t = null;
+  window.addEventListener("resize", () => { clearTimeout(t); t = setTimeout(_nhDraw, 200); });
+})();
 
 function drawNewHighChart(canvas, d) {
   const W = canvas.offsetWidth || 800;
@@ -2764,9 +2823,9 @@ function drawNewHighChart(canvas, d) {
   canvas.width  = W;
   canvas.height = H;
   const ctx = canvas.getContext("2d");
-  const NH = d.new_highs, NL = d.new_lows, dates = d.dates;
+  const NH = d.new_highs || [], NL = d.new_lows || [], dates = d.dates || [];
   const n  = NH.length;
-  if (!n) return;
+  if (n < 2) return;   // toX หาร (n-1) — ต้องมีอย่างน้อย 2 จุด
 
   const maxVal = Math.max(...NH, ...NL, 1);
   const pad = { l: 40, r: 10, t: 10, b: 28 };
@@ -2984,27 +3043,34 @@ function renderSectors() {
 // เดียวกัน ไม่ยิงซ้ำถ้ากำลังโหลดอยู่ และเก็บ callback ของ "ทุก" หน้าที่แวะเรียกระหว่างรอ (ไม่ใช่
 // แค่หน้าแรก) เผื่อผู้ใช้สลับหน้าเร็วก่อน fetch จะเสร็จ ไม่งั้นหน้าหลังๆ จะไม่ได้ re-render อัตโนมัติ
 let _idxDataLoading = false;
+let _idxDataDone = false;          // ยิง /api/indices ไปแล้ว 1 รอบ (สำเร็จ/ล้มเหลวก็ตาม)
 let _idxDataWaiters = [];
 function _ensureIdxDataLoaded(onLoaded) {
   if (_idxData) return;
+  // สำคัญ: waiter ที่เรียกกลับ (renderOverview/renderSectors/renderRotMulti) จะเรียก
+  // _ensureIdxDataLoaded ซ้ำที่บรรทัดแรกของตัวเอง — ถ้า fetch ล้มเหลวถาวร (ไม่มี
+  // indices_cache.json / 500 / timeout) แล้วยัง retry ทุกครั้ง จะกลายเป็น loop fetch+
+  // re-render ไม่รู้จบ ตัดจบที่รอบเดียว: หลังจากนั้น fallback เป็นค่าเฉลี่ยไม่ถ่วงน้ำหนัก
+  if (_idxDataDone) return;
   _idxDataWaiters.push(onLoaded);
   if (_idxDataLoading) return;
   _idxDataLoading = true;
-  _fetchTimeout('/api/indices').then(r => r.json()).then(d => {
+  const _finish = () => {
     _idxDataLoading = false;
+    _idxDataDone = true;
     const waiters = _idxDataWaiters;
     _idxDataWaiters = [];
+    waiters.forEach(fn => fn());   // เรียก re-render ต่อแม้ error แทนที่จะค้างเงียบๆ
+  };
+  _fetchTimeout('/api/indices').then(r => r.json()).then(d => {
     if (!d.error) {
       _idxData = d;
       renderDqBanner();   // เพิ่งมี _idxData ครั้งแรก — เช็คว่าเก่ากว่าราคาหุ้นไปหรือยัง
     }
-    waiters.forEach(fn => fn());   // เรียก re-render ต่อแม้ error (fallback เป็นค่าเฉลี่ยไม่ถ่วงน้ำหนัก) แทนที่จะค้างเงียบๆ
+    _finish();
   }).catch((e) => {
     console.warn('[_ensureIdxDataLoaded] /api/indices ล้มเหลว:', e);
-    _idxDataLoading = false;
-    const waiters = _idxDataWaiters;
-    _idxDataWaiters = [];
-    waiters.forEach(fn => fn());   // เรียก re-render ต่อ (fallback เป็นค่าเฉลี่ยไม่ถ่วงน้ำหนัก) แทนที่จะค้างเงียบๆ
+    _finish();
   });
 }
 
@@ -4226,7 +4292,7 @@ function showPage(id, btn) {
   if (id === "dcf-screener")   loadDcfScreenerPage();
   if (id === "pbv-pe-screener") loadPbvPeScreenerPage();
   if (id === "growth-screener") loadGrowthScreenerPage();
-  if (id === "overview")       { setTimeout(() => { if (!_nhLoaded) loadNewHighChart(); }, 100); }
+  if (id === "overview")       { setTimeout(() => { if (!_nhLoaded) loadNewHighChart(); else _nhDraw(); }, 100); }
 }
 
 
@@ -27096,7 +27162,7 @@ async function _idxDownloadFirstTime() {
     const res = await fetch('/api/indices-refresh', { method: 'POST' });
     const d   = await res.json();
     if (d.error) throw new Error(d.error);
-    _idxData = null;   // บังคับ loadIndicesPage ดึง /api/indices ใหม่ ไม่ใช้ cache เก่า (ไม่มี)
+    _idxData = null; _idxDataDone = false;   // บังคับ loadIndicesPage + _ensureIdxDataLoaded ดึง /api/indices ใหม่
     await loadIndicesPage();
   } catch (e) {
     grid.innerHTML = `<div style="padding:20px">

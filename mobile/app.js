@@ -142,13 +142,19 @@ function rowEtf(s) {
 }
 
 /* ---------------- market computations (ported from dashboard.js) ---------------- */
+// ทุก component ตัดหุ้นที่ค่านั้นเป็น null ออกจากทั้งเศษและส่วน (เหมือน c5 + rsDist) —
+// หุ้น IPO ใหม่ที่ above_emaXXX/ret ยังเป็น null เดิมถูกนับเป็น bearish ถ่วง score ให้ต่ำเกินจริง
+function _fracNonNull(stocks, key, test) {
+  const w = stocks.filter(s => s[key] != null);
+  return w.length ? w.filter(test).length / w.length * 100 : 50;
+}
 function calcFGI(stocks) {
   const n = stocks.length;
   if (!n) return { score: 50, c1: 50, c2: 50, c3: 50, c4: 50, c5: 50 };
-  const c1 = stocks.filter(s => s.above_ema50).length / n * 100;
-  const c2 = stocks.filter(s => (s.ret_1w || 0) > 0).length / n * 100;
-  const c3 = stocks.filter(s => s.above_ema200).length / n * 100;
-  const c4 = stocks.filter(s => (s.ret_3m || 0) > 0).length / n * 100;
+  const c1 = _fracNonNull(stocks, 'above_ema50', s => s.above_ema50);
+  const c2 = _fracNonNull(stocks, 'ret_1w', s => s.ret_1w > 0);
+  const c3 = _fracNonNull(stocks, 'above_ema200', s => s.above_ema200);
+  const c4 = _fracNonNull(stocks, 'ret_3m', s => s.ret_3m > 0);
   const w1m = stocks.filter(s => s.ret_1m != null);
   const avg1m = w1m.length ? w1m.reduce((a, s) => a + s.ret_1m, 0) / w1m.length : 0;
   const c5 = Math.max(0, Math.min(100, (avg1m + 15) / 30 * 100));
@@ -156,16 +162,23 @@ function calcFGI(stocks) {
   return { score, c1, c2, c3, c4, c5 };
 }
 function calcRegime(stocks) {
-  const n = stocks.length || 1;
-  const pct200 = stocks.filter(s => s.above_ema200).length / n * 100;
-  const pct50 = stocks.filter(s => s.above_ema50).length / n * 100;
-  const pos3m = stocks.filter(s => (s.ret_3m || 0) > 0).length / n * 100;
-  const pos1m = stocks.filter(s => (s.ret_1m || 0) > 0).length / n * 100;
+  const frac = (key, test) => {
+    const w = stocks.filter(s => s[key] != null);
+    return w.length ? w.filter(test).length / w.length * 100 : 0;
+  };
+  const pct200 = frac('above_ema200', s => s.above_ema200);
+  const pct50 = frac('above_ema50', s => s.above_ema50);
+  const pos3m = frac('ret_3m', s => s.ret_3m > 0);
+  const pos1m = frac('ret_1m', s => s.ret_1m > 0);
   return Math.min(100, Math.round(pct200 * 0.35 + pct50 * 0.25 + pos3m * 0.25 + pos1m * 0.15));
 }
 function computeMarket() {
-  const st = D.stocks, n = st.length || 1;
-  const p = f => Math.round(st.filter(f).length / n * 100);
+  const st = D.stocks;
+  // % เหนือ EMA — นับเฉพาะหุ้นที่คำนวณเส้นได้ (above_emaXXX != null) เหมือน ver เต็ม
+  const pEma = key => {
+    const w = st.filter(s => s[key] != null);
+    return w.length ? Math.round(w.filter(s => s[key]).length / w.length * 100) : 0;
+  };
   const st1d = st.filter(s => s.chg1d != null);
   const avg1d = st1d.length ? st1d.reduce((a, s) => a + s.chg1d, 0) / st1d.length : 0;
   // นิยามเดียวกับ dashboard.js (นับ new-high ราย sector): price >= high_52w
@@ -182,7 +195,7 @@ function computeMarket() {
     .sort((a, b) => b[1] - a[1]);
   return {
     total: st.length,
-    ema20: p(s => s.above_ema20), ema50: p(s => s.above_ema50), ema200: p(s => s.above_ema200),
+    ema20: pEma('above_ema20'), ema50: pEma('above_ema50'), ema200: pEma('above_ema200'),
     avg1d,
     rs80: st.filter(s => (s.rs || 0) >= 80).length,
     nHigh, nLow,
@@ -202,10 +215,12 @@ function rsDist(stocks) {
     ['70–79', 70, 80, 'var(--accent)'], ['80–89', 80, 90, '#4bb36b'],
     ['90–99', 90, 100, 'var(--up)'],
   ];
-  return defs.map(([label, mn, mx, color]) => ({
-    label, color,
-    n: stocks.filter(s => s.rs != null && s.rs >= mn && s.rs < mx).length,
-  }));
+  return defs.map(([label, mn, mx, color]) => {
+    const n = stocks.filter(s => s.rs != null && s.rs >= mn && s.rs < mx).length;
+    // ความสูงแท่งใช้ density (หุ้นต่อช่วง 10 แต้ม) — bin 0–19/20–39/40–59 กว้าง 20 แต้ม
+    // ถ้าพล็อตจำนวนดิบแท่งกว้างเท่ากันจะสูงเกินจริง ~2 เท่าเสมอ (rs เป็น percentile uniform)
+    return { label, color, n, dens: n / ((mx - mn) / 10) };
+  });
 }
 
 /* ---------------- boot ---------------- */
@@ -428,13 +443,13 @@ function renderMarket() {
 
   // RS distribution histogram
   const rd = rsDist(D.stocks);
-  const rdMax = Math.max(...rd.map(b => b.n), 1);
+  const rdMax = Math.max(...rd.map(b => b.dens), 1);
   const rs90 = rd[6].n, rs80 = rd[5].n + rd[6].n, rs70 = rd[4].n + rs80;
   const rdWrap = el('div');
   rdWrap.appendChild(secHead('การกระจายค่า RS'));
   const rdBars = el('div', 'rsd');
   rdBars.innerHTML = rd.map(b =>
-    `<span class="col"><span class="cnt">${b.n}</span><span class="bar" style="height:${Math.round(b.n / rdMax * 100)}%;background:${b.color}"></span></span>`
+    `<span class="col"><span class="cnt">${b.n}</span><span class="bar" style="height:${Math.round(b.dens / rdMax * 100)}%;background:${b.color}"></span></span>`
   ).join('');
   rdWrap.appendChild(rdBars);
   rdWrap.appendChild(el('div', 'rsd-x', rd.map(b => `<span>${b.label}</span>`).join('')));

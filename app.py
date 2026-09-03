@@ -11233,6 +11233,10 @@ def jp_market_breadth():
 
 
 _market_internals_cache: dict = {}
+# in-flight guard — Overview โหลดครั้งแรกยิง /api/market-internals ซ้อนกันได้ (renderAll +
+# showPage setTimeout) ตอน cache ยังว่าง ทั้งสอง request จะรัน compute_breadth (pandas EMA/
+# rolling ~1,200 หุ้น ~1-2 วิ) พร้อมกันบน dev server — pattern เดียวกับ breadth/screener mirror
+_market_internals_lock = threading.Lock()
 
 @app.route("/api/market-internals")
 def market_internals():
@@ -11249,27 +11253,33 @@ def market_internals():
             or os.path.exists(os.path.join(BASE_DIR, "set_history.json"))):
         return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณา Full Refresh ก่อน"}), 404
 
-    gen0 = _cache_gen["n"]
-    try:
-        # ใช้ compute_breadth (vectorized pandas — ~1-2 วิ) แทน loop เดิมที่ทำ
-        # .get_loc() ทีละหุ้นทีละวัน (~1,198 หุ้น x 63 วัน ~25 วิ) และยังผูก
-        # calendar กับหุ้นตัวเดียวที่อาจถูกแขวน/เลิกเทรดแล้ว
-        from services.breadth import compute_breadth
-        breadth = compute_breadth(BASE_DIR, days=63)
-        if not breadth:
-            return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณา Full Refresh ก่อน"}), 404
+    with _market_internals_lock:
+        # request ที่สองรอ lock แล้วเจอผลจาก request แรกใน cache — ไม่ต้อง compute ซ้ำ
+        cached = _market_internals_cache.get("data")
+        if cached:
+            return jsonify(cached)
 
-        result = {
-            "dates":      breadth["dates"],
-            "new_highs":  breadth["nh"],
-            "new_lows":   breadth["nl"],
-        }
-        if _cache_gen["n"] == gen0:
-            _market_internals_cache["data"] = result
-        return jsonify(result)
+        gen0 = _cache_gen["n"]
+        try:
+            # ใช้ compute_breadth (vectorized pandas — ~1-2 วิ) แทน loop เดิมที่ทำ
+            # .get_loc() ทีละหุ้นทีละวัน (~1,198 หุ้น x 63 วัน ~25 วิ) และยังผูก
+            # calendar กับหุ้นตัวเดียวที่อาจถูกแขวน/เลิกเทรดแล้ว
+            from services.breadth import compute_breadth
+            breadth = compute_breadth(BASE_DIR, days=63)
+            if not breadth:
+                return jsonify({"error": "ไม่พบข้อมูลราคา — กรุณา Full Refresh ก่อน"}), 404
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            result = {
+                "dates":      breadth["dates"],
+                "new_highs":  breadth["nh"],
+                "new_lows":   breadth["nl"],
+            }
+            if _cache_gen["n"] == gen0:
+                _market_internals_cache["data"] = result
+            return jsonify(result)
+
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
 
 _INDEX_DRIFT_TTL_DAYS = 6   # เช็คสัปดาห์ละครั้งพอ — Wikipedia/SET.or.th ไม่เปลี่ยน
