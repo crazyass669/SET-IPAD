@@ -24574,7 +24574,7 @@ function _renderNpResult(data) {
     <div class="band-metric"><div class="band-metric-val">${fmt(data.market_cap)}</div><div class="band-metric-lbl">มูลค่าตลาด</div></div>
     <div class="band-metric"><div class="band-metric-val">${fmt(data.pe)}</div><div class="band-metric-lbl">P/E</div></div>
     <div class="band-metric"><div class="band-metric-val">${fmt(data.pbv)}</div><div class="band-metric-lbl">P/BV</div></div>
-    <div class="band-metric"><div class="band-metric-val">${fmt(data.div_yield)}</div><div class="band-metric-lbl">Div. Yield (12M)</div></div>
+    <div class="band-metric"><div class="band-metric-val">${fmt(data.div_yield)}</div><div class="band-metric-lbl">Dividend Yield</div></div>
   `;
 
   const deltaColor = v => {
@@ -24602,6 +24602,51 @@ function _renderNpResult(data) {
     <thead><tr><th>ปี</th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th>รวม</th></tr></thead>
     <tbody>${rows}</tbody>
   `;
+
+  // ตาราง TTM ไล่ตามเวลา — 4 ไตรมาสต่อเนื่องจริง (ไม่ใช่ปีปฏิทิน) เทียบ stage เดียวกัน YoY
+  const seq      = data.table_seq;
+  const seqEl    = document.getElementById('np-table-seq');
+  const ttmSumEl = document.getElementById('np-ttm-summary');
+  const discEl   = document.getElementById('np-disclaimer');
+  if (seq && seq.rows && seq.rows.length) {
+    const qo = seq.quarter_order || [];
+    const seqCell = c => {
+      if (!c || c.val == null) return '<td class="np-empty">—</td>';
+      const eps = c.eps ? `<div class="np-eps">[${_escHtml(c.eps)}]</div>` : '';
+      const yy  = c.yoy ? `<div class="np-eps" style="color:${deltaColor(c.yoy)}">${_escHtml(c.yoy)}</div>` : '';
+      return `<td>${_escHtml(c.val)}${eps}${yy}</td>`;
+    };
+    const seqRows = seq.rows.map(r => {
+      const qmap = {};
+      (r.quarters || []).forEach(qc => { qmap[qc.q] = qc; });
+      const qtds = qo.map(q => seqCell(qmap[q])).join('');
+      const t = r.total || {};
+      const tEps = t.eps ? `<div class="np-eps">[${_escHtml(t.eps)}]</div>` : '';
+      const tYoy = t.yoy ? `<div class="np-eps" style="color:${deltaColor(t.yoy)}">${_escHtml(t.yoy)}</div>` : '';
+      const tCell = t.val == null ? '<td class="np-empty">—</td>'
+        : `<td style="font-weight:700;background:rgba(88,166,255,0.10)">${_escHtml(t.val)}${tEps}${tYoy}</td>`;
+      return `<tr><td>${_escHtml(r.year)}</td>${qtds}${tCell}</tr>`;
+    }).join('');
+    seqEl.innerHTML = `
+      <thead><tr><th>ปี</th>${qo.map(q => `<th>${_escHtml(q)}</th>`).join('')}<th>TTM</th></tr></thead>
+      <tbody>${seqRows}</tbody>
+    `;
+    seqEl.parentElement.style.display = '';
+
+    const ttm = data.ttm;
+    ttmSumEl.innerHTML = `
+      <div style="font-size:12px;font-weight:600;margin-bottom:6px">
+        📊 TTM &amp; กำไรสุทธิไล่ตามเวลา — ผลรวม 4 ไตรมาสต่อเนื่องกันจริง${ttm && ttm.period_label ? ` ณ ${_escHtml(ttm.period_label)}` : ''}
+      </div>` + ((ttm && ttm.value != null) ? `
+      <div class="band-metrics-row">
+        <div class="band-metric"><div class="band-metric-val">${_escHtml(ttm.value)}</div><div class="band-metric-lbl">TTM ล่าสุด${ttm.eps ? ` · EPS ${_escHtml(ttm.eps)}` : ''}</div></div>
+        <div class="band-metric"><div class="band-metric-val" style="color:${deltaColor(ttm.yoy)}">${ttm.yoy ? _escHtml(ttm.yoy) : '—'}</div><div class="band-metric-lbl">YoY เทียบ stage เดียวกันปีก่อน</div></div>
+      </div>` : '');
+  } else {
+    if (seqEl)    { seqEl.innerHTML = ''; seqEl.parentElement.style.display = 'none'; }
+    if (ttmSumEl) ttmSumEl.innerHTML = '';
+  }
+  if (discEl) discEl.textContent = data.disclaimer || '';
 
   requestAnimationFrame(() => _drawNpChart('np-chart-canvas', data.chart));
 }

@@ -905,7 +905,8 @@ def get_npdata(symbol):
         market_cap = _stat_value('มูลค่าตลาด')
         pe         = _stat_value('P/E')
         pbv        = _stat_value('P/BV')
-        div_yield  = _stat_value('Div. Yield (12M)')
+        # 9hoon เปลี่ยนป้ายจาก "Div. Yield (12M)" เป็น "Dividend Yield" — รองรับทั้งคู่
+        div_yield  = _stat_value('Dividend Yield') or _stat_value('Div. Yield (12M)')
 
         latest_label = latest_val = None
         hero_tiles = tree.xpath('//div[contains(@class,"stat-tile") and contains(@class,"hero")]')
@@ -929,35 +930,106 @@ def get_npdata(symbol):
         yoy = _delta('YoY')
         qoq = _delta('QoQ')
 
-        # ตารางกำไรสุทธิรายปี/ไตรมาส (พร้อม EPS ต่อไตรมาส)
+        # ตารางกำไรสุทธิรายปี/ไตรมาส (พร้อม EPS + YoY ต่อไตรมาส)
         def _cell(td):
             eps_divs = td.xpath('.//div[@class="eps-sub"]')
             eps_text = _txt1(eps_divs)
             eps = eps_text.strip('[] ').strip() if eps_text else None
+            # ค่าหลัก = text node ตรงๆ ของ <td> (ไม่รวม eps-sub / yoy-tip-bubble)
             val_text = ' '.join(t.strip() for t in td.xpath('./text()') if t.strip())
             val = None if (not val_text or val_text == '-') else val_text
-            return {"val": val, "eps": eps}
+            yoy_pct = _txt1(td.xpath('.//span[contains(@class,"tip-pct")]'))
+            return {"val": val, "eps": eps, "yoy": yoy_pct}
 
+        # หน้า 9hoon มี 2 ตาราง: (1) "เทียบ YoY" คอลัมน์ Q1..Q4 ตามปฏิทิน
+        # (2) "ไล่ตามเวลา" คอลัมน์เรียงตามงวดที่รายงานจริง + คอลัมน์ "รวม" = TTM
+        # (4 ไตรมาสต่อเนื่องกันจริง ไม่ใช่ปีปฏิทิน) — เดิม parser วน //table//tbody/tr
+        # รวมทั้งสองตารางทำให้แถวปนกันและคอลัมน์ Q เพี้ยน
+        def _parse_np_table(tbl):
+            heads = [th.text_content().strip() for th in tbl.xpath('./thead//th')]
+            q_labels = heads[1:-1] if len(heads) >= 3 else []
+            rows = []
+            for tr in tbl.xpath('./tbody/tr'):
+                tds = tr.xpath('./td')
+                if len(tds) < len(q_labels) + 2:
+                    continue
+                cells = [_cell(td) for td in tds[1:1 + len(q_labels)]]
+                rows.append({
+                    "year": tds[0].text_content().strip(),
+                    "quarters": [dict(c, q=q) for q, c in zip(q_labels, cells)],
+                    "total": _cell(tds[-1]),
+                })
+            return {"quarter_order": q_labels, "rows": rows}
+
+        np_tables = []
+        for tbl in tree.xpath('//table'):
+            ct = tbl.xpath('./preceding::div[contains(@class,"chart-title")][1]')
+            np_tables.append(((ct[0].text_content() if ct else ''), _parse_np_table(tbl)))
+
+        def _find_tbl(kw, default_idx):
+            for title, parsed in np_tables:
+                if kw in title:
+                    return parsed
+            return np_tables[default_idx][1] if len(np_tables) > default_idx else None
+
+        yoy_parsed = _find_tbl('เทียบ YoY', 0)
+        seq_parsed = _find_tbl('ไล่ตามเวลา', 1)
+
+        # ตารางเทียบ YoY — คงรูปเดิม q1..q4 ไว้ให้ frontend เดิมใช้ได้ (map ตามชื่อไตรมาสจริง)
         table = []
-        for tr in tree.xpath('//table//tbody/tr'):
-            tds = tr.xpath('./td')
-            if len(tds) < 6:
-                continue
+        for row in (yoy_parsed["rows"] if yoy_parsed else []):
+            qmap = {qc["q"]: qc for qc in row["quarters"]}
+            def _pick(qq, _qmap=qmap):
+                c = _qmap.get(qq)
+                return {"val": c["val"], "eps": c["eps"], "yoy": c["yoy"]} if c \
+                    else {"val": None, "eps": None, "yoy": None}
             table.append({
-                "year":  tds[0].text_content().strip(),
-                "q1":    _cell(tds[1]), "q2": _cell(tds[2]),
-                "q3":    _cell(tds[3]), "q4": _cell(tds[4]),
-                "total": _cell(tds[5]),
+                "year": row["year"],
+                "q1": _pick("Q1"), "q2": _pick("Q2"),
+                "q3": _pick("Q3"), "q4": _pick("Q4"),
+                "total": row["total"],
             })
 
-        # ข้อมูลกราฟรายไตรมาสเทียบปี (ดึงจาก google.visualization.DataTable ที่ฝังในหน้า)
-        chart_years = _re.findall(r"addColumn\('number',\s*'(\d{4})'\)", html)
-        chart = {"years": chart_years, "quarters": []}
-        rows_m = _re.search(r'data\.addRows\(\[(.*?)\]\);', html, _re.DOTALL)
-        if rows_m:
-            for qm in _re.finditer(r'\["(Q\d)",([^\]]*)\]', rows_m.group(1)):
-                vals = [(float(v) if v.strip() != 'null' else None) for v in qm.group(2).split(',')]
-                chart["quarters"].append({"q": qm.group(1), "vals": vals})
+        # ตารางไล่ตามเวลา + TTM (ของใหม่)
+        table_seq = seq_parsed
+        ttm = None
+        if seq_parsed and seq_parsed["rows"]:
+            r0 = seq_parsed["rows"][0]
+            qo = seq_parsed["quarter_order"]
+            ttm = {
+                "period_label": (f"{qo[-1]}/{r0['year']}" if qo else r0["year"]),
+                "year": r0["year"],
+                "value": r0["total"]["val"],
+                "eps": r0["total"]["eps"],
+                "yoy": r0["total"]["yoy"],
+            }
+
+        disclaimer = _txt1(tree.xpath('//div[contains(@class,"footer-note")]'))
+
+        # กราฟ: 9hoon เลิกใช้ google.visualization แล้ว ฝัง SVG inline แทน —
+        # ดึงจาก data-tooltip ("Q1/2021: 32,587.60 ลบ.") ของแท่งใน svg แรก (เทียบ YoY)
+        chart = {"years": [], "quarters": []}
+        svgs = tree.xpath('//*[contains(@class,"np-svg-chart")]')
+        if svgs:
+            byq, years_seen = {}, []
+            for tip in svgs[0].xpath('.//*[@data-tooltip]/@data-tooltip'):
+                m = _re.match(r'\s*(Q\d)/(\d{4}):\s*([-\d,.]+)', tip)
+                if not m:
+                    continue
+                q, yr, raw = m.group(1), m.group(2), m.group(3).replace(',', '')
+                try:
+                    v = float(raw)
+                except ValueError:
+                    v = None
+                byq.setdefault(q, {})[yr] = v
+                if yr not in years_seen:
+                    years_seen.append(yr)
+            years = sorted(years_seen)
+            chart = {
+                "years": years,
+                "quarters": [{"q": q, "vals": [byq[q].get(y) for y in years]}
+                             for q in ("Q1", "Q2", "Q3", "Q4") if q in byq],
+            }
 
         result = {
             "symbol": sym,
@@ -973,6 +1045,9 @@ def get_npdata(symbol):
             "yoy": yoy,
             "qoq": qoq,
             "table": table,
+            "table_seq": table_seq,
+            "ttm": ttm,
+            "disclaimer": disclaimer,
             "chart": chart,
         }
         fetched_at = _dt.now().strftime("%H:%M น.")
