@@ -81,6 +81,11 @@ _BAND_CACHE_TTL = 6 * 3600
 _npdata_cache = _LRUCache(2000)
 _NPDATA_CACHE_TTL = 6 * 3600
 
+# Research reports cache — บทวิเคราะห์ (PDF) รายโบรกจาก 9hoon.com ไว้ 3 ชั่วโมง
+# (บทใหม่เข้ามาระหว่างวันได้ ไม่ควร cache นานเท่า npdata)
+_rr_cache = _LRUCache(2000)
+_RR_CACHE_TTL = 3 * 3600
+
 # DR cache — เก็บราคา underlying foreign stocks ไว้ 4 ชั่วโมง
 _dr_cache: dict = {}
 _DR_CACHE_TTL = 4 * 3600
@@ -953,6 +958,127 @@ def get_npdata(symbol):
         }
         fetched_at = _dt.now().strftime("%H:%M น.")
         _npdata_cache[sym] = {"ts": time.time(), "fetched_at": fetched_at, "data": result}
+        result["cached_at"] = None
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/research-reports/<symbol>")
+def get_research_reports(symbol):
+    """บทวิเคราะห์รายหุ้น (PDF รายโบรก) + สรุปฉันทามติ จาก 9hoon.com
+    (view_research_reports.php) — โครงเดียวกับ /api/npdata: scrape สด + cache 3 ชม.
+
+    9hoon รวมไฟล์ PDF จาก portal.settrade.com/brokerpage/AnalystConsensus ให้แล้ว
+    (SET/settrade เองอยู่หลัง Incapsula ยิงตรงจาก server ไม่ได้) — หน้า Valuation Band
+    ฝัง <iframe> ชี้ pdf_url ตรงๆ ให้เปิดอ่านในเว็บได้เลย"""
+    import requests as req, re as _re
+    import lxml.html as _lh
+    from datetime import datetime as _dt
+
+    sym = symbol.upper().strip()
+
+    cached = _rr_cache.get(sym)
+    if cached and (time.time() - cached["ts"] < _RR_CACHE_TTL):
+        result = dict(cached["data"])
+        result["cached_at"] = cached["fetched_at"]
+        return jsonify(result)
+
+    try:
+        r = req.get(
+            "https://9hoon.com/aset/view_research_reports.php",
+            params={"symbol": sym},
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            timeout=25,
+        )
+        html = r.text
+        tree = _lh.fromstring(html)
+
+        def _t1(els):
+            return els[0].text_content().strip() if els else None
+
+        company_name = None
+        hdr = tree.xpath('//a[contains(@href,"analyst-consensus")]')
+        if hdr:
+            spans = hdr[0].getparent().xpath('./span')
+            if spans:
+                company_name = spans[0].text_content().strip()
+
+        # แถวสรุป (ตารางมีแถวข้อมูลเดียว) — ฉันทามติทั้งตลาด ไม่ใช่แค่บทที่มีลิงก์
+        summary = None
+        rows = tree.xpath('//table//tbody/tr')
+        if rows:
+            tds = rows[0].xpath('./td')
+            if len(tds) >= 12:
+                def _c(i):
+                    return (tds[i].text_content().strip() or None) if i < len(tds) else None
+                bhs = tds[3].xpath('.//span')
+                summary = {
+                    "market":        _c(0),
+                    "last_price":    _c(1),
+                    "coverage":      _c(2),
+                    "buy":  bhs[0].text_content().strip() if len(bhs) > 0 else None,
+                    "hold": bhs[1].text_content().strip() if len(bhs) > 1 else None,
+                    "sell": bhs[2].text_content().strip() if len(bhs) > 2 else None,
+                    "rating":        _c(4),
+                    "target_avg":    _c(5),
+                    "target_median": _c(6),
+                    "upside":        _c(7),
+                    "eps_y1":  _c(8),  "eps_y2":  _c(9),
+                    "np_y1":   _c(10), "np_y2":   _c(11),
+                    "pe_y1":   _c(12), "pe_y2":   _c(13),
+                }
+
+        yr = tree.xpath('//table//thead/tr[2]/th')
+        year_labels = [x.text_content().strip() for x in yr if x.text_content().strip()]
+
+        reports = []
+        for ifr in tree.xpath('//iframe[contains(@class,"pdf-frame")]'):
+            card = ifr.getparent()
+            pdf = (ifr.get("src") or "").strip()
+            if not pdf:
+                continue
+            # pdf_url ถูกฝังตรงๆ ใน <iframe src> / <a href> ฝั่ง frontend — รับเฉพาะ URL
+            # https:// สมบูรณ์ (9hoon ชี้ไป portal.settrade.com) กัน javascript:/data:/relative
+            # ถ้าต้นทาง 9hoon ถูก poison/เปลี่ยน markup (scraped HTML = untrusted)
+            if pdf.startswith("//"):
+                pdf = "https:" + pdf
+            if not pdf.lower().startswith("https://"):
+                continue
+            broker = _t1(card.xpath('.//div[contains(@class,"font-semibold")]'))
+            dd = card.xpath('.//div[contains(@class,"text-xs") and contains(@class,"text-gray-400")]')
+            date = dd[0].text_content().strip() if dd else None
+            rating = _t1(card.xpath('.//span[contains(@class,"rounded-full")]'))
+            target = year = rec = None
+            meta = card.xpath('.//div[contains(@class,"bg-gray-50")][1]')
+            if meta:
+                mono = meta[0].xpath('.//span[contains(@class,"font-mono")]')
+                if mono:
+                    target = mono[0].text_content().strip()
+                ital = meta[0].xpath('.//div[contains(@class,"italic")]')
+                if ital:
+                    rec = ital[0].text_content().strip().strip('"')
+                for d in meta[0].xpath('./div'):
+                    tc = d.text_content()
+                    if 'ปี' in tc:
+                        year = tc.replace('ปี', '').strip()
+            reports.append({
+                "broker": broker, "date": date, "rating": rating,
+                "target": target, "year": year, "rec": rec, "pdf_url": pdf,
+            })
+
+        if summary is None and not reports:
+            return jsonify({"error": f"ไม่พบบทวิเคราะห์สำหรับ {sym} บน 9hoon.com"}), 404
+
+        result = {
+            "symbol": sym,
+            "company_name": company_name,
+            "summary": summary,
+            "year_labels": year_labels,
+            "reports": reports,
+        }
+        fetched_at = _dt.now().strftime("%H:%M น.")
+        _rr_cache[sym] = {"ts": time.time(), "fetched_at": fetched_at, "data": result}
         result["cached_at"] = None
         return jsonify(result)
     except Exception as e:
@@ -10169,8 +10295,11 @@ def market_stats():
     if not os.path.exists(_MARKET_STATS_FILE):
         return jsonify({"error": "ไม่พบ set_market_stats.json — รัน import_market_stats.py ก่อน"}), 404
     try:
-        with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
-            return jsonify(json.load(f))
+        # อ่านใต้ lock เดียวกับตอน rebuild/merge — บน Windows ถ้ามี read handle ค้างอยู่ตอน
+        # _atomic_write_json ทำ os.replace() ฝั่งเขียนจะโดน PermissionError แล้ว refresh 500
+        with _market_stats_lock:
+            with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
+                return jsonify(json.load(f))
     except Exception as e:
         return jsonify({"error": f"set_market_stats.json เสีย อ่านไม่ได้: {e}"}), 500
 
@@ -10184,12 +10313,16 @@ def market_stats_meta():
     if not os.path.exists(_MARKET_STATS_FILE):
         return jsonify({"updated_at": None})
     try:
-        with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
-            data = json.load(f)
+        with _market_stats_lock:
+            with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
+                data = json.load(f)
     except Exception:
         return jsonify({"updated_at": None})
-    pe_latest = (data.get("pe", {}).get("dates") or [None])[-1]
-    pbv_latest = (data.get("pbv", {}).get("dates") or [None])[-1]
+    if not isinstance(data, dict):
+        # ไฟล์เขียนไม่สมบูรณ์ (เช่น null / [] จาก partial write) — อย่าให้ .get() โยน 500
+        return jsonify({"updated_at": None})
+    pe_latest = ((data.get("pe") or {}).get("dates") or [None])[-1]
+    pbv_latest = ((data.get("pbv") or {}).get("dates") or [None])[-1]
     return jsonify({"updated_at": pe_latest, "pe_date": pe_latest, "pbv_date": pbv_latest})
 
 
@@ -10310,9 +10443,11 @@ def refresh_market_stats():
             try:
                 with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
                     old = json.load(f)
-                old_latest = old.get("pe", {}).get("dates", [None])[-1]
+                old_latest = ((old.get("pe") or {}).get("dates") or [None])[-1]
             except Exception:
                 pass
+        if not isinstance(old, dict):
+            old = None
 
         new_latest = pe_data["dates"][-1] if pe_data["dates"] else None
 
@@ -10328,6 +10463,32 @@ def refresh_market_stats():
         for _k in ("div_yield", "mkt_cap", "breadth"):
             if old and _k in old:
                 output[_k] = old[_k]
+
+        # Table_PE/PBV.xls ที่ดาวน์โหลดมืออาจเก่ากว่าเดือนล่าสุดที่ merge จาก
+        # Market_Statistics_Month_th_TH.xls (/api/refresh-market-stats-monthly) ไว้แล้ว —
+        # ถ้า rebuild ทับตรงๆ เดือนท้ายๆ (SET/mai P/E-P/BV) ที่สะสมไว้จะหาย แถม pe/pbv จะจบ
+        # คนละเดือนกับ div_yield/mkt_cap/breadth ที่เพิ่งคงไว้ข้างบน — เติมเดือนที่ใหม่กว่างวด
+        # ท้ายของ .xls กลับเข้าไป (คอลัมน์กลุ่มดัชนีย่อยที่ไฟล์รายเดือนไม่มีจะเป็น None)
+        for _key in ("pe", "pbv"):
+            if not (old and isinstance(old.get(_key), dict)):
+                continue
+            o_dates = old[_key].get("dates") or []
+            o_series = old[_key].get("series") or {}
+            n = output[_key]
+            last_new = n["dates"][-1] if n["dates"] else ""
+            appended = False
+            for i, d in enumerate(o_dates):
+                if d <= last_new or d in n["dates"]:
+                    continue
+                n["dates"].append(d)
+                for c in n["series"]:
+                    ov = o_series.get(c) or []
+                    n["series"][c].append(ov[i] if i < len(ov) else None)
+                appended = True
+            if appended:
+                n["stats"] = {k: calc_stats(v) for k, v in n["series"].items()}
+
+        new_latest = output["pe"]["dates"][-1] if output["pe"]["dates"] else new_latest
 
         _atomic_write_json(_MARKET_STATS_FILE, output)
 

@@ -24225,6 +24225,9 @@ async function searchBand() {
   document.getElementById('np-card').style.display      = 'block';
   document.getElementById('np-error').style.display     = 'none';
   document.getElementById('np-body').style.display      = 'none';
+  document.getElementById('rr-card').style.display      = 'block';
+  document.getElementById('rr-error').style.display     = 'none';
+  document.getElementById('rr-body').style.display      = 'none';
 
   // สอง endpoint นี้ดึงจากคนละเว็บ ยิงพร้อมกันแล้วเรนเดอร์แยกกัน — ตัวหนึ่งพังไม่ควรบัง
   // ผลของอีกตัว (mrlikestock.com ล่ม 9hoon.com ก็ยังอยากเห็น, และกลับกัน)
@@ -24241,7 +24244,7 @@ async function searchBand() {
         document.getElementById('band-error').textContent     = '⚠ ' + data.error;
         return;
       }
-      _renderBandResult(data);
+      _renderBandResult(data, myReq);
     } catch(e) {
       if (myReq !== _bandReqSeq) return;
       document.getElementById('band-error').style.display   = 'block';
@@ -24268,16 +24271,100 @@ async function searchBand() {
     }
   })();
 
-  await Promise.allSettled([bandTask, npTask]);
+  const rrTask = (async () => {
+    try {
+      const res  = await _fetchTimeout(`/api/research-reports/${encodeURIComponent(sym)}`, 30000,
+        'หมดเวลารอบทวิเคราะห์ (เกิน 30 วิ) — 9hoon.com อาจช้าหรือไม่ตอบสนอง ลองใหม่อีกครั้ง');
+      const data = await res.json();
+      if (myReq !== _bandReqSeq) return;
+      if (data.error) {
+        document.getElementById('rr-error').style.display = 'block';
+        document.getElementById('rr-error').textContent   = '⚠ ' + data.error;
+        return;
+      }
+      _renderResearchReports(data);
+    } catch(e) {
+      if (myReq !== _bandReqSeq) return;
+      document.getElementById('rr-error').style.display = 'block';
+      document.getElementById('rr-error').textContent   = '⚠ เกิดข้อผิดพลาด: ' + e.message;
+    }
+  })();
+
+  await Promise.allSettled([bandTask, npTask, rrTask]);
   if (myReq === _bandReqSeq) {
     document.getElementById('band-loading').style.display = 'none';
   }
 }
 
-function _renderBandResult(data) {
+function _rrBadgeClass(rating) {
+  const r = (rating || '').toLowerCase();
+  if (r.includes('buy') || r.includes('ซื้อ') || r.includes('outperform') || r.includes('overweight')) return 'buy';
+  if (r.includes('sell') || r.includes('ขาย') || r.includes('underperform') || r.includes('underweight') || r.includes('reduce')) return 'sell';
+  return 'hold';
+}
+
+function _renderResearchReports(data) {
+  const card = document.getElementById('rr-card');
+  const body = document.getElementById('rr-body');
+  card.style.display = 'block';
+  body.style.display = 'block';
+
+  const s = data.summary;
+  const sEl = document.getElementById('rr-summary');
+  const nameHdr = data.company_name
+    ? `<div style="font-size:14px;font-weight:600;margin-bottom:8px">${_escHtml(data.company_name)}</div>` : '';
+  if (s) {
+    const cell = (lbl, val) => val == null || val === ''
+      ? '' : `<div><span class="rr-s-lbl">${_escHtml(lbl)}</span><br><span class="rr-s-val">${_escHtml(val)}</span></div>`;
+    sEl.innerHTML = nameHdr + `<div class="rr-summary-row">
+      ${cell('ราคาล่าสุด', s.last_price)}
+      ${cell('โบรกคัฟเวอร์', s.coverage)}
+      ${cell('Buy / Hold / Sell', (s.buy != null || s.hold != null || s.sell != null) ? `${s.buy ?? '—'} / ${s.hold ?? '—'} / ${s.sell ?? '—'}` : null)}
+      ${cell('คำแนะนำ', s.rating)}
+      ${cell('เป้าหมาย (Avg)', s.target_avg)}
+      ${cell('เป้าหมาย (Median)', s.target_median)}
+      ${cell('Upside', s.upside)}
+      ${cell('EPS ' + (data.year_labels?.[0] || 'F1') + ' / ' + (data.year_labels?.[1] || 'F2'),
+             (s.eps_y1 != null) ? `${s.eps_y1} / ${s.eps_y2 ?? '—'}` : null)}
+      ${cell('P/E ' + (data.year_labels?.[0] || 'F1') + ' / ' + (data.year_labels?.[1] || 'F2'),
+             (s.pe_y1 != null) ? `${s.pe_y1} / ${s.pe_y2 ?? '—'}` : null)}
+    </div>`;
+  } else {
+    sEl.innerHTML = nameHdr;
+  }
+
+  const grid = document.getElementById('rr-grid');
+  const reps = data.reports || [];
+  if (!reps.length) {
+    grid.innerHTML = '<div class="text2" style="padding:12px;font-size:13px">— ยังไม่มีไฟล์บทวิเคราะห์ (PDF) ที่เปิดอ่านได้สำหรับหุ้นนี้ —</div>';
+    return;
+  }
+  grid.innerHTML = reps.map(r => {
+    const bc = _rrBadgeClass(r.rating);
+    const pdf = _escHtml(r.pdf_url);
+    return `<div class="rr-item">
+      <div class="rr-item-head">
+        <div>
+          <div class="rr-item-broker">${_escHtml(r.broker || '—')}</div>
+          <div class="rr-item-date">${_escHtml(r.date || '')}</div>
+        </div>
+        ${r.rating ? `<span class="rr-badge ${bc}">${_escHtml(r.rating)}</span>` : ''}
+      </div>
+      <div class="rr-item-meta">
+        ${r.target ? `<div><span class="rr-m-lbl">เป้าหมาย</span> <b>${_escHtml(r.target)}</b></div>` : ''}
+        ${r.year ? `<div><span class="rr-m-lbl">ปี</span> ${_escHtml(r.year)}</div>` : ''}
+        ${r.rec ? `<div class="rr-m-rec">"${_escHtml(r.rec)}"</div>` : ''}
+      </div>
+      <iframe src="${pdf}" loading="lazy" title="บทวิเคราะห์ ${_escHtml(r.broker || '')}"></iframe>
+      <a class="rr-item-open" href="${pdf}" target="_blank" rel="noopener noreferrer">เปิดฉบับเต็มในแท็บใหม่ ↗</a>
+    </div>`;
+  }).join('');
+}
+
+function _renderBandResult(data, seq) {
   document.getElementById('band-result').style.display = 'block';
   document.getElementById('band-sym-title').textContent = data.symbol;
-  _loadBandSetCheck(data.symbol, data.pe?.current, data.pbv?.current);
+  _loadBandSetCheck(data.symbol, data.pe?.current, data.pbv?.current, seq);
   const cacheTag = document.getElementById('band-cache-tag');
   if (data.cached_at) {
     cacheTag.textContent = `cache ${data.cached_at}`;
@@ -24309,13 +24396,17 @@ function _renderBandResult(data) {
 // PLAN_set_api_expansion.txt งาน #4) — เทียบกับค่า "ปัจจุบัน" ที่ mrlikestock.com ให้
 // ในการ์ด Band ด้านบน ไม่ใช่แทนที่ pipeline หลัก (SET ให้ย้อนหลังแค่ ~6 เดือน band
 // ต้องใช้หลายปี) ถ้าห่างกันมาก = แหล่งใดแหล่งหนึ่งอาจเพี้ยน ควรเช็ค
-async function _loadBandSetCheck(sym, mrPe, mrPbv) {
+async function _loadBandSetCheck(sym, mrPe, mrPbv, seq) {
   const box = document.getElementById('band-set-check');
   if (!box) return;
   box.innerHTML = '';
   try {
     const r = await _fetchTimeout(`/api/set-valuation-check/${encodeURIComponent(sym)}`, 15000);
+    // guard race เหมือน bandTask/npTask/rrTask — ผลของหุ้นเก่าที่มาช้าต้องไม่ทับการ์ด
+    // ตรวจสอบของหุ้นที่ผู้ใช้เพิ่งค้นล่าสุด (seq มาจาก _bandReqSeq ตอนเริ่ม request)
+    if (seq != null && seq !== _bandReqSeq) return;
     const d = await r.json();
+    if (seq != null && seq !== _bandReqSeq) return;
     if (d.error) return;   // เงียบๆ พอ — เป็นแค่เส้นตรวจสอบเสริม ไม่ควรบัง error ทับการ์ดหลัก
     const diffRow = (label, mr, set) => {
       if (mr == null || set == null) return '';
@@ -27409,16 +27500,26 @@ document.addEventListener('click', e => {
 //  STOCK VALUATION (cross-sectional)
 // ═══════════════════════════════════════════════
 let _valStockData = null;
+let _valStockInflight = null;   // กัน fetch ซ้ำเมื่อหลาย consumer (ตาราง sector + ค้นหา + โซน σ) เรียกพร้อมกันตอน _valStockData ยัง null
 let _valSecSort = 'pe';
 
 async function _loadStockValStats() {
   if (_valStockData) return _valStockData;
-  const r = await _fetchTimeout('/api/stock-valuation-stats?t=' + Date.now(), 25000,
-    'หมดเวลารอข้อมูล PE/PBV รายตัว (เกิน 25 วิ) ลองใหม่อีกครั้ง');
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  _valStockData = await r.json();
-  if (_valStockData.error) throw new Error(_valStockData.error);
-  return _valStockData;
+  if (_valStockInflight) return _valStockInflight;
+  _valStockInflight = (async () => {
+    const r = await _fetchTimeout('/api/stock-valuation-stats?t=' + Date.now(), 25000,
+      'หมดเวลารอข้อมูล PE/PBV รายตัว (เกิน 25 วิ) ลองใหม่อีกครั้ง');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    _valStockData = d;
+    return d;
+  })();
+  try {
+    return await _valStockInflight;
+  } finally {
+    _valStockInflight = null;
+  }
 }
 
 function _zColor(z) {
@@ -27478,11 +27579,11 @@ async function searchValStock(query) {
     const matches = data.stocks.filter(s =>
       s.symbol.includes(query) || (s.name||'').toUpperCase().includes(query)
     ).slice(0, 5);
-    if (!matches.length) { el.innerHTML = `<span style="color:var(--muted)">ไม่พบหุ้น "${query}"</span>`; return; }
+    if (!matches.length) { el.innerHTML = `<span style="color:var(--muted)">ไม่พบหุ้น "${_escHtml(query)}"</span>`; return; }
     el.innerHTML = `<div style="color:var(--muted);font-size:12px;margin-bottom:6px">พบ ${matches.length} รายการ:</div>` +
-      matches.map(m => `<button onclick="document.getElementById('val-stock-input').value='${m.symbol}';searchValStock('${m.symbol}')"
+      matches.map(m => `<button onclick="document.getElementById('val-stock-input').value='${_escJsAttr(m.symbol)}';searchValStock('${_escJsAttr(m.symbol)}')"
         style="background:var(--bg-card2);border:1px solid var(--border);color:#c8d0dc;padding:4px 10px;border-radius:4px;cursor:pointer;margin:2px;font-size:12px">
-        ${m.symbol} <span style="color:var(--muted)">${(m.name||'').slice(0,30)}</span>
+        ${_escHtml(m.symbol)} <span style="color:var(--muted)">${_escHtml((m.name||'').slice(0,30))}</span>
       </button>`).join('');
     return;
   }
@@ -27506,7 +27607,7 @@ async function searchValStock(query) {
         <div style="font-size:10px;color:var(--muted);margin-top:2px">avg=${mktDist?mktDist.avg:'?'}x ±σ=${mktDist?mktDist.std:'?'}</div>
       </div>
       <div style="margin-top:10px">
-        <div style="font-size:11px;color:var(--muted)">เทียบ ${stock.sector} (${secDist?secDist.n:'?'} หุ้น)</div>
+        <div style="font-size:11px;color:var(--muted)">เทียบ ${_escHtml(stock.sector)} (${secDist?secDist.n:'?'} หุ้น)</div>
         <div style="font-size:13px;font-weight:600;color:${_zColor(zSec)}">${_zLabel(zSec, isPE)}</div>
         ${secDist ? _sdBar(val, secDist.avg, secDist.std, secDist.min, secDist.max) : ''}
         <div style="font-size:10px;color:var(--muted);margin-top:2px">avg=${secDist?secDist.avg:'?'}x ±σ=${secDist?secDist.std:'?'}</div>
@@ -27516,8 +27617,8 @@ async function searchValStock(query) {
 
   el.innerHTML = `
     <div style="font-weight:600;font-size:14px;margin-bottom:10px">
-      ${stock.symbol} <span style="font-size:12px;color:var(--muted)">${stock.name||''}</span>
-      <span style="font-size:11px;color:var(--muted);margin-left:8px">Sector: ${stock.sector}</span>
+      ${_escHtml(stock.symbol)} <span style="font-size:12px;color:var(--muted)">${_escHtml(stock.name||'')}</span>
+      <span style="font-size:11px;color:var(--muted);margin-left:8px">Sector: ${_escHtml(stock.sector)}</span>
     </div>
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       ${metricCard('P/E Ratio', stock.pe, mkt.pe, sec.pe, true)}
@@ -27561,9 +27662,12 @@ function setVsdScope(s, btn) {
 
 async function showVsdZone(zone, btn) {
   _vsdZone = zone;
-  // highlight active zone button
+  // highlight active zone button — ผูกไฮไลต์กับค่า zone ไม่ใช่ตัว btn ที่ส่งมา เพราะ
+  // setVsdMetric/setVsdScope เรียก showVsdZone(_vsdZone) ต่อโดยไม่มี btn ทำให้ไฮไลต์
+  // โซนหายทั้งที่ตัวกรองยังทำงานอยู่
   document.querySelectorAll('#page-valuation .card .filter-btn[onclick^="showVsdZone"]').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
+  const zoneBtn = btn || document.querySelector(`#page-valuation .card .filter-btn[onclick^="showVsdZone('${zone}'"]`);
+  if (zoneBtn) zoneBtn.classList.add('active');
 
   const el = document.getElementById('vsd-result');
   el.innerHTML = '<span style="color:var(--muted);font-size:12px">กำลังโหลด...</span>';
@@ -27622,12 +27726,6 @@ async function showVsdZone(zone, btn) {
     (bySector[sec] = bySector[sec] || []).push(s);
   });
 
-  // Stats header
-  const mktDist = data.market[_vsdMetric];
-  const distInfo = mktDist
-    ? `avg=${mktDist.avg}x ±σ=${mktDist.std}x | zone นี้: ${lo === -Infinity ? '< ' + hi*-1 : lo >= 0 ? '> +'+lo+'σ' : lo+'σ ~ '+(hi > 0 ? '+'+hi : hi)+'σ'}`
-    : '';
-
   el.innerHTML = `
     <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="font-size:13px;font-weight:700;color:${col}">${zoneLabels[zone]}</span>
@@ -27644,9 +27742,9 @@ async function showVsdZone(zone, btn) {
             const z = s[zField];
             const v = s[valField];
             const zStr = z !== null ? (z >= 0 ? '+' : '') + z.toFixed(2) + 'σ' : '—';
-            const tip = `${s.name||s.symbol} | ${_vsdMetric.toUpperCase()}=${v != null ? v.toFixed(2)+'x' : '—'} | z=${zStr}`.replace(/"/g,'&quot;');
+            const tip = _escHtml(`${s.name||s.symbol} | ${_vsdMetric.toUpperCase()}=${v != null ? v.toFixed(2)+'x' : '—'} | z=${zStr}`);
             return `<button
-              onclick="openChartModal('${s.symbol}')"
+              onclick="openChartModal('${_escJsAttr(s.symbol)}')"
               title="${tip}"
               style="background:var(--bg-card2);border:1px solid ${col}30;border-radius:6px;
                      padding:5px 10px;cursor:pointer;font-size:12px;color:#c8d0dc;
@@ -27654,7 +27752,7 @@ async function showVsdZone(zone, btn) {
                      transition:border-color .15s;min-width:80px"
               onmouseover="this.style.borderColor='${col}';this.style.background='${col}18'"
               onmouseout="this.style.borderColor='${col}30';this.style.background='var(--bg-card2)'">
-              <span style="font-weight:700;font-size:13px">${s.symbol}</span>
+              <span style="font-weight:700;font-size:13px">${_escHtml(s.symbol)}</span>
               <span style="color:${col};font-size:10px">${zStr}</span>
               <span style="color:var(--muted);font-size:10px">${v != null ? v.toFixed(2)+'x' : '—'}</span>
             </button>`;
@@ -27692,7 +27790,8 @@ async function openValSectorModal(secName) {
   const secStats = data.sectors[secName] || {};
   let stocks = data.stocks.filter(s => s.sector === secName);
   // ต้อง join กับ DATA.stocks ก่อนเรียง เพราะ rs/price/1D%/1M% อยู่คนละ object (main)
-  const mainOf = s => (typeof DATA !== 'undefined') ? DATA.stocks.find(x => x.symbol === s.symbol) : null;
+  // ใช้ _stockBySym() (Map ที่ prebuild ไว้แล้ว) แทน DATA.stocks.find() ต่อการเปรียบเทียบ+ต่อแถว — เดิม O(n²) บน sector ใหญ่
+  const mainOf = s => _stockBySym(s.symbol) || null;
   if (_valSecModalSort) {
     const key = _valSecModalSort.key, dir = _valSecModalSort.dir;
     const getters = {
@@ -27757,7 +27856,7 @@ async function openValSectorModal(secName) {
       </tr></thead>
       <tbody>
       ${stocks.map(s => {
-        const main = (typeof DATA !== 'undefined') ? DATA.stocks.find(x => x.symbol === s.symbol) : null;
+        const main = _stockBySym(s.symbol) || null;
         const rs    = main?.rs_score;
         const price = main?.price;
         const r1d   = main?.ret_1d;
@@ -27766,8 +27865,8 @@ async function openValSectorModal(secName) {
         const r1dCol = r1d > 0 ? 'color:#3ab464' : r1d < 0 ? 'color:#dc503c' : '';
         const r1mCol = r1m > 0 ? 'color:#3ab464' : r1m < 0 ? 'color:#dc503c' : '';
         return `<tr>
-          <td><strong class="sym-link" onclick="closeModal();openChartModal('${s.symbol}')">${s.symbol}</strong>${tvLink(s.symbol)}</td>
-          <td style="font-size:11px;color:var(--text2);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name||''}</td>
+          <td><strong class="sym-link" onclick="closeModal();openChartModal('${_escJsAttr(s.symbol)}')">${_escHtml(s.symbol)}</strong>${tvLink(s.symbol)}</td>
+          <td style="font-size:11px;color:var(--text2);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escHtml(s.name||'')}</td>
           ${valCell(s.pe, s.pe_z_sec)}
           ${valCell(s.pbv, s.pbv_z_sec)}
           <td class="r" style="${rsCol}">${rs ?? '—'}</td>
@@ -27886,7 +27985,26 @@ async function renderValSectorTable() {
 //  VALUATION PAGE (INDEX P/E & PBV)
 // ═══════════════════════════════════════════════
 let _valData = null;
+let _valDataInflight = null;   // กัน /api/market-stats ถูกยิงซ้ำตอนโหลดหน้าครั้งแรก (loadValuationPage + loadValDailyBox แข่งกันเช็ค !_valData)
 let _valPeriod = 'ALL';
+
+// โหลด set_market_stats.json (cache ใน _valData) — force=true บังคับดึงใหม่ (หลัง rebuild/merge)
+async function _loadValData(force) {
+  if (_valData && !force) return _valData;
+  if (_valDataInflight && !force) return _valDataInflight;
+  const p = (async () => {
+    const r = await _fetchTimeout('/api/market-stats?t=' + Date.now(), 20000);
+    if (!r.ok) throw new Error('ไม่พบข้อมูล');
+    _valData = await r.json();
+    return _valData;
+  })();
+  if (!force) _valDataInflight = p;
+  try {
+    return await p;
+  } finally {
+    if (_valDataInflight === p) _valDataInflight = null;
+  }
+}
 
 // ── Global tooltip popup ─────────────────────
 // เดิมเปิด/ปิด/วางตำแหน่งด้วย mousemove+mouseleave ล้วนๆ — ใช้ไม่ได้เลยบนจอสัมผัส
@@ -27942,14 +28060,12 @@ async function refreshMarketStats() {
   status.style.color = 'var(--muted)';
 
   try {
-    const r = await fetch('/api/refresh-market-stats', { method: 'POST' });
+    const r = await _fetchTimeout('/api/refresh-market-stats', 60000, 'หมดเวลารอ rebuild (เกิน 60 วิ)', { method: 'POST' });
     const d = await r.json();
 
     if (!d.ok) {
       status.textContent = '✗ ' + d.error;
       status.style.color = 'var(--red)';
-      btn.disabled = false;
-      btn.innerHTML = '⟳ อัพเดทข้อมูล P/E &amp; P/BV';
       return;
     }
 
@@ -27962,10 +28078,7 @@ async function refreshMarketStats() {
       // ต้อง fetch ข้อมูลใหม่ก่อน render — เดิม set _valData = null แล้วเรียก
       // renderValuation() ตรงๆ แต่ renderValuation() บรรทัดแรกคือ
       // "if (!_valData) return" เลยไม่มีอะไรถูกวาดใหม่เลย (กราฟ/สถิติค้างชุดเก่า)
-      try {
-        const r2 = await fetch('/api/market-stats?t=' + Date.now());
-        if (r2.ok) _valData = await r2.json();   // fetch ไม่สำเร็จ = คง _valData เดิมไว้
-      } catch (e) { /* คง _valData เดิมไว้ */ }
+      try { await _loadValData(true); } catch (e) { /* คง _valData เดิมไว้ */ }
       renderValuation();
       renderMarketStatsExtra();   // ปันผล/market cap/breadth ถูกคงไว้ตอน rebuild — วาดใหม่ให้ตรงชุดข้อมูลใหม่
     }
@@ -27973,10 +28086,10 @@ async function refreshMarketStats() {
   } catch(e) {
     status.textContent = '✗ ไม่สามารถเชื่อมต่อ server: ' + e.message;
     status.style.color = 'var(--red)';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '⟳ Rebuild ประวัติ (Table_PE/PBV)';
   }
-
-  btn.disabled = false;
-  btn.innerHTML = '⟳ อัพเดทข้อมูล P/E &amp; P/BV';
 }
 
 // อัพเดทจากไฟล์ Market_Statistics_Month_th_TH.xls (ไฟล์เดียว รายเดือนปกติ) — ต่าง
@@ -27991,14 +28104,12 @@ async function refreshMarketStatsMonthly() {
   status.style.color = 'var(--muted)';
 
   try {
-    const r = await fetch('/api/refresh-market-stats-monthly', { method: 'POST' });
+    const r = await _fetchTimeout('/api/refresh-market-stats-monthly', 60000, 'หมดเวลารอ merge (เกิน 60 วิ)', { method: 'POST' });
     const d = await r.json();
 
     if (!d.ok) {
       status.textContent = '✗ ' + d.error;
       status.style.color = 'var(--red)';
-      btn.disabled = false;
-      btn.innerHTML = '⟳ อัพเดทข้อมูล (Market Statistics)';
       return;
     }
 
@@ -28008,10 +28119,7 @@ async function refreshMarketStatsMonthly() {
     } else {
       status.textContent = `✓ อัพเดทสำเร็จ! ${d.old_latest} → ${d.new_latest} | P/E=${d.pe_current}x | P/BV=${d.pbv_current}x | ปันผล=${d.div_yield_current}%`;
       status.style.color = '#3ab464';
-      try {
-        const r2 = await fetch('/api/market-stats?t=' + Date.now());
-        if (r2.ok) _valData = await r2.json();
-      } catch (e) { /* คง _valData เดิมไว้ */ }
+      try { await _loadValData(true); } catch (e) { /* คง _valData เดิมไว้ */ }
       renderValuation();
       renderMarketStatsExtra();
     }
@@ -28019,10 +28127,10 @@ async function refreshMarketStatsMonthly() {
   } catch (e) {
     status.textContent = '✗ ไม่สามารถเชื่อมต่อ server: ' + e.message;
     status.style.color = 'var(--red)';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '⟳ อัพเดทข้อมูล (Market Statistics)';
   }
-
-  btn.disabled = false;
-  btn.innerHTML = '⟳ อัพเดทข้อมูล (Market Statistics)';
 }
 
 async function checkDelistedNew() {
@@ -28301,11 +28409,8 @@ async function loadValuationPage() {
   // Load both in parallel
   const [_1, _2] = await Promise.allSettled([
     (async () => {
-      if (_valData) { renderValuation(); renderMarketStatsExtra(); return; }
       try {
-        const r = await fetch('/api/market-stats?t=' + Date.now());
-        if (!r.ok) throw new Error('ไม่พบข้อมูล');
-        _valData = await r.json();
+        await _loadValData();
         renderValuation();
         renderMarketStatsExtra();
       } catch(e) {
@@ -28339,10 +28444,8 @@ async function loadValDailyBox() {
     // จะใช้ค่าสิ้นเดือนล่าสุดของ Excel (ค้างได้นานสุด ~1 เดือน) — ใช้ _svgBand
     // เดียวกับที่ใช้ในหน้างบการเงินรายหุ้น (ดู _loadLiveValuationBand)
     if (!_valData) {
-      try {
-        const r2 = await fetch('/api/market-stats?t=' + Date.now());
-        if (r2.ok) _valData = await r2.json();
-      } catch (e) { /* ไม่มี Excel ก็แสดงแค่ตารางรายวันด้านบนไป */ }
+      try { await _loadValData(); }
+      catch (e) { /* ไม่มี Excel ก็แสดงแค่ตารางรายวันด้านบนไป */ }
     }
     const today = new Date().toISOString().slice(0, 10);
     const bandSeries = (market, statKey, liveVal) => {
@@ -28433,7 +28536,9 @@ function filterByPeriod(dates, vals, period) {
   cutoff.setFullYear(cutoff.getFullYear() - years);
   const cutStr = cutoff.toISOString().slice(0,7);
   const idx = dates.findIndex(d => d >= cutStr);
-  if (idx < 0) return { dates, vals };
+  // ทุกงวดเก่ากว่า cutoff = ซีรีส์นี้หยุดอัพเดทไปแล้ว — คืนว่างให้ downstream ขึ้น "ไม่มีข้อมูล"
+  // ดีกว่าคืนประวัติเต็มแล้วไปคิด avg/z-score ใต้ป้ายช่วงสั้น (เช่น "1 ปี")
+  if (idx < 0) return { dates: [], vals: [] };
   return { dates: dates.slice(idx), vals: vals.slice(idx) };
 }
 
@@ -28478,13 +28583,10 @@ function _periodStats(fullStats, filteredVals) {
   return _calcStatsClient(filteredVals);
 }
 
+// เดิม copy ladder ของ _zColor เป๊ะ (2/1/-1/-2 → สีชุดเดียวกัน) ต่างแค่ fallback ตอน z
+// ว่าง — ตารางเทียบช่วงเวลาอยากได้สีจางกลืนพื้นแทน dot สีขาวจางแบบ cross-sectional
 function _valZColor(z) {
-  if (z == null) return 'var(--text2)';
-  if (z >  2) return '#dc503c';
-  if (z >  1) return '#dca032';
-  if (z > -1) return '#c8d0dc';
-  if (z > -2) return '#96c850';
-  return '#3ab464';
+  return z == null ? 'var(--text2)' : _zColor(z);
 }
 
 // ตารางเปรียบเทียบ avg/z-score ทุกช่วงเวลา (Max→1Y) ของ P/E & P/BV ทั้ง SET และ mai
@@ -28544,6 +28646,13 @@ function valZoneStyle(v, thresholds) {
 function drawValChart(canvasId, dates, vals, thresholds, stats) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
+  // ไม่มีจุดข้อมูลในช่วงที่เลือก (เช่น ซีรีส์หยุดอัพเดท + เลือกช่วงสั้น) — ล้าง canvas แล้วออก
+  // ไม่งั้น Math.max(...[]) = -Infinity ลาก scale เพี้ยนทั้งกราฟ
+  if (!dates || !dates.length || !vals || !vals.some(v => v !== null && v !== undefined)) {
+    const c = canvas.getContext('2d');
+    c.clearRect(0, 0, canvas.width, canvas.height);
+    return;
+  }
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.clientWidth || canvas.offsetWidth || 700;
   const H = canvas.clientHeight || 260;
@@ -28561,8 +28670,12 @@ function drawValChart(canvasId, dates, vals, thresholds, stats) {
   const current = stats.current;
 
   const validVals = vals.filter(v => v !== null);
-  const dataMax = Math.max(...validVals);
-  const dataMin = Math.max(0, Math.min(...validVals));
+  // แกน Y ผูกกับช่วง "ปกติ" ของข้อมูล — ใช้ค่า winsorize (ตัดขอบ p1/p99 ที่ n ใหญ่) เฉพาะตอน
+  // คิดขอบแกน ไม่งั้นเดือนที่พุ่งผิดปกติจริงในประวัติ (เช่น P/E mai 937x ก.ค.2546 เทียบ median ~37x)
+  // ลากสเกลจนเส้นส่วนใหญ่แบนติดขอบล่างอ่านไม่ออก — เส้น/จุด/แถบ ±σ ยังวาดจากค่าจริง (clip ที่ขอบ)
+  const axisRef = _winsorize(validVals);
+  const dataMax = Math.max(...axisRef);
+  const dataMin = Math.max(0, Math.min(...axisRef));
   const dataRange = dataMax - dataMin || dataMax || 1;
   // ผูกขอบแกนกับช่วงข้อมูลจริงเป็นหลัก ไม่ปล่อยให้ avg±3.2σ ลาก scale ทั้งกราฟตรงๆ —
   // ชุดข้อมูลรายหุ้น (8-67 จุด) เจอ _winsorize (ตัดขอบ p1/p99) แทบไม่ตัด outlier เลยที่ n
@@ -28853,11 +28966,15 @@ function renderValuation() {
   if (!_valData) return;
   const pe  = _valData.pe;
   const pbv = _valData.pbv;
-  if (!pe || !pbv) {
+  // ไฟล์ที่ trim มือ/เวอร์ชันเก่า อาจขาด .series หรือ .stats ทั้งก้อน — กันไว้ให้ครบ
+  // ไม่งั้น pe.series['SET'] / pe.stats['SET'] โยน TypeError กลางทาง หน้าเว็บว่างเปล่า
+  if (!pe || !pbv || !pe.series || !pbv.series) {
     const el = document.getElementById('val-summary');
     if (el) el.innerHTML = '<div style="color:var(--red);padding:16px">ไฟล์ set_market_stats.json ไม่มีข้อมูล pe/pbv — ลองกด Rebuild ใหม่</div>';
     return;
   }
+  pe.stats  = pe.stats  || {};
+  pbv.stats = pbv.stats || {};
 
   const peF  = filterByPeriod(pe.dates,  pe.series['SET']  || [], _valPeriod);
   const pbvF = filterByPeriod(pbv.dates, pbv.series['SET'] || [], _valPeriod);
@@ -28870,13 +28987,16 @@ function renderValuation() {
   const zoneLabels = ['Cheap','Fair','Slightly High','Expensive'];
 
   // ── SD zone helper ───────────────────────────
+  // color ใช้ _zColor เดียวกับ cross-sectional (ladder 2/1/-1/-2) — ที่นี่เพิ่มแค่ bg tint
+  // + ข้อความไทยต่อโซน ไม่ทำ ladder สีซ้ำเอง
   function sdZoneInfo(zscore) {
     const z = zscore || 0;
-    if (z >  2) return { label:`+${z.toFixed(2)}σ`, text:'แพงผิดปกติ',    color:'#dc503c', bg:'rgba(220,80,60,0.12)'  };
-    if (z >  1) return { label:`+${z.toFixed(2)}σ`, text:'แพงเกินค่าเฉลี่ย', color:'#dca032', bg:'rgba(220,160,50,0.10)' };
-    if (z > -1) return { label:(z>=0?'+':'')+z.toFixed(2)+'σ', text:z>=0?'ใกล้ค่าเฉลี่ย (แพงกว่านิด)':'ใกล้ค่าเฉลี่ย (ถูกกว่านิด)', color:'#c8d0dc', bg:'rgba(200,208,220,0.08)' };
-    if (z > -2) return { label:`${z.toFixed(2)}σ`,  text:'ถูกกว่าค่าเฉลี่ย', color:'#96c850', bg:'rgba(150,200,80,0.10)'  };
-    return              { label:`${z.toFixed(2)}σ`,  text:'ถูกผิดปกติ',    color:'#3ab464', bg:'rgba(58,180,100,0.12)' };
+    const color = _zColor(z);
+    if (z >  2) return { label:`+${z.toFixed(2)}σ`, text:'แพงผิดปกติ',    color, bg:'rgba(220,80,60,0.12)'  };
+    if (z >  1) return { label:`+${z.toFixed(2)}σ`, text:'แพงเกินค่าเฉลี่ย', color, bg:'rgba(220,160,50,0.10)' };
+    if (z > -1) return { label:(z>=0?'+':'')+z.toFixed(2)+'σ', text:z>=0?'ใกล้ค่าเฉลี่ย (แพงกว่านิด)':'ใกล้ค่าเฉลี่ย (ถูกกว่านิด)', color, bg:'rgba(200,208,220,0.08)' };
+    if (z > -2) return { label:`${z.toFixed(2)}σ`,  text:'ถูกกว่าค่าเฉลี่ย', color, bg:'rgba(150,200,80,0.10)'  };
+    return              { label:`${z.toFixed(2)}σ`,  text:'ถูกผิดปกติ',    color, bg:'rgba(58,180,100,0.12)' };
   }
 
   function sdTipContent(s, label) {
@@ -28923,9 +29043,6 @@ function renderValuation() {
       `<div class='tip-row'><span class='tip-label'>&gt; 2x</span><span class='tip-zone-exp'>Expensive</span></div>` +
       `<hr><b>ข้อดีเทียบ P/E:</b> เสถียรกว่าในช่วงกำไรผันผวน<br>เช่น COVID ที่กำไรร่วงแต่ Book Value คงที่`,
 
-    pePct: _pctTip(peStats.percentile),
-    pbvPct: _pctTip(pbvStats.percentile),
-
     peChart: `<div class='tip-head'>วิธีอ่านกราฟ P/E</div>` +
       `<div class='tip-row'><span class='tip-label'>เส้นฟ้า</span><span class='tip-val'>P/E รายเดือน</span></div>` +
       `<div class='tip-row'><span class='tip-label'>เส้นเหลือง</span><span class='tip-val'>ค่าเฉลี่ย${VAL_PERIOD_LABEL[_valPeriod]} (${peStats.avg}x)</span></div>` +
@@ -28954,12 +29071,6 @@ function renderValuation() {
       `<b>ตัวอย่าง:</b> ถ้า Cheap zone เกิด 8% ของเวลา<br>แต่ตอนนี้ตลาดอยู่ Cheap → โอกาสพิเศษมาก<br>` +
       `ควรเพิ่ม position มากกว่าเวลาปกติ`,
   };
-
-  const peZone  = valZoneLabel(peStats.current,  peThresh,  zoneLabels);
-  const pbvZone = valZoneLabel(pbvStats.current, pbvThresh, zoneLabels);
-
-  const peZI  = sdZoneInfo(peStats.zscore);
-  const pbvZI = sdZoneInfo(pbvStats.zscore);
 
   // ── Summary cards ────────────────────────────
   function makeCard(title, s, thresholds, isPE, overrideTip) {
@@ -29080,10 +29191,11 @@ function renderValuation() {
     drawValChart('val-pbv-canvas', pbvF.dates, pbvF.vals, pbvThresh, pbvStats);
     setupValHover('val-pe-canvas',  peThresh,  peStats.avg,  true,  peStats.std);
     setupValHover('val-pbv-canvas', pbvThresh, pbvStats.avg, false, pbvStats.std);
-    document.getElementById('val-pe-info').textContent =
-      `${peF.dates[0]} – ${peF.dates[peF.dates.length-1]} | ${peF.dates.length} เดือน | เส้นสีเหลือง = ค่าเฉลี่ย${VAL_PERIOD_LABEL[_valPeriod]} ${peStats.avg}x`;
-    document.getElementById('val-pbv-info').textContent =
-      `${pbvF.dates[0]} – ${pbvF.dates[pbvF.dates.length-1]} | ${pbvF.dates.length} เดือน | เส้นสีเหลือง = ค่าเฉลี่ย${VAL_PERIOD_LABEL[_valPeriod]} ${pbvStats.avg}x`;
+    const infoTxt = (f, st) => f.dates.length
+      ? `${f.dates[0]} – ${f.dates[f.dates.length-1]} | ${f.dates.length} เดือน | เส้นสีเหลือง = ค่าเฉลี่ย${VAL_PERIOD_LABEL[_valPeriod]} ${st.avg}x`
+      : `ไม่มีข้อมูลในช่วง${VAL_PERIOD_LABEL[_valPeriod]}`;
+    document.getElementById('val-pe-info').textContent  = infoTxt(peF,  peStats);
+    document.getElementById('val-pbv-info').textContent = infoTxt(pbvF, pbvStats);
 
     // MAI charts — maiPeF/maiPbvF ถูกกรองตามช่วงเวลาแล้วด้านบน (ก่อน makeCard)
     if (maiPeStats.avg) {
@@ -29104,13 +29216,13 @@ function renderValuation() {
   const zoneFreqEl = document.getElementById('val-zone-freq');
   zoneFreqEl.innerHTML = `
     <div style="width:100%">
-      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">P/E — ${pe.dates.length} เดือน</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">P/E — ${(pe.dates||[]).length} เดือน</div>
       <div id="val-zone-pe" style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:16px"></div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">P/BV — ${pbv.dates.length} เดือน</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">P/BV — ${(pbv.dates||[]).length} เดือน</div>
       <div id="val-zone-pbv" style="display:flex;gap:24px;flex-wrap:wrap"></div>
     </div>`;
-  renderValZoneFreq('val-zone-pe',  pe.series['SET'],  peThresh,  zoneLabels, true);
-  renderValZoneFreq('val-zone-pbv', pbv.series['SET'], pbvThresh, zoneLabels, false);
+  renderValZoneFreq('val-zone-pe',  pe.series['SET']  || [], peThresh,  zoneLabels, true);
+  renderValZoneFreq('val-zone-pbv', pbv.series['SET'] || [], pbvThresh, zoneLabels, false);
 }
 
 // ══════════════════════════════════════════════════════════

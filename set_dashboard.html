@@ -30,7 +30,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260830f">
+<link rel="stylesheet" href="static/dashboard.css?v=20260903g">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -855,7 +855,7 @@
 <!-- PAGE: VALUATION BAND -->
 <div id="page-band" class="page">
   <div class="page-title">Valuation Band</div>
-  <div class="page-sub">PE Band · PBV Band (mrlikestock.com) · กำไรสุทธิรายไตรมาส (9hoon.com) — ตำแหน่ง Valuation เทียบกับค่าเฉลี่ยในอดีต</div>
+  <div class="page-sub">PE Band · PBV Band (mrlikestock.com) · กำไรสุทธิรายไตรมาส + บทวิเคราะห์รายโบรก (9hoon.com) — ตำแหน่ง Valuation เทียบกับค่าเฉลี่ยในอดีต</div>
   <div id="band-gate" class="empty" style="display:none;padding:24px"></div>
   <div id="band-body">
     <div class="band-search-row">
@@ -882,22 +882,32 @@
         </div>
       </div>
       <div id="band-set-check" style="margin-top:12px"></div>
-      <div class="card" id="np-card" style="display:none;margin-top:16px">
-        <div class="band-card-label">กำไรสุทธิรายไตรมาส (ข้อมูลจาก 9hoon.com)</div>
-        <div id="np-error" style="display:none;color:var(--red);padding:8px 0;font-size:13px"></div>
-        <div id="np-body" style="display:none">
-          <div style="font-size:15px;font-weight:600;margin-bottom:6px" id="np-company-name"></div>
-          <div id="np-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
-          <div class="band-metrics-row" id="np-metrics"></div>
-          <div class="band-metrics-row" id="np-delta-row" style="margin-bottom:14px"></div>
-          <div id="np-chart-wrap" style="margin-bottom:14px">
-            <div style="font-size:11px;color:var(--text2);margin-bottom:6px">กำไรสุทธิรายไตรมาส เทียบ YoY (ล้านบาท)</div>
-            <canvas id="np-chart-canvas" style="width:100%;display:block;border-radius:6px;background:#0d1117"></canvas>
-          </div>
-          <div style="overflow-x:auto">
-            <table class="np-table" id="np-table"></table>
-          </div>
+    </div>
+    <!-- np-card / rr-card อยู่นอก #band-result โดยตั้งใจ — สอง endpoint นี้ดึงคนละเว็บกับ
+         Band (9hoon.com vs mrlikestock.com) ต้องเรนเดอร์ได้แม้ Band 404/ล่ม (ดู searchBand) -->
+    <div class="card" id="np-card" style="display:none;margin-top:16px">
+      <div class="band-card-label">กำไรสุทธิรายไตรมาส (ข้อมูลจาก 9hoon.com)</div>
+      <div id="np-error" style="display:none;color:var(--red);padding:8px 0;font-size:13px"></div>
+      <div id="np-body" style="display:none">
+        <div style="font-size:15px;font-weight:600;margin-bottom:6px" id="np-company-name"></div>
+        <div id="np-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
+        <div class="band-metrics-row" id="np-metrics"></div>
+        <div class="band-metrics-row" id="np-delta-row" style="margin-bottom:14px"></div>
+        <div id="np-chart-wrap" style="margin-bottom:14px">
+          <div style="font-size:11px;color:var(--text2);margin-bottom:6px">กำไรสุทธิรายไตรมาส เทียบ YoY (ล้านบาท)</div>
+          <canvas id="np-chart-canvas" style="width:100%;display:block;border-radius:6px;background:#0d1117"></canvas>
         </div>
+        <div style="overflow-x:auto">
+          <table class="np-table" id="np-table"></table>
+        </div>
+      </div>
+    </div>
+    <div class="card" id="rr-card" style="display:none;margin-top:16px">
+      <div class="band-card-label">บทวิเคราะห์รายหุ้น — PDF รายโบรก (ข้อมูลจาก 9hoon.com)</div>
+      <div id="rr-error" style="display:none;color:var(--red);padding:8px 0;font-size:13px"></div>
+      <div id="rr-body" style="display:none">
+        <div id="rr-summary" style="margin-bottom:14px"></div>
+        <div id="rr-grid" class="rr-grid"></div>
       </div>
     </div>
   </div>
@@ -5669,6 +5679,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260903c"></script>
+<script src="static/dashboard.js?v=20260903g"></script>
 </body>
 </html>

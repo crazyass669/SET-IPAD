@@ -555,6 +555,29 @@
   .np-eps { font-size:10.5px; color:var(--text2); margin-top:1px; }
   .np-table tbody tr:hover { background:var(--bg3); }
 
+  /* RESEARCH REPORTS (บทวิเคราะห์รายหุ้น — 9hoon.com) */
+  .rr-summary-row { display:flex; flex-wrap:wrap; gap:10px 22px; align-items:baseline;
+    padding:10px 12px; background:var(--bg3); border:1px solid var(--border); border-radius:8px; font-size:13px; }
+  .rr-summary-row .rr-s-lbl { color:var(--text2); font-size:11px; }
+  .rr-summary-row .rr-s-val { font-weight:700; }
+  .rr-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:14px; }
+  .rr-item { border:1px solid var(--border); border-radius:10px; overflow:hidden; display:flex; flex-direction:column; background:var(--bg2); }
+  .rr-item-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 12px; border-bottom:1px solid var(--border); }
+  .rr-item-broker { font-weight:700; font-size:14px; }
+  .rr-item-date { font-size:11px; color:var(--text2); margin-top:1px; }
+  .rr-item-meta { display:flex; flex-wrap:wrap; gap:4px 16px; padding:8px 12px; font-size:12px;
+    border-bottom:1px solid var(--border); background:var(--bg3); }
+  .rr-item-meta .rr-m-lbl { color:var(--text2); }
+  .rr-item-meta .rr-m-rec { font-style:italic; color:var(--text2); }
+  .rr-item iframe { width:100%; height:640px; border:0; background:var(--bg3); }
+  .rr-item-open { display:block; text-align:center; padding:8px; font-size:12px; font-weight:600;
+    color:var(--accent); border-top:1px solid var(--border); text-decoration:none; }
+  .rr-item-open:hover { background:var(--bg3); }
+  .rr-badge { font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px; white-space:nowrap; }
+  .rr-badge.buy  { background:rgba(63,185,80,.15);  color:#3fb950; }
+  .rr-badge.hold { background:rgba(227,179,65,.15); color:#e3b341; }
+  .rr-badge.sell { background:rgba(248,81,73,.15);  color:#f85149; }
+
   /* REFRESH PERIOD DIALOG */
   .period-opt-btn { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:14px 10px; cursor:pointer; text-align:center; color:var(--text); transition:border-color .15s, background .15s; width:100%; }
   .period-opt-btn:hover { border-color:var(--accent); background:var(--bg2); }
