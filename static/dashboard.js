@@ -16910,7 +16910,9 @@ function _loadCmFin() {
     _fetchTimeout(`/api/financials-merged-report/${encodeURIComponent(sym)}`, 30000)
       .then(r => r.json())
       .then(d => {
-        if (_cmStock?.symbol !== sym) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
+        // เปลี่ยนหุ้น หรือสลับ toggle รายปี/ไตรมาส ระหว่างรอโหลด → ทิ้ง response นี้ ไม่งั้น
+        // response งวดเก่ามาทีหลังจะทับตารางงวดใหม่ + _cmFinLoaded เพี้ยน ทำ toggle ค้าง
+        if (_cmStock?.symbol !== sym || _cmFinPeriod !== (isQ ? 'q' : 'y')) return;
         if (d.error) throw new Error(d.error);
         if (!(isQ ? d.quarters : d.years)?.length) throw new Error('no-merged-rows');
         document.getElementById('cm-fin-loading').style.display = 'none';
@@ -16920,7 +16922,7 @@ function _loadCmFin() {
         requestAnimationFrame(() => _drawCmMergedChart(d, isQ));
       })
       .catch(() => {
-        if (_cmStock?.symbol !== sym) return;
+        if (_cmStock?.symbol !== sym || _cmFinPeriod !== (isQ ? 'q' : 'y')) return;
         _loadCmFinLegacy(sym, finSym, qs, isQ, cacheKey);   // merged พลาด → Finnomena/Yahoo ตามเดิม
       });
     return;
@@ -16933,8 +16935,9 @@ function _loadCmFin() {
 function _loadCmFinLegacy(sym, finSym, qs, isQ, cacheKey) {
   const srcMain = isQ ? 'finnomena_q' : 'finnomena_y';
   const srcAlt  = isQ ? 'yahoo_q'     : 'yahoo';
+  const stale = () => _cmStock?.symbol !== sym || _cmFinPeriod !== (isQ ? 'q' : 'y');
   const showFin = (d, source) => {
-    if (_cmStock?.symbol !== sym) return;   // เปลี่ยนหุ้นไปแล้วระหว่างรอโหลด
+    if (stale()) return;   // เปลี่ยนหุ้น/สลับ toggle ระหว่างรอโหลด
     document.getElementById('cm-fin-loading').style.display = 'none';
     _cmFinLoaded = cacheKey;
     document.getElementById('cm-fin-body').innerHTML = _renderCmFin(d, source);
@@ -16947,16 +16950,17 @@ function _loadCmFinLegacy(sym, finSym, qs, isQ, cacheKey) {
       showFin(d, srcMain);
     })
     .catch(() => {
+      if (stale()) return;
       _fetchTimeout(`/api/financials-full/${encodeURIComponent(finSym)}?source=${srcAlt}${qs}`, 30000)
         .then(r => r.json())
         .then(d => {
-          if (_cmStock?.symbol !== sym) return;
+          if (stale()) return;
           if (d.error) { document.getElementById('cm-fin-loading').style.display = 'none';
             document.getElementById('cm-fin-body').innerHTML = `<div style="color:var(--text2);padding:16px">${d.error}</div>`; return; }
           showFin(d, srcAlt);
         })
         .catch(e => {
-          if (_cmStock?.symbol !== sym) return;
+          if (stale()) return;
           document.getElementById('cm-fin-loading').style.display = 'none';
           document.getElementById('cm-fin-body').innerHTML = `<div style="color:var(--red);padding:16px">โหลดไม่สำเร็จ: ${e.message}</div>`;
         });
