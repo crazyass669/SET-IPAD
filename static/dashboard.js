@@ -12088,10 +12088,9 @@ function renderTearsheet(d) {
         ${mkt !== 'JP' ? `<a href="#" onclick="_tsGoFilings('${h.symbol}');return false" style="font-size:11px;color:var(--blue)">เปิดหน้ารายงานทางการ →</a>` : ''}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-        ${filLinksFn(h.symbol)[0].links.map(l => `<a class="filter-btn" href="${l.url}" target="_blank" rel="noopener"
-          title="${l.tip}" style="text-decoration:none;font-size:12px;padding:6px 12px">${l.label} ↗</a>`).join('')}
+        ${filLinksFn(h.symbol)[0].links.map(l => _filLinkAnchorHtml(l, '6px 12px', '12px')).join('')}
       </div>
-      <button class="btn-secondary" style="font-size:11.5px" onclick="copyFilPrompt('${h.symbol}','${mkt}','ts-fil-copy-note')">📋 คัดลอก Prompt วิเคราะห์ 13 ข้อ</button>
+      <button class="btn-secondary" style="font-size:11.5px" onclick="copyFilPrompt('${_escJsAttr(h.symbol)}','${_escJsAttr(mkt)}','ts-fil-copy-note')">📋 คัดลอก Prompt วิเคราะห์ 13 ข้อ</button>
       <span id="ts-fil-copy-note" style="font-size:11px;color:var(--green);margin-left:8px"></span>
     </div>`;
 
@@ -32396,7 +32395,11 @@ function _filBuildDatalist() {
     const seen = new Set(drUs.map(([s]) => s));
     syms = drUs.concat((mir.US || []).filter(s => !seen.has(s)).map(s => [s, _finMirName('US', s)]));
   }
-  const key = _filTab + ':' + syms.length;
+  // key รวมจำนวนชื่อบริษัทที่โหลดมาแล้วด้วย — /api/mirror-names มาเป็น request แยกทีหลัง
+  // ตอน syms.length ยังเท่าเดิม ถ้า key เป็น count อย่างเดียว guard จะ return ก่อน ทำให้
+  // ป้ายชื่อบริษัทไม่เคยถูกเติมลง datalist (autocomplete โชว์แต่ ticker เปล่า)
+  const nameCnt = (_finMirNames && _finMirNames[_filTab]) ? Object.keys(_finMirNames[_filTab]).length : 0;
+  const key = _filTab + ':' + syms.length + ':' + nameCnt;
   if (!syms.length || dl.dataset.key === key) return;
   dl.innerHTML = '';
   const frag = document.createDocumentFragment();
@@ -32416,6 +32419,11 @@ function setFilTab(tab, btn) {
   if (btn) btn.classList.add('active');
   const inp = document.getElementById('fil-sym');
   if (inp) inp.placeholder = tab === 'TH' ? 'เช่น PTT, AOT, CPALL' : tab === 'US' ? 'เช่น NVDA, AAPL, MSFT' : 'เช่น 0700.HK, 9988.HK';
+  // คนละ tab = คนละตลาด — ล้างผลของหุ้นตัวก่อนไม่ให้ลิงก์ผิดตลาดค้างจอ (แบบเดียวกับ setNewsTab/setFinTab)
+  const out = document.getElementById('fil-result');
+  if (out) out.innerHTML = '';
+  const hint = document.getElementById('fil-hint');
+  if (hint) hint.textContent = '';
   _filBuildDatalist();
 }
 
@@ -32424,7 +32432,8 @@ function _filRecentRender() {
   const box = document.getElementById('fil-recent');
   if (!box) return;
   let list = [];
-  try { list = JSON.parse(localStorage.getItem(FIL_RECENT_KEY)) || []; } catch {}
+  try { list = JSON.parse(localStorage.getItem(FIL_RECENT_KEY)); } catch {}
+  if (!Array.isArray(list)) list = [];
   if (!list.length) { box.style.display = 'none'; return; }
   box.style.display = 'flex';
   box.style.flexWrap = 'wrap';
@@ -32434,14 +32443,15 @@ function _filRecentRender() {
   // sym มาจาก localStorage — กรองเป็น [A-Z0-9.-] ก่อนยัดลง onclick (กันอักขระพิเศษแตก HTML)
   const safe = s => String(s || '').replace(/[^A-Z0-9.\-]/gi, '');
   box.innerHTML = '<span style="color:var(--text2)">🕓 เพิ่งดู:</span>' +
-    list.filter(r => r && safe(r.sym) && flag[r.tab])
+    list.filter(r => r && safe(r.sym) && ['TH', 'US', 'HK'].includes(r.tab))
       .map(r => `<button class="filter-btn" style="font-size:11px;padding:3px 10px"
       onclick="_filRecentPick('${safe(r.sym)}','${r.tab}')">${flag[r.tab]} ${safe(r.sym)}</button>`).join('');
 }
 
 function _filRecentAdd(sym, tab) {
   let list = [];
-  try { list = JSON.parse(localStorage.getItem(FIL_RECENT_KEY)) || []; } catch {}
+  try { list = JSON.parse(localStorage.getItem(FIL_RECENT_KEY)); } catch {}
+  if (!Array.isArray(list)) list = [];
   list = [{ sym, tab }, ...list.filter(r => r && !(r.sym === sym && r.tab === tab))].slice(0, 10);
   try { localStorage.setItem(FIL_RECENT_KEY, JSON.stringify(list)); } catch {}
   _filRecentRender();
@@ -32570,6 +32580,13 @@ function _filLinksJP(sym) {
   ];
 }
 
+// ปุ่มลิงก์เอกสาร 1 อัน — ใช้ร่วมกันระหว่างหน้า Filings เต็มกับการ์ด "📑 เอกสารทางการ" ใน
+// Tearsheet (เดิม Tearsheet ใส่ href/title ดิบไม่ผ่าน _safeHref/_escHtml — ต่างจากที่นี่)
+function _filLinkAnchorHtml(l, pad = '7px 14px', fs = '12.5px') {
+  return `<a class="filter-btn" href="${_escHtml(_safeHref(l.url))}" target="_blank" rel="noopener"
+    title="${_escHtml(l.tip)}" style="text-decoration:none;font-size:${fs};padding:${pad}">${_escHtml(l.label)} ↗</a>`;
+}
+
 // ---------- ค้นหา + render ----------
 function searchFilings() {
   const inp = document.getElementById('fil-sym');
@@ -32590,22 +32607,20 @@ function searchFilings() {
   _filRecentAdd(sym, _filTab);
   const hint = document.getElementById('fil-hint');
   if (hint) hint.textContent = '';
-  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   const out = document.getElementById('fil-result');
   out.innerHTML = groups.map(g => `
     <div class="card" style="padding:14px 16px;margin-bottom:12px">
-      <div style="font-size:13px;font-weight:600;margin-bottom:10px">${g.group} — ${esc(sym)}</div>
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px">${_escHtml(g.group)} — ${_escHtml(sym)}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${g.links.map(l => `<a class="filter-btn" href="${esc(_safeHref(l.url))}" target="_blank" rel="noopener"
-          title="${esc(l.tip)}" style="text-decoration:none;font-size:12.5px;padding:7px 14px">${l.label} ↗</a>`).join('')}
+        ${g.links.map(l => _filLinkAnchorHtml(l)).join('')}
       </div>
     </div>`).join('') + `
     <div class="card" style="padding:14px 16px;margin-bottom:12px">
-      <div style="font-size:13px;font-weight:600;margin-bottom:6px">🤖 Prompt วิเคราะห์ 13 ข้อ — ${esc(sym)}</div>
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px">🤖 Prompt วิเคราะห์ 13 ข้อ — ${_escHtml(sym)}</div>
       <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
         คัดลอก prompt กรอบวิเคราะห์หุ้น 13 หัวข้อ (ธุรกิจ · Moat · งบ · Valuation · ความเสี่ยง · ให้คะแนน 1-10 · Final Verdict)
         พร้อมใส่ชื่อหุ้น + ลิงก์เอกสารให้แล้ว — เอาไปวางใน Claude / ChatGPT ให้ช่วยสรุปได้ทันที</div>
-      <button class="btn-primary" onclick="copyFilPrompt('${esc(sym)}')">📋 คัดลอก Prompt</button>
+      <button class="btn-primary" onclick="copyFilPrompt('${_escJsAttr(sym)}')">📋 คัดลอก Prompt</button>
       <span id="fil-copy-note" style="font-size:11px;color:var(--green);margin-left:8px"></span>
     </div>
     <div style="font-size:10.5px;color:var(--text2)">ทุกลิงก์เปิดแท็บใหม่ไปยังเว็บต้นทาง — dashboard ไม่ได้ดึงข้อมูลมาเก็บ · hover ที่ปุ่มเพื่อดูคำอธิบายว่าเอกสารนั้นคืออะไร</div>`;
