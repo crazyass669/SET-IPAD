@@ -3516,7 +3516,7 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
     ปลอดภัย)
 
     คืน {"quarters": [{quarter, revenue, revenue_yoy, revenue_qoq, revenue_coverage, profit,
-    profit_yoy, profit_qoq, npm,
+    profit_yoy, profit_qoq, profit_coverage, npm,
     npm_median, roe_aggregate, roe_median, roe_coverage, cfo_np_aggregate, cfo_np_median,
     cfo_np_coverage, pct_revenue_growing, pct_profit_growing, pct_cfo_positive, flipped_profit,
     flipped_loss}, ...]} เรียงเก่า -> ใหม่"""
@@ -3537,8 +3537,11 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
     init_db(base_dir)
     con = _connect(base_dir)
     try:
+        # symbol NOT LIKE '%:%' — ตัด mirror ('FINN:US:', 'DR:') ออกที่ชั้น SQL ก่อน json.loads
+        # (หุ้น SET เป็น ticker เปล่าไม่มี ':' เสมอ) เดิมโหลดทั้งตาราง ~33k แถวแล้ว parse ทิ้ง ~32k
         fq_rows = con.execute(
-            "SELECT symbol, payload FROM financials WHERE source='finnomena_q'").fetchall()
+            "SELECT symbol, payload FROM financials "
+            "WHERE source='finnomena_q' AND symbol NOT LIKE '%:%'").fetchall()
     finally:
         con.close()
 
@@ -3586,7 +3589,9 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
         if not m:
             return None
         cs, ps = sum(x[0] for x in m), sum(x[1] for x in m)
-        return round((cs / ps - 1) * 100, 1) if ps else None
+        # ps > 0 ไม่ใช่แค่ != 0 — ฐานเทียบรวมติดลบ (ทั้งตลาด/scope ขาดทุนรวม) หารแล้วพลิก
+        # เครื่องหมาย กลายเป็น % หลอก (เหมือน _yoy ใน get_sector_qpl_compare + docstring ระบุไว้)
+        return round((cs / ps - 1) * 100, 1) if ps > 0 else None
 
     quarters_out = []
     for (y, q) in seq:
@@ -3615,6 +3620,7 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
         rev_sum = sum(c for c, _ in rev_pairs if c is not None)
         rev_n = sum(1 for c, _ in rev_pairs if c is not None)
         profit_sum = sum(c for c, _ in profit_pairs if c is not None)
+        profit_n = sum(1 for c, _ in profit_pairs if c is not None)
 
         # ── ROE / Cash Quality TTM (ทั้งตลาด ไม่ตัดการเงิน/REIT) ──
         roe_vals, roe_pairs, cfo_np_vals, cfo_np_pairs = [], [], [], []
@@ -3635,10 +3641,11 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
                           if roe_pairs else None)
         cfo_np_denom = sum(p for _, p in cfo_np_pairs)
         # pttm มีเครื่องหมายได้ทั้งบวก/ลบ (ต่างจาก eq ของ roe_aggregate ที่การันตี >0 เสมอ) —
-        # ผลรวมทั้งกลุ่มหักล้างกันพอดีเป็นศูนย์ได้ในทางทฤษฎี (โดยเฉพาะ /api/sector-trend ที่ scope
-        # เหลือหุ้นน้อยตัว) ต้องกัน ZeroDivisionError ตรงนี้
+        # ผลรวมทั้งกลุ่มเป็นศูนย์ได้ (กัน ZeroDivisionError) และ 'ติดลบ' ได้ด้วยเมื่อ scope ขาดทุน
+        # รวม (โดยเฉพาะ /api/sector-trend ที่เหลือหุ้นน้อยตัว) — หาร CFO ด้วยกำไรรวมติดลบพลิก
+        # เครื่องหมาย ได้ ratio หลอก (เช่น CFO บวกแต่ได้ -1.8x) ต้อง > 0 เท่านั้น
         cfo_np_aggregate = (round(sum(c for c, _ in cfo_np_pairs) / cfo_np_denom, 2)
-                             if cfo_np_pairs and cfo_np_denom else None)
+                             if cfo_np_pairs and cfo_np_denom > 0 else None)
 
         # ── Breadth (ทั้งตลาด) — %โต YoY เทียบไตรมาสเดียวกันปีก่อน, พลิกกำไร/ขาดทุนเทียบไตรมาส
         # ก่อนหน้าติดกัน (QoQ) เพราะ 'พลิก' หมายถึงเปลี่ยนสถานะจากงวดล่าสุดที่รายงาน ไม่ใช่ปีก่อน ──
@@ -3675,7 +3682,7 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
             "revenue": rev_sum, "revenue_yoy": _sum_yoy(rev_pairs), "revenue_coverage": rev_n,
             "revenue_qoq": _sum_yoy(rev_qoq_pairs),
             "profit": profit_sum, "profit_yoy": _sum_yoy(profit_pairs),
-            "profit_qoq": _sum_yoy(profit_qoq_pairs),
+            "profit_qoq": _sum_yoy(profit_qoq_pairs), "profit_coverage": profit_n,
             "npm": round(profit_sum / rev_sum * 100, 1) if rev_sum else None,
             "npm_median": round(statistics.median(npm_vals), 1) if npm_vals else None,
             "roe_aggregate": roe_aggregate,

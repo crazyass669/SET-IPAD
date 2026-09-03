@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
-<link rel="stylesheet" href="app.css?v=22">
+<link rel="stylesheet" href="app.css?v=23">
 </head>
 <body>
 
@@ -72,10 +72,15 @@
   <p>สรุปหุ้นไทย / DR / ETF รายวัน สำหรับดูบนมือถือ/iPad — <b>อ่านอย่างเดียว</b></p>
   <p>ข้อมูลอัปเดตอัตโนมัติทุกวันหลังตลาดปิด (ราคา · RS · งบย้อนหลัง) — ตัวเลขเป็นราคาปิดล่าสุด ไม่ใช่เรียลไทม์</p>
   <p>DCF/Fair-value ทั้งตลาด, หุ้นต่างประเทศ US/HK/JP, ข่าวรายตัว และการเพิ่ม/ลบวอทช์ลิสต์ — ทำที่เวอร์ชันรันบนเครื่อง</p>
+  <p style="border-top:1px solid var(--line);padding-top:12px"><b>ทำไม “ดัชนีกลุ่มอุตสาหกรรม” กับ “Heatmap” ให้ตัวเลขรายกลุ่มไม่ตรงกัน?</b><br>
+  คิดผลตอบแทนคนละวิธี จึงไม่ตรงกันโดยธรรมชาติ (ไม่ใช่บั๊ก):</p>
+  <p>• <b>ดัชนีกลุ่มอุตสาหกรรม</b> = ดัชนีกลุ่ม/หมวดที่ SET เผยแพร่จริง <b>ถ่วงน้ำหนักด้วย market cap</b> — หุ้นใหญ่ (PTT, DELTA, ADVANC) ลากทั้งกลุ่ม</p>
+  <p>• <b>Heatmap</b> ค่าเฉลี่ยที่หัวกลุ่ม = <b>ค่าเฉลี่ยของหุ้นทุกตัวในกลุ่มแบบเท่า ๆ กัน</b> (หุ้นเล็กมีน้ำหนักเท่าหุ้นใหญ่) และนับเฉพาะหุ้นที่มีในตัว viewer</p>
+  <p>นอกจากนี้ Heatmap แตกกลุ่มตาม “หมวดธุรกิจ” (~35 หมวดละเอียด) ส่วนหน้าดัชนีเลือกดูได้ทั้งกลุ่มอุตสาหกรรม (16) และหมวด — คนละระดับการจัดกลุ่ม จึงเทียบตรง ๆ ไม่ได้</p>
 </aside>
 
 <div class="toast" id="toast"></div>
 
-<script src="app.js?v=22"></script>
+<script src="app.js?v=23"></script>
 </body>
 </html>

@@ -4362,17 +4362,22 @@ const _mtGrowthMode = { sectorRevenue: 'yoy', sectorProfit: 'yoy', stockRevenue:
 // มาใน payload /api/market-trend อยู่แล้ว (ดู financials_store.get_market_trend)
 let _mtRevLineMode = 'yoy';
 let _mtProfitLineMode = 'npm';
+let _mtSectorLoading = false;
+// คำบรรยายใต้หัวข้อ (#mt-updated) ฉบับตั้งต้นจาก HTML — เก็บครั้งเดียวตอนเรียกครั้งแรก ก่อนถูก
+// เขียนทับเป็น "กำลังรวม..."/"โหลดไม่ได้..." ไม่งั้นรอบที่โหลดล้มเหลวจะทำให้รอบถัดไปที่สำเร็จ
+// "คืนค่า" ข้อความ error ค้างไว้แทนคำบรรยายจริง
+let _mtOrigSub = null;
 const _MT_THB_FMT = v => v == null ? '' : (Math.round(v / 1e6)).toLocaleString('en-US') + ' ลบ.';
 const _MT_PCT_FMT = v => v == null ? '' : (v > 0 ? '+' : '') + v.toFixed(1) + '%';
 const _MT_NPM_FMT = v => v == null ? '' : v.toFixed(1) + '%';
 const _MT_RATIO_FMT = v => v == null ? '' : v.toFixed(2) + 'x';
 
 async function loadMarketTrendPage() {
-  if (_marketTrendData) { _renderMarketTrend(); return; }
+  const sub = document.getElementById('mt-updated');
+  if (_mtOrigSub == null && sub) _mtOrigSub = sub.textContent;
+  if (_marketTrendData) { _renderMarketTrend(); _mtLoadSectorData(); return; }
   if (_marketTrendLoading) return;
   _marketTrendLoading = true;
-  const sub = document.getElementById('mt-updated');
-  const origSub = sub ? sub.textContent : '';
   if (sub) sub.textContent = 'กำลังรวมข้อมูลย้อนหลังทั้งตลาด... (ครั้งแรกอาจช้า ~20-30 วิ)';
   try {
     const res = await _fetchTimeout('/api/market-trend?t=' + Date.now(), 45000,
@@ -4380,7 +4385,7 @@ async function loadMarketTrendPage() {
     const d = await res.json();
     if (d.error) throw new Error(d.error);
     _marketTrendData = d;
-    if (sub) sub.textContent = origSub;
+    if (sub) sub.textContent = _mtOrigSub;
     _renderMarketTrend();
   } catch (e) {
     if (sub) sub.textContent = `โหลดไม่ได้: ${e.message}`;
@@ -4388,14 +4393,22 @@ async function loadMarketTrendPage() {
     return;
   }
   _marketTrendLoading = false;
+  _mtLoadSectorData();
+}
 
-  // ตาราง Top 10 แยก fetch เป็นอิสระจากกราฟหลัก — timeout/พังที่นี่ไม่ควรทำให้กราฟหลักที่โหลดสำเร็จแล้วหายไปด้วย
+// ตาราง Top 10 แยก fetch เป็นอิสระจากกราฟหลัก — timeout/พังที่นี่ไม่ควรทำให้กราฟหลักที่โหลด
+// สำเร็จแล้วหายไปด้วย · เรียกได้ทุกครั้งที่เข้าหน้า (รวม cache-hit path) เพื่อ retry ถ้ารอบก่อน
+// โหลด sector ไม่สำเร็จ — วาดเฉพาะตาราง ไม่ rebuild กราฟทั้ง 6 ใบซ้ำ
+async function _mtLoadSectorData() {
+  if (_mtSectorData || _mtSectorLoading) return;
+  _mtSectorLoading = true;
   try {
     const secRes = await _fetchTimeout('/api/sector-compare?t=' + Date.now(), 45000,
       'หมดเวลารอข้อมูล Top 10 เติบโต (เกิน 45 วิ)');
     const sd = await secRes.json();
-    if (!sd.error) { _mtSectorData = sd; _renderMarketTrend(); }
+    if (!sd.error) { _mtSectorData = sd; _mtRenderGrowthTables(); }
   } catch (e2) { /* ตาราง Top 10 พังไม่ควรทำให้กราฟหลักพังตาม */ }
+  _mtSectorLoading = false;
 }
 
 function _mtQuarterLabel(q) {
@@ -4411,10 +4424,21 @@ const _MT_TICK_COLOR = '#8b949e', _MT_GRID_COLOR = '#1e2736';
 const _MT_TOOLTIP_BASE = {
   backgroundColor: '#1c2128', borderColor: '#30363d', borderWidth: 1,
   titleColor: '#e6edf3', bodyColor: '#8b949e',
+  footerColor: '#6e7681', footerFont: { size: 10, weight: 'normal' }, footerMarginTop: 6,
 };
 
+// footer callback ร่วม — โชว์ "บริษัทที่มีข้อมูล: N" ต่อจุด (จาก *_coverage ใน payload
+// /api/market-trend) ตามที่ tooltip help บนหน้าสัญญาไว้ · cov = array ยาวเท่า labels หรือ undefined
+function _mtCoverageFooter(cov) {
+  if (!cov) return undefined;
+  return items => {
+    const i = items && items.length ? items[0].dataIndex : null;
+    return (i != null && cov[i] != null) ? `บริษัทที่มีข้อมูล: ${cov[i]}` : '';
+  };
+}
+
 // กราฟแท่ง+เส้น 2 แกน (รายได้/กำไร) — โครงเดียวกับ _drawCmFinChart (dashboard.js ~11912)
-function _mtDrawBarLine(canvasId, labels, barVals, lineVals, barLabel, lineLabel, barColor, lineFmt, barFmt) {
+function _mtDrawBarLine(canvasId, labels, barVals, lineVals, barLabel, lineLabel, barColor, lineFmt, barFmt, coverage) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   _mtDestroy(canvasId);
@@ -4437,7 +4461,8 @@ function _mtDrawBarLine(canvasId, labels, barVals, lineVals, barLabel, lineLabel
         tooltip: { ...(_MT_TOOLTIP_BASE), callbacks: {
           label: ctx => ctx.raw == null ? null
             : ctx.dataset.yAxisID === 'yBar' ? ` ${barLabel}: ${barFmt(ctx.raw)}`
-            : ` ${lineLabel}: ${lineFmt(ctx.raw)}`
+            : ` ${lineLabel}: ${lineFmt(ctx.raw)}`,
+          footer: _mtCoverageFooter(coverage),
         } }
       },
       scales: {
@@ -4450,7 +4475,7 @@ function _mtDrawBarLine(canvasId, labels, barVals, lineVals, barLabel, lineLabel
 }
 
 // กราฟเส้นคู่แกนเดียว (Aggregate vs Median) — ROE / Margin Trend / Cash Quality
-function _mtDrawDualLine(canvasId, labels, seriesA, seriesB, labelA, labelB, colorA, colorB, fmt) {
+function _mtDrawDualLine(canvasId, labels, seriesA, seriesB, labelA, labelB, colorA, colorB, fmt, coverage) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   _mtDestroy(canvasId);
@@ -4471,7 +4496,8 @@ function _mtDrawDualLine(canvasId, labels, seriesA, seriesB, labelA, labelB, col
       plugins: {
         legend: { labels: { color: _MT_TICK_COLOR, font: { size: 11 }, boxWidth: 14, padding: 16 } },
         tooltip: { ...(_MT_TOOLTIP_BASE), callbacks: {
-          label: ctx => ctx.raw == null ? null : ` ${ctx.dataset.label}: ${fmt(ctx.raw)}`
+          label: ctx => ctx.raw == null ? null : ` ${ctx.dataset.label}: ${fmt(ctx.raw)}`,
+          footer: _mtCoverageFooter(coverage),
         } }
       },
       scales: {
@@ -4532,7 +4558,8 @@ function _mtDrawRevenueChart() {
   const qoq = _mtRevLineMode === 'qoq';
   _mtDrawBarLine('mt-chart-revenue', labels, q.map(x => x.revenue),
     q.map(x => qoq ? x.revenue_qoq : x.revenue_yoy),
-    'รายได้', qoq ? 'QoQ' : 'YoY', '#1f6feb', _MT_PCT_FMT, _MT_THB_FMT);
+    'รายได้', qoq ? 'QoQ' : 'YoY', '#1f6feb', _MT_PCT_FMT, _MT_THB_FMT,
+    q.map(x => x.revenue_coverage));
 }
 
 // การ์ด "กำไรสุทธิรวม + NPM" — แท่ง = กำไรระดับ · เส้น = NPM (default) หรืออัตราเติบโต YoY/QoQ
@@ -4547,7 +4574,8 @@ function _mtDrawProfitChart() {
   const lineLabel = m === 'npm' ? 'Aggregate NPM' : m === 'qoq' ? 'กำไร QoQ' : 'กำไร YoY';
   const lineFmt = m === 'npm' ? _MT_NPM_FMT : _MT_PCT_FMT;
   _mtDrawBarLine('mt-chart-profit', labels, q.map(x => x.profit), lineVals,
-    'กำไรสุทธิ', lineLabel, '#3fb950', lineFmt, _MT_THB_FMT);
+    'กำไรสุทธิ', lineLabel, '#3fb950', lineFmt, _MT_THB_FMT,
+    q.map(x => x.profit_coverage));
 }
 
 // สลับโหมดเส้นของการ์ดรายได้/กำไร แล้ววาดเฉพาะการ์ดนั้นใหม่ (pattern เดียวกับ _mtSetGrowthMode)
@@ -4569,11 +4597,11 @@ function _renderMarketTrend() {
   _mtDrawRevenueChart();
   _mtDrawProfitChart();
   _mtDrawDualLine('mt-chart-roe', labels, q.map(x => x.roe_aggregate), q.map(x => x.roe_median),
-    'Aggregate ROE', 'Median ROE', '#58a6ff', '#e8b84b', _MT_NPM_FMT);
+    'Aggregate ROE', 'Median ROE', '#58a6ff', '#e8b84b', _MT_NPM_FMT, q.map(x => x.roe_coverage));
   _mtDrawDualLine('mt-chart-margin', labels, q.map(x => x.npm), q.map(x => x.npm_median),
-    'Aggregate NPM', 'Median NPM', '#3fb950', '#f85149', _MT_NPM_FMT);
+    'Aggregate NPM', 'Median NPM', '#3fb950', '#f85149', _MT_NPM_FMT, q.map(x => x.revenue_coverage));
   _mtDrawDualLine('mt-chart-cashquality', labels, q.map(x => x.cfo_np_aggregate), q.map(x => x.cfo_np_median),
-    'Aggregate CFO/NP', 'Median CFO/NP', '#58a6ff', '#e8b84b', _MT_RATIO_FMT);
+    'Aggregate CFO/NP', 'Median CFO/NP', '#58a6ff', '#e8b84b', _MT_RATIO_FMT, q.map(x => x.cfo_np_coverage));
   _mtDrawBreadth('mt-chart-breadth', labels, q);
   _mtRenderGrowthTables();
 }
