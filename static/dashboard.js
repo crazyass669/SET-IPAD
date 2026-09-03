@@ -3370,8 +3370,8 @@ function _wlPopulateSymList() {
       _wlSymListLastAttempt = Date.now();
       Promise.all([
         _drData ? Promise.resolve() : _fetchTimeout('/api/dr', IS_STATIC ? 25000 : 150000).then(r => r.json()).then(d => { if (d.stocks) { _drData = d.stocks; _drLoaded = true; } }).catch(() => {}),
-        (IS_STATIC || _usData) ? Promise.resolve() : fetch('/api/us-index-metrics').then(r => r.json()).then(d => { _usData = d; }).catch(() => {}),
-        (IS_STATIC || _hkData) ? Promise.resolve() : fetch('/api/hk-index-metrics').then(r => r.json()).then(d => { _hkData = d; }).catch(() => {}),
+        (IS_STATIC || _usData) ? Promise.resolve() : _fetchTimeout('/api/us-index-metrics', 30000).then(r => r.json()).then(d => { if (!d.error && d.stocks && d.stocks.length) _usData = d; }).catch(() => {}),   // ห้าม cache {error:...}/ก้อนว่าง — ไม่งั้น _wlSymListReady=true ค้าง + loadUsStocksPage โชว์ "ไม่มีหุ้น" ทั้ง session
+        (IS_STATIC || _hkData) ? Promise.resolve() : _fetchTimeout('/api/hk-index-metrics', 30000).then(r => r.json()).then(d => { if (!d.error && d.stocks && d.stocks.length) _hkData = d; }).catch(() => {}),
         (IS_STATIC || _wlMirrorSymList) ? Promise.resolve() : fetch('/api/mirror-symbol-names').then(r => r.json()).then(d => { _wlMirrorSymList = d.stocks || []; }).catch(() => {}),
       ]).then(() => {
         _wlSymListFetching = false;
@@ -3852,10 +3852,10 @@ function renderWatchlist() {
           if (d.refreshing) _drPollRefresh(0);   // cache stale — poll เบื้องหลังจนได้ชุดใหม่ (pattern เดียวกับหน้า DR)
         }).catch(() => {}),
         (IS_STATIC || _usData || !need.has("US")) ? Promise.resolve() : _fetchTimeout('/api/us-index-metrics', 25000).then(r => r.json()).then(d => {
-          if (d && !d.error) _usData = d;   // route คืน {error:...} ตอน exception — ห้าม cache เป็นข้อมูลจริง ไม่งั้นไม่ retry อีกเลยทั้ง session
+          if (d && !d.error && d.stocks && d.stocks.length) _usData = d;   // route คืน {error:...} ตอน exception — ห้าม cache เป็นข้อมูลจริง/ก้อนว่าง ไม่งั้นไม่ retry อีกเลยทั้ง session + renderUsTable crash
         }).catch(() => {}),
         (IS_STATIC || _hkData || !need.has("HK")) ? Promise.resolve() : _fetchTimeout('/api/hk-index-metrics', 25000).then(r => r.json()).then(d => {
-          if (d && !d.error) _hkData = d;
+          if (d && !d.error && d.stocks && d.stocks.length) _hkData = d;
         }).catch(() => {}),
       ]).then(renderWatchlist);
       return;
@@ -17396,7 +17396,9 @@ function _finMirSetIndex(idx, btn) {
   if (btn) btn.classList.add('active');
   if (_finIndexData === null) {
     _finIndexData = {};   // กันยิงซ้ำ
-    fetch('/api/us-index-membership').then(r => r.json()).then(d => { _finIndexData = d || {}; _finMirRender(); }).catch(() => {});
+    // fetch พังต้อง reset เป็น null — ไม่งั้น _finIndexData ค้าง {} แล้ว _finMirRender กรอง
+    // ทุก symbol ทิ้ง ('ไม่พบรหัสที่ค้น' ตลอด) ไม่มี retry ทั้ง session
+    fetch('/api/us-index-membership').then(r => r.json()).then(d => { _finIndexData = d || {}; _finMirRender(); }).catch(() => { _finIndexData = null; });
     return;
   }
   _finMirRender();
@@ -17590,7 +17592,7 @@ function startUSIndexSync(btnId = 'us-idx-sync-btn') {
       // ก่อน re-render รายการ browse (เดิม _finDrMirrorSyms ไม่เปลี่ยน แต่โหลดซ้ำไว้กันพลาด
       // ถ้า mirror list ขยับจาก sync อื่นระหว่างนี้)
       _finIndexData = {};
-      fetch('/api/us-index-membership').then(r => r.json()).then(d => { _finIndexData = d || {}; _finMirRender(); }).catch(() => {});
+      fetch('/api/us-index-membership').then(r => r.json()).then(d => { _finIndexData = d || {}; _finMirRender(); }).catch(() => { _finIndexData = null; });
       fetch('/api/mirror-symbols').then(r => r.json()).then(d => { _finDrMirrorSyms = d || {}; _finMirRender(); }).catch(() => {});
       fetch('/api/mirror-names').then(r => r.json()).then(d => { _finMirNames = d || {}; _finMirRender(); }).catch(() => {});
     });
@@ -17676,8 +17678,11 @@ async function loadUsBreadthChart() {
     if (canvas)  canvas.style.display = 'none';
   });
   try {
-    const r = await _fetchTimeout('/api/us-breadth?range=' + encodeURIComponent(rng), 30000,
-      'หมดเวลารอ Market Breadth หุ้น US (เกิน 30 วิ) — ลองใหม่อีกครั้ง');
+    // range 'all'/'5y' ต้อง full-scan us_prices.db (breadth.py ~35s) — 30s ไม่พอตอน cache เย็น
+    // ทำให้คลิกแรกขึ้น 'หมดเวลา' ทุกครั้ง (server คำนวณเสร็จ+cache ไว้ กดซ้ำถึงติด) — ให้เวลามากขึ้น
+    const to = rng === 'all' ? 90000 : rng === '5y' ? 60000 : 30000;
+    const r = await _fetchTimeout('/api/us-breadth?range=' + encodeURIComponent(rng), to,
+      `หมดเวลารอ Market Breadth หุ้น US (เกิน ${to / 1000} วิ) — ลองใหม่อีกครั้ง`);
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     _usBreadthCacheByRange[rng] = d;
@@ -17938,26 +17943,41 @@ function setSrMarket(mkt, btn) {
   if (mkt === 'ETF') loadEtfRotation();
 }
 
+let _usStocksLoading = false;
+
 function loadUsStocksPage() {
-  if (_usData) { renderUsTable(); loadUsBreadthChart(); return; }
+  if (_usData) {
+    // _usData อาจถูกเซ็ตนอก path นี้ (preload ของ Watchlist / deep-link #stock/us/..) ซึ่งข้าม
+    // _rebuildUsSectorFilter ทำให้ dropdown Sector ค้างเหลือแค่ "ALL" จนกว่าจะกดปุ่มสลับดัชนี
+    if ((document.getElementById('us-sector-filter')?.options.length || 0) <= 1) _rebuildUsSectorFilter();
+    renderUsTable(); loadUsBreadthChart(); return;
+  }
+  if (_usStocksLoading) return;   // กัน fetch ซ้ำตอนสลับเข้า-ออกหน้าระหว่างรอ (เหมือน loadHkStocksPage/loadJpStocksPage)
   const tbody = document.getElementById('us-stocks-tbody');
   if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">กำลังโหลด...</td></tr>`;
+  _usStocksLoading = true;
   _fetchTimeout('/api/us-index-metrics', 30000, 'หมดเวลารอข้อมูลหุ้น US (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
-      _usData = d;
       if (!d.stocks || !d.stocks.length) {
+        // อย่า cache ก้อนว่าง — ไม่งั้น _usData ค้าง [] แล้วปุ่ม US Index Max/Quick Update
+        // ที่บอกให้กดจะไม่มีทาง re-fetch จนกว่าจะ F5 (เหมือน loadHkStocksPage)
         if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--text2)">ยังไม่มีข้อมูล — กดปุ่ม <b>📈 US Index Max</b> หรือ <b>⚡ Quick Update</b> เพื่อดึงราคาและคำนวณ metrics</td></tr>`;
         return;
       }
+      // กัน null entry ใน us_index_metrics.json (JSON เพี้ยน) ทำให้ s[flag]/s.symbol throw
+      // ทั้งหน้า — hardening แบบเดียวกับ loadHkStocksPage
+      if (Array.isArray(d.stocks)) d.stocks = d.stocks.filter(s => s && typeof s === 'object');
+      _usData = d;
       _rebuildUsSectorFilter();
       renderUsTable();
       loadUsBreadthChart();
     })
     .catch(e => {
       if (tbody) tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--red)">⚠ โหลดไม่สำเร็จ: ${e.message}</td></tr>`;
-    });
+    })
+    .finally(() => { _usStocksLoading = false; });
 }
 
 function _rebuildUsSectorFilter() {
@@ -17968,7 +17988,7 @@ function _rebuildUsSectorFilter() {
   const sel = document.getElementById('us-sector-filter');
   if (!sel) return;
   const cur = sel.value;
-  sel.innerHTML = sectors.map(s => `<option value="${s}">${s === 'ALL' ? 'ทุก Sector' : s}</option>`).join('');
+  sel.innerHTML = sectors.map(s => `<option value="${_escHtml(s)}">${s === 'ALL' ? 'ทุก Sector' : _escHtml(s)}</option>`).join('');
   sel.value = sectors.includes(cur) ? cur : 'ALL';
   _usSector = sel.value;
 }
@@ -18049,7 +18069,7 @@ function renderUsTable() {
     return `<tr>
       <td><span class="${rsColor(s.rs_score)}" style="font-weight:700">${s.rs_score ?? '-'}</span></td>
       <td><strong class="sym-link" onclick="openUsChartModal('${s.symbol}')">${s.symbol}</strong>${_usTvLink(s.symbol)}</td>
-      <td style="font-size:11px;color:var(--text2)">${s.sector || '—'}</td>
+      <td style="font-size:11px;color:var(--text2)">${s.sector ? _escHtml(s.sector) : '—'}</td>
       <td class="r">${s.price != null ? s.price.toFixed(2) : '—'}</td>
       <td class="r">${pct(s.ret_1d)}</td>
       <td class="r">${pct(s.ret_1w)}</td>
@@ -18131,9 +18151,9 @@ function renderUsSectorTable() {
   const tbody = document.getElementById('us-sectors-tbody');
   if (!tbody) return;
   tbody.innerHTML = rows.map((s, i) => `
-    <tr style="cursor:pointer" onclick="_openUsSector('${s.name.replace(/'/g,"\\'")}')">
+    <tr style="cursor:pointer" onclick="_openUsSector('${_escJsAttr(s.name)}')">
       <td class="text2">${i + 1}</td>
-      <td><strong>${s.name}</strong></td>
+      <td><strong>${_escHtml(s.name)}</strong></td>
       <td class="r text2">${s.count}</td>
       <td class="r"><span class="${rsColor(s.avg_rs)}" style="font-weight:700">${s.avg_rs ?? '—'}</span></td>
       <td class="r">${pct(s.ret_1d)}</td>
@@ -20108,7 +20128,7 @@ async function _stockApplyHash() {
       // US Index Max) แล้วเก็บดื้อๆ renderUsTable จะ crash เพราะ _usData.stocks undefined
       try {
         const d = await (await fetch('/api/us-index-metrics')).json();
-        if (!d.error && d.stocks) _usData = d;
+        if (!d.error && d.stocks && d.stocks.length) _usData = d;
       } catch (e) { /* เช็ค found ใน openUsChartModal จะแจ้งเตือนเอง */ }
       if (_usData) _rebuildUsSectorFilter();   // เดิม path ปกติ (loadUsStocksPage) เรียกอยู่แล้ว
                                                 // แต่ deep-link เซ็ต _usData เองข้าม path นั้น
@@ -20121,7 +20141,7 @@ async function _stockApplyHash() {
     if (!_hkData) {
       try {
         const d = await (await fetch('/api/hk-index-metrics')).json();
-        if (!d.error && d.stocks) _hkData = d;
+        if (!d.error && d.stocks && d.stocks.length) _hkData = d;
       } catch (e) { /* เช็ค found ใน openHkChartModal จะแจ้งเตือนเอง */ }
       if (_hkData) _rebuildHkSectorFilter();   // เหตุผลเดียวกับฝั่ง US ด้านบน
     }
@@ -20132,7 +20152,7 @@ async function _stockApplyHash() {
     if (!_jpData) {
       try {
         const d = await (await fetch('/api/jp-index-metrics')).json();
-        if (!d.error && d.stocks) _jpData = d;
+        if (!d.error && d.stocks && d.stocks.length) _jpData = d;
       } catch (e) { /* เช็ค found ใน openJpChartModal จะแจ้งเตือนเอง */ }
       if (_jpData) _rebuildJpSectorFilter();   // เหตุผลเดียวกับฝั่ง US/HK ด้านบน
     }

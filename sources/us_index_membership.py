@@ -38,7 +38,11 @@ def _norm(sym):
     return sym.replace(".", "-")   # BRK.B -> BRK-B ให้ตรง yfinance/mirror
 
 
-_SECTOR_JUNK_RE = re.compile(r'[\[\]{}|]')
+# นอกจาก wiki markup ([[ ]] {{ }} |) ยังกัน < > " ' = ด้วย — ชื่อ GICS/ICB sector จริงไม่มี
+# ตัวอักษรพวกนี้เลย (Industrials, Health Care, Information Technology, ...) การปล่อยผ่านทำให้
+# cell "GICS Sector" ที่ถูก vandalize บน Wikipedia (เช่น Tech<img src=x onerror=...>) หลุดเข้า
+# us_index_membership.json / us_index_metrics.json แล้ว render เป็น HTML สดในหน้า "หุ้น US"
+_SECTOR_JUNK_RE = re.compile(r'''[\[\]{}|<>"'=]''')
 
 
 def _looks_like_sector(s):

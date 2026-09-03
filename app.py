@@ -102,6 +102,10 @@ _ETF_CACHE_TTL = 2 * 3600
 # US index (S&P500/Dow/Nasdaq100) diff-check cache — เทียบ Wikipedia กับไฟล์ local ไว้ 6 ชั่วโมง
 _us_index_diff_cache: dict = {}
 _US_INDEX_DIFF_CACHE_TTL = 6 * 3600
+# in-flight guard — diff_membership ยิง urlopen Wikipedia 3 หน้าเรียงกัน (timeout 30s ต่อหน้า =
+# บล็อก worker ได้ถึง ~90s) frontend abort ที่ 30s แล้ว re-enable ปุ่มให้กดซ้ำ — ถ้าไม่กันจะเกิด
+# worker ค้างซ้อนกันหลายตัวจน waitress thread pool หมด ตอน cache เย็น (restart / หลัง sync)
+_us_index_diff_lock = threading.Lock()
 
 # HK index (HSI/HSCEI/HSTECH) diff-check cache — เทียบ Wikipedia กับไฟล์ local ไว้ 6 ชั่วโมง
 _hk_index_diff_cache: dict = {}
@@ -2700,8 +2704,13 @@ def us_sector_ranks():
     from core.metrics import summarize_groups
     idx = (request.args.get("index") or "SP500").upper()
     flag = {"SP500": "in_sp500", "DOW": "in_dow", "NDX": "in_ndx"}.get(idx, "in_sp500")
-    stocks = [s for s in us_index_metrics.load_local(BASE_DIR).get("stocks", []) if s.get(flag)]
-    return jsonify({"sectors": summarize_groups(stocks, "sector")})
+    try:
+        stocks = [s for s in us_index_metrics.load_local(BASE_DIR).get("stocks", [])
+                  if isinstance(s, dict) and s.get(flag)]
+        return jsonify({"sectors": summarize_groups(stocks, "sector")})
+    except Exception as e:
+        print(f"[USSectorRanks] {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/us-history/<symbol>")
@@ -6763,10 +6772,26 @@ def us_index_check_updates():
     """เทียบรายชื่อ S&P 500 / Dow Jones / Nasdaq 100 สดจาก Wikipedia กับไฟล์ local — รายงาน
     ตัวใหม่/ตัวที่ถูกถอดต่อดัชนี ไม่แก้ไฟล์ local ให้ (คู่กับ dr_check_updates ของหน้า DR
     แต่ใช้กับ 3 ดัชนี US แทน underlying ของ DR)"""
-    cached = _us_index_diff_cache.get("result")
-    if cached and (time.time() - _us_index_diff_cache.get("ts", 0) < _US_INDEX_DIFF_CACHE_TTL):
+    def _fresh_cache():
+        c = _us_index_diff_cache.get("result")
+        if c and (time.time() - _us_index_diff_cache.get("ts", 0) < _US_INDEX_DIFF_CACHE_TTL):
+            return c
+        return None
+
+    cached = _fresh_cache()
+    if cached:
         return jsonify(cached)
+    # กัน worker ค้างซ้อน — มีคนกำลังเช็คกับ Wikipedia อยู่แล้ว รอไม่เกิน ~2s เผื่อมันเสร็จพอดี
+    # (จะได้ตอบจาก cache) ไม่งั้นแจ้งให้ลองใหม่แทนที่จะเปิด urlopen ชุดใหม่ซ้อนเข้าไปอีก
+    if not _us_index_diff_lock.acquire(timeout=2):
+        cached = _fresh_cache() or _us_index_diff_cache.get("result")
+        if cached:
+            return jsonify(cached)
+        return jsonify({"error": "กำลังเช็คกับ Wikipedia อยู่ โปรดลองใหม่อีกครั้งในสักครู่"}), 503
     try:
+        cached = _fresh_cache()
+        if cached:
+            return jsonify(cached)
         mirror_us = factor_snapshot.get_mirror_symbols(BASE_DIR).get("US", [])
         result, _live = us_index_membership.diff_membership(BASE_DIR, mirror_us=mirror_us)
         _us_index_diff_cache["result"] = result
@@ -6774,6 +6799,8 @@ def us_index_check_updates():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        _us_index_diff_lock.release()
 
 
 @app.route("/api/us-index-sync", methods=["POST"])
