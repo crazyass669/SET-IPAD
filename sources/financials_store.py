@@ -3401,7 +3401,7 @@ def _qpl_core_special(other_gl, net_profit, tax_expense, pretax_profit):
     if other_gl is None or net_profit is None:
         return None, None, None
     etr = _GROWTH_SCR_ETR_DEFAULT
-    if tax_expense is not None and pretax_profit:
+    if tax_expense is not None and pretax_profit is not None and pretax_profit > 0:
         etr = min(_GROWTH_SCR_ETR_MAX, max(0.0, tax_expense / pretax_profit))
     special_after_tax = other_gl * (1 - etr)
     core_profit = net_profit - special_after_tax

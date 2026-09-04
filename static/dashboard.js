@@ -5787,7 +5787,7 @@ function _growthScrOpenSymbol(symbol) {
 // เลย (เช็คแล้ว 2026-09-04: สุ่ม 10 ตัวไม่มีสักตัว) ใช้แยก "—" (ไม่รู้อะไรเลย) จาก "—﹡" (SET ไม่แยก
 // บรรทัดงวดนี้ แต่หุ้นนี้ไม่ใช่กลุ่มการเงิน ถือว่าไม่มีรายการพิเศษได้) ในเซลล์กำไรพิเศษ/กำไรปกติ/
 // พิเศษ% — ค่า sector ตรงกับ data/set_data.json field 'sector' ตรงๆ (ภาษาอังกฤษ ไม่แปล)
-const _GROWTH_SCR_FIN_SECTORS = new Set(['Banking', 'Finance & Securities', 'Insurance']);
+const _GROWTH_SCR_FIN_SECTORS = new Set(['Banking', 'Finance & Securities', 'Insurance', 'Financials -mai']);
 function _growthScrIsFinSector(r) { return _GROWTH_SCR_FIN_SECTORS.has(r.sector); }
 
 // กำไรพิเศษ (สุทธิภาษี, บัญชี SET 439700) — +/− ชัดเจนเพราะเป็นตัวปรับ ไม่ใช่ยอดสะสม
@@ -5818,6 +5818,13 @@ function _growthScrShareCell(r) {
     return `<span class="${big ? 'red' : 'text2'}"${big ? ' style="font-weight:700"' : ''}>${big ? '⚡ ' : ''}${r.special_share_pct.toFixed(0)}%</span>`;
   }
   if (_growthScrIsFinSector(r)) return '<span class="text2">—</span>';
+  // special_after_tax ไม่ null แปลว่า SET แยกบัญชี 439700 งวดนี้จริง (backend คืน null ทั้งชุดถ้าไม่มี
+  // บรรทัด) — ที่นี่ null เฉพาะ share_pct ต้องมาจากฐานกำไรสุทธิเล็ก/ศูนย์ (_growthScrMaskedRows หรือ
+  // net_profit==0 จาก backend) คนละเหตุผลกับ "SET ไม่แยกบัญชี" ต้องคนละข้อความ ไม่งั้นขัดกับคอลัมน์
+  // กำไรพิเศษ/กำไรปกติข้างๆที่ยังโชว์ตัวเลขจริงอยู่
+  if (r.special_after_tax != null) {
+    return '<span class="text2" title="ฐานกำไรสุทธิเล็กเกินไป — % จะบวมเกินจริงจนไม่มีความหมาย">—†</span>';
+  }
   return '<span class="text2" title="SET ไม่แยกบัญชี 439700 งวดนี้">—﹡</span>';
 }
 
@@ -5907,14 +5914,16 @@ function exportGrowthScreenerCsv() {
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
   const headers = ['Symbol', 'Name', 'Sector', 'Revenue', 'Revenue QoQ %', 'Revenue YoY %',
-    'Net Profit', 'Profit QoQ %', 'Profit YoY %', 'NPM %', 'NPM Δ YoY (pp)', 'NPM Δ QoQ (pp)',
+    'Net Profit', 'Special Profit (after-tax)', 'Core Profit', 'Special Share %',
+    'Profit QoQ %', 'Profit YoY %', 'NPM %', 'NPM Δ YoY (pp)', 'NPM Δ QoQ (pp)',
     'Revenue Streak (Q)', 'Profit Streak (Q)', 'OCF', 'OCF/NI %', 'P/S', 'Quarter'];
   const lines = [headers.map(csvEsc).join(',')];
   rows.forEach(r => {
     lines.push([
       r.symbol, r.name || '', r.sector || '',
       r.revenue ?? '', r.revenue_qoq ?? '', r.revenue_yoy ?? '',
-      r.net_profit ?? '', r.profit_qoq ?? '', r.profit_yoy ?? '', r.npm ?? '',
+      r.net_profit ?? '', r.special_after_tax ?? '', r.core_profit ?? '', r.special_share_pct ?? '',
+      r.profit_qoq ?? '', r.profit_yoy ?? '', r.npm ?? '',
       r.npm_change_yoy ?? '', r.npm_change_qoq ?? '', r.revenue_streak ?? '', r.profit_streak ?? '',
       r.ocf ?? '', r.ocf_ni_pct ?? '', r.ps ?? '',
       _growthScrQuarter || '',
