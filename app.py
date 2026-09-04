@@ -10885,9 +10885,12 @@ def set_daily_valuation():
 def refresh_market_stats():
     """อ่าน Table_PE.xls + Table_PBV.xls แล้วสร้าง set_market_stats.json ใหม่"""
     import math
-    import numpy as np
     import pandas as pd
     from datetime import datetime as _dt
+
+    # calc_stats: ใช้ตัวเดียวกับ sources/set_market_stats_monthly + import_market_stats.py
+    # (เดิม copy สูตร percentile/zscore/median/bands ไว้ 3 ที่ — แก้จุดเดียวไม่ครบเสี่ยงเพี้ยน)
+    from sources.set_market_stats_monthly import calc_stats
 
     PE_FILE,  pe_ok  = _resolve_xls("Table_PE.xls")
     PBV_FILE, pbv_ok = _resolve_xls("Table_PBV.xls")
@@ -10909,28 +10912,6 @@ def refresh_market_stats():
             return _dt.strptime(str(s).strip(), "%b-%Y").strftime("%Y-%m")
         except Exception:
             return None
-
-    def calc_stats(values):
-        v = [x for x in values if x is not None and not (isinstance(x, float) and math.isnan(x))]
-        if not v:
-            return {}
-        arr = sorted(v)
-        avg = sum(v) / len(v)
-        std = float(np.std(v))
-        current = v[-1]
-        pct = round(sum(1 for x in arr if x <= current) / len(arr) * 100, 1)
-        zscore = round((current - avg) / std, 2) if std else 0
-        return {
-            "current": round(current, 2), "min": round(min(arr), 2),
-            "max": round(max(arr), 2), "avg": round(avg, 2),
-            "median": round(arr[len(arr)//2], 2), "std": round(std, 2),
-            "zscore": zscore, "percentile": pct,
-            "bands": {
-                "+3σ": round(avg+3*std,2), "+2σ": round(avg+2*std,2),
-                "+1σ": round(avg+std,2),   "-1σ": round(avg-std,2),
-                "-2σ": round(avg-2*std,2), "-3σ": round(avg-3*std,2),
-            },
-        }
 
     def process(df):
         col_date = "Month-Year"
@@ -10979,19 +10960,41 @@ def refresh_market_stats():
             try:
                 with open(_MARKET_STATS_FILE, encoding="utf-8") as f:
                     old = json.load(f)
-                old_latest = ((old.get("pe") or {}).get("dates") or [None])[-1]
-            except Exception:
-                pass
+            except Exception as e:
+                # ไฟล์เดิมเสีย/อ่านไม่ขึ้น — อย่า rebuild ทับแบบเงียบๆ เพราะ output ที่ได้จะขาด
+                # div_yield/mkt_cap/breadth ที่สะสมไว้ (โค้ดคงซีรีส์พวกนี้จาก old เท่านั้น) +
+                # ขาดเดือนท้ายที่ merge จากไฟล์รายเดือน — เหมือน /api/refresh-market-stats-monthly
+                # ที่ abort ในเคสเดียวกัน (code review 2026-09-04)
+                return jsonify({"ok": False, "error": f"อ่าน set_market_stats.json เดิมไม่สำเร็จ: {e} "
+                                                      "— ไม่เขียนทับ เพื่อกันประวัติปันผล/มูลค่าหลักทรัพย์/breadth หาย"}), 500
         if not isinstance(old, dict):
             old = None
+        if old:
+            old_latest = ((old.get("pe") or {}).get("dates") or [None])[-1]
+            # shrink guard: Table_PE/PBV.xls โตขึ้นเรื่อยๆ (เติมเดือนล่าสุด) ไม่เคยสั้นลง —
+            # ไฟล์ดาวน์โหลดไม่ครบ (สายหลุด) parse ได้ไม่กี่แถวจะผ่าน emptiness guard ข้างบนแล้ว
+            # rebuild ทับ ทำให้ประวัติ P/E-P/BV ย้อนหลังหายถาวร (re-append คืนให้เฉพาะเดือนที่
+            # "ใหม่กว่า" งวดท้ายไฟล์ ของเก่ากว่านั้นหายเกลี้ยง) — เผื่อ revision เล็กน้อย 3 เดือน
+            for _k, _new in (("pe", pe_data), ("pbv", pbv_data)):
+                _old_n = len((old.get(_k) or {}).get("dates") or [])
+                if _old_n and len(_new["dates"]) < _old_n - 3:
+                    return jsonify({"ok": False, "error":
+                        f"ไฟล์ {_k.upper()} อ่านได้ {len(_new['dates'])} เดือน แต่ของเดิมมี {_old_n} เดือน "
+                        "— ไฟล์ .xls อาจดาวน์โหลดไม่ครบ ไม่เขียนทับเพื่อกันประวัติย้อนหลังหาย "
+                        "(ถ้าตั้งใจ rebuild จากไฟล์สั้น ให้ลบ set_market_stats.json เดิมก่อน)"}), 400
 
         new_latest = pe_data["dates"][-1] if pe_data["dates"] else None
 
         output = {
             "updated_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "pe":  {"dates": pe_data["dates"],  "series": pe_data["series"],
+            # copy list ออกจาก pe_data/pbv_data — ด้านล่าง re-append เดือนท้ายลง output[..]["dates"]
+            # แบบ in-place ถ้าใช้ list เดียวกัน pe_data['dates'] จะถูกดันตาม ทำให้ pe_range/pe_months
+            # ใน response (ที่ควรบอก "ช่วงข้อมูลในไฟล์ .xls") เพี้ยนเกินจริง
+            "pe":  {"dates": list(pe_data["dates"]),
+                    "series": {k: list(v) for k, v in pe_data["series"].items()},
                     "stats": {k: calc_stats(v) for k, v in pe_data["series"].items()}},
-            "pbv": {"dates": pbv_data["dates"], "series": pbv_data["series"],
+            "pbv": {"dates": list(pbv_data["dates"]),
+                    "series": {k: list(v) for k, v in pbv_data["series"].items()},
                     "stats": {k: calc_stats(v) for k, v in pbv_data["series"].items()}},
         }
         # ซีรีส์ที่มีเฉพาะใน Market_Statistics_Month_th_TH.xls (Table_PE/PBV ไม่มี) ต้องคงไว้ —

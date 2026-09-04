@@ -28616,13 +28616,14 @@ async function refreshMarketStats() {
     } else {
       status.textContent = `✓ อัพเดทสำเร็จ! ${d.old_latest} → ${d.new_latest} | P/E=${d.pe_current}x (${d.pe_zscore > 0 ? '+' : ''}${d.pe_zscore}σ) | P/BV=${d.pbv_current}x`;
       status.style.color = '#3ab464';
-      // ต้อง fetch ข้อมูลใหม่ก่อน render — เดิม set _valData = null แล้วเรียก
-      // renderValuation() ตรงๆ แต่ renderValuation() บรรทัดแรกคือ
-      // "if (!_valData) return" เลยไม่มีอะไรถูกวาดใหม่เลย (กราฟ/สถิติค้างชุดเก่า)
-      try { await _loadValData(true); } catch (e) { /* คง _valData เดิมไว้ */ }
-      renderValuation();
-      renderMarketStatsExtra();   // ปันผล/market cap/breadth ถูกคงไว้ตอน rebuild — วาดใหม่ให้ตรงชุดข้อมูลใหม่
     }
+    // re-load + re-render เสมอหลัง refresh สำเร็จ — d.new_data เทียบแค่ "เดือนล่าสุด" ถ้า SET
+    // revise ค่าเดือนเก่าย้อนหลัง (ยื่นงบช้า) โดยเดือนล่าสุดเท่าเดิม backend เขียนไฟล์ใหม่แล้ว
+    // แต่ new_data=false — ไม่ re-render กราฟ/สถิติจะค้างค่าเก่าจนกว่าจะ reload หน้า
+    // (renderValuation() บรรทัดแรก "if (!_valData) return" — ต้อง _loadValData ก่อนเสมอ)
+    try { await _loadValData(true); } catch (e) { /* คง _valData เดิมไว้ */ }
+    renderValuation();
+    renderMarketStatsExtra();   // ปันผล/market cap/breadth ถูกคงไว้ตอน rebuild — วาดใหม่ให้ตรงชุดข้อมูลใหม่
     _showValDataMonth();   // อัพเดทป้ายเดือนข้อมูลให้ตรงหลัง refresh
   } catch(e) {
     status.textContent = '✗ ไม่สามารถเชื่อมต่อ server: ' + e.message;
@@ -28660,10 +28661,12 @@ async function refreshMarketStatsMonthly() {
     } else {
       status.textContent = `✓ อัพเดทสำเร็จ! ${d.old_latest} → ${d.new_latest} | P/E=${d.pe_current}x | P/BV=${d.pbv_current}x | ปันผล=${d.div_yield_current}%`;
       status.style.color = '#3ab464';
-      try { await _loadValData(true); } catch (e) { /* คง _valData เดิมไว้ */ }
-      renderValuation();
-      renderMarketStatsExtra();
     }
+    // re-load + re-render เสมอ — merge อาจ upsert ทับค่าเดือนเก่าโดยเดือนล่าสุดเท่าเดิม
+    // (new_data=false) แต่ไฟล์เปลี่ยนแล้ว ถ้าไม่ re-render จะค้างค่าเก่าจนกว่าจะ reload หน้า
+    try { await _loadValData(true); } catch (e) { /* คง _valData เดิมไว้ */ }
+    renderValuation();
+    renderMarketStatsExtra();
     _showValDataMonth();
   } catch (e) {
     status.textContent = '✗ ไม่สามารถเชื่อมต่อ server: ' + e.message;
@@ -28843,7 +28846,7 @@ async function _showValDataMonth() {
   const el = document.getElementById('val-data-month');
   if (!el) return;
   try {
-    const d = await (await fetch('/api/market-stats-meta?t=' + Date.now())).json();
+    const d = await (await _fetchTimeout('/api/market-stats-meta?t=' + Date.now(), 10000)).json();
     const pe = _thMonth(d.pe_date), pbv = _thMonth(d.pbv_date);
     const same = d.pe_date === d.pbv_date;
     const peLine = same

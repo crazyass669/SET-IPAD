@@ -107,7 +107,10 @@ def parse_annual_market_statistics(path):
             raw = str(df.iloc[i, 1]).strip()
             label = _strip_footnote(raw)
             key = _ROW_LABELS.get(label)
-            if key is None and raw == _MKT_CAP_LABEL:
+            # match บน label ที่ตัดเชิงอรรถแล้วเหมือนแถวอื่นๆ — ถ้า SET เติมเลขเชิงอรรถท้าย
+            # "- ตามราคาตลาด (ล้านบาท)" (อย่างที่ทำกับ "P/E ของตลาด3,4/") การเทียบ raw ตรงๆ
+            # จะพลาดเงียบๆ แล้ว mkt_cap ค้างค่าเดิมไปเรื่อยๆ โดยไม่มี error
+            if key is None and label == _MKT_CAP_LABEL:
                 key = "mkt_cap"
             if key is None:
                 continue
@@ -140,7 +143,8 @@ def calc_stats(values):
     zscore = round((current - avg) / std, 2) if std else 0
     return {
         "current": round(current, 2), "min": round(min(arr), 2), "max": round(max(arr), 2),
-        "avg": round(avg, 2), "median": round(arr[len(arr) // 2], 2), "std": round(std, 2),
+        # np.median = เฉลี่ย 2 ตัวกลางเมื่อจำนวนงวดเป็นเลขคู่ (เดิม arr[len//2] คืนตัวบนเฉยๆ)
+        "avg": round(avg, 2), "median": round(float(np.median(arr)), 2), "std": round(std, 2),
         "zscore": zscore, "percentile": pct,
         "bands": {
             "+3σ": round(avg + 3 * std, 2), "+2σ": round(avg + 2 * std, 2), "+1σ": round(avg + std, 2),
@@ -155,6 +159,12 @@ def _upsert_point(container, ym, values):
     if ym in dates:
         idx = dates.index(ym)
     else:
+        # เดือนใหม่ที่ไม่มีค่าจริงเลย (ทุก field เป็น None) — อย่าแทรกแถวว่าง เดี๋ยว container นี้
+        # จะงอกเดือน all-None ต่อท้ายเรื่อยๆ (เกิดเมื่อ SET เปลี่ยนชื่อ label เฉพาะแถวนี้ เช่น
+        # div_yield แต่ pe/pbv ยัง parse ได้) แล้ว market-stats-meta จะเลื่อน monthly_date ไปเดือน
+        # ที่ไม่มีข้อมูลปันผล/มูลค่าหลักทรัพย์จริง — UI โชว์ว่าข้อมูลสดทั้งที่เดือนท้ายๆ ว่าง
+        if all(v is None for v in values.values()):
+            return
         idx = bisect.bisect_left(dates, ym)
         dates.insert(idx, ym)
         for k in series:
