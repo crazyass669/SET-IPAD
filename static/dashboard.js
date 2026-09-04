@@ -699,7 +699,7 @@ async function restartServer(force) {
 }
 
 async function killDuplicateServers() {
-  if (!confirm('ปิด server ตัวอื่นที่รันซ้อนพอร์ตเดียวกันทั้งหมด?\n\nเก็บตัวที่กำลังใช้งานอยู่นี้ไว้เสมอ (ไม่ปิดตัวเอง) — รองรับเฉพาะ Windows')) return;
+  if (!confirm('ปิด server ตัวอื่นที่รันซ้อนพอร์ตเดียวกันทั้งหมด?\n\nเก็บตัวที่กำลังใช้งานอยู่นี้ไว้เสมอ (ไม่ปิดตัวเอง) — รองรับเฉพาะ Windows\n\n⚠️ ถ้า server ตัวที่ซ้อนกำลังรัน Refresh/Update อยู่ งานจะถูกตัดทิ้งทันที (ตัวนี้เช็ค job ของ process อื่นไม่ได้) — เช็ค Task Manager ก่อนถ้าไม่แน่ใจ')) return;
   const btn = document.getElementById('kill-dup-btn');
   btn.disabled = true; btn.textContent = '🗡️ กำลังปิด...';
   try {
@@ -727,7 +727,15 @@ async function resetStuckJob() {
   btn.disabled = true; btn.textContent = '🔓 กำลังปลดล็อก...';
   try {
     const r = await fetch('/api/job-reset', {method: 'POST'});
-    const j = await r.json();
+    const j = await r.json().catch(() => ({}));
+    // เช็ค r.ok ก่อน — เดิมอ่าน j.was_running ตรงๆ ถ้า server ตอบ 403 (token หมดอายุหลัง
+    // server restart สร้าง .dashboard_token ใหม่ ทั้งที่หน้าเว็บเปิดค้าง) / 500 จะได้
+    // j.was_running = undefined → ขึ้น "ไม่มี job ค้างอยู่" หลอกทั้งที่ปลดล็อกไม่สำเร็จ
+    // เงื่อนไข 409 ยังค้างอยู่ (restartServer/killDuplicateServers เช็ค r.ok อยู่แล้ว)
+    if (!r.ok) {
+      alert('❌ ปลดล็อกไม่สำเร็จ:\n' + (j.error || `HTTP ${r.status}`));
+      return;
+    }
     alert(j.was_running ? 'ปลดล็อกแล้ว — ลองกดปุ่มที่ต้องการใหม่ได้เลย' : 'ไม่มี job ค้างอยู่');
   } catch (e) {
     alert('ปลดล็อกไม่สำเร็จ: ' + e.message);

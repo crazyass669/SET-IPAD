@@ -8379,16 +8379,33 @@ def job_reset():
 
     ไม่สามารถ "ยกเลิก" thread ที่ค้างจริงๆ ได้ (Python ทำไม่ได้) แค่ reset flag ให้กดปุ่มใหม่ได้
     — ถ้า thread เดิมยังทำงานอยู่จริงและเขียนไฟล์สำเร็จช้าๆ ทีหลัง อาจชนกับรอบใหม่ที่เพิ่งกด
-    แต่ดีกว่าต้องปิด server ทิ้งทั้งตัวเมื่อ job ค้าง"""
+    แต่ดีกว่าต้องปิด server ทิ้งทั้งตัวเมื่อ job ค้าง
+
+    ⚠️ หลัง reset **อย่ากดปุ่มงานหนัก (Full Refresh/Quick Update) ซ้ำทันที** — ให้กด Restart แทน
+    ถ้า thread เดิมยังไม่ตายจริง การกดซ้ำจะได้ 2 job เขียน .db ไฟล์เดียวกันพร้อมกัน (SQLite lock /
+    price seam ถาวรใน set_prices.db) และตอน thread เก่าจบ `finally: _update(running=False)` ของมัน
+    จะไป clear flag ของ job รอบใหม่ ทำให้ _state โกหกว่า idle → restart ถัดไปตัดงานรอบใหม่ทิ้ง
+    (fix เต็มต้องมี cooperative-abort ทั้ง worker — เกินคุ้มกับความถี่ที่เกิดจริง ดู code review
+    2026-09-04 "3 ปุ่ม operational")"""
     with _lock:
         was_running = _state["running"]
         _state.update(running=False, done=True,
                       error="ยกเลิกโดยผู้ใช้ (job ค้างนานเกินไป)" if was_running else _state.get("error"))
-    _dr_refresh_state["running"] = False
-    for region_state in _HM_LIVE_STATE.values():
-        region_state["running"] = False
+        # _HM_LIVE_STATE[region]["running"] ถูก check-then-set ภายใต้ _lock ตัวเดียวกันนี้
+        # (ดู heatmap_live_update) — ต้อง reset ใต้ _lock ด้วย ไม่งั้น bare write ที่นี่อาจ
+        # ไปทับ running=True ที่ worker เพิ่งตั้งในจังหวะเดียวกัน เหลือ worker รันอยู่โดย
+        # flag เป็น False → กดปุ่ม Live ซ้ำผ่าน guard ยิง Yahoo ซ้อน
+        for region_state in _HM_LIVE_STATE.values():
+            region_state["running"] = False
+    with _dr_refresh_lock:
+        _dr_refresh_state["running"] = False
     with _indices_job_lock:
         _indices_job_state["running"] = False
+    # /api/market-flow background refresh (stale-while-revalidate) — _any_job_running()
+    # เช็ค flag นี้ด้วย ถ้า _bg thread ค้าง (siamchart ช้า/ไม่ตอบ) restart จะติด 409
+    # ตลอดและปุ่มนี้ต้องปลดได้ · ไม่แตะ _flow_fetch_lock (thread เดิมอาจถืออยู่จริง —
+    # ปล่อยให้ release เองใน finally, รอบใหม่แค่ serve cache เก่าจนกว่าจะปล่อย ไม่ค้างถาวร)
+    _flow_fetch_state["running"] = False
     # _restart_state["in_progress"] ตั้งเป็น True ก่อนเรียก subprocess.Popen (ดู
     # _do_restart) แล้วไม่มีทาง reset กลับถ้า Popen ค้างนานผิดปกติ (แอนตี้ไวรัสสแกน
     # python.exe/disk ช้า) — เพิ่มเข้า reset endpoint นี้ด้วยให้ครบทุก "running" flag
