@@ -736,7 +736,15 @@ async function resetStuckJob() {
       alert('❌ ปลดล็อกไม่สำเร็จ:\n' + (j.error || `HTTP ${r.status}`));
       return;
     }
-    alert(j.was_running ? 'ปลดล็อกแล้ว — ลองกดปุ่มที่ต้องการใหม่ได้เลย' : 'ไม่มี job ค้างอยู่');
+    // threads_may_persist = ยังมี lock ของงานเบื้องหลัง (flow/DR/ETF rebuild) ถูกถืออยู่ —
+    // job-reset ปลด lock พวกนี้ให้ไม่ได้ (force-release = เสี่ยง 2 writer) · ส่วนใหญ่เป็นแค่
+    // rebuild ปกติที่จบเองใน ~1 นาที จึงแจ้งแบบ informational ไม่ฟันธงว่า "ค้าง" (กันขัดกับ
+    // ข้อความ "ไม่มี job ค้างอยู่") แต่ถ้าค้างจริงต้อง Restart ก่อนสั่งงานหนักรอบใหม่
+    const persistNote = j.threads_may_persist
+      ? '\n\nยังมีงานเบื้องหลังทำงานอยู่ (DR/ETF/flow rebuild) — ปกติจบเองใน ~1 นาที; '
+        + 'ถ้าเพิ่งปลดเพราะค้างนานผิดปกติ ให้กด ↺ Restart ก่อนสั่งงานหนักรอบใหม่'
+      : '';
+    alert((j.was_running ? 'ปลดล็อกแล้ว — ลองกดปุ่มที่ต้องการใหม่ได้เลย' : 'ไม่มี job ค้างอยู่') + persistNote);
   } catch (e) {
     alert('ปลดล็อกไม่สำเร็จ: ' + e.message);
   } finally {

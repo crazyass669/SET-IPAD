@@ -8403,8 +8403,16 @@ def job_reset():
         _indices_job_state["running"] = False
     # /api/market-flow background refresh (stale-while-revalidate) — _any_job_running()
     # เช็ค flag นี้ด้วย ถ้า _bg thread ค้าง (siamchart ช้า/ไม่ตอบ) restart จะติด 409
-    # ตลอดและปุ่มนี้ต้องปลดได้ · ไม่แตะ _flow_fetch_lock (thread เดิมอาจถืออยู่จริง —
-    # ปล่อยให้ release เองใน finally, รอบใหม่แค่ serve cache เก่าจนกว่าจะปล่อย ไม่ค้างถาวร)
+    # ตลอดและปุ่มนี้ต้องปลดได้
+    #
+    # เขียน bare (ไม่ acquire _flow_fetch_lock ก่อน) โดยตั้งใจ — ต่างจาก _HM_LIVE_STATE/
+    # _dr_refresh_state ด้านบนที่ย้ายเข้าใต้ lock:
+    #   • flag นี้ป้อน _any_job_running() อย่างเดียว ไม่ได้กัน double-writer — ตัวกันจริงคือ
+    #     _flow_fetch_lock ที่ _kick_flow_refresh ถือยาวตลอด _bg fetch (acquire(blocking=
+    #     False) คือ guard) ต่อให้ทับ running=True ที่เพิ่งตั้ง รอบถัดไปก็ acquire ไม่ได้อยู่ดี
+    #   • เคสที่บรรทัดนี้มีไว้แก้คือ thread ค้าง = ถือ lock อยู่ ถ้า acquire ก่อนจะล้มเหลว →
+    #     flag ไม่ถูกปลด → restart ยังติด 409 (ปลดล็อกไร้ความหมาย)
+    # ไม่ force-release _flow_fetch_lock ด้วยเหตุผลเดียวกับ _dr_rebuild_lock ด้านล่าง
     _flow_fetch_state["running"] = False
     # _restart_state["in_progress"] ตั้งเป็น True ก่อนเรียก subprocess.Popen (ดู
     # _do_restart) แล้วไม่มีทาง reset กลับถ้า Popen ค้างนานผิดปกติ (แอนตี้ไวรัสสแกน
@@ -8417,7 +8425,15 @@ def job_reset():
     # thread อื่นอาจกำลังถือจริงและเขียนไฟล์ cache อยู่จะทำให้ 2 thread เขียนไฟล์
     # เดียวกันพร้อมกัน อันตรายกว่าปล่อยให้รอ (ตอนนี้ยิง yfinance มี timeout แล้ว
     # จึงไม่ควรค้างถาวรอีกต่อไป)
-    return jsonify({"ok": True, "was_running": was_running})
+    #
+    # lock ของงานเบื้องหลัง 3 ตัวที่ job-reset ปลดให้ไม่ได้ (force-release = เสี่ยง 2 writer)
+    # — ถ้ายัง .locked() = thread ยังทำงานอยู่ ส่วนใหญ่เป็น DR/ETF/flow rebuild ปกติ (~1 นาที)
+    # ไม่ใช่ "ค้าง" เสมอ · ส่งให้ frontend แจ้งแบบ informational (ถ้าค้างจริง → Restart ก่อน
+    # สั่งงานหนักรอบใหม่ ดู ⚠️ docstring)
+    threads_may_persist = (_flow_fetch_lock.locked() or _dr_rebuild_lock.locked()
+                           or _etf_rebuild_lock.locked())
+    return jsonify({"ok": True, "was_running": was_running,
+                    "threads_may_persist": threads_may_persist})
 
 
 @app.route("/api/status")
