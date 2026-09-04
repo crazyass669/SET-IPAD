@@ -5891,7 +5891,9 @@ function renderGrowthScreener() {
     const title = c.tip ? `${c.tip} (กดเรียงลำดับ)` : 'กดเรียงลำดับ';
     return `<th style="text-align:${c.align};cursor:pointer;user-select:none;white-space:nowrap" onclick="_growthScrSetSort('${c.key}')" title="${_growthScrEsc(title)}">${c.label}${arrow}</th>`;
   }).join('');
-  box.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%">
+  // .growth-scr-tbl-scroll = หัวตารางค้าง (sticky) ตอนเลื่อนดูรายชื่อหุ้น (ดู dashboard.css) —
+  // overflow-x:auto อยู่ในคลาสเดียวกันได้ (scroll ได้ทั้งสองแกนพร้อมกัน)
+  box.innerHTML = `<div class="growth-scr-tbl-scroll" style="overflow-x:auto"><table class="tbl" style="width:100%">
     <thead><tr>${headHtml}</tr></thead>
     <tbody>${rowsHtml}</tbody></table></div>`;
 }

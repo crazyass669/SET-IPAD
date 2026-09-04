@@ -183,6 +183,12 @@
   .mini-tbl-scroll { max-height: 296px; overflow-y: auto; }
   .mini-tbl-scroll .tbl thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
 
+  /* ตาราง "🚀 หุ้นโตแรงรายไตรมาส" — ตรึงหัวตารางไว้เวลาเลื่อนดูรายชื่อหุ้น (บาง universe
+     เช่น US มีเป็นพันแถว) ต่างจาก .mini-tbl-scroll ตรงสูงเป็น % ของหน้าจอ ไม่ใช่ card เล็ก
+     เพราะตารางนี้คือเนื้อหาหลักของทั้งหน้า ไม่ใช่ widget ย่อย */
+  .growth-scr-tbl-scroll { max-height: 70vh; overflow-y: auto; }
+  .growth-scr-tbl-scroll .tbl thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+
   /* ตารางผล Screener+ / เทียบเพื่อน (.data-table) — ไม่เคยมี padding ของตัวเอง
      โดน global reset (* { padding:0 }) ทับจนเซลล์ชิดกันหมด ดูแน่นเกินไป */
   .data-table { border-collapse: collapse; }
