@@ -2,7 +2,9 @@
  แผนงาน: แยก "กำไรปกติ" / "กำไรพิเศษ" ในเมนู 🚀 หุ้นโตแรงรายไตรมาส
  สร้าง: 2026-09-04
  แหล่งข้อมูลที่เลือก: SET P&L รายไตรมาส (financialstatement API, account code)
- สถานะ: ⬜ Phase 0 บางส่วนเสร็จ — รอผู้ใช้เคาะว่าเดินหน้าไหม
+ สถานะ: 🔶 Phase 1-3 เขียน+ทดสอบเสร็จแล้ว (โค้ดพร้อมใช้) — เหลือ Phase 4
+        ผู้ใช้กด "อัพเดทงบการเงินทั้งหมด" เอง DB ถึงจะมีข้อมูลจริงให้เห็น
+        (ตอนนี้คอลัมน์ใหม่ขึ้น "—﹡"/"—" ทุกแถว เพราะ DB ยังไม่มี field other_gl)
         (ค้นพบ: feature ให้ค่าจริงกับหุ้น ~45-50% ของตลาดเท่านั้น ดูข้อ [3])
 ========================================================================
 
@@ -138,20 +140,48 @@ BACKEND — app.py
      L5054 _qpl_parsed_cache.clear())
 
 FRONTEND — static/dashboard.js  (block QUARTERLY GROWTH SCREENER ~5268+)
-  H. GROWTH_SCR_COLS            + { key:'core_profit', label:'กำไรปกติ' }
-                                 + { key:'core_profit_yoy', label:'กำไรปกติ YoY' }
-  I. _GROWTH_SCR_CORE_COLS = new Set(['th'])  — โชว์ 2 คอลัมน์นี้เฉพาะ th
-     (_growthScrCols() filter เพิ่มเงื่อนไข เหมือน _GROWTH_SCR_HAS_SECTOR)
-  J. _growthScrCellHtml()       + case 'core_profit' → _growthScrThb + badge ⚡
-                                   ถ้า r.special_share_pct >= 20
-                                 + case 'core_profit_yoy' → pct() + สีเขียว/แดง
-  K. _growthScrMaskedRows()     + mask core_profit_yoy เมื่อ core_profit /
-                                   ฐานปีก่อน < GROWTH_SCR_MIN_BASE
-  L. tooltip ในคอลัมน์ + อัปเดต #growth-scr-th-desc ให้สรุปข้อจำกัด
-     ("เฉพาะรายการที่ SET แยกบรรทัด 'กำไร(ขาดทุน)อื่น' — FX/อนุพันธ์/hedge ·
-       กลุ่มธนาคาร-ประกันไม่มีข้อมูล")
-  M. bump ?v= ของ dashboard.js ใน set_dashboard.html
+  รูปแบบ UI ที่ล็อกแล้ว (2026-09-04, ทดสอบใน mockup จนพอใจ):
+    − ตัดคอลัมน์ 'Sector' ออก (ปุ่มกรอง sector dropdown ยังอยู่)
+    − ตัดชื่อบริษัทใต้ชื่อย่อออกจากคอลัมน์ 'หุ้น' (ย้ายไป title tooltip แทน
+      — ชื่อยาวไม่จำกัดความกว้างเคยดันคอลัมน์นี้กว้าง ~150-220px)
+    + 3 คอลัมน์ใหม่ถัดจาก 'กำไรสุทธิ': 'กำไรพิเศษ' (จำนวนเงิน) →
+      'กำไรปกติ' (จำนวนเงิน) → 'พิเศษ %' (ของกำไรสุทธิ)
+    → รวม 15 คอลัมน์ (วันนี้ 13) แต่ความกว้างจริง ~1,190px ยังแคบกว่าวันนี้
+      (~1,250px) เพราะตัด Sector+ชื่อบริษัทออกมากกว่าที่เพิ่มเข้า
+    ไม่ทำ 'กำไรปกติ YoY' (ข้อจำกัด #4 — คำนวณไม่ได้ ~1 ปี)
+  H. GROWTH_SCR_COLS  + 3 รายการถัดจาก net_profit:
+       { key:'special_after_tax', label:'กำไรพิเศษ' }
+       { key:'core_profit',       label:'กำไรปกติ' }
+       { key:'special_share_pct', label:'พิเศษ %' }
+  I. _growthScrCols()  — เดิม filter 'sector' ออกให้ dr/us/hk
+       (_GROWTH_SCR_HAS_SECTOR) → ตัด 'sector' ออกจาก GROWTH_SCR_COLS ทุก
+       universe ไปเลย (ไม่ใช่ filter ต่อ uni อีกต่อไป) · 3 คอลัมน์ใหม่โชว์
+       เฉพาะ th (_GROWTH_SCR_CORE = Set(['th']))
+  I2. case 'symbol' ใน _growthScrCellHtml() — ลบ `<div class="text2">${name}</div>`
+       บรรทัดชื่อบริษัท → ย้าย name (+ sector) ไปเป็น title="" บน <a class="sym-link">
+       แทน (hover เห็น)
+  J. _growthScrCellHtml() เพิ่ม 3 case:
+       'special_after_tax' → _growthScrThb (มี +/− nam), หุ้นการเงิน/ไม่มีบรรทัด → "—"/"—﹡"
+       'core_profit'       → _growthScrThb, ไม่มีบรรทัด → net + ﹡ (สี dim)
+       'special_share_pct' → เลข% ธรรมดา, **แดง+ตัวหนา+⚡ เมื่อ >= 20**,
+                              เทาจาง เมื่อต่ำกว่า, "—"/"—﹡" เหมือนสองคอลัมน์บน
+       ทุก case: หุ้นการเงิน (is_fin) → "—" ล้วน + tag "กลุ่มการเงิน" (เฉพาะ
+       คอลัมน์กำไรพิเศษพอ ไม่ต้องซ้ำทุกคอลัมน์) · ไม่มีบรรทัด 439700 (no_other_line)
+       → "—﹡"/net+﹡ ตามแต่ละคอลัมน์ (ดู mockup expand-row "คิดจากอะไร" เป็น
+       ต้นแบบ tooltip)
+  K. _growthScrSortVal() (~L5572, เทียบ pattern เดิม) — เพิ่ม guard: ถ้า sort
+       key เป็น 'special_after_tax'/'special_share_pct' และแถวเป็น is_fin/
+       no_other_line → คืน null (ให้ sort ตกไปท้ายเสมอ เหมือน pattern
+       Infinity ที่มีอยู่แล้วสำหรับ turnaround)
+  L. _growthScrMaskedRows()     — ไม่ต้องแก้ (ไม่มีคอลัมน์ %/YoY แบบเดิมให้ mask)
+  M. อัปเดต #growth-scr-th-desc สรุปข้อจำกัด
+     ("กำไรปกติ = ตัดบัญชี 'กำไร(ขาดทุน)อื่น' (FX/อนุพันธ์/hedge) ·
+       ธนาคาร-เงินทุน-ประกันไม่มีข้อมูล · ~40% หุ้นอื่นไม่แยกบรรทัด = กำไรปกติเท่ากำไรสุทธิ")
+  N. bump ?v= ของ dashboard.js ใน set_dashboard.html
      ([[cache-busting-version-bump]])
+  * mockup (ล็อกดีไซน์นี้แล้ว): claude.ai/code/artifact/a95cdc46-c736-494a-bd46-3fcda34ba6c8
+    ("2 คอลัมน์"/"ย่ออย่างเดียว" toggle ในนั้น = mockup UI, ของจริงคือ
+    3 คอลัมน์ + ย่ออย่างเดียว ล็อกตายตัว ไม่มี toggle)
 
 ไม่แตะ:
   - mobile/  (เมนูนี้ซ่อนบนมือถืออยู่แล้ว — [[which-codebase-local-vs-mobile]])
@@ -171,28 +201,58 @@ Phase 0 — verify สมมติฐาน  (บางส่วนทำแล�
   [ ] เทียบ core_profit ที่คำนวณ กับบทวิเคราะห์โบรก 3-4 ตัว (sanity)
   [ ] ตัดสิน option 431000 (inventory write-down) — รวมหรือไม่
 
-Phase 1 — backend pipeline  (A–E, ~2-3 ชม.)
-  [ ] แก้ A/B/C — เก็บ 439700 ผ่าน fetch → row → DB
-  [ ] สคริปต์ทดสอบ: sync set_qpl หุ้นสัก 20 ตัวลง scratchpad DB สำเนา
-      แล้วเช็ค payload มี #439700
-  [ ] แก้ D/E — core/special ออกมาใน /api/quarterly-growth-screener
-  [ ] curl เช็ค 5 เคส: PTT (special ใหญ่), CPALL (เล็ก), KBANK (—),
-      SCC (ไม่มีบรรทัด), หุ้นเล็กกำไรจิ๋ว (mask)
+Phase 1 — backend pipeline  ✅ เสร็จ 2026-09-04
+  [x] _set_qpl_amt_map เก็บคีย์ "#<accountCode>" คู่กับชื่อบัญชี (ไม่ทับของเดิม)
+  [x] _set_qpl_row_from_amt เพิ่ม other_gl = amt.get("#439700") ในแถวที่คืน
+  [x] _qpl_core_special(other_gl, net_profit, tax_expense, pretax_profit) —
+      helper ใหม่ คำนวณ (special_after_tax, core_profit, special_share_pct)
+      ETR = tax/pretax clamp [0, 0.35] fallback 0.20
+  [x] _qpl_stock_growth_rows ส่ง other_gl/tax_expense/pretax_profit ผ่าน
+      (get_sector_qpl_compare ไม่กระทบ — whitelist field ก่อน export อยู่แล้ว)
+  [x] get_qpl_growth_screener เรียก _qpl_core_special ต่อแถว, pop ฟิลด์ดิบ
+      (other_gl/tax_expense/pretax_profit) ไม่ export ออกไปดิบๆ
+  [x] validate สด: ยิง SET API จริง PTT/TASCO/SCC/KBANK ผ่าน _set_qpl_amt_map→
+      _set_qpl_row_from_amt→_qpl_core_special ครบสาย — PTT other_gl=+11,220 ล.
+      core=44,330 ล. (15.6%), SCC other_gl=None (ไม่มีบรรทัด), KBANK row=None
+      (ธนาคาร ไม่มี revenue account) ตรงตามคาด
+  [x] python -m py_compile ผ่าน
 
-Phase 2 — frontend  (H–M, ~2 ชม.)
-  [ ] คอลัมน์ + badge + tooltip + th-desc + ?v=
-  [ ] sort ได้, filter/search ไม่พัง, universe อื่น (US/HK/DR) ไม่โชว์คอลัมน์นี้
+Phase 2 — frontend  ✅ เสร็จ 2026-09-04
+  [x] GROWTH_SCR_COLS +3 คอลัมน์ (special_after_tax/core_profit/special_share_pct,
+      core:true) · _growthScrCols() กรอง core:true ตาม _GROWTH_SCR_HAS_CORE={th}
+  [x] _GROWTH_SCR_HAS_SECTOR เหลือแค่ {jp} (เดิม {th,jp}) — แยกออกจาก
+      _GROWTH_SCR_SECTOR_DATA={th,jp} ใหม่ (คุมตัวกรอง dropdown ไม่ให้หายไปด้วย
+      ตอนตัด sector คอลัมน์ของ th — บั๊กที่เกือบเกิดถ้าไม่แยก 2 constant นี้)
+  [x] case 'symbol': th ตัดชื่อบริษัทออกจากใต้ชื่อย่อ ย้ายเป็น title="" (name·sector)
+      universe อื่นไม่กระทบ (ยังโชว์ชื่อใต้ชื่อย่อเหมือนเดิม)
+  [x] _growthScrSpecialCell/_growthScrCoreCell/_growthScrShareCell — แยก 2 เคส
+      null: กลุ่มการเงิน (badge badge-blue "กลุ่มการเงิน") vs ไม่มีบรรทัด (﹡, core
+      fallback = net_profit)
+  [x] _growthScrSortVal: core_profit ใช้ net_profit แทนตอน null+ไม่ใช่กลุ่มการเงิน
+      (sort แข่งกับหุ้นที่มีข้อมูลจริงได้) special_after_tax/share_pct ไม่ fallback
+  [x] _growthScrMaskedRows: mask special_share_pct เมื่อ |net_profit| < 50 ลบ.
+  [x] #growth-scr-th-desc เพิ่มย่อหน้าอธิบาย 3 คอลัมน์ใหม่ + ข้อจำกัด
+  [x] ?v=20260904h → 20260904i
 
-Phase 3 — ทดสอบ  (~1 ชม.)
-  [ ] Playwright headless port 5011 ([[browser-testing-playwright-setup]]
-      [[server-kill-restart-pattern]]) — 0 console error, สลับ universe,
-      เลื่อน ◀▶ ไตรมาส, คลิกหุ้น
-  [ ] spot-check เลข PTT/TASCO/DELTA เทียบคำนวณมือจากงบ SET
+Phase 3 — ทดสอบ  ✅ เสร็จ 2026-09-04
+  [x] node --check dashboard.js ผ่าน
+  [x] test server พอร์ต 5011 ([[server-kill-restart-pattern]]) — curl
+      /api/quarterly-growth-screener: 910 แถว, field ใหม่มาครบ (null หมด — ยังไม่
+      sync ตาม Phase 4)
+  [x] Playwright headless: คอลัมน์ th ถูก (14 คอลัมน์ ไม่มี Sector มีกำไรพิเศษ/
+      กำไรปกติ/พิเศษ%) · sector filter dropdown ยังอยู่ (36 ตัวเลือก) ·
+      symbol tooltip โชว์ name+sector ถูก · sort พิเศษ% ไม่ crash (910 แถว) ·
+      US: ไม่มี core cols, ไม่มี Sector (เหมือนเดิม) · JP: มี Sector ไม่มี core cols
+      · KBANK row: "—"+badge กลุ่มการเงิน ถูก · PTTGC row: "—﹡"/"...﹡" (SET ไม่แยก
+      บรรทัดงวดนี้) ถูก · 0 console/page error ตลอด
+  [x] kill server by PID, netstat ยืนยันพอร์ตว่าง
+  [ ] spot-check เลขจริงเทียบคำนวณมือ — รอ Phase 4 (ตอนนี้ทุกแถว null เพราะ
+      DB ยังไม่มี field other_gl เลย ยังเทียบไม่ได้จนกว่าจะ sync)
 
-Phase 4 — เก็บข้อมูลจริง  (ผู้ใช้กดเอง)
+Phase 4 — เก็บข้อมูลจริง  (ผู้ใช้กดเอง — ยังไม่ได้ทำ)
   [ ] กด "🔄 อัพเดทงบการเงินทั้งหมด" หรือ "ดึงเฉพาะที่ขาด/เก่า"
       (full ~1 ชม. / partial เร็วกว่า) → 439700 เข้า DB สำหรับ ~4 ไตรมาสล่าสุด
-  [ ] เปิดหน้าเช็คจริง — งวดล่าสุดมี core/special ครบพอ
+  [ ] เปิดหน้าเช็คจริง — งวดล่าสุดมี core/special ครบพอ (spot-check ค้างจาก Phase 3)
 
 Phase 5 — option ต่อยอด (ไว้ทีหลัง)
   [ ] ป๊อปอัพ "🧾 งบการเงิน" โชว์ "กำไร(ขาดทุน)อื่น" จาก SET layer (F)

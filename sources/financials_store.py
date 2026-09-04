@@ -1775,12 +1775,23 @@ def _set_qpl_amt_map(payload):
     Yahoo/Finnomena ที่เก็บเป็นหน่วยบาทดิบ — ถ้าไม่ปรับหน่วยตรงนี้ field-level merge ใน
     compute_qpl_report จะได้แถวที่ปนหน่วยกัน (revenue จาก SET เป็นพันบาท แต่ selling_exp จาก
     Yahoo เป็นบาทดิบ ในไตรมาสเดียวกัน) พังทั้งตาราง — ชื่อบัญชี normalize ผ่าน
-    _SET_ACCOUNT_ALIASES ก่อนเก็บ key เผื่องวดที่ใช้คนละคำสะกดสำหรับบัญชีเดียวกัน"""
+    _SET_ACCOUNT_ALIASES ก่อนเก็บ key เผื่องวดที่ใช้คนละคำสะกดสำหรับบัญชีเดียวกัน
+
+    เก็บซ้ำอีกชุดคีย์ตาม accountCode (prefix "#" กันชนกับชื่อบัญชี) เพราะบัญชีบางตัว
+    (เช่น 439700 "กำไร(ขาดทุน)อื่น" ที่ get_qpl_growth_screener ใช้แยกกำไรปกติ/กำไรพิเศษ)
+    ไม่มี alias ให้เชื่อว่าสะกดคงที่ทุกบริษัท/ทุกงวดเหมือนที่เช็คไว้กับบัญชีหลักในฟังก์ชันด้านบน
+    — accountCode เป็น taxonomy มาตรฐานของ SET เอง เชื่อถือได้กว่า (ยืนยันแล้ว 2026-09-04:
+    439700 = ผลรวม 439710 FX + 439720 อนุพันธ์ FVTPL + 439770 hedge ตรงกันทุกบริษัทที่สุ่มเช็ค)
+    ไม่ผ่าน sub() (ลบงวดสะสม) ต่างจากชื่อบัญชีตรงไหน — เป็น key เดียวกันในดิกต์เดียวกัน
+    ลบงวดสะสมได้เหมือนกันเพราะ sub() วนทุก key แบบ set(a)|set(b) อยู่แล้ว"""
     out = {}
     for a in (payload or {}).get("accounts", []):
         name = _SET_ACCOUNT_ALIASES.get(a.get("accountName"), a.get("accountName"))
         amt = a["amount"] * 1000 if a.get("amount") is not None else None
         out[name] = amt
+        code = a.get("accountCode")
+        if code:
+            out["#" + code] = amt
     return out
 
 
@@ -1827,13 +1838,22 @@ def _set_qpl_row_from_amt(amt):
     # ไม่ปล่อย pretax เป็น None ทั้งที่มี op จริง เพราะทำให้ 'กำไรก่อนภาษี'/'% TAX' ว่างเปล่าโดยไม่จำเป็น
     pretax = (op - (fin_cost if fin_cost is not None else 0)) if op is not None else None
     net_profit = g("การแบ่งปันกำไร (ขาดทุน) สุทธิ : ผู้ถือหุ้นบริษัทใหญ่", "กำไร (ขาดทุน) สุทธิ สำหรับงวด")
+    # บัญชี 439700 "กำไร(ขาดทุน)อื่น" — ผลรวมของ 439710 อัตราแลกเปลี่ยน/439720 อนุพันธ์ FVTPL/
+    # 439770 การบัญชีป้องกันความเสี่ยง (ยืนยันแล้ว parent=sum(children) 2026-09-04, สุ่ม 24 ตัว
+    # ไม่มี mismatch) ใช้เป็นตัวตั้งต้นแยก "กำไรพิเศษ" ออกจากกำไรสุทธิใน get_qpl_growth_screener —
+    # ไม่รวม 431100 ส่วนแบ่งกำไรบริษัทร่วม (เป็นกำไรที่เกิดประจำ ไม่ใช่รายการพิเศษ) อยู่เหนือบรรทัด
+    # EBIT (409992) ในงบ SET คือรวมอยู่ใน operating_profit/net_profit ข้างบนแล้ว — ไม่ได้แยกคำนวณใหม่
+    # ที่นี่ ใช้ code-key (ดู _set_qpl_amt_map) เพราะชื่อบัญชีนี้ไม่ได้ยืนยันว่าสะกดคงที่ทุกบริษัท
+    # เหมือนบัญชีหลักด้านบน — None ถ้างวด/บริษัทนั้นไม่มีบรรทัดนี้ (ผังบัญชีธนาคาร/ประกัน หรือ
+    # SET ไม่แยกให้ในงวดนั้น — caller แยกสองเคสนี้เองจาก sector ถ้าต้องการ)
+    other_gl = amt.get("#439700")
     return {
         "revenue": revenue, "cogs": cogs,
         "gross_profit": (revenue - cogs) if cogs is not None else None,
         "selling_exp": selling, "admin_exp": admin, "sga_total": sga_total,
         "total_expenses": (cogs + sga_total) if (cogs is not None and sga_total is not None) else None,
         "operating_profit": op, "financial_cost": fin_cost, "pretax_profit": pretax,
-        "tax_expense": g("ภาษีเงินได้"), "net_profit": net_profit,
+        "tax_expense": g("ภาษีเงินได้"), "net_profit": net_profit, "other_gl": other_gl,
         "detail": selling is not None or admin is not None,
     }
 
@@ -3260,6 +3280,9 @@ def _stock_pct_change(cur_val, prior_val):
 
 _QPL_STREAK_MAX = 60   # กันเดินย้อนไม่มีที่สิ้นสุดถ้าข้อมูลสะสมในอนาคตยาวขึ้นเรื่อยๆ (60 ไตรมาส = 15 ปี เกินพอ)
 _GROWTH_SCR_MIN_BASE = 50_000_000   # บาท — ค่าเดียวกับ GROWTH_SCR_MIN_BASE ใน dashboard.js (ฐาน/ตัวหารเล็กกว่านี้ถือว่าเทียบไม่ได้)
+_GROWTH_SCR_ETR_DEFAULT = 0.20   # อัตราภาษีสมมติเมื่อคำนวณเองไม่ได้ (ไม่มี tax_expense/pretax_profit)
+_GROWTH_SCR_ETR_MAX = 0.35       # กันอัตราภาษีที่คำนวณได้ (tax_expense/pretax_profit) หลุดช่วงสมเหตุสมผล
+                                  # (งวดเดียวมีรายการปรับภาษีย้อนหลัง/deferred tax ทำให้ ETR ดิบเพี้ยนได้)
 
 
 def _qpl_growth_streak(qs, target, field):
@@ -3297,9 +3320,13 @@ def _qpl_stock_growth_rows(parsed, target):
 
     คืน list ของ {symbol, revenue, net_profit, revenue_prior, profit_prior, revenue_prior_qoq,
     profit_prior_qoq, revenue_yoy, profit_yoy, revenue_qoq, profit_qoq, gpm, npm, npm_change_yoy,
-    npm_change_qoq, revenue_streak, profit_streak, revenue_ttm, profit_ttm} เฉพาะหุ้นที่มีข้อมูล
-    งวด target แล้ว (revenue หรือ net_profit อย่างน้อยหนึ่งตัว) — ไม่แนบ sector มาด้วย (caller
-    แนบเอง เพราะบางจุดจัดกลุ่ม บางจุดไม่จัดกลุ่ม)"""
+    npm_change_qoq, revenue_streak, profit_streak, revenue_ttm, profit_ttm, other_gl, tax_expense,
+    pretax_profit} เฉพาะหุ้นที่มีข้อมูล งวด target แล้ว (revenue หรือ net_profit อย่างน้อยหนึ่งตัว)
+    — ไม่แนบ sector มาด้วย (caller แนบเอง เพราะบางจุดจัดกลุ่ม บางจุดไม่จัดกลุ่ม)
+
+    other_gl/tax_expense/pretax_profit: ดิบจากงวด target เฉยๆ (ไม่ derive) ให้
+    get_qpl_growth_screener คำนวณกำไรปกติ/กำไรพิเศษต่อ (ดู PLAN_core_special_profit.txt) —
+    None ทั้งคู่ถ้างวด/หุ้นนั้นไม่มี (ผังบัญชีกลุ่มการเงิน หรือ SET ไม่แยกบรรทัด 439700 งวดนั้น)"""
     prior_key = (target[0] - 1, target[1])   # YoY เทียบไตรมาสเดียวกันปีก่อน ไม่ใช่ _prev_quarter (QoQ)
     prior_qoq_key = _prev_quarter(*target)   # QoQ เทียบไตรมาสก่อนหน้าติดกัน (ต่างจาก prior_key)
 
@@ -3347,8 +3374,39 @@ def _qpl_stock_growth_rows(parsed, target):
             "profit_streak": _qpl_growth_streak(qs, target, "net_profit"),
             "revenue_ttm": _ttm_sum(qs, "revenue"),
             "profit_ttm": _ttm_sum(qs, "net_profit"),
+            "other_gl": cur.get("other_gl"),
+            "tax_expense": cur.get("tax_expense"),
+            "pretax_profit": cur.get("pretax_profit"),
         })
     return rows
+
+
+def _qpl_core_special(other_gl, net_profit, tax_expense, pretax_profit):
+    """แยกกำไรสุทธิ (SET) เป็นกำไรปกติ/กำไรพิเศษ จากบัญชี 439700 "กำไร(ขาดทุน)อื่น" — ดู
+    PLAN_core_special_profit.txt สำหรับที่มา/ข้อจำกัดเต็ม (สรุป: จับ FX+อนุพันธ์+hedge ~90%
+    ของรายการไม่เกิดประจำ ไม่รวมกำไรขายสินทรัพย์/ด้อยค่าที่บางบริษัทลงบัญชีอื่น)
+
+    other_gl = None -> คืน (None, None, None) ทั้งชุด (ผังบัญชีกลุ่มการเงินไม่มีบรรทัดนี้ หรือ
+    SET ไม่แยกให้งวดนั้น — caller แยกสองเคสนี้เองจาก sector ถ้าต้องการ ดู _GROWTH_SCR_FIN_SECTORS
+    ฝั่ง frontend)
+
+    อัตราภาษี (ETR) = tax_expense/pretax_profit ของงวดเดียวกัน (ไม่ใช่ tax_rate มาตรฐาน 20% เพราะ
+    BOI/สิทธิประโยชน์ภาษีทำให้ ETR จริงต่างกันมากข้ามบริษัท) clamp [0, _GROWTH_SCR_ETR_MAX] กัน
+    รายการปรับภาษีย้อนหลังทำให้ ETR ดิบเพี้ยน (ติดลบ/เกิน 100%) — คำนวณไม่ได้ (ไม่มี tax_expense/
+    pretax_profit หรือ pretax_profit<=0) ใช้ _GROWTH_SCR_ETR_DEFAULT แทน
+
+    คืน (special_after_tax, core_profit, special_share_pct) — special_share_pct เป็น None
+    เพิ่มเติมถ้า net_profit เป็น None/0 (หารไม่ได้) โดยไม่ต้อง mask ฐานจิ๋วที่นี่ (ฝั่ง frontend
+    _growthScrMaskedRows คุมด้วย GROWTH_SCR_MIN_BASE เหมือนคอลัมน์อื่นอยู่แล้ว)"""
+    if other_gl is None or net_profit is None:
+        return None, None, None
+    etr = _GROWTH_SCR_ETR_DEFAULT
+    if tax_expense is not None and pretax_profit:
+        etr = min(_GROWTH_SCR_ETR_MAX, max(0.0, tax_expense / pretax_profit))
+    special_after_tax = other_gl * (1 - etr)
+    core_profit = net_profit - special_after_tax
+    special_share_pct = round(abs(special_after_tax) / abs(net_profit) * 100, 1) if net_profit else None
+    return round(special_after_tax), round(core_profit), special_share_pct
 
 
 def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_by_symbol=None,
@@ -3379,6 +3437,10 @@ def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_
     คืน {"quarter": "YYYY-Q" หรือ None, "available_quarters": [...ทั้งหมดที่มีข้อมูลจริง เรียง
     ใหม่->เก่า...], "stocks": [...]} โครง stock เหมือน _qpl_stock_growth_rows + "sector" ต่อแถว
     (ไม่มี sector ใน sector_by_symbol -> "อื่นๆ") + "ps" ถ้าส่ง mktcap_by_symbol มา
+
+    ทุกแถวมี special_after_tax/core_profit/special_share_pct เสมอ (None ถ้าคำนวณไม่ได้ — ดู
+    _qpl_core_special) — แยกกำไรปกติ/กำไรพิเศษจากบัญชี 439700 ของ SET (เมนู "หุ้นโตแรงรายไตรมาส"
+    เท่านั้น ไม่ใช่ get_sector_qpl_compare ซึ่งกรอง field ก่อน export เอง) ดู PLAN_core_special_profit.txt
 
     กรอง key ไตรมาสที่ "วันสิ้นงวดยังไม่ถึงวันนี้" ทิ้งจาก available_quarters เสมอ — พบจริงว่าหุ้น
     ปีบัญชีไม่ตรงปฏิทิน (BTS/VGI/STANLY/TIF1 ฯลฯ ดู qpl-quarterly-report-view memory) บางตัวยังมี
@@ -3414,6 +3476,13 @@ def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_
     for row in rows:
         row["sector"] = sector_by_symbol.get(row["symbol"], "อื่นๆ")
         row["name"] = (name_by_symbol or {}).get(row["symbol"])
+        # กำไรปกติ/กำไรพิเศษ — pop ฟิลด์ดิบที่ _qpl_stock_growth_rows แนบมาออก ไม่ export ดิบ
+        # (caller/frontend ใช้ special_after_tax/core_profit/special_share_pct ที่คำนวณแล้วพอ)
+        other_gl = row.pop("other_gl", None)
+        tax_expense = row.pop("tax_expense", None)
+        pretax_profit = row.pop("pretax_profit", None)
+        row["special_after_tax"], row["core_profit"], row["special_share_pct"] = _qpl_core_special(
+            other_gl, row["net_profit"], tax_expense, pretax_profit)
         if cashflow_parsed is not None:
             ocf_row = cashflow_parsed.get(row["symbol"], {}).get(target)
             ocf = ocf_row.get("ocf") if ocf_row else None

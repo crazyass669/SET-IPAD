@@ -5286,8 +5286,18 @@ const GROWTH_SCR_MIN_BASE = 50_000_000;   // บาท — ฐานเทีย
                                            // ใช้เฉพาะ uni='th' (สกุลบาท) — ต่างประเทศซ่อน checkbox นี้
 // หน่วยเงินของคอลัมน์รายได้/กำไร ต่อ universe (ตัวเลขดิบเป็นสกุลท้องถิ่นของงบ)
 const _GROWTH_SCR_CCY = { th: 'ลบ.', dr: 'ล้าน', us: '$M', hk: 'HK$M', jp: '¥M' };
-// uni ที่มี sector ให้แสดง — DR/US/HK ไม่มี (factor_snapshot ไม่เก็บ), JP มีจาก jp_index_metrics
-const _GROWTH_SCR_HAS_SECTOR = new Set(['th', 'jp']);
+// uni ที่มี sector data จริง (ใช้กรองด้วย dropdown #growth-scr-sector ได้) — th/jp เท่านั้น
+// DR/US/HK ไม่มีเลย (factor_snapshot ไม่เก็บ) — คนละเรื่องกับ _GROWTH_SCR_HAS_SECTOR ด้านล่าง
+// (แสดงเป็นคอลัมน์หรือไม่) เพราะ th มีข้อมูล sector แต่ตัดสินใจไม่โชว์เป็นคอลัมน์ (ดู comment ถัดไป)
+const _GROWTH_SCR_SECTOR_DATA = new Set(['th', 'jp']);
+// uni ที่โชว์ sector เป็นคอลัมน์ในตาราง — jp เท่านั้น (2026-09-04: th ตัดออก เพราะชื่อ sector เป็น
+// อังกฤษยาว เช่น "Information & Communication Technology" ดันคอลัมน์กว้างเกินจำเป็นตอนเพิ่ม
+// 3 คอลัมน์กำไรปกติ/กำไรพิเศษ/พิเศษ% — ตัวกรอง dropdown #growth-scr-sector ยังอยู่ตามปกติ
+// (ดู _GROWTH_SCR_SECTOR_DATA ด้านบน) แค่ไม่โชว์เป็นคอลัมน์)
+const _GROWTH_SCR_HAS_SECTOR = new Set(['jp']);
+// uni ที่มีคอลัมน์กำไรปกติ/กำไรพิเศษ/พิเศษ% — th เท่านั้น (แหล่งข้อมูล SET P&L รายไตรมาส บัญชี
+// 439700 ไม่มีสำหรับ DR/US/HK/JP ที่ใช้ finnomena_q/yahoo_q — ดู PLAN_core_special_profit.txt)
+const _GROWTH_SCR_HAS_CORE = new Set(['th']);
 function _growthScrCur() { return (_growthScrCache[_growthScrUni] || {})[_growthScrQuarter]; }
 
 const GROWTH_SCR_COLS = [
@@ -5297,6 +5307,12 @@ const GROWTH_SCR_COLS = [
   { key: 'revenue_qoq', label: 'รายได้ QoQ', align: 'right' },
   { key: 'revenue_yoy', label: 'รายได้ YoY', align: 'right' },
   { key: 'net_profit', label: 'กำไรสุทธิ', align: 'right' },
+  { key: 'special_after_tax', label: 'กำไรพิเศษ', align: 'right', core: true,
+    tip: 'รายการไม่เกิดประจำ สุทธิภาษี — กำไร(ขาดทุน)จากอัตราแลกเปลี่ยน/อนุพันธ์ mark-to-market/การป้องกันความเสี่ยง (บัญชี SET 439700) จับได้ ~90% ของรายการไม่เกิดประจำ ไม่รวมกำไรขายสินทรัพย์/ด้อยค่าที่บางบริษัทลงบัญชีอื่น · ธนาคาร-เงินทุน-ประกัน ไม่มีข้อมูล (ผังบัญชีคนละแบบ) · "﹡" = SET ไม่แยกบรรทัดนี้งวดนี้ ถือว่าไม่มีรายการพิเศษ' },
+  { key: 'core_profit', label: 'กำไรปกติ', align: 'right', core: true,
+    tip: 'กำไรสุทธิ − กำไรพิเศษ (สุทธิภาษี) — ประมาณกำไรจากธุรกิจหลักไม่รวมรายการครั้งเดียว ดูคอลัมน์ "กำไรพิเศษ"/"พิเศษ %" ประกอบ' },
+  { key: 'special_share_pct', label: 'พิเศษ %', align: 'right', core: true,
+    tip: 'กำไรพิเศษ (สุทธิภาษี) คิดเป็นกี่ % ของกำไรสุทธิ — ยิ่งสูงยิ่งควรระวัง (⚡ เมื่อ ≥20%) กำไรสุทธิที่โตแรง/หดแรงอาจมาจากรายการครั้งเดียว ไม่ใช่ธุรกิจจริง' },
   { key: 'profit_qoq', label: 'กำไร QoQ', align: 'right' },
   { key: 'profit_yoy', label: 'กำไร YoY', align: 'right' },
   { key: 'npm', label: 'NPM', align: 'right' },
@@ -5310,11 +5326,14 @@ const GROWTH_SCR_COLS = [
     tip: 'Price-to-Sales = มูลค่าตลาด (ราคาปัจจุบัน) ÷ รายได้ TTM ของไตรมาสที่กำลังดู — ใช้ได้แม้หุ้นขาดทุน (ต่างจาก PE) แต่ถ้าเลื่อนไปดูไตรมาสเก่า ตัวเศษยังเป็นราคา ณ ปัจจุบันเสมอ ไม่ใช่ราคา ณ ตอนนั้น' },
 ];
 
-// คอลัมน์ที่โชว์จริงต่อ universe — ตัด Sector ออกสำหรับ DR/US/HK (ไม่มีข้อมูล sector)
+// คอลัมน์ที่โชว์จริงต่อ universe — ตัด Sector ออกยกเว้น jp (ไม่มีข้อมูล/ไม่โชว์) + คอลัมน์
+// กำไรปกติ/กำไรพิเศษ/พิเศษ% (core:true) โชว์เฉพาะ th
 function _growthScrCols() {
-  return _GROWTH_SCR_HAS_SECTOR.has(_growthScrUni)
+  let cols = _GROWTH_SCR_HAS_SECTOR.has(_growthScrUni)
     ? GROWTH_SCR_COLS
     : GROWTH_SCR_COLS.filter(c => c.key !== 'sector');
+  if (!_GROWTH_SCR_HAS_CORE.has(_growthScrUni)) cols = cols.filter(c => !c.core);
+  return cols;
 }
 
 function _growthScrEsc(s) {
@@ -5341,9 +5360,11 @@ function _growthScrApplyUniUI() {
   // ย่อหน้าอธิบายแบบหุ้นไทย (set_qpl / กลุ่มการเงิน ฯลฯ) โชว์เฉพาะแท็บ th
   const thDesc = document.getElementById('growth-scr-th-desc');
   if (thDesc) thDesc.style.display = _growthScrUni === 'th' ? '' : 'none';
-  // ซ่อน Sector (DR/US/HK ไม่มี) + "ตัดฐานเทียบเล็กเกินไป" (threshold เป็นสกุลบาท ใช้ได้แค่ th)
+  // ซ่อนตัวกรอง Sector (DR/US/HK ไม่มีข้อมูล) + "ตัดฐานเทียบเล็กเกินไป" (threshold เป็นสกุลบาท
+  // ใช้ได้แค่ th) — ใช้ _GROWTH_SCR_SECTOR_DATA (มีข้อมูล) ไม่ใช่ _GROWTH_SCR_HAS_SECTOR (โชว์เป็น
+  // คอลัมน์) เพราะ th มีข้อมูล sector กรองได้ แค่ไม่โชว์เป็นคอลัมน์
   const secSel = document.getElementById('growth-scr-sector');
-  if (secSel) secSel.style.display = _GROWTH_SCR_HAS_SECTOR.has(_growthScrUni) ? '' : 'none';
+  if (secSel) secSel.style.display = _GROWTH_SCR_SECTOR_DATA.has(_growthScrUni) ? '' : 'none';
   const minBase = document.getElementById('growth-scr-min-base');
   if (minBase) {
     const lbl = minBase.closest('label');
@@ -5519,6 +5540,10 @@ function _growthScrMaskedRows(stocks) {
     if (row.revenue_prior_qoq != null && row.revenue_prior_qoq < GROWTH_SCR_MIN_BASE) row.npm_change_qoq = null;
     if (row.revenue != null && row.revenue < GROWTH_SCR_MIN_BASE) row.npm_change_yoy = null;
     if (row.revenue_prior != null && row.revenue_prior < GROWTH_SCR_MIN_BASE) row.npm_change_yoy = null;
+    // พิเศษ % หารด้วย |กำไรสุทธิ| — ฐานจิ๋ว (ใกล้ศูนย์ ไม่ว่าบวกหรือลบ) ทำ % บวมเกินจริงได้แม้
+    // เครื่องหมายถูก (เหมือนเหตุผลเดียวกับ OCF/NI ด้านบน) ไม่แตะ special_after_tax/core_profit
+    // เอง — เป็นจำนวนเงินดิบ ไม่ใช่ % จึงไม่มีปัญหาฐานจิ๋วแบบนี้
+    if (row.net_profit != null && Math.abs(row.net_profit) < GROWTH_SCR_MIN_BASE) row.special_share_pct = null;
     return row;
   });
 }
@@ -5573,6 +5598,12 @@ function _growthScrSortVal(row, key) {
   const v = row[key];
   if (v == null && (key === 'profit_qoq' || key === 'profit_yoy')) {
     if (_growthScrIsTurnaround(row, key === 'profit_qoq' ? 'qoq' : 'yoy')) return Infinity;
+  }
+  // กำไรปกติ = null เพราะ SET ไม่แยกบัญชี 439700 งวดนี้ (ไม่ใช่กลุ่มการเงิน) — ใช้กำไรสุทธิแทน
+  // (ถือว่าไม่มีรายการพิเศษ) ให้ยังเรียงแข่งกับหุ้นที่มีข้อมูลจริงได้ ต่างจาก special_after_tax/
+  // special_share_pct ที่ไม่ derive แทน (ไม่รู้ตัวเลขพิเศษจริง เอาไปเรียง 'พิเศษเยอะสุด' ไม่ได้)
+  if (key === 'core_profit' && v == null && row.net_profit != null && !_growthScrIsFinSector(row)) {
+    return row.net_profit;
   }
   return v;
 }
@@ -5752,17 +5783,66 @@ function _growthScrOpenSymbol(symbol) {
   }
 }
 
+// กลุ่มการเงิน (ธนาคาร/เงินทุนและหลักทรัพย์/ประกันภัย) — ผังบัญชี SET คนละแบบ ไม่มีบัญชี 439700
+// เลย (เช็คแล้ว 2026-09-04: สุ่ม 10 ตัวไม่มีสักตัว) ใช้แยก "—" (ไม่รู้อะไรเลย) จาก "—﹡" (SET ไม่แยก
+// บรรทัดงวดนี้ แต่หุ้นนี้ไม่ใช่กลุ่มการเงิน ถือว่าไม่มีรายการพิเศษได้) ในเซลล์กำไรพิเศษ/กำไรปกติ/
+// พิเศษ% — ค่า sector ตรงกับ data/set_data.json field 'sector' ตรงๆ (ภาษาอังกฤษ ไม่แปล)
+const _GROWTH_SCR_FIN_SECTORS = new Set(['Banking', 'Finance & Securities', 'Insurance']);
+function _growthScrIsFinSector(r) { return _GROWTH_SCR_FIN_SECTORS.has(r.sector); }
+
+// กำไรพิเศษ (สุทธิภาษี, บัญชี SET 439700) — +/− ชัดเจนเพราะเป็นตัวปรับ ไม่ใช่ยอดสะสม
+function _growthScrSpecialCell(r) {
+  if (r.special_after_tax != null) {
+    const v = r.special_after_tax;
+    return `<span>${v > 0 ? '+' : ''}${_growthScrThb(v)}</span>`;
+  }
+  if (_growthScrIsFinSector(r)) {
+    return '<span class="text2">—</span> <span class="badge badge-blue">กลุ่มการเงิน</span>';
+  }
+  return '<span class="text2" title="SET ไม่แยกบัญชี 439700 งวดนี้ — ถือว่าไม่มีรายการพิเศษ">—﹡</span>';
+}
+
+// กำไรปกติ = กำไรสุทธิ − กำไรพิเศษ — ไม่มีบรรทัด 439700 (ไม่ใช่กลุ่มการเงิน) ถือว่าไม่มีรายการ
+// พิเศษ โชว์กำไรสุทธิแทนพร้อม ﹡ เตือนว่าเป็นการสมมติ (ดู _growthScrSortVal คู่กัน — ค่าที่โชว์นี้
+// ใช้เรียงลำดับได้ด้วย ไม่ใช่แค่โชว์เฉยๆ)
+function _growthScrCoreCell(r) {
+  if (r.core_profit != null) return _growthScrThb(r.core_profit);
+  if (_growthScrIsFinSector(r)) return '<span class="text2">—</span>';
+  return `<span class="text2" title="SET ไม่แยกบัญชี 439700 งวดนี้ — ถือว่าไม่มีรายการพิเศษ (กำไรปกติ = กำไรสุทธิ)">${_growthScrThb(r.net_profit)}﹡</span>`;
+}
+
+// พิเศษ % ของกำไรสุทธิ — แดง+ตัวหนา+⚡ เมื่อ ≥20% (เกณฑ์เดียวกับที่ใช้ตอนทำ mockup 2026-09-04)
+function _growthScrShareCell(r) {
+  if (r.special_share_pct != null) {
+    const big = r.special_share_pct >= 20;
+    return `<span class="${big ? 'red' : 'text2'}"${big ? ' style="font-weight:700"' : ''}>${big ? '⚡ ' : ''}${r.special_share_pct.toFixed(0)}%</span>`;
+  }
+  if (_growthScrIsFinSector(r)) return '<span class="text2">—</span>';
+  return '<span class="text2" title="SET ไม่แยกบัญชี 439700 งวดนี้">—﹡</span>';
+}
+
 // เนื้อเซลล์ต่อคอลัมน์ — ให้ตารางวนตาม _growthScrCols() (คอลัมน์ต่างกันตาม universe)
 function _growthScrCellHtml(r, key) {
   switch (key) {
-    case 'symbol':
+    case 'symbol': {
       // <a href> ด้วย deep-link — คลิกปกติให้ _growthScrOpenSymbol จัดการ (modal / แท็บใหม่ตามโหมด),
       // แต่ Ctrl/กลางคลิกให้เบราว์เซอร์เปิด href เอง (แท็บใหม่ native) — ตรงกับที่ผู้ใช้คาดหวัง
-      return `<a class="sym-link" href="${_growthScrDeepLink(r.symbol)}" onclick="_growthScrOpenSymbol('${_growthScrEsc(r.symbol)}');return false" style="font-weight:700;text-decoration:none">${_growthScrEsc(r.symbol)}</a>${_growthScrTvLink(r.symbol)}`
-        + (r.name ? `<div class="text2" style="font-size:10px">${_growthScrEsc(r.name)}</div>` : '');
+      const link = `<a class="sym-link" href="${_growthScrDeepLink(r.symbol)}" onclick="_growthScrOpenSymbol('${_growthScrEsc(r.symbol)}');return false" style="font-weight:700;text-decoration:none">${_growthScrEsc(r.symbol)}</a>${_growthScrTvLink(r.symbol)}`;
+      // th: ตัดชื่อบริษัทใต้ชื่อย่อออก (2026-09-04 — กว้างไม่จำกัดเคยดันคอลัมน์ 'หุ้น' กว้างเกิน
+      // จำเป็นตอนเพิ่ม 3 คอลัมน์กำไรปกติ/พิเศษ) ย้ายไป title="" แทน (hover เห็น) universe อื่น
+      // ยังโชว์ชื่อใต้ชื่อย่อเหมือนเดิม (ไม่มีแรงกดดันเรื่องความกว้างจากคอลัมน์ใหม่)
+      if (_growthScrUni === 'th') {
+        const tip = [r.name, r.sector].filter(Boolean).join(' · ');
+        return tip ? `<span title="${_growthScrEsc(tip)}">${link}</span>` : link;
+      }
+      return link + (r.name ? `<div class="text2" style="font-size:10px">${_growthScrEsc(r.name)}</div>` : '');
+    }
     case 'sector': return `<span class="text2">${_growthScrEsc(r.sector || '')}</span>`;
     case 'revenue': return _growthScrThb(r.revenue);
     case 'net_profit': return _growthScrThb(r.net_profit);
+    case 'special_after_tax': return _growthScrSpecialCell(r);
+    case 'core_profit': return _growthScrCoreCell(r);
+    case 'special_share_pct': return _growthScrShareCell(r);
     case 'revenue_qoq': return pct(r.revenue_qoq, 1);
     case 'revenue_yoy': return pct(r.revenue_yoy, 1);
     case 'profit_qoq': return _growthScrProfitCell(r, 'profit_qoq');
