@@ -390,6 +390,210 @@
     position: sticky; top: 0; background: var(--bg2); z-index: 2;
   }
 
+  /* Sticky header — จุดที่มีกล่อง scroll (max-height + overflow-y:auto) อยู่แล้ว
+     แต่หัวตารางยังไม่เคยตั้ง sticky (2026-09-05 Phase 1 rollout) */
+
+  /* Short — ตารางอันดับ short position อยู่ในกล่อง scroll (max-height:62vh) แล้ว
+     แต่หัวตารางไม่เคย sticky ต่างจาก Insider ที่ใช้กล่อง scroll pattern เดียวกัน */
+  #short-table-wrap .tbl thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+
+  /* Valuation — เช็คหุ้นหยุดพักเทรด / เช็คห้องต่างชาติใกล้เต็ม: กล่อง scroll สร้างจาก
+     inline style ใน dashboard.js แต่ container (#val-halt-result / #val-foreign-room-result)
+     มี id คงที่ ใช้ id เป็น scope ได้เลย */
+  #val-halt-result .tbl thead th,
+  #val-foreign-room-result .tbl thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+
+  /* Valuation — เช็คหุ้นเพิกถอนใหม่ (#val-delisted-result) — จุดเดียวกันเป๊ะกับ 2 อันบน แต่
+     หลุดไปจาก Phase 1 รอบก่อน (div ห่อไม่เคยมี max-height/overflow-y เลย เพิ่งเติมใน
+     dashboard.js เมื่อตรวจพบตอน Phase 2 ชุด D 2026-09-05) */
+  #val-delisted-result .tbl thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+
+  /* Data Health — cash-cycle crosscheck modal "ดูทั้งหมด" (max-height:60vh) */
+  #dh-cc-table-wrap .tbl thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+
+  /* Sector detail modal — modal-body scroll แต่ยังไม่เคย sticky หัวตาราง
+     scope ด้วย #sector-modal (ไม่ใช้ .modal-body เฉยๆ) กันกระทบ modal อื่นที่ยังไม่ตรวจ */
+  #sector-modal .tbl thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+
+  /* Sticky header — ตารางเต็มหน้า (ไม่มีกล่อง scroll เดิม, เลื่อนทั้งหน้า) — nav bar บนสุด
+     สูงไม่คงที่ เลยกำหนด offset แบบ px ตายตัวไม่ได้ จึงห่อตารางเองเป็นกล่อง scroll แทน
+     (pattern เดียวกับ .growth-scr-tbl-scroll) (2026-09-05 Phase 2 rollout ชุด A:
+     หุ้นทั้งหมด + Watchlist) */
+  .tbl-scroll-page { max-height: 70vh; overflow-y: auto; }
+  .tbl-scroll-page table thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+
+  /* Sticky header — งบการเงิน #fin-result (ทุก sub-view: QPL/Financial Health/Factsheet/
+     Cashflow/Merged/YoY/Dividends/Custom Avg/Full report) + #fin-cmp-result (ตารางเทียบราย
+     ไตรมาส/รายปีย้อนหลัง)
+
+     ลองแบบง่ายก่อน: sticky ที่ th อ้างอิง document scroll ผ่าน --nav-h (แบบเดียวกับแนวคิด Phase 1/2
+     เดิม) — Playwright ยืนยันว่า "ใช้ไม่ได้จริง" กับตารางกลุ่มนี้ทุกจุด สาเหตุคือทุกตารางถูกห่อด้วย
+     <div style="overflow-x:auto"> (ให้เลื่อนดูปีเก่ากว่าได้แนวนอน) ซึ่งโดน CSS spec บังคับ overflow-y
+     ที่เหลือ "visible" ให้กลายเป็น "auto" ไปด้วยเสมอเมื่อตั้ง overflow-x เดี่ยวๆ — div นี้เลยกลาย
+     เป็น "nearest scroll container" ของลูกที่ sticky แทนที่จะเป็นหน้าเว็บ/document แต่เพราะ div ไม่
+     เคยมี vertical overflow จริง (สูงเท่าเนื้อหาเสมอ ไม่เคยมี scrollbar แนวตั้งของตัวเอง) จุดอ้างอิง
+     ที่ sticky ใช้จึงไม่เคยขยับ (scrollTop คงที่ 0 ตลอด) ผลคือ sticky ไม่ค้างเลย แม้ getComputedStyle
+     จะรายงาน position:sticky ถูกต้องก็ตาม (ลองสลับเป็น overflow-y:hidden/clip ก็ยังไม่ค้าง เพราะ
+     ปัญหาไม่ใช่ keyword ของ overflow แต่เป็นตัว div เองที่ไม่เคย scroll จริงตามแกนตั้ง)
+
+     ทางแก้ที่ใช้ได้จริง (ยืนยันด้วย Playwright แล้ว): ให้ div ห่อนี้เองมี vertical overflow จริง
+     (max-height + overflow-y:auto) เหมือน pattern Phase 2 (.tbl-scroll-page) แล้ว sticky top:0
+     อ้างอิงกับกล่องนี้แทน document — เลือก div ด้วย attribute selector [style*="overflow-x:auto"]
+     แทนการไล่แก้ id ทีละจุด (มีมากกว่า 15 จุดกระจายทั่ว sub-view) ใช้ selector เดียวกับที่
+     dashboard.js เรียก _finScrollTablesToLatest() ('#fin-result div[style*="overflow-x:auto"]')
+     อยู่แล้วสำหรับเลื่อนไปปีล่าสุดอัตโนมัติ ยืนยันว่าจับเฉพาะ div ห่อตารางจริงเท่านั้น ไม่มีจุดอื่น
+     หลุดมาปน — ผลข้างเคียงที่ตั้งใจ (เหมือน Phase 2): ตารางที่สูงเกิน 65vh จะกลายเป็นกล่อง scroll
+     ในตัวเอง แยกจาก scroll ของหน้า — ส่วนตารางสรุป snapshot สั้นๆ บนสุดของ #fin-cmp-result (ไม่มี
+     div ห่อ overflow-x:auto เพราะกว้างแค่ 3 คอลัมน์ ไม่เกินจอ) ไม่โดน rule นี้ ไม่ได้ sticky ด้วย —
+     สั้นพอ (~19 แถว) ไม่จำเป็นต้องมี
+
+     thead 2 แถว (QPL: ปี + Q1-Q4 / เทียบ 2 หุ้นรายไตรมาส: ปี + Q1-Q4) แถวแรก sticky top:0 ปกติ
+     แถวที่ 2 ต้อง sticky ต่ำกว่าแถวแรกอีกเท่ากับความสูงจริงของแถวแรก (วัดจริงจาก Playwright ~26-27px
+     ที่ font-size/padding ปัจจุบัน — ถ้าแก้ font-size/padding ของแถวปีในอนาคต ต้องปรับเลขนี้ตาม
+     ไม่ผูกอัตโนมัติเพราะ CSS ไม่มี sibling-height function) (2026-09-05 Phase 3 rollout) */
+  #fin-result div[style*="overflow-x:auto"],
+  #fin-cmp-result div[style*="overflow-x:auto"] {
+    max-height: 65vh;
+    overflow-y: auto;
+  }
+  #fin-result div[style*="overflow-x:auto"] .tbl thead th,
+  #fin-cmp-result div[style*="overflow-x:auto"] .tbl thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg2);
+    z-index: 2;
+  }
+  #fin-result div[style*="overflow-x:auto"] .tbl thead tr:nth-child(2) th,
+  #fin-cmp-result div[style*="overflow-x:auto"] .tbl thead tr:nth-child(2) th {
+    top: 27px;
+  }
+
+  /* คอลัมน์แรกของ #fin-result มี sticky left+z-index:3 อยู่แล้ว (บรรทัด ~200 ด้านบน) มุมซ้ายบน
+     เลย "ค้าง" ครบ 2 แกนไปโดยไม่ต้องแก้อะไรเพิ่ม */
+
+  /* Sticky header — ชุด B (Screener กลุ่ม, 2026-09-05 Phase 2 rollout) — ตารางถูกห่อด้วย
+     <div style="overflow-x:auto"> เดี่ยวๆ เหมือน #fin-result (Phase 3 pattern) แก้ด้วยวิธีเดียวกัน:
+     ให้ div ห่อมี vertical overflow จริง (max-height+overflow-y:auto) แล้ว sticky top:0 อ้างอิงกล่องนั้น
+     — DCF Screener / Fair Value P/B·P/E Screener (ทั้งตลาด หลายร้อยแถว) + Stock Screener หลัก
+     (#screener-results div เป็น <div class="card" style="overflow-x:auto"> — attribute selector
+     จับได้เหมือนกันไม่สนใจ class อื่นที่ติดมาด้วย) + Peer Compare "หุ้นเทียบกับกลุ่ม" ตาราง
+     "กำไรปกติโตแรงสุด" (สูงสุด ~64 แถว/กลุ่ม) — thead ทุกจุดในชุดนี้มีแถวเดียว ไม่ต้อง offset แถว 2 */
+  #dcf-screener-table div[style*="overflow-x:auto"],
+  #pbvpe-screener-table div[style*="overflow-x:auto"],
+  #screener-results div[style*="overflow-x:auto"],
+  #peer-group-body div[style*="overflow-x:auto"] {
+    max-height: 65vh;
+    overflow-y: auto;
+  }
+  #dcf-screener-table div[style*="overflow-x:auto"] .tbl thead th,
+  #pbvpe-screener-table div[style*="overflow-x:auto"] .tbl thead th,
+  #screener-results div[style*="overflow-x:auto"] .tbl thead th,
+  #peer-group-body div[style*="overflow-x:auto"] .data-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg2);
+    z-index: 2;
+  }
+
+  /* Peer Compare "Sector Workspace" heatmap (#ws-heatmap-body) — มีกล่อง scroll
+     (overflow:auto;max-height:60vh) อยู่แล้วจาก _workspaceHeatmapTableHtml() แต่ thead ไม่เคย
+     sticky เลย (ต่างจาก _peerGroupTableHtml ที่ทำไว้แล้ว) — เติม sticky อย่างเดียวพอ ไม่ต้องแตะ
+     scroll box เดิม */
+  #ws-heatmap-body table thead th { position: sticky; top: 0; background: var(--bg2); z-index: 2; }
+
+  /* Sticky header — ชุด D (Valuation/ปฏิทิน/Data Health, 2026-09-05 Phase 2 rollout)
+
+     Valuation — ตาราง P/E & P/BV รายกลุ่ม (#val-sector-table, 34 sectors) — div ห่อมี id คงที่
+     อยู่แล้ว (ไม่ต้องใช้ attribute selector) แต่ table ข้างในไม่มี class .tbl (ใช้ inline style
+     ล้วน) เลยต้อง select ด้วย "table" เฉยๆ — thead 2 แถว (แถว1: Sector/P-E colspan4/P-BV colspan4/
+     หุ้น padding 5px 8px font-size 11px, แถว2: avg±σ/+1σ/-1σ/med ต่อ metric ไม่มี padding เอง
+     font-size 10px) แถว 2 ต้อง sticky ต่ำกว่าแถว 1 เท่าความสูงจริงของแถว 1 (วัดจาก Playwright) */
+  #val-sector-table { max-height: 65vh; overflow-y: auto; }
+  #val-sector-table table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg2);
+    z-index: 2;
+  }
+  #val-sector-table table thead tr:nth-child(2) th { top: 26px; }
+
+  /* Data Health — ตารางสถานะหลักแยกตาม category (#dh-table-wrap) — แต่ละการ์ดห่อ
+     <div style="overflow-x:auto"> เดี่ยวๆ ซ้ำกันเป๊ะทุกการ์ด ไม่มี id แยกต่อการ์ด ใช้
+     attribute selector รวมแบบเดียวกับ #fin-result — thead ทุกตารางในนี้มีแถวเดียว */
+  #dh-table-wrap div[style*="overflow-x:auto"] {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+  #dh-table-wrap div[style*="overflow-x:auto"] .tbl thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg2);
+    z-index: 1;
+  }
+
+  /* ปฏิทิน — มุมมองรายการ (#cal-list-card, _calRenderList) — ตารางหลักของหน้านี้ วัดจริงมีได้ถึง
+     253 events (scope ทั้งหมด) เดิมห่อแค่ <div class="card" style="padding:0;overflow:hidden">
+     (overflow:hidden ใช้ clip มุมโค้งเข้ากับ .card เท่านั้น ไม่ใช่กล่อง scroll) — inline
+     "overflow:hidden" (shorthand) ตั้ง overflow-y:hidden มาด้วย ซึ่ง inline style ชนะ external
+     CSS เสมอ ต่อให้ตั้ง overflow-y:auto ทับก็ไม่มีผล จึงแก้ inline ใน dashboard.js เป็น
+     overflow-x:hidden เดี่ยวๆ แทน (คงมุมโค้งซ้าย-ขวา) แล้วปล่อยให้ CSS นี้ตั้ง overflow-y:auto
+     เอง — ผลตอนเนื้อหาสั้นเหมือนเดิมเป๊ะ (auto ไม่โชว์ scrollbar/ไม่ต่างจาก hidden ถ้าไม่ล้น)
+     ตารางไม่มี class .tbl (inline ล้วน) ใช้ selector "thead th" เฉยๆ, thead แถวเดียว */
+  #cal-list-card {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+  #cal-list-card thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg2);
+    z-index: 1;
+  }
+
+  /* Sticky header — Phase 4 (priority ต่ำสุด, 2026-09-05) — ตาราง "หุ้นในดัชนี/กลุ่ม" ในป็อปอัพ
+     กราฟหุ้น (#cm-stocks-panel, .sector-table) — เดิมตารางถูกห่อด้วย <div style="overflow-x:auto">
+     ซ้ำอีกชั้นข้างในกล่อง scroll จริงที่มีอยู่แล้ว (max-height:62vh;overflow-y:auto) ติด gotcha
+     เดียวกับ Phase 3 (div ห่อไม่เคยมี vertical overflow จริง เลยกลายเป็น nearest scroll container
+     ที่ไม่เคยขยับ sticky เลยไม่ค้าง) — แก้โดยเอา div ห่อซ้ำออก (dashboard.js _renderIdxStocks) แล้วเติม
+     overflow-x:auto ให้ #cm-stocks-panel เองแทน (เดิมมีแค่ overflow-y:auto — CSS spec บังคับ overflow-x
+     ที่เหลือ visible ให้เป็น auto อยู่แล้วก็จริง แต่ตั้งชัดเจนเองกันสับสน) ตารางนี้แถวเยอะได้ถึงหลักร้อย
+     (universe ทั้งดัชนี) sticky จึงมีประโยชน์จริง ต่างจากตาราง note เล็กด้านล่างที่ทำไว้ให้ครบ pattern
+     มากกว่าจะเห็นผลจริง */
+  #cm-stocks-panel .sector-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg2);
+    z-index: 1;
+  }
+
+  /* ป็อปอัพอธิบาย (modal-overlay) ตารางเล็ก 3-5 แถว — Backtest NH-NL / Δ NPM / P/S — ใช้ .tbl +
+     thead อยู่แล้ว และ .modal-body มีกล่อง scroll จริงอยู่แล้ว (overflow-y:auto ผูกกับ .modal
+     max-height:95vh) เหมือน #sector-modal ที่ทำไปแล้วใน Phase 1 — เติม sticky อย่างเดียวพอ (ตาราง
+     สั้นมากจนแทบไม่ทันเห็นผล แต่ทำไว้ให้ครบ pattern เดียวกันทั้งเว็บ) */
+  #nhnl-note-modal .tbl thead th,
+  #npm-delta-note-modal .tbl thead th,
+  #ps-note-modal .tbl thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg2);
+    z-index: 1;
+  }
+
+  /* Filings — "💡 เอกสารแต่ละแบบคืออะไร" (#fil-guide-box, filing-guide) — ตาราง 5 แถวเทียบ
+     เอกสารไทย/US/HK ห่อด้วย <div style="overflow-x:auto"> เดี่ยวๆ แบบเดียวกับ Phase 3 (single-axis
+     overflow) แก้ด้วยวิธีเดียวกัน: ให้ div ห่อมี vertical overflow จริง แล้ว sticky top:0 อ้างอิงกล่องนั้น
+     — table ไม่มี class .tbl (inline ล้วน) ใช้ selector "table" เฉยๆ */
+  #fil-guide-box div[style*="overflow-x:auto"] {
+    max-height: 65vh;
+    overflow-y: auto;
+  }
+  #fil-guide-box div[style*="overflow-x:auto"] table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg2);
+    z-index: 1;
+  }
+
   /* MARKET REGIME LIGHT (nav) */
   .regime-wrap { position: relative; display: inline-block; margin-right: 8px; }
   #regime-light {

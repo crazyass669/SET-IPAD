@@ -1767,6 +1767,7 @@ function renderRotMulti(sortKey) {
   const el = document.getElementById('rot-multi-content');
   el.innerHTML = `
     <div style="font-size:10px;color:var(--text2);margin-bottom:6px">Multi-Timeframe · ${sorted.length} ${label} · คลิก header เพื่อเรียง</div>
+    <div class="tbl-scroll-page">
     <table class="tbl" style="width:100%;font-size:11px">
       <thead><tr>
         <th style="cursor:default">${label}</th>
@@ -1782,7 +1783,8 @@ function renderRotMulti(sortKey) {
         <td class="r">${pc(s.ret_1y)}</td>
         <td class="r text2">${s.avg_rs!=null?Math.round(s.avg_rs):'—'}</td>
       </tr>`; }).join('')}</tbody>
-    </table>`;
+    </table>
+    </div>`;
 }
 
 function renderRotAppendix() {
@@ -16982,7 +16984,6 @@ function _renderIdxStocks(sym) {
       <div class="modal-stat"><div class="modal-stat-val ${rsC(avgRS)}">${avgRS??'—'}</div><div class="modal-stat-lbl">Avg RS</div></div>
       <div class="modal-stat"><div class="modal-stat-val">${pctEma??'—'}%</div><div class="modal-stat-lbl">%&gt;EMA50</div></div>
     </div>
-    <div style="overflow-x:auto">
     <table class="sector-table" style="width:100%">
       <thead><tr>
         <th style="cursor:pointer" onclick="idxStocksSortBy('rs_score')">RS${colTipIcon('rs_score')}<span class="sort-ind${_idxStocksSortCol==='rs_score'?' on':''}">${_idxStocksSortArrow('rs_score')}</span></th>
@@ -17012,8 +17013,7 @@ function _renderIdxStocks(sym) {
           <td class="r">${emaBadge(s.above_ema200)}</td>
         </tr>`).join('')}
       </tbody>
-    </table>
-    </div>`;
+    </table>`;
 }
 
 // สลับมุมมองตารางงบการเงินในป็อปอัพกราฟหุ้น: 'y' รายปี (Finnomena ~16-20 ปี / Yahoo ~4 ปี)
@@ -23605,7 +23605,7 @@ function _calRenderList() {
   }).join('');
 
   box.innerHTML = `
-    <div class="card" style="padding:0;overflow:hidden">
+    <div class="card" id="cal-list-card" style="padding:0;overflow-x:hidden">
       <table style="width:100%;border-collapse:collapse;font-size:13px">
         <thead style="background:var(--bg2)">
           <tr><th style="text-align:left;padding:8px 10px;cursor:pointer" onclick="calListSortBy('date')">วันที่${_calListSortArrow('date')}</th><th style="text-align:left;padding:8px 10px;cursor:pointer" onclick="calListSortBy('symbol')">หุ้น${_calListSortArrow('symbol')}</th>
@@ -28807,7 +28807,7 @@ async function checkDelistedNew() {
       status.style.color = 'var(--red)';
       box.style.display = 'block';
       box.innerHTML = `<div class="card" style="padding:14px">
-        <div style="overflow-x:auto"><table class="tbl" style="min-width:560px">
+        <div style="overflow-x:auto;max-height:400px;overflow-y:auto"><table class="tbl" style="min-width:560px">
           <thead><tr><th>Symbol</th><th>ชื่อ</th><th>ตลาด</th><th>วันเพิกถอน</th><th>เหตุผล</th><th>ราคาล่าสุดที่มี</th></tr></thead>
           <tbody>${d.actionable.map(x => `
             <tr>
@@ -30142,7 +30142,7 @@ function _renderConfluenceTable() {
     </tr>`;
   }).join('');
 
-  body.innerHTML = `<div style="overflow-x:auto"><table class="tbl" style="width:100%;min-width:820px;border-collapse:collapse">
+  body.innerHTML = `<div class="tbl-scroll-page" style="overflow-x:auto"><table class="tbl" style="width:100%;min-width:820px;border-collapse:collapse">
     <thead><tr style="border-bottom:1px solid rgba(255,255,255,0.12);color:#8899aa;font-size:11px;text-align:center">
       <th style="padding:6px 8px;text-align:left;cursor:pointer" onclick="confluenceSortBy('symbol')">หุ้น${_confluenceSortArrow('symbol')}</th>
       <th style="padding:6px 8px;text-align:left;cursor:pointer" onclick="confluenceSortBy('sector')">Sector${_confluenceSortArrow('sector')}</th>

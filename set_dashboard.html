@@ -30,7 +30,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260905a">
+<link rel="stylesheet" href="static/dashboard.css?v=20260905g">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -310,7 +310,7 @@
         <button class="rot-tab-btn active" id="rtab-heat" onclick="setRotTab('heat',this)">Heatmap</button>
         <button class="rot-tab-btn" id="rtab-rvol"  onclick="setRotTab('rvol',this)">Top RVOL</button>
       </div>
-      <div id="rot-tab-content"></div>
+      <div id="rot-tab-content" class="tbl-scroll-page"></div>
     </div>
   </div>
 
@@ -568,6 +568,7 @@
       </div>
 
       <div class="card">
+       <div class="tbl-scroll-page">
         <table class="tbl" id="tbl-stocks">
           <thead><tr>
             <th class="r sortable" id="sh-rs"   onclick="sortStocks('rs_score')">RS<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">ℹ<div class="scr-tip-box">RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)</div></span><span class="sort-ind">↕</span></th>
@@ -590,6 +591,7 @@
           </tr></thead>
           <tbody id="stocks-tbody"></tbody>
         </table>
+       </div>
       </div>
     </div>
 
@@ -599,6 +601,7 @@
         <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
           หุ้นที่ RS <strong>กำลังดีขึ้นเร็ว</strong> ในช่วง 4 สัปดาห์ล่าสุด — RS ยังไม่ถึง 80 แต่กำลังไต่ขึ้น เหมาะสำหรับจับสัญญาณต้นรอบ
         </div>
+        <div class="tbl-scroll-page">
         <table class="tbl" id="tbl-emerging">
           <thead><tr>
             <th>RS ▲<span class="scr-tip-icon">ℹ<div class="scr-tip-box">RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)</div></span></th><th>Symbol<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ</div></span></th><th>ชื่อ<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อบริษัท</div></span></th><th>Sector<span class="scr-tip-icon">ℹ<div class="scr-tip-box">กลุ่มอุตสาหกรรม</div></span></th>
@@ -607,6 +610,7 @@
           </tr></thead>
           <tbody id="emerging-tbody"></tbody>
         </table>
+        </div>
       </div>
     </div>
 
@@ -679,10 +683,12 @@
       </div>
       <div class="card">
         <div id="bo-count" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
+        <div class="tbl-scroll-page">
         <table class="tbl" id="tbl-breakout">
           <thead id="bo-thead"></thead>
           <tbody id="bo-tbody"></tbody>
         </table>
+        </div>
       </div>
     </div>
 
@@ -723,10 +729,12 @@
       </div>
       <div class="card">
         <div id="mom-count" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
+        <div class="tbl-scroll-page">
         <table class="tbl" id="tbl-momentum">
           <thead id="mom-thead"></thead>
           <tbody id="mom-tbody"></tbody>
         </table>
+        </div>
       </div>
     </div>
   </div>
@@ -747,6 +755,7 @@
 
     <!-- RANK VIEW: เปรียบเทียบอันดับข้าม 4 ช่วงเวลา -->
     <div class="card" id="sector-rank-card" style="display:none">
+      <div class="tbl-scroll-page">
       <table class="tbl">
         <thead><tr>
           <th>ชื่อ</th>
@@ -779,9 +788,11 @@
         </tr></thead>
         <tbody id="sector-rank-tbody"></tbody>
       </table>
+      </div>
     </div>
 
     <div class="card" id="sector-pct-card">
+      <div class="tbl-scroll-page">
       <table class="tbl" id="tbl-sectors">
         <thead><tr>
           <th>อันดับ</th><th>ชื่อ</th><th class="r">จำนวน <span class="scr-tip-icon" style="margin-left:1px">?<div class="scr-tip-box">จำนวนหุ้นในกลุ่มนี้</div></span></th>
@@ -811,6 +822,7 @@
         </tr></thead>
         <tbody id="sectors-tbody"></tbody>
       </table>
+      </div>
     </div>
 
     <!-- EMA Breadth by Sector/Industry (ตาราง — กราฟ 3 อันย้ายไปแสดงเสมอด้านบนแล้ว) -->
@@ -830,6 +842,7 @@
       <button class="filter-btn" onclick="setEMABreadthView('industry',this)">Industry Group</button>
     </div>
     <div class="card">
+      <div class="tbl-scroll-page">
       <table class="tbl">
         <thead><tr>
           <th>#</th><th>ชื่อ</th><th class="r">หุ้น</th>
@@ -848,6 +861,7 @@
         </tr></thead>
         <tbody id="ema-breadth-tbody"></tbody>
       </table>
+      </div>
     </div>
   </div>
 </div>
@@ -935,6 +949,7 @@
   </div>
 
   <div class="card">
+   <div class="tbl-scroll-page">
     <table class="tbl" id="tbl-watchlist">
       <thead><tr>
         <th>RS<span class="scr-tip-icon">ℹ<div class="scr-tip-box">RS Score 0–99 — จัดอันดับความแข็งแกร่งของราคาเทียบหุ้นทั้งตลาด ยิ่งสูงยิ่งแข็งแกร่ง (99 = แข็งสุด)</div></span></th><th>Symbol<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อย่อหุ้น — คลิกเพื่อเปิดกราฟ</div></span></th><th>ชื่อ<span class="scr-tip-icon">ℹ<div class="scr-tip-box">ชื่อบริษัท</div></span></th><th>Sector<span class="scr-tip-icon">ℹ<div class="scr-tip-box">กลุ่มอุตสาหกรรม</div></span></th>
@@ -949,6 +964,7 @@
       </tr></thead>
       <tbody id="wl-tbody"></tbody>
     </table>
+   </div>
   </div>
 </div>
 
@@ -2263,7 +2279,7 @@
 
   <div class="card">
     <div id="dr-status" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
-    <div id="dr-table-wrap" style="overflow-x:auto">
+    <div id="dr-table-wrap" class="tbl-scroll-page" style="overflow-x:auto">
       <div class="dr-loading"><span class="dr-load-spin"></span>กำลังโหลด กรุณารอสักครู่...</div>
     </div>
   </div>
@@ -2339,7 +2355,7 @@
 
   <div class="card">
     <div id="etf-status" style="font-size:11px;color:var(--text2);margin-bottom:8px"></div>
-    <div id="etf-table-wrap" style="overflow-x:auto">
+    <div id="etf-table-wrap" class="tbl-scroll-page" style="overflow-x:auto">
       <div class="dr-loading"><span class="dr-load-spin"></span>กำลังโหลด กรุณารอสักครู่...</div>
     </div>
   </div>
@@ -5190,7 +5206,7 @@
       <div id="cm-fin-band" style="margin-top:12px"></div>
     </div>
     <!-- STOCKS IN SECTOR PANEL -->
-    <div id="cm-stocks-panel" style="display:none;max-height:62vh;overflow-y:auto;padding-top:4px"></div>
+    <div id="cm-stocks-panel" style="display:none;max-height:62vh;overflow-y:auto;overflow-x:auto;padding-top:4px"></div>
     <!-- INSIDER SECTION -->
     <div id="popup-insider-wrap" style="border-top:1px solid rgba(255,255,255,0.07);margin-top:10px;padding-top:10px">
       <div style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none"
@@ -5688,6 +5704,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260905b"></script>
+<script src="static/dashboard.js?v=20260905g"></script>
 </body>
 </html>
