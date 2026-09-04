@@ -573,6 +573,18 @@ def _snapshot():
         return dict(_state)
 
 
+def _spawn_worker(target, args=()):
+    """เริ่ม worker thread ของงานยาว — คืน exception ถ้า .start() ล้ม (thread/memory
+    exhaustion) ให้ caller reset running-flag เอง ไม่งั้น flag ค้าง True ถาวร ทุก
+    request ถัดไปติด 409 จน restart (เดิม dr_quick_update ทำ try/except inline อยู่แล้ว
+    ที่เดียว — ปุ่มงานยาวอื่น (_state) กับ Heatmap live (_HM_LIVE_STATE) ไม่มี)"""
+    try:
+        threading.Thread(target=target, args=args, daemon=True).start()
+        return None
+    except Exception as e:
+        return e
+
+
 # ============================================================
 # Routes
 # ============================================================
@@ -2630,62 +2642,102 @@ def us_index_full_refresh():
             return jsonify({"error": "กำลังอัพเดทราคาสด (Heatmap US) อยู่ โปรดรอสักครู่"}), 409
         _state.update(running=True, done=False, error=None,
                       current=0, total=0, message="กำลังเริ่มดึงราคา US Index ย้อนหลังสูงสุด...")
-    threading.Thread(target=_run_us_index_full_refresh, daemon=True).start()
+    err = _spawn_worker(_run_us_index_full_refresh)
+    if err:
+        _update(running=False, done=True, error=str(err), message=f"เริ่มงานไม่ได้: {err}")
+        return jsonify({"error": f"เริ่มงานไม่ได้: {err}"}), 500
     return jsonify({"ok": True})
 
 
 def _run_us_index_full_refresh():
-    ok = False
-    try:
-        from sources import us_index_membership
-        from sources.yahoo import fetch_all_batch
-        from core import us_store
+    from sources import us_index_membership, us_index_metrics
+    from core import us_store
+    _run_index_full_refresh(us_index_membership, us_store, us_index_metrics,
+                            _us_breadth_cache, "US Index", "us_prices.db",
+                            "us_index_full_refresh")
 
-        tickers = us_index_membership.all_tickers(BASE_DIR)
+
+def _run_index_full_refresh(membership, store, metrics_mod, breadth_cache, label, db_file, log_key):
+    """ดึงราคา OHLC ย้อนหลังสูงสุด (period=max) ของสมาชิกดัชนีทั้ง union ลง <db_file>
+    ปุ่มแยกต่างหาก ใช้เฉพาะกดมือ (ไม่ผูก Quick Update) — รวม 3 ก็อป us/hk/jp เดิมที่
+    ต่างกันแค่ module/ไฟล์/label ไว้ที่เดียว (เหมือน _run_index_gap_update ที่รวมฝั่ง
+    gap-update แล้ว) กันแก้จุดเดียวต้องแก้ 3 ที่แล้ว drift
+
+    ต่างจากก่อนหน้า 2 จุดที่แก้จากรีวิว (2026-09-04):
+      1. Split/CA detector + shrink guard ก่อน upsert — เดิม path นี้ไม่มีเลย (ต่างจาก
+         Thai Full Refresh / gap-update) ถ้า Yahoo คืน period='max' ที่ปรับฐานราคา
+         ย้อนหลัง (แตกพาร์) หรือ response ขาดช่วง จะ INSERT OR REPLACE แท่งฐานใหม่
+         บางส่วนทับฐานเก่า = seam ถาวรใน <db_file> (regenerate ผ่าน backfill ช้าหลาย
+         ชั่วโมง — CLAUDE.md) ใช้ detect_ca_mismatch + _repair_ca_tickers (มี 90%-guard
+         ในตัว) + pop unrepaired แบบเดียวกับ run_with_progress/_run_index_gap_update
+      2. done=True ตั้ง "หลัง" build() metrics เสร็จ ไม่ใช่ก่อน — เดิม SSE (/api/progress)
+         break ทันทีที่ done=True (แม้ยัง running=True) frontend เลย finish() + re-enable
+         ปุ่ม + re-fetch metrics ที่ยังเป็นไฟล์เก่า (build ใช้ ~30-90 วิ) กดซ้ำช่วงนั้น
+         เจอ 409 ทั้งที่ UI บอกว่าเสร็จแล้ว · build ล้มเหลวก็ไม่รายงานเป็น success อีก
+         (run_log.record_run ใช้ metrics_ok flag + เตือนใน message)"""
+    from sources.yahoo import fetch_all_batch
+    from services.refresh import detect_ca_mismatch, _repair_ca_tickers
+
+    try:
+        tickers = membership.all_tickers(BASE_DIR)
         if not tickers:
-            raise ValueError("ไม่พบรายชื่อดัชนี US ใน data/us_index_membership.json — รัน sync ก่อน")
+            raise ValueError(f"ไม่พบรายชื่อสมาชิกดัชนี {label} — รัน sync ก่อน")
 
         def cb(current, total, msg):
             _update(current=current, total=total, message=msg)
 
         data = fetch_all_batch(tickers, callback=cb, period="max")
+
+        # Split/CA detector + shrink guard — เหมือน services/refresh.py::run_with_progress
+        # (Thai Full Refresh) และ _run_index_gap_update: กันเขียนฐานราคาหลังแตกพาร์ หรือ
+        # response ที่สั้นกว่าประวัติสะสม ทับลง <db_file>
+        store.init_db(BASE_DIR)
+        replace_tickers = set()
+        suspects = detect_ca_mismatch(BASE_DIR, data, store=store)
+        if suspects:
+            print(f"[{label} CA] พบ overlap mismatch: {suspects}")
+            repaired = _repair_ca_tickers(BASE_DIR, data, suspects,
+                                          lambda i, n, m: _update(message=m), store=store)
+            replace_tickers = set(repaired)
+            unrepaired = set(suspects) - repaired
+            for t in unrepaired:
+                data.pop(t, None)
+            if unrepaired:
+                print(f"[{label} CA] {len(unrepaired)} ตัวซ่อมไม่สำเร็จ — ข้ามการบันทึกรอบนี้ "
+                      f"(รอรอบถัดไป retry): {sorted(unrepaired)}")
+
         # ขั้นเขียน DB ใช้เวลาหลายนาที (หลายล้านแถวใน transaction เดียว) — บอกสถานะ
-        # ให้ชัด ไม่งั้น progress ค้างที่ "batch 6/6" จนดูเหมือนแฮงค์
+        # ให้ชัด ไม่งั้น progress ค้างที่ "batch N/N" จนดูเหมือนแฮงค์
         _update(current=len(tickers) - 1, total=len(tickers),
-                message=f"กำลังบันทึก {len(data)} ตัวลง us_prices.db (หลายนาที อย่าเพิ่งปิด)...")
-        us_store.init_db(BASE_DIR)
-        us_store.upsert_bars(BASE_DIR, data)
+                message=f"กำลังบันทึก {len(data)} ตัวลง {db_file} (หลายนาที อย่าเพิ่งปิด)...")
+        store.upsert_bars(BASE_DIR, data, replace_tickers=replace_tickers)
 
         missing = len(tickers) - len(data)
-        msg = f"เสร็จแล้ว! ดึงราคา US Index ย้อนหลังสูงสุด {len(data)}/{len(tickers)} ตัว"
+        msg = f"เสร็จแล้ว! ดึงราคา {label} ย้อนหลังสูงสุด {len(data)}/{len(tickers)} ตัว"
         if missing:
-            msg += f" (ขาด {missing} ตัว)"
+            msg += f" (ขาด/ข้าม {missing} ตัว)"
+
+        # คำนวณ RS/EMA/Stage/52W ใหม่ — ยัง running=True ตลอดขั้นนี้ กันปุ่ม Index Max/
+        # Heatmap live update ตัวอื่นเริ่มเขียน <db_file>/<region>_index_metrics.json
+        # ซ้อนกันก่อน build() รอบนี้เสร็จ (lost update)
+        _update(current=len(tickers), total=len(tickers),
+                message=f"กำลังคำนวณ RS/EMA/Stage/52W ของ {label} ใหม่ (สักครู่)...")
+        metrics_ok = True
+        try:
+            n_metrics = metrics_mod.build(BASE_DIR)
+            breadth_cache.clear()
+            _bump_cache_gen()
+            print(f"[{label}] rebuilt metrics: {n_metrics} ticker")
+        except Exception as e:
+            metrics_ok = False
+            print(f"[{label}] metrics build error: {e}")
+            msg += f" · ⚠️ แต่คำนวณ metrics (RS/EMA/Stage) ล้มเหลว: {e} — หน้า Heatmap/Rotation อาจยังโชว์ค่าเก่า"
+
         _update(done=True, message=msg)
-        run_log.record_run(BASE_DIR, "us_index_full_refresh", True, msg)
-        ok = True
+        run_log.record_run(BASE_DIR, log_key, metrics_ok, msg)
     except Exception as e:
         _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
-        run_log.record_run(BASE_DIR, "us_index_full_refresh", False, str(e))
-    finally:
-        if not ok:
-            _update(running=False)
-
-    if not ok:
-        return
-
-    # คำนวณ RS/EMA/Stage/52W ใหม่จากราคาที่เพิ่งดึง — ทำนอก try/except หลักเพื่อให้รันแม้
-    # ราคาบางตัวพลาด (best-effort, ไม่ทำให้ job หลักถูกมองว่า error) แต่ยัง "running=True"
-    # อยู่ตลอดขั้นนี้ — กันปุ่ม Index Max/Heatmap live update ตัวอื่นเริ่มเขียน us_prices.db/
-    # us_index_metrics.json ซ้อนกันก่อน build() รอบนี้เสร็จ (เดิมปล่อย running=False ก่อน
-    # build() ทำให้กดปุ่มซ้ำหรือกด Heatmap live ระหว่างนี้ชิงเขียนไฟล์ชนกันได้ — lost update)
-    try:
-        from sources import us_index_metrics
-        n_metrics = us_index_metrics.build(BASE_DIR)
-        _us_breadth_cache.clear()
-        _bump_cache_gen()
-        print(f"[US Index] rebuilt metrics: {n_metrics} ticker")
-    except Exception as e:
-        print(f"[US Index] metrics build error: {e}")
+        run_log.record_run(BASE_DIR, log_key, False, str(e))
     finally:
         _update(running=False)
 
@@ -2979,61 +3031,19 @@ def hk_index_full_refresh():
             return jsonify({"error": "กำลังอัพเดทราคาสด (Heatmap HK) อยู่ โปรดรอสักครู่"}), 409
         _state.update(running=True, done=False, error=None,
                       current=0, total=0, message="กำลังเริ่มดึงราคา HK Index ย้อนหลังสูงสุด...")
-    threading.Thread(target=_run_hk_index_full_refresh, daemon=True).start()
+    err = _spawn_worker(_run_hk_index_full_refresh)
+    if err:
+        _update(running=False, done=True, error=str(err), message=f"เริ่มงานไม่ได้: {err}")
+        return jsonify({"error": f"เริ่มงานไม่ได้: {err}"}), 500
     return jsonify({"ok": True})
 
 
 def _run_hk_index_full_refresh():
-    ok = False
-    try:
-        from sources import hk_index_membership
-        from sources.yahoo import fetch_all_batch
-        from core import hk_store
-
-        tickers = hk_index_membership.all_tickers(BASE_DIR)
-        if not tickers:
-            raise ValueError("ไม่พบรายชื่อดัชนี HK ใน data/hk_index_membership.json — รัน sync ก่อน")
-
-        def cb(current, total, msg):
-            _update(current=current, total=total, message=msg)
-
-        data = fetch_all_batch(tickers, callback=cb, period="max")
-        _update(current=len(tickers) - 1, total=len(tickers),
-                message=f"กำลังบันทึก {len(data)} ตัวลง hk_prices.db (หลายนาที อย่าเพิ่งปิด)...")
-        hk_store.init_db(BASE_DIR)
-        hk_store.upsert_bars(BASE_DIR, data)
-
-        missing = len(tickers) - len(data)
-        msg = f"เสร็จแล้ว! ดึงราคา HK Index ย้อนหลังสูงสุด {len(data)}/{len(tickers)} ตัว"
-        if missing:
-            msg += f" (ขาด {missing} ตัว)"
-        _update(done=True, message=msg)
-        run_log.record_run(BASE_DIR, "hk_index_full_refresh", True, msg)
-        ok = True
-    except Exception as e:
-        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
-        run_log.record_run(BASE_DIR, "hk_index_full_refresh", False, str(e))
-    finally:
-        if not ok:
-            _update(running=False)
-
-    if not ok:
-        return
-
-    # คำนวณ RS/EMA/Stage/52W ใหม่จากราคาที่เพิ่งดึง — ทำนอก try/except หลักเพื่อให้รันแม้
-    # ราคาบางตัวพลาด (best-effort, ไม่ทำให้ job หลักถูกมองว่า error) แต่ยัง "running=True"
-    # อยู่ตลอดขั้นนี้ — กันปุ่ม Index Max/Heatmap live update ตัวอื่นเริ่มเขียน hk_prices.db/
-    # hk_index_metrics.json ซ้อนกันก่อน build() รอบนี้เสร็จ
-    try:
-        from sources import hk_index_metrics
-        n_metrics = hk_index_metrics.build(BASE_DIR)
-        _hk_breadth_cache.clear()
-        _bump_cache_gen()
-        print(f"[HK Index] rebuilt metrics: {n_metrics} ticker")
-    except Exception as e:
-        print(f"[HK Index] metrics build error: {e}")
-    finally:
-        _update(running=False)
+    from sources import hk_index_membership, hk_index_metrics
+    from core import hk_store
+    _run_index_full_refresh(hk_index_membership, hk_store, hk_index_metrics,
+                            _hk_breadth_cache, "HK Index", "hk_prices.db",
+                            "hk_index_full_refresh")
 
 
 def _run_hk_index_gap_update(progress_cb=None, index_key=None):
@@ -3101,59 +3111,19 @@ def jp_index_full_refresh():
             return jsonify({"error": "กำลังอัพเดทราคาสด (Heatmap JP) อยู่ โปรดรอสักครู่"}), 409
         _state.update(running=True, done=False, error=None,
                       current=0, total=0, message="กำลังเริ่มดึงราคา JP Index ย้อนหลังสูงสุด...")
-    threading.Thread(target=_run_jp_index_full_refresh, daemon=True).start()
+    err = _spawn_worker(_run_jp_index_full_refresh)
+    if err:
+        _update(running=False, done=True, error=str(err), message=f"เริ่มงานไม่ได้: {err}")
+        return jsonify({"error": f"เริ่มงานไม่ได้: {err}"}), 500
     return jsonify({"ok": True})
 
 
 def _run_jp_index_full_refresh():
-    ok = False
-    try:
-        from sources import jp_index_membership
-        from sources.yahoo import fetch_all_batch
-        from core import jp_store
-
-        tickers = jp_index_membership.all_tickers(BASE_DIR)
-        if not tickers:
-            raise ValueError("ไม่พบรายชื่อดัชนี JP ใน data/jp_index_membership.json — รัน sync ก่อน")
-
-        def cb(current, total, msg):
-            _update(current=current, total=total, message=msg)
-
-        data = fetch_all_batch(tickers, callback=cb, period="max")
-        _update(current=len(tickers) - 1, total=len(tickers),
-                message=f"กำลังบันทึก {len(data)} ตัวลง jp_prices.db (หลายนาที อย่าเพิ่งปิด)...")
-        jp_store.init_db(BASE_DIR)
-        jp_store.upsert_bars(BASE_DIR, data)
-
-        missing = len(tickers) - len(data)
-        msg = f"เสร็จแล้ว! ดึงราคา JP Index ย้อนหลังสูงสุด {len(data)}/{len(tickers)} ตัว"
-        if missing:
-            msg += f" (ขาด {missing} ตัว)"
-        _update(done=True, message=msg)
-        run_log.record_run(BASE_DIR, "jp_index_full_refresh", True, msg)
-        ok = True
-    except Exception as e:
-        _update(done=True, error=str(e), message=f"เกิดข้อผิดพลาด: {e}")
-        run_log.record_run(BASE_DIR, "jp_index_full_refresh", False, str(e))
-    finally:
-        if not ok:
-            _update(running=False)
-
-    if not ok:
-        return
-
-    # ยัง "running=True" อยู่ตลอด build() นี้ — กันปุ่ม Index Max/Heatmap live update ตัวอื่น
-    # เริ่มเขียน jp_prices.db/jp_index_metrics.json ซ้อนกันก่อน build() รอบนี้เสร็จ
-    try:
-        from sources import jp_index_metrics
-        n_metrics = jp_index_metrics.build(BASE_DIR)
-        _jp_breadth_cache.clear()
-        _bump_cache_gen()
-        print(f"[JP Index] rebuilt metrics: {n_metrics} ticker")
-    except Exception as e:
-        print(f"[JP Index] metrics build error: {e}")
-    finally:
-        _update(running=False)
+    from sources import jp_index_membership, jp_index_metrics
+    from core import jp_store
+    _run_index_full_refresh(jp_index_membership, jp_store, jp_index_metrics,
+                            _jp_breadth_cache, "JP Index", "jp_prices.db",
+                            "jp_index_full_refresh")
 
 
 def _run_jp_index_gap_update(progress_cb=None):
@@ -7653,7 +7623,11 @@ def heatmap_live_update(region):
         if _state["running"]:
             return jsonify({"status": "busy"})
         state.update(running=True, error=None, done=False, n_fetched=None, n_live=None)
-    threading.Thread(target=_run_heatmap_live_update, args=(region, index_key), daemon=True).start()
+    err = _spawn_worker(_run_heatmap_live_update, (region, index_key))
+    if err:
+        with _lock:
+            state.update(running=False, error=str(err), done=True)
+        return jsonify({"error": f"เริ่มงานไม่ได้: {err}"}), 500
     return jsonify({"status": "started"})
 
 
@@ -10234,7 +10208,10 @@ def mirror_yahoo_index_sync():
             return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
         _state.update(running=True, done=False, error=None,
                       current=0, total=0, message="กำลังเริ่ม sync งบ Yahoo หุ้น US/HK ทั้ง mirror universe...")
-    threading.Thread(target=_run_mirror_yahoo_index_sync, daemon=True).start()
+    err = _spawn_worker(_run_mirror_yahoo_index_sync)
+    if err:
+        _update(running=False, done=True, error=str(err), message=f"เริ่มงานไม่ได้: {err}")
+        return jsonify({"error": f"เริ่มงานไม่ได้: {err}"}), 500
     return jsonify({"ok": True})
 
 

@@ -1,0 +1,212 @@
+========================================================================
+ แผนงาน: แยก "กำไรปกติ" / "กำไรพิเศษ" ในเมนู 🚀 หุ้นโตแรงรายไตรมาส
+ สร้าง: 2026-09-04
+ แหล่งข้อมูลที่เลือก: SET P&L รายไตรมาส (financialstatement API, account code)
+ สถานะ: ⬜ Phase 0 บางส่วนเสร็จ — รอผู้ใช้เคาะว่าเดินหน้าไหม
+        (ค้นพบ: feature ให้ค่าจริงกับหุ้น ~45-50% ของตลาดเท่านั้น ดูข้อ [3])
+========================================================================
+
+------------------------------------------------------------------------
+ ที่มา / โจทย์
+------------------------------------------------------------------------
+เมนู "หุ้นโตแรงรายไตรมาส" โชว์ กำไรสุทธิ + QoQ/YoY แต่กำไรสุทธิรวม
+"รายการครั้งเดียว" (FX, mark-to-market อนุพันธ์, ด้อยค่า) ทำให้ QoQ/YoY
+หลอก — หุ้นดู "โตแรง" ทั้งที่ธุรกิจจริงไม่ได้โต (หรือกลับกัน)
+
+ต้องการ: แยกกำไรสุทธิเป็น
+  - กำไรปกติ  = กำไรจากธุรกิจหลัก (recurring)
+  - กำไรพิเศษ = รายการไม่เกิดประจำ (non-recurring)
+
+เทียบ 4 แหล่งแล้ว (2026-09-04):
+  SET P&L รายไตรมาส  — มี account code 439700 "กำไร(ขาดทุน)อื่น" แยกชัด
+                        มาตรฐาน SET ตรงกันทุกบริษัท  ← เลือกอันนี้
+  Yahoo yahoo_q      — มี Normalized Income สำเร็จรูป แต่ช้า 1 ไตรมาส +
+                        auto-detect เพี้ยนกับหุ้นไทยบางตัว
+  SET company-highlight (set) — profitFromOtherActivity เป็นรายปี/6M เท่านั้น
+  Finnomena finnomena_q — มี income แค่ 5 บรรทัด ไม่มีทางแยก
+
+ผู้ใช้ยืนยัน: ปกติดูแค่ไตรมาสล่าสุด → ข้อจำกัดเรื่อง "ลึกแค่ ~4 ไตรมาส"
+ของ SET ไม่กระทบ use case จริง
+
+------------------------------------------------------------------------
+ ⚠️ 4 ข้อจำกัดที่รับรู้แล้ว (NOTES — อ่านก่อนแก้/ก่อนเชื่อตัวเลข)
+------------------------------------------------------------------------
+
+[1] ธนาคาร / เงินทุน / ประกัน จะได้ "—" (ไม่มีตัวเลข)
+    ผังบัญชีกลุ่มการเงินคนละแบบ — ไม่มี 439700, ไม่มีบรรทัด EBIT (409992)
+    เช็คแล้ว: KBANK/KTB/TISCO/BLA ไม่มีทั้งคู่
+    กลุ่มนี้ ~15% ของตลาดโดยจำนวน แต่รวมชื่อใหญ่ (KBANK/SCB/BBL/KTB/
+    ประกันชีวิต ฯลฯ) — feature นี้ใช้กับกลุ่มการเงินไม่ได้ ต้องโชว์ "n/a"
+    ไม่ใช่ 0
+
+[2] 439700 ครอบ ~90% ของ "รายการพิเศษ" ไม่ใช่ 100%
+    จับครบ: FX (439710) + อนุพันธ์ FVTPL (439720) + hedge (439770)
+            = ก้อนใหญ่สุดและผันผวนสุด
+    อาจตกหล่น: กำไรขายสินทรัพย์ / ด้อยค่า goodwill / ค่าเผื่อการด้อยค่า
+            ที่บางบริษัทลงใน 410200 "รายได้อื่น" หรือ 429800 "ค่าใช้จ่ายอื่น"
+            แทน — ตัวเหล่านี้จะไม่ถูกจับ
+    ตัดสินใจ: ไม่รวม 410200/429800 เข้าสูตร (เสี่ยง over-strip — สอง
+             บรรทัดนี้ปน recurring income เยอะ) ยอมพลาด one-off ที่ซ่อน
+             อยู่ในนั้น ดีกว่าตัดรายได้จริงทิ้ง
+    → ป้าย badge ต้องสื่อว่า "จับเท่าที่ SET แยกบรรทัดให้" ไม่ใช่
+      "กำไรปกติสมบูรณ์แบบ"
+
+[3] ~40% ของหุ้นนอกกลุ่มการเงิน ไม่แยกบรรทัด 439700 เลย
+    เช็ค Phase 0 (สุ่ม 17 ตัวนอกกลุ่มการเงิน): 7 ตัวไม่มี 439700 —
+    SCC / OSP / KCE / COM7 / BJC / CRC / CBG (Q2/2026)
+    ค้าปลีก/consumer หลายตัวไม่มี FX/อนุพันธ์จริง → "ไม่มีรายการพิเศษ" ถูกต้อง
+    แต่ SCC/OSP น่าจะมี (net เข้าบรรทัดอื่น / ค่าเล็ก SET ตัดแถวทิ้ง)
+    ผลลัพธ์: feature นี้ "core = net, special = 0" สำหรับหุ้นกลุ่มนี้ —
+    ไม่ได้เพิ่มข้อมูลอะไร และอาจพลาด one-off ที่ซ่อนอยู่
+    → เมื่อ special = 0 เพราะ "ไม่มีบรรทัด" ต้องต่างจาก special = 0 เพราะ
+      "มีบรรทัดแต่ค่า = 0" ในเชิง UI (badge/tooltip บอกว่า SET ไม่แยกให้)
+    → รวม [1]+[3]: feature ให้ค่าจริงกับหุ้นราว ๆ 45-50% ของตลาด
+      (นอกกลุ่มการเงิน ที่แยก 439700) เท่านั้น
+
+[4] ต้องแก้ pipeline — ตอนนี้ทิ้ง account code ทั้งหมด
+    _set_qpl_row_from_amt() ปัจจุบันเก็บแค่ 10 field (revenue/cogs/gross/
+    sga/op/fin_cost/pretax/tax/net) — โยน 439700/4397xx/431xxx ทิ้งหมด
+    ต้องเพิ่มให้เก็บ + carry ผ่าน merge + bake
+    ผลข้างเคียง: ไตรมาสเก่าที่ sync เก็บไว้แล้วจะไม่มี field ใหม่ (SET
+    periods endpoint refetch ย้อนหลังไม่ได้) — มีเฉพาะ ~4 ไตรมาสที่ยัง
+    อยู่ใน periods list ตอน sync รอบแรกหลัง deploy เป็นต้นไป
+
+------------------------------------------------------------------------
+ สูตร / นิยาม
+------------------------------------------------------------------------
+account code (SET taxonomy — ยืนยันแล้วว่า parent = ผลรวม children):
+  439700  กำไร(ขาดทุน)อื่น           ← parent total ใช้ตัวนี้ตรง ๆ
+    439710  จากอัตราแลกเปลี่ยน (FX)
+    439720  จากเครื่องมือการเงิน FVTPL (อนุพันธ์ mark-to-market)
+    439770  จากการบัญชีป้องกันความเสี่ยง (hedge)
+    439790  อื่น ๆ
+  431000  (กลับรายการ)ขาดทุนลดมูลค่าสินค้าคงเหลือ  ← option: รวมด้วย
+  431100  ส่วนแบ่งกำไร(ขาดทุน)บริษัทร่วม (equity method) ← ไม่รวม (recurring)
+
+หน่วย: SET รายงานเป็น "พันบาท" → ×1000 (เหมือน field อื่นใน _set_qpl_amt_map)
+หมายเหตุตำแหน่ง: 439700 อยู่ "เหนือ" บรรทัด EBIT 409992 ในงบ SET
+  → operating_profit / net_profit ปัจจุบันรวม 439700 อยู่แล้ว
+  → "กำไรปกติ" = ถอด 439700 ออก
+
+  special_pretax     = amt(439700)              (+ amt(431000) ถ้าเปิด option)
+  etr                = tax_expense / pretax_profit   guard → clamp [0, 0.35],
+                       fallback 0.20 ถ้าหารไม่ได้
+  special_after_tax  = special_pretax * (1 - etr)
+  core_profit        = net_profit - special_after_tax
+  special_share_pct  = |special_after_tax| / |net_profit| * 100
+  core_profit_yoy    = pct_change(core_profit, core_profit ของ Q เดียวกันปีก่อน)
+                       — None ถ้าปีก่อนไม่มี 439700 หรือฐาน <= 0
+
+badge ⚡ "กำไรพิเศษ": โชว์เมื่อ special_share_pct >= 20 AND
+                      |net_profit| >= 50 ลบ. (GROWTH_SCR_MIN_BASE กันฐานจิ๋ว)
+
+edge:
+  - net_profit = "ผู้ถือหุ้นบริษัทใหญ่" (ไม่รวม NCI) แต่ 439700 เป็นก่อนแบ่ง
+    NCI → มี error เล็กน้อยในหุ้นที่ NCI เยอะ ยอมรับได้
+  - ไม่มี 439700 ในงบ → special = None (กลุ่มการเงิน) หรือ 0 (นอกกลุ่ม
+    การเงินที่ไม่แยกบรรทัด) — สองเคสนี้ต่างกัน ดูข้อ [1]/[3]
+
+------------------------------------------------------------------------
+ ไฟล์ที่ต้องแตะ
+------------------------------------------------------------------------
+BACKEND — sources/financials_store.py
+  A. _set_qpl_amt_map()          + เก็บ key แบบ "#<accountCode>" คู่กับ key
+                                   ชื่อบัญชีเดิม (namespaced กันชนกัน) เพื่อให้
+                                   builder อ้าง code ได้ (ชื่อบัญชีสะกดไม่นิ่ง)
+  B. _set_qpl_row_from_amt()     + other_gl_pretax = g("#439700")
+                                   + fx_gl / deriv_gl / hedge_gl (เผื่อโชว์ย่อย)
+                                   + inv_writedown = g("#431000")
+                                   ใส่เข้า row ที่ return
+     * sub() ใน _fetch_set_cumulative_series ทำงานกับทุก key อยู่แล้ว
+       (set(a)|set(b)) — "#439700" ลบงวดสะสมได้เอง ไม่ต้องแก้
+  C. _merge_set_qpl_payload()    — เช็คว่า field-level merge รับ key ใหม่
+                                   (น่าจะได้อยู่แล้ว — merge ทั้ง dict)
+  D. _qpl_stock_growth_rows()    + pass-through: special_pretax (cur),
+                                   special_pretax_prior (prior key), tax/pretax
+                                   สำหรับคำนวณ etr
+  E. get_qpl_growth_screener()   + คำนวณ core_profit / special_after_tax /
+                                   core_profit_yoy / special_share_pct ต่อ row
+                                   (จุดเดียวกับที่แนบ ocf/ps อยู่แล้ว)
+                                   + param include_core=True (ปิดได้เผื่อ caller อื่น)
+  F. (option) compute_qpl_report() — SET layer ก็ผ่าน _set_qpl_row_from_amt
+                                   → เพิ่ม row["other_gl"] ให้ป๊อปอัพ
+                                   "🧾 งบการเงิน" โชว์ด้วย (ของแถมงานน้อย)
+
+BACKEND — app.py
+  G. /api/quarterly-growth-screener — ไม่ต้องแก้ logic (get_qpl_growth_screener
+     คำนวณให้) แค่เช็คว่า _qpl_parsed_cache invalidate ตอน sync (มีอยู่แล้ว
+     L5054 _qpl_parsed_cache.clear())
+
+FRONTEND — static/dashboard.js  (block QUARTERLY GROWTH SCREENER ~5268+)
+  H. GROWTH_SCR_COLS            + { key:'core_profit', label:'กำไรปกติ' }
+                                 + { key:'core_profit_yoy', label:'กำไรปกติ YoY' }
+  I. _GROWTH_SCR_CORE_COLS = new Set(['th'])  — โชว์ 2 คอลัมน์นี้เฉพาะ th
+     (_growthScrCols() filter เพิ่มเงื่อนไข เหมือน _GROWTH_SCR_HAS_SECTOR)
+  J. _growthScrCellHtml()       + case 'core_profit' → _growthScrThb + badge ⚡
+                                   ถ้า r.special_share_pct >= 20
+                                 + case 'core_profit_yoy' → pct() + สีเขียว/แดง
+  K. _growthScrMaskedRows()     + mask core_profit_yoy เมื่อ core_profit /
+                                   ฐานปีก่อน < GROWTH_SCR_MIN_BASE
+  L. tooltip ในคอลัมน์ + อัปเดต #growth-scr-th-desc ให้สรุปข้อจำกัด
+     ("เฉพาะรายการที่ SET แยกบรรทัด 'กำไร(ขาดทุน)อื่น' — FX/อนุพันธ์/hedge ·
+       กลุ่มธนาคาร-ประกันไม่มีข้อมูล")
+  M. bump ?v= ของ dashboard.js ใน set_dashboard.html
+     ([[cache-busting-version-bump]])
+
+ไม่แตะ:
+  - mobile/  (เมนูนี้ซ่อนบนมือถืออยู่แล้ว — [[which-codebase-local-vs-mobile]])
+  - financials.db มือ / ไตรมาสเก่าที่เก็บไว้แล้ว
+  - set_qpl_chart_series (company-highlight 5 ปี — ไม่มี account code แยก)
+
+------------------------------------------------------------------------
+ ลำดับงาน (phase)
+------------------------------------------------------------------------
+Phase 0 — verify สมมติฐาน  (บางส่วนทำแล้ว 2026-09-04)
+  [x] 439700 == ผลรวม 4397xx children — สุ่ม 24 ตัว: 0 mismatch ✓
+      ใช้ 439700 ตรง ๆ ได้
+  [x] กลุ่มการเงิน (แบงก์/เงินทุน/ประกัน) ไม่มี 439700 — สุ่ม 10 ตัว: 0 มี ✓
+  [x] หุ้นนอกกลุ่มการเงินที่ไม่มี 439700 — 7/17 (~40%, สูงกว่าเดาไว้มาก)
+  [ ] ชื่อบัญชี 439700 สะกดคงที่ข้ามงวดไหม (Phase 1 จะ key ด้วย code อยู่แล้ว
+      — เช็คเสริมว่า accountCode นิ่งข้ามปี)
+  [ ] เทียบ core_profit ที่คำนวณ กับบทวิเคราะห์โบรก 3-4 ตัว (sanity)
+  [ ] ตัดสิน option 431000 (inventory write-down) — รวมหรือไม่
+
+Phase 1 — backend pipeline  (A–E, ~2-3 ชม.)
+  [ ] แก้ A/B/C — เก็บ 439700 ผ่าน fetch → row → DB
+  [ ] สคริปต์ทดสอบ: sync set_qpl หุ้นสัก 20 ตัวลง scratchpad DB สำเนา
+      แล้วเช็ค payload มี #439700
+  [ ] แก้ D/E — core/special ออกมาใน /api/quarterly-growth-screener
+  [ ] curl เช็ค 5 เคส: PTT (special ใหญ่), CPALL (เล็ก), KBANK (—),
+      SCC (ไม่มีบรรทัด), หุ้นเล็กกำไรจิ๋ว (mask)
+
+Phase 2 — frontend  (H–M, ~2 ชม.)
+  [ ] คอลัมน์ + badge + tooltip + th-desc + ?v=
+  [ ] sort ได้, filter/search ไม่พัง, universe อื่น (US/HK/DR) ไม่โชว์คอลัมน์นี้
+
+Phase 3 — ทดสอบ  (~1 ชม.)
+  [ ] Playwright headless port 5011 ([[browser-testing-playwright-setup]]
+      [[server-kill-restart-pattern]]) — 0 console error, สลับ universe,
+      เลื่อน ◀▶ ไตรมาส, คลิกหุ้น
+  [ ] spot-check เลข PTT/TASCO/DELTA เทียบคำนวณมือจากงบ SET
+
+Phase 4 — เก็บข้อมูลจริง  (ผู้ใช้กดเอง)
+  [ ] กด "🔄 อัพเดทงบการเงินทั้งหมด" หรือ "ดึงเฉพาะที่ขาด/เก่า"
+      (full ~1 ชม. / partial เร็วกว่า) → 439700 เข้า DB สำหรับ ~4 ไตรมาสล่าสุด
+  [ ] เปิดหน้าเช็คจริง — งวดล่าสุดมี core/special ครบพอ
+
+Phase 5 — option ต่อยอด (ไว้ทีหลัง)
+  [ ] ป๊อปอัพ "🧾 งบการเงิน" โชว์ "กำไร(ขาดทุน)อื่น" จาก SET layer (F)
+  [ ] แท็บ DR: fallback Yahoo Total Unusual Items (คนละสูตร — ต้องคิด
+      เรื่อง label ว่ามาคนละแหล่ง)
+
+------------------------------------------------------------------------
+ ประเมินงาน
+------------------------------------------------------------------------
+Phase 0-3: ~1 วันทำงาน (6-8 ชม.)   Phase 4: ผู้ใช้กด + รอ sync
+เสี่ยงต่ำ — เพิ่ม field ไม่แตะ logic เดิม, universe อื่นไม่กระทบ,
+ไตรมาสเก่าแค่ไม่มีข้อมูล (ไม่ error)
+
+related memory: [[growth-screener-code-review-22C-2026-09-04]]
+               [[growth-screener-foreign-2026-08-30]]
+               [[qpl-quarterly-report-view]]  [[financials-menu-code-review-B3-2026-09-03]]
+========================================================================
