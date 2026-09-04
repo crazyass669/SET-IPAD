@@ -2764,6 +2764,19 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
         # แทนที่จะลบทันทีตรงนี้แล้วค่อย upsert ทีหลัง — เดิมถ้า upsert_bars ล้มเหลว
         # กลางทาง (ข้อมูลเสีย/exception) ราคาของ ticker เหล่านี้จะหายถาวรเพราะลบไปแล้ว
         replace_tickers = set(repaired)
+        # ตัวที่ตรวจพบ CA แต่ refetch เต็มไม่สำเร็จ (Yahoo partial/history-floor/exception
+        # หรือเกิน MAX_CA_REPAIR) — ห้าม upsert แท่ง overlap ฐานใหม่จาก fetch_gap_batch
+        # ทับ archive ฐานเก่า (upsert_bars จะ INSERT OR REPLACE ทีละแท่ง ตัวที่ไม่อยู่ใน
+        # replace_tickers ไม่ถูก DELETE ก่อน) ไม่งั้น series กลายเป็นฐานเก่าต่อฐานใหม่ +
+        # รอบหน้า detector เทียบกับแท่งที่เพิ่งเขียนทับ (ฐานใหม่แล้ว) เลยไม่เจอ mismatch
+        # อีก = seam ถาวรมองไม่เห็น — ข้ามรอบนี้ รอ retry รอบถัดไป (เหมือน run_quick_update/
+        # run_with_progress ใน services/refresh.py)
+        unrepaired = set(suspects) - repaired
+        for t in unrepaired:
+            data.pop(t, None)
+        if unrepaired:
+            print(f"[{label} CA] {len(unrepaired)} ตัวซ่อมไม่สำเร็จ — ข้ามการบันทึกรอบนี้ "
+                  f"(รอรอบถัดไป retry): {sorted(unrepaired)}")
 
     # ตัดแท่งล่าสุดทิ้งถ้ายังไม่นิ่ง (ตลาดกำลังเปิด/pre-market/after-hours) — เหตุผล
     # เดียวกับ dr_quick_update (ดูคอมเมนต์ยาวตรงนั้น) timezone ต่างกันตาม region

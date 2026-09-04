@@ -8,6 +8,7 @@ from core.store_factory import make_store
 DB_FILE = "jp_prices.db"
 
 _s = make_store(DB_FILE)
+_connect = _s._connect   # detect_ca_mismatch reuse connection เดียวทั้งลูป (ดู services/refresh.py)
 db_exists = _s.db_exists
 init_db = _s.init_db
 get_meta = _s.get_meta
