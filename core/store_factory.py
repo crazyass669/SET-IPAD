@@ -139,19 +139,22 @@ def make_store(db_file):
         finally:
             con.close()
 
-    def get_closes_map(base_dir, ticker, dates):
+    def get_closes_map(base_dir, ticker, dates, con=None):
         """คืน {date: close} ของ ticker เฉพาะวันที่ระบุ — ใช้เทียบแท่ง overlap
-        ตอนตรวจ corporate action (split detector) เหมือน core.store.get_closes_map"""
+        ตอนตรวจ corporate action (split detector) เหมือน core.store.get_closes_map
+
+        con: reuse connection ที่เปิดค้างไว้ได้ (detect_ca_mismatch loop) — ไม่ส่งมาก็เปิด/ปิดเอง"""
         if not dates or not db_exists(base_dir):
             return {}
-        con = _connect(base_dir)
+        _con = con or _connect(base_dir)
         try:
             q = ",".join("?" * len(dates))
-            rows = con.execute(
+            rows = _con.execute(
                 f"SELECT date, close FROM prices WHERE ticker=? AND date IN ({q})",
                 (ticker, *dates)).fetchall()
         finally:
-            con.close()
+            if con is None:
+                _con.close()
         return dict(rows)
 
     def delete_ticker_bars(base_dir, ticker):
@@ -237,7 +240,7 @@ def make_store(db_file):
             con.close()
 
     return SimpleNamespace(
-        DB_FILE=db_file,
+        DB_FILE=db_file, _connect=_connect,
         db_exists=db_exists, init_db=init_db, get_meta=get_meta,
         get_last_dates=get_last_dates, upsert_bars=upsert_bars,
         get_closes_map=get_closes_map, delete_ticker_bars=delete_ticker_bars,

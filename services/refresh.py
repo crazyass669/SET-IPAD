@@ -35,26 +35,38 @@ def detect_ca_mismatch(base_dir, new_data, tol=0.005, min_bad=2, store=None):
     เข้ามาแทนเพื่อใช้ split detector ตัวเดียวกันกับหุ้น US/HK (โครง get_closes_map เหมือนกัน)"""
     store = store or _default_ca_store
     suspects = []
-    for tick, d in new_data.items():
-        try:
-            dates  = [x.strftime("%Y-%m-%d") for x in d["close"].index]
-            if len(dates) < 2:
-                continue
-            closes = {dt: float(c) for dt, c in zip(dates, d["close"])}
-            # ตัดแท่งล่าสุดออก (วันนี้เป็นราคาใหม่จริง ไม่ใช่ overlap)
-            stored = store.get_closes_map(base_dir, tick, dates[:-1])
-            bad = 0
-            for dt, sc in stored.items():
-                nc = closes.get(dt)
-                if nc is None or sc is None or sc <= 0:
+    # เปิด connection เดียว reuse ทั้งลูป — เดิม get_closes_map เปิด/ปิด connection + 2 PRAGMA
+    # ต่อ ticker (~900 รอบ/รอบ non-fast-path Quick Update)
+    con = None
+    try:
+        if store.db_exists(base_dir):
+            con = store._connect(base_dir)
+    except Exception:
+        con = None
+    try:
+        for tick, d in new_data.items():
+            try:
+                dates  = [x.strftime("%Y-%m-%d") for x in d["close"].index]
+                if len(dates) < 2:
                     continue
-                if abs(nc - sc) / sc > tol:
-                    bad += 1
-                    if bad >= min_bad:
-                        suspects.append(tick)
-                        break
-        except Exception:
-            continue
+                closes = {dt: float(c) for dt, c in zip(dates, d["close"])}
+                # ตัดแท่งล่าสุดออก (วันนี้เป็นราคาใหม่จริง ไม่ใช่ overlap)
+                stored = store.get_closes_map(base_dir, tick, dates[:-1], con=con)
+                bad = 0
+                for dt, sc in stored.items():
+                    nc = closes.get(dt)
+                    if nc is None or sc is None or sc <= 0:
+                        continue
+                    if abs(nc - sc) / sc > tol:
+                        bad += 1
+                        if bad >= min_bad:
+                            suspects.append(tick)
+                            break
+            except Exception:
+                continue
+    finally:
+        if con is not None:
+            con.close()
     return suspects
 
 
@@ -79,11 +91,15 @@ def detect_flat_price_tickers(base_dir, days=14):
 MAX_CA_REPAIR = 30   # เพดานซ่อมต่อรอบ — mismatch เกินนี้ = ผิดปกติทั้งกระดาน
 
 
-def _repair_ca_tickers(base_dir, new_data, suspects, callback):
+def _repair_ca_tickers(base_dir, new_data, suspects, callback, store=None):
     """refetch เต็ม (period=max) เฉพาะหุ้นที่ตรวจพบ CA — แทนข้อมูลใน new_data
     คืน set ของ ticker ที่ซ่อมสำเร็จ (ผู้เรียกต้อง delete ticker เดิมออกก่อน upsert
     ทั้ง series ใหม่ — ดู save_history's replace_tickers ของหุ้นไทย หรือ
-    delete_ticker_bars + upsert_bars ตรงๆ ของ US/HK gap-update)"""
+    delete_ticker_bars + upsert_bars ตรงๆ ของ US/HK gap-update)
+
+    store: price store สำหรับเช็คจำนวนแท่งเดิม (default = core.store หุ้นไทย) — ส่ง
+    us_store/hk_store เข้ามาเมื่อเรียกจาก _run_index_gap_update"""
+    store = store or _default_ca_store
     if len(suspects) > MAX_CA_REPAIR:
         logging.warning(f"[CA] mismatch {len(suspects)} ตัว — มากผิดปกติ "
               f"(แหล่งข้อมูลอาจเปลี่ยนฐานทั้งกระดาน?) ซ่อมรอบนี้ {MAX_CA_REPAIR} ตัวแรก "
@@ -97,9 +113,25 @@ def _repair_ca_tickers(base_dir, new_data, suspects, callback):
             fd = full.get(tick)
             # sanity: ข้อมูลใหม่ต้องยาวพอ ไม่ใช่ response ขาดๆ
             if fd is not None and len(fd["close"]) >= 100:
+                # กันเขียนทับประวัติสะสมด้วย response ที่สั้นกว่าเดิม — refetch หลัง CA จริง
+                # ต้องได้จำนวนแท่ง ~เท่าเดิม (วันเทรดเท่ากัน แค่ราคาปรับย้อนหลัง) ถ้าได้น้อยกว่า
+                # 90% ของที่เก็บไว้ = Yahoo partial response / history floor (ดึงย้อนได้แค่บางช่วง)
+                # — save_history(replace_tickers=) จะ DELETE ทั้ง series แล้ว insert เท่าที่ได้
+                # ทำให้แท่งเก่า (set_prices.db ย้อนถึงปี 1983 — Yahoo ดึงกลับมาใหม่ไม่ได้, CLAUDE.md)
+                # หายถาวร
+                try:
+                    _old = store.get_ohlc_series(base_dir, tick)
+                    stored_n = len(_old["dates"]) if _old and _old.get("dates") else 0
+                except Exception:
+                    stored_n = 0
+                if stored_n and len(fd["close"]) < stored_n * 0.9:
+                    logging.warning(f"[CA] {tick}: refetch ได้ {len(fd['close'])} แท่ง < 90% ของที่เก็บไว้ "
+                          f"{stored_n} แท่ง — น่าจะ response ขาด/Yahoo history floor ข้าม replace "
+                          f"(คงข้อมูลเดิม รอ retry รอบถัดไป)")
+                    continue
                 new_data[tick] = fd
                 repaired.add(tick)
-                logging.info(f"[CA] repaired {tick}: refetch {len(fd['close'])} แท่ง")
+                logging.info(f"[CA] repaired {tick}: refetch {len(fd['close'])} แท่ง (เดิม {stored_n})")
             else:
                 logging.warning(f"[CA] {tick}: refetch ได้ข้อมูลสั้นผิดปกติ — ข้าม (คงข้อมูลเดิม)")
         except Exception as e:
@@ -263,10 +295,18 @@ def run_with_progress(callback, base_dir=None, period="max"):
     if suspects:
         logging.info(f"[CA] Full Refresh พบ overlap mismatch: {suspects[:MAX_CA_REPAIR]}")
         repaired = _repair_ca_tickers(base_dir, all_data, suspects, callback)
+        # ตัวที่ตรวจพบ mismatch แต่ซ่อมไม่สำเร็จ ห้าม upsert แท่งฐานใหม่ทับฐานเก่า — สำหรับ
+        # period ที่ไม่ใช่ 'max' (เช่น run_static_update.py fallback period='10y') all_data
+        # ของตัวนั้นคือ series ฐานใหม่ที่ยาวไม่ถึง history เต็ม พอ INSERT OR REPLACE ทับ
+        # จะเหลือรอยต่อฐานเก่า/ใหม่ถาวร (return/RS ปลอม) — pop ทิ้งเหมือน run_quick_update
+        # (metrics ยังคำนวณจาก DB เดิมได้ตามปกติ รอ detector เจอซ้ำรอบถัดไปแล้ว retry)
         unrepaired = set(suspects) - repaired
+        for t in unrepaired:
+            all_data.pop(t, None)
         if unrepaired:
             logging.warning(f"[CA] Full Refresh {len(unrepaired)} ตัวซ่อมไม่สำเร็จ — "
-                  f"บันทึกด้วยข้อมูลที่ดึงมาได้ตามปกติ (รอรอบถัดไป retry): {sorted(unrepaired)}")
+                  f"ข้ามการบันทึกรอบนี้ กันเขียนฐานใหม่บางส่วนทับฐานเก่า (รอรอบถัดไป retry): "
+                  f"{sorted(unrepaired)}")
 
     callback(total, total, f"บันทึกราคา ({len(all_data)} หุ้น)...")
     existing_hist = load_history(base_dir) if DUAL_WRITE_JSON else None
@@ -493,25 +533,46 @@ def run_quick_update(callback, base_dir=None, exclude_halted_early=False, reveri
                 quote_tickers = [t for t, d in active_map.items() if d == mode_date]
                 callback(0, total, f"ดึงราคาล่าสุด {asof} ({len(quote_tickers)} หุ้น, SET API)...")
                 quotes = fetch_quotes_batch(quote_tickers, callback=callback, signs_out=fast_signs)
-                stored_close = get_closes_on_date(base_dir, mode_date)
+                stored_close = get_closes_on_date(base_dir, mode_date, quote_tickers)
                 idx = pd.DatetimeIndex([pd.Timestamp(asof)])
-                fast_data, mismatched = {}, 0
+                fast_data, mismatched, checked = {}, 0, 0
                 for tick, q in quotes.items():
                     sc = stored_close.get(tick)
                     # sanity: prior ต้องตรงราคาปิดที่เก็บไว้จริง — กัน SET API คืน
                     # ข้อมูลเพี้ยน/คนละวัน ไม่งั้นจะเขียนแท่งผิดฐานราคาลง DB ถาวร
-                    if sc and q["prior"] is not None and abs(q["prior"] - sc) / sc > 0.005:
-                        mismatched += 1
-                        continue
+                    if sc and q["prior"] is not None:
+                        checked += 1
+                        if abs(q["prior"] - sc) / sc > 0.005:
+                            mismatched += 1
+                            continue
                     fast_data[tick] = {
                         "open":   pd.Series([q["open"]],   index=idx),
                         "high":   pd.Series([q["high"]],   index=idx),
                         "low":    pd.Series([q["low"]],    index=idx),
                         "close":  pd.Series([q["close"]],  index=idx),
+                        # SET API (list-by-symbols) ไม่มี adj_close — แท่งวันล่าสุดเสมอมี
+                        # adj_close == close (ค่าปรับย้อนหลังยังไม่เกิด) Yahoo gap/Full Refresh
+                        # รอบถัดไป REPLACE ทับด้วยค่าปรับจริงเองถ้ามีปันผล/แตกพาร์ — ถ้าไม่ใส่เลย
+                        # คอลัมน์ adj_close ของแท่งใหม่ทุกวันจะเป็น NULL สะสม แล้ว
+                        # price_analytics._clean_adj_series ตัดหาง NULL ทิ้งเงียบๆ (drawdown/
+                        # CAGR/seasonality ค้างที่ Full Refresh ครั้งล่าสุด)
+                        "adj_close": pd.Series([q["close"]], index=idx),
                         "volume": pd.Series([q["volume"]], index=idx),
                     }
                 if mismatched:
-                    logging.info(f"[QuickUpdate] SET API: prior ไม่ตรงราคาปิดเดิม ข้าม {mismatched} ตัว")
+                    logging.info(f"[QuickUpdate] SET API: prior ไม่ตรงราคาปิดเดิม ข้าม {mismatched}/{checked} ตัว")
+                # prior ที่ SET API คืนคือ "ราคาปิด session ก่อนหน้า ณ ตอน query" — ถ้าตลาดยัง
+                # เปิด/อยู่ระหว่าง session ที่ใหม่กว่า asof (chart-quotation ยังไม่ขึ้นแท่งวันนี้
+                # แต่ list-by-symbols คืน last = ราคาวิ่งของวันนี้แล้ว) prior จะเท่าราคาปิด asof
+                # ไม่ใช่ราคาปิด mode_date — หุ้นที่ราคาขยับระหว่าง mode_date→asof จะ mismatch
+                # ยกแผง ส่วนหุ้นราคานิ่งจะรอดเช็คแล้วโดนเขียน last (ราคากลางวันของวันถัดไป) ทับ
+                # เป็นแท่งปิด asof ถาวร — mismatch ratio สูงผิดปกติ = สัญญาณว่า quote คนละ
+                # session กับ asof ยกเลิก fast path ทั้งชุด ไป Yahoo (settle แล้ว) แทน
+                if checked >= 20 and mismatched / checked > 0.20:
+                    logging.warning(f"[QuickUpdate] SET API fast path ยกเลิก: prior ไม่ตรงราคาปิด "
+                          f"{mode_date} {mismatched}/{checked} ตัว (>20%) — quote น่าจะคนละ session "
+                          f"กับ asof {asof} (ตลาดยังเปิด?) fallback Yahoo gap-fill")
+                    fast_data = {}
                 if fast_data:
                     new_data = fast_data
                     logging.info(f"[QuickUpdate] SET API fast path: {len(new_data)}/{len(quote_tickers)} "
@@ -578,11 +639,19 @@ def run_quick_update(callback, base_dir=None, exclude_halted_early=False, reveri
     # set_prices.db) ซ้ำเองในเธรดพื้นหลัง ซึ่งจะแข่งกับ save_history() ของเธรดหลักด้านล่าง
     # ที่กำลังเขียนแท่งราคาวันใหม่ของรอบนี้อยู่พอดี (code review 2026-08-27)
     def _fund_worker():
-        fm, w = _fetch_fundamentals_with_fallback(
-            tickers, base_dir, lambda *a: None, log_prefix="[QuickUpdate]",
-            use_daily_val=True, ref_date=_max_last_str)
-        _fund_result["fund_map"] = fm
-        _fund_result["warning"]  = w
+        # ห่อ try กันเธรดตายเงียบ (เช่น import transitive ใน _fetch_fundamentals_with_fallback
+        # พัง) — เดิมไม่มี ทำให้ _fund_result ว่าง แล้ว consumer ด้านล่างเซ็ต mkt_cap/pe/pbv/
+        # div_yield = None ทับทั้งกระดานใน set_data.json โดยไม่มี warning
+        try:
+            fm, w = _fetch_fundamentals_with_fallback(
+                tickers, base_dir, lambda *a: None, log_prefix="[QuickUpdate]",
+                use_daily_val=True, ref_date=_max_last_str)
+            _fund_result["fund_map"] = fm
+            _fund_result["warning"]  = w
+        except Exception as e:
+            logging.exception("[QuickUpdate] เธรด fundamentals ล้มเหลว")
+            _fund_result["warning"] = (f"Fundamentals (P/E, P/BV, Market Cap, Div Yield): "
+                                       f"ดึงล้มเหลว ({e}) — คงค่าเดิมจากรอบก่อน")
     _fund_thread = threading.Thread(target=_fund_worker, daemon=True)
     _fund_thread.start()
 
@@ -680,9 +749,29 @@ def run_quick_update(callback, base_dir=None, exclude_halted_early=False, reveri
     # save + คำนวณ metrics ด้านบน) ตรงนี้แค่รอผล กันเวลาที่เพิ่มจริงเหลือแค่ส่วนต่าง
     # (ถ้า fetch เสร็จก่อนแล้ว join() คืนทันที)
     callback(total, total, f"รอผล Fundamentals ({len(stocks)} หุ้น)...")
-    _fund_thread.join()
-    fund_map     = _fund_result.get("fund_map", {})
+    # join แบบมี timeout — เดิม join() เปล่า ถ้า set_daily_val.sync_all ค้าง (socket ไม่มี
+    # timeout / SET.or.th แขวน) run_quick_update จะไม่คืน → _run_quick finally ไม่รัน →
+    # _state['running'] ค้าง True ทุก endpoint หนัก 409 จนกว่าจะ restart
+    _fund_thread.join(timeout=600)
+    if _fund_thread.is_alive():
+        logging.warning("[QuickUpdate] เธรด fundamentals ไม่เสร็จใน 600s — ใช้ค่าเดิมจากรอบก่อน")
+    fund_map     = _fund_result.get("fund_map") or {}
     fund_warning = _fund_result.get("warning")
+    if not fund_map:
+        # เธรดล้มเหลว/ยังไม่จบ — ห้ามปล่อยให้ทุกหุ้นได้ mkt_cap/pe/pbv/div_yield = None
+        # ทับ set_data.json เดิม อ่านค่าเดิมกลับมาใช้แทน
+        if _fund_thread.is_alive() and not fund_warning:
+            fund_warning = ("Fundamentals (P/E, P/BV, Market Cap, Div Yield): ดึงไม่เสร็จใน 10 นาที "
+                            "— คงค่าเดิมจากรอบก่อน")
+        try:
+            with open(os.path.join(base_dir, OUT_FILE), encoding="utf-8") as _f:
+                _old_stocks = json.load(_f).get("stocks", [])
+            fund_map = {s["ticker"]: {k: s.get(k) for k in ("mkt_cap", "pe", "pbv", "div_yield")}
+                        for s in _old_stocks if s.get("ticker")}
+            logging.warning(f"[QuickUpdate] fundamentals fallback: ใช้ค่าเดิมจาก {OUT_FILE} "
+                            f"({len(fund_map)} ตัว)")
+        except Exception as _e:
+            logging.warning(f"[QuickUpdate] fundamentals: อ่านค่าเดิมจาก {OUT_FILE} ไม่ได้ ({_e})")
     warnings = [fund_warning] if fund_warning else []
     for s in stocks:
         fund = fund_map.get(s["ticker"], {})

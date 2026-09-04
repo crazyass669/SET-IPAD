@@ -800,6 +800,12 @@ def start_quick_update():
     with _lock:
         if _state["running"]:
             return jsonify({"error": "กำลังดึงข้อมูลอยู่แล้ว โปรดรอสักครู่"}), 409
+        # Quick Update มีขั้นตอนย่อยอัพเดทราคา US/HK/JP Index (เขียน *_prices.db /
+        # *_index_metrics.json) — กันชนกับปุ่ม "⚡ อัพเดทราคา" ของ Heatmap ที่เขียนไฟล์
+        # เดียวกันภายใต้ _hm_live lock คนละตัว (heatmap_live_update เช็ค _state['running']
+        # ฝั่งตรงข้ามอยู่แล้ว ต้องเช็คสองทางถึงกัน race ได้จริง — เหมือน us_index_full_refresh)
+        if any(s["running"] for s in _HM_LIVE_STATE.values()):
+            return jsonify({"error": "กำลังอัพเดทราคาสด (Heatmap) อยู่ โปรดรอสักครู่"}), 409
         _state.update(running=True, done=False, error=None,
                       current=0, total=0, message="กำลังเริ่ม Quick Update...")
     threading.Thread(target=_run_quick, daemon=True).start()
@@ -2752,7 +2758,8 @@ def _run_index_gap_update(membership, store, region, label, progress_cb=None, sl
     suspects = detect_ca_mismatch(BASE_DIR, data, store=store)
     if suspects:
         print(f"[{label} CA] พบ overlap mismatch: {suspects}")
-        repaired = _repair_ca_tickers(BASE_DIR, data, suspects, progress_cb or (lambda *a: None))
+        repaired = _repair_ca_tickers(BASE_DIR, data, suspects, progress_cb or (lambda *a: None),
+                                      store=store)
         # ลบของเก่าทิ้งพร้อม insert ใหม่ในทรานแซกชันเดียว (ผ่าน upsert_bars ด้านล่าง)
         # แทนที่จะลบทันทีตรงนี้แล้วค่อย upsert ทีหลัง — เดิมถ้า upsert_bars ล้มเหลว
         # กลางทาง (ข้อมูลเสีย/exception) ราคาของ ticker เหล่านี้จะหายถาวรเพราะลบไปแล้ว
@@ -10823,7 +10830,23 @@ def market_stats_meta():
         return jsonify({"updated_at": None})
     pe_latest = ((data.get("pe") or {}).get("dates") or [None])[-1]
     pbv_latest = ((data.get("pbv") or {}).get("dates") or [None])[-1]
-    return jsonify({"updated_at": pe_latest, "pe_date": pe_latest, "pbv_date": pbv_latest})
+    # เดือนล่าสุดของข้อมูลที่มาจาก Market_Statistics_Month_th_TH.xls เท่านั้น
+    # (ปันผล/มูลค่าหลักทรัพย์/จำนวนบริษัทจดทะเบียน) — Table_PE/PBV.xls ไม่มี series พวกนี้
+    # อาจไม่ตรงกับ pe_date/pbv_date เมื่อ rebuild ด้วย Table_PE/PBV.xls ที่เก่ากว่า
+    _monthly_dates = [
+        d for d in (
+            ((data.get("div_yield") or {}).get("dates") or [None])[-1],
+            ((data.get("mkt_cap") or {}).get("dates") or [None])[-1],
+            ((data.get("breadth") or {}).get("dates") or [None])[-1],
+        ) if d
+    ]
+    monthly_latest = max(_monthly_dates) if _monthly_dates else None
+    return jsonify({
+        "updated_at": pe_latest,
+        "pe_date": pe_latest,
+        "pbv_date": pbv_latest,
+        "monthly_date": monthly_latest,
+    })
 
 
 @app.route("/api/set-daily-valuation")

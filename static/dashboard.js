@@ -28846,9 +28846,17 @@ async function _showValDataMonth() {
     const d = await (await fetch('/api/market-stats-meta?t=' + Date.now())).json();
     const pe = _thMonth(d.pe_date), pbv = _thMonth(d.pbv_date);
     const same = d.pe_date === d.pbv_date;
-    el.innerHTML = same
+    const peLine = same
       ? `📅 ข้อมูลล่าสุด: <b style="color:var(--fg)">${pe}</b> <span style="color:var(--muted)">(P/E &amp; P/BV จาก SET มักช้ากว่าปัจจุบัน ~1 เดือนเป็นปกติ)</span>`
       : `📅 ข้อมูลล่าสุด: P/E <b style="color:var(--fg)">${pe}</b> · P/BV <b style="color:var(--fg)">${pbv}</b> <span style="color:var(--muted)">(SET มักช้า ~1 เดือน)</span>`;
+    // ข้อมูลจาก Market_Statistics_Month_th_TH.xls (ปันผล / มูลค่าหลักทรัพย์ / จำนวนบริษัท
+    // จดทะเบียน) — โชว์แยกบรรทัดเสมอ กันเข้าใจผิดว่าตกรุ่นตาม P/E-P/BV เวลาอัพเดทคนละรอบ
+    let msLine = '';
+    if (d.monthly_date) {
+      const ms = _thMonth(d.monthly_date);
+      msLine = `<br>📅 Market Statistics (ปันผล / มูลค่าหลักทรัพย์ / จำนวนบริษัทจดทะเบียน): <b style="color:var(--fg)">${ms}</b> <span style="color:var(--muted)">(จาก Market_Statistics_Month_th_TH.xls · SET มักช้า ~1 เดือน)</span>`;
+    }
+    el.innerHTML = peLine + msLine;
   } catch (e) { el.textContent = ''; }
 }
 

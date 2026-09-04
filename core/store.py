@@ -14,6 +14,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from datetime import datetime
 
 OUT_FILE     = "set_data.json"
@@ -190,14 +191,29 @@ def iter_recent_series(base_dir, warmup_rows):
         con.close()
 
 
-def get_closes_on_date(base_dir, date):
-    """คืน {ticker: close} ของทุกหุ้นในวันที่ระบุ — ใช้เช็ค sanity ราคา 'prior' จาก
+def get_closes_on_date(base_dir, date, tickers=None):
+    """คืน {ticker: close} ของหุ้นในวันที่ระบุ — ใช้เช็ค sanity ราคา 'prior' จาก
     SET API fast path (Quick Update) เทียบกับราคาปิดที่เก็บไว้จริงของวันเดียวกัน
-    (ดู services/refresh.py::run_quick_update)"""
+    (ดู services/refresh.py::run_quick_update)
+
+    tickers: ระบุ list เพื่อจำกัดเฉพาะที่ต้องใช้ — WHERE date=? เพียวๆ สแกนทั้งตาราง
+    (PK คือ (ticker,date) WITHOUT ROWID ใช้ index กับ date ตัวเดียวไม่ได้ ~4.4M แถว)
+    ส่ง tickers มาทำให้เป็น point lookup ตาม PK ทีละตัวแทน"""
     if not db_exists(base_dir):
         return {}
     con = _connect(base_dir)
     try:
+        if tickers:
+            out = {}
+            tl = list(tickers)
+            for i in range(0, len(tl), 400):
+                chunk = tl[i:i + 400]
+                q = ",".join("?" * len(chunk))
+                rows = con.execute(
+                    f"SELECT ticker, close FROM prices WHERE date=? AND ticker IN ({q})",
+                    (date, *chunk)).fetchall()
+                out.update(rows)
+            return out
         rows = con.execute("SELECT ticker, close FROM prices WHERE date=?", (date,)).fetchall()
     finally:
         con.close()
@@ -314,20 +330,24 @@ def upsert_history_dict(base_dir, history):
         con.close()
 
 
-def get_closes_map(base_dir, ticker, dates):
+def get_closes_map(base_dir, ticker, dates, con=None):
     """คืน {date: close} ของ ticker เฉพาะวันที่ระบุ — ใช้เทียบแท่ง overlap
-    ตอนตรวจ corporate action (split detector)"""
+    ตอนตรวจ corporate action (split detector)
+
+    con: ส่ง connection ที่เปิดค้างไว้เข้ามา reuse ได้ (detect_ca_mismatch เรียกฟังก์ชันนี้
+    ~900 ครั้ง/รอบ non-fast-path Quick Update — เดิมเปิด/ปิด connection + 2 PRAGMA ทุกครั้ง)"""
     if not dates:
         return {}
     if db_exists(base_dir):
-        con = _connect(base_dir)
+        _con = con or _connect(base_dir)
         try:
             q = ",".join("?" * len(dates))
-            rows = con.execute(
+            rows = _con.execute(
                 f"SELECT date, close FROM prices WHERE ticker=? AND date IN ({q})",
                 (ticker, *dates)).fetchall()
         finally:
-            con.close()
+            if con is None:
+                _con.close()
         return dict(rows)
     s = get_series(base_dir, ticker)
     if not s:
@@ -364,7 +384,18 @@ def _atomic_write_json(path, obj):
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False)
-    os.replace(tmp, path)
+    # Windows: os.replace() ล้มด้วย PermissionError ถ้ามี reader เปิด handle ไฟล์ปลายทาง
+    # ค้างอยู่พอดี (เช่น /api/data กำลังอ่าน set_data.json อยู่ — คนละล็อกกับ writer) —
+    # POSIX ไม่มีปัญหานี้ retry สั้นๆ แทนที่จะปล่อยให้ Full Refresh/Quick Update ที่สำเร็จ
+    # ครบแล้วรายงานว่า "ล้มเหลว" (reader ปล่อย handle ภายในไม่กี่ ms)
+    for _attempt in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if _attempt == 19:
+                raise
+            time.sleep(0.1)
 
 
 def _check_stock_count(base_dir, new_count, min_ratio=0.8):
