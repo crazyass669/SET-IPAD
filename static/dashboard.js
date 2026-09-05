@@ -15043,8 +15043,13 @@ const _BO_TIP_FROM_LOW  = '% เด้งขึ้นจาก 52W Low — ย�
 function _tipIconToggle(el, ev) {
   ev.stopPropagation();
   document.querySelectorAll('.tt-open').forEach(o => { if (o !== el) o.classList.remove('tt-open'); });
-  _tipIconPosition(el);
+  // ต้องเปิดกล่อง (.tt-open -> display:block) ก่อนคำนวณตำแหน่งเสมอ ไม่งั้น
+  // box.offsetHeight ยังเป็น 0 (display:none) ทำให้ _tipIconPosition คำนวณ bh=0
+  // แล้วข้ามลอจิก "เปิดขึ้นบนถ้าล้นขอบล่างจอ" ไปเงียบๆ — พบว่ากล่องเปิดค้างล้นขอบจอ
+  // จริงเวลาแตะไอคอนหัวตารางที่ sticky อยู่ใกล้ขอบล่างจอ (มือถือ/แท็บเล็ต)
+  const opening = !el.classList.contains('tt-open');
   el.classList.toggle('tt-open');
+  if (opening) _tipIconPosition(el);
 }
 
 // คำนวณตำแหน่ง tipbox (.scr-tip-box เป็น position:fixed อ้างอิง viewport ไม่ใช่ตัวไอคอน
