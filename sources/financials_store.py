@@ -3596,7 +3596,8 @@ def get_sector_qpl_compare(base_dir, sector_by_symbol):
         items = buckets.get(sector, [])
         rev_vals = [r["revenue"] for r in items if r["revenue"] is not None]
         rev_sum = sum(rev_vals) if rev_vals else None
-        profit_sum = sum(r["net_profit"] for r in items if r["net_profit"] is not None)
+        profit_vals = [r["net_profit"] for r in items if r["net_profit"] is not None]
+        profit_sum = sum(profit_vals) if profit_vals else None
         all_syms = sector_all_symbols.get(sector, set())
         reported_syms = {r["symbol"] for r in items}
         missing_syms = sorted(all_syms - reported_syms)
@@ -3612,10 +3613,13 @@ def get_sector_qpl_compare(base_dir, sector_by_symbol):
             "profit": profit_sum,
             "profit_yoy": _yoy("net_profit", "profit_prior"),
             "profit_qoq": _yoy("net_profit", "profit_prior_qoq"),
-            "npm": round(profit_sum / rev_sum * 100, 1) if rev_sum else None,
+            "npm": round(profit_sum / rev_sum * 100, 1) if rev_sum and profit_sum is not None else None,
             "profit_stocks": sum(1 for r in items if r["net_profit"] is not None and r["net_profit"] > 0),
             "loss_stocks": sum(1 for r in items if r["net_profit"] is not None and r["net_profit"] < 0),
-            "profit_share_pct": round(profit_sum / total_profit_all * 100, 1) if total_profit_all else None,
+            # total_profit_all > 0 กันเคสตลาดรวมขาดทุนสุทธิ (ฐานติดลบ) พลิกเครื่องหมาย
+            # profit_share_pct ทั้งกระดาน เหมือน _yoy ด้านบน
+            "profit_share_pct": round(profit_sum / total_profit_all * 100, 1)
+                if total_profit_all > 0 and profit_sum is not None else None,
             # profit_prior/profit_prior_qoq (กำไรงวดก่อนแบบดิบ) ใส่มาด้วยแม้ profit_yoy/qoq จะ
             # เป็น None ตอนฐานติดลบ — ให้ caller เช็คหุ้นพลิกกำไร (prior<=0 แต่ net_profit>0) ได้เอง
             # โดยไม่ต้องพึ่ง % ที่ไม่มีความหมายในเคสนี้
