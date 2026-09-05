@@ -9047,7 +9047,7 @@ const FS_FILTERS = [
   { k: 'ocf_ni_ratio',        label: 'คุณภาพกำไร OCF/NI ≥', unit: 'เท่า', cmp: 'gte',
     tip: '<strong>คุณภาพกำไร (OCF/NI)</strong><br>กระแสเงินสดดำเนินงาน ÷ กำไรสุทธิ (สะสม 4 ไตรมาส)<br><br>เช่น ใส่ <b>0.8</b> = เงินสดเข้าจริง ≥ 80% ของกำไร<br><span style="color:var(--text2)">ต่ำกว่า 0.8 = กำไรโตแต่เงินไม่เข้า (จับหุ้นแต่งบัญชี)</span>' },
   { k: 'f_score',             label: 'F-Score ≥', unit: '/9', cmp: 'gte',
-    tip: '<strong>Piotroski F-Score (0-9)</strong><br>คะแนนรวม 9 ข้อ ความสามารถทำกำไร/งบดุล/ประสิทธิภาพ ยิ่งสูงยิ่งดี<br><br>เช่น ใส่ <b>7</b> = ผ่านอย่างน้อย 7 ใน 9 ข้อ<br><span style="color:var(--text2)">ต้องมีงบ Yahoo annual ครบถึงจะคำนวณได้ — หุ้น US/HK นอกพอร์ตส่วนใหญ่ยังไม่มีค่า (มีเฉพาะตัวที่เคยเปิดดูหรือ sync แล้ว)</span>' },
+    tip: '<strong>Piotroski F-Score (0-9)</strong><br>คะแนนรวม 9 ข้อ ความสามารถทำกำไร/งบดุล/ประสิทธิภาพ ยิ่งสูงยิ่งดี<br><br>เช่น ใส่ <b>7</b> = ผ่านอย่างน้อย 7 ข้อ<br><span style="color:var(--text2)">ต้องมีงบ Yahoo annual ครบถึงจะคำนวณได้ — หุ้น US/HK นอกพอร์ตส่วนใหญ่ยังไม่มีค่า (มีเฉพาะตัวที่เคยเปิดดูหรือ sync แล้ว) · ⚠ ตัวกรองนี้เทียบ "จำนวนข้อที่ผ่าน" ตรงๆ — บางหุ้นเช็คได้จริงน้อยกว่า 9 ข้อ (Yahoo ขาดฟิลด์บางตัว) คะแนนเต็มจริงจะต่ำกว่า 9 ไปด้วย ดูเลขหลัง "/" ในคอลัมน์ F-Score ของผลลัพธ์เพื่อดูจำนวนข้อที่เช็คได้จริงต่อหุ้น</span>' },
   { k: 'z_zone',              label: 'Z-Score โซน', cmp: 'eq',
     options: [{ v: 'safe', label: '🟢 ปลอดภัย' }, { v: 'grey', label: '🟡 เทา' }, { v: 'distress', label: '🔴 เสี่ยง' }],
     tip: '<strong>Altman Z-Score โซนความเสี่ยงล้มละลาย</strong><br>ปลอดภัย/เทา/เสี่ยง ตามเกณฑ์ Z (DR) หรือ Z\'\' emerging market (ไทย)<br><br><span style="color:var(--text2)">ไม่มีค่าสำหรับกลุ่มการเงิน (ธนาคาร/ประกัน) เพราะสูตร Altman ใช้ไม่ได้กับงบดุลกลุ่มนี้ — ตัดออกจากผลลัพธ์เสมอเมื่อกรองด้วยตัวนี้ · ต้องมีงบ Yahoo annual ครบถึงจะคำนวณได้เหมือน F-Score</span>' },
@@ -9537,7 +9537,7 @@ const FS_COLS = [
   { k: 'roa', label: 'ROA%' },
   { k: 'net_margin', label: 'NM%', tip: 'อัตรากำไรสุทธิ' },
   { k: 'ocf_ni_ratio', label: 'OCF/NI', tip: 'คุณภาพกำไร: เงินสดเข้าจริง ÷ กำไร (TTM) — เขียว ≥1 · ส้ม <0.8' },
-  { k: 'f_score', label: 'F-Score', tip: 'Piotroski F-Score 0-9 — เขียว 8-9 · แดง 0-3' },
+  { k: 'f_score', label: 'F-Score', tip: 'Piotroski F-Score — คะแนนรวมสูงสุดต่อหุ้นอาจน้อยกว่า 9 ถ้า Yahoo ขาดฟิลด์บางตัว (ดูเลขหลัง "/" ต่อแถว) สีคำนวณตามสัดส่วนของคะแนนเต็มจริง ไม่ใช่ /9 ตายตัว — เขียว ≥89% · แดง <44%' },
   { k: 'z_zone', label: 'Z-Score', tip: 'Altman Z-Score โซนความเสี่ยงล้มละลาย — ไม่มีค่า = กลุ่มการเงิน หรือยังไม่มีงบ Yahoo' },
   { k: 'de_ratio', label: 'D/E', tip: 'หนี้ต่อทุน — แดง >2' },
   { k: 'rev_yoy_q', label: 'รายได้YoY%', sep: true, tip: 'รายได้ไตรมาสล่าสุด เทียบไตรมาสเดียวกันปีก่อน' },
@@ -9579,7 +9579,13 @@ const FS_COL_CLR = {
   roa:                 v => v < 0 ? 'var(--red)' : '',
   net_margin:          v => v < 0 ? 'var(--red)' : '',
   ocf_ni_ratio:        v => v >= 1 ? 'var(--green)' : (v < 0 ? 'var(--red)' : (v < 0.8 ? '#e8a33d' : '')),
-  f_score:             v => v >= 8 ? 'var(--green)' : (v >= 6 ? '#7ee787' : (v >= 4 ? '#d29922' : 'var(--red)')),
+  // อิงสัดส่วนกับ f_score_max (จำนวนข้อที่เช็คได้จริง ≤9) ไม่ใช่ /9 ตายตัว — กันหุ้นที่
+  // เช็คได้แค่ 3 ข้อแล้วผ่านครบ 3/3 (100%) โดนตัดสินเป็น "แดง" เพราะ 3 < 4 บนสเกล /9 เดิม
+  f_score:             (v, r) => {
+    const max = (r && r.f_score_max) || 9;
+    const pct = v / max;
+    return pct >= 8 / 9 ? 'var(--green)' : (pct >= 6 / 9 ? '#7ee787' : (pct >= 4 / 9 ? '#d29922' : 'var(--red)'));
+  },
   de_ratio:            v => v > 2 ? 'var(--red)' : '',
   rev_yoy_q:           _fsPosNeg,
   profit_yoy_q:        _fsPosNeg,
@@ -10221,11 +10227,13 @@ function fsSort(key) {
   runFscreener();
 }
 
-function _fsFmt(v, key) {
+function _fsFmt(v, key, r) {
   if (v == null || (typeof v === 'number' && isNaN(v))) return '<span style="color:var(--text2)">–</span>';
   if (typeof v === 'string') return v;
   if (key === 'high_season_q') return 'Q' + v;   // ไตรมาสไฮซีซั่น
-  if (key === 'f_score') return Math.round(v) + '/9';
+  // ตัวหารคือจำนวนข้อที่ "เช็คได้จริง" (≤9 — Yahoo ขาดฟิลด์บางตัวจะตัดข้อนั้นออก)
+  // ไม่ใช่ 9 ตายตัวเสมอไป (เทียบ f_score_max ที่ backend ส่งมา — ดู compute_fscore)
+  if (key === 'f_score') return Math.round(v) + '/' + ((r && r.f_score_max) ?? 9);
   if (key === 'profit_accel_streak' || key === 'rev_accel_streak' || key === 'quarters_available' ||
       key === 'roe15_streak_q' || key === 'rs') return Math.round(v);
   if (key === 'pct_off_high52' || key === 'profit_yoy_q' || key === 'profit_ttm_yoy' ||
@@ -10250,7 +10258,7 @@ const _SEP_CSS = 'border-left:1px solid var(--border);padding-left:10px';
 // ค่า + สีต่อคอลัมน์ (ไม่รวม symbol — ใช้ทั้งตารางหลักและ popup รายละเอียด กันโค้ดสีตรง
 // z_zone/market เพี้ยนกันระหว่างสองที่)
 function _fsColHtml(r, c) {
-  const v = _fsFmt(r[c.k], c.k);
+  const v = _fsFmt(r[c.k], c.k, r);
   if (c.k === 'market') {
     const cc = FS_MKT_BADGE[r.market] || 'var(--text2)';
     return `<span style="background:${cc}22;color:${cc};padding:1px 7px;border-radius:4px;font-size:10.5px;font-weight:600">${r.market || '—'}</span>`;
@@ -10267,7 +10275,7 @@ function _fsColHtml(r, c) {
   const raw = r[c.k];
   const clr = FS_COL_CLR[c.k];
   if (clr && raw != null && (typeof raw === 'number' || c.k === 'esg_rating')) {
-    const col = clr(raw);
+    const col = clr(raw, r);
     if (col) return `<span style="color:${col};font-weight:600">${v}</span>`;
   }
   return v;
@@ -27463,8 +27471,12 @@ document.addEventListener('click', e => {
   document.querySelectorAll('.scr-tip-icon.tt-open, .regime-wrap.tt-open').forEach(el => { if (el !== hit) el.classList.remove('tt-open'); });
   if (hit) {
     e.stopPropagation();
-    if (hit.classList.contains('scr-tip-icon')) _tipIconPosition(hit);
+    // ต้องเปิดกล่อง (.tt-open) ก่อนคำนวณตำแหน่งเสมอ ไม่งั้น box.offsetHeight ยังเป็น 0
+    // (display:none) ทำให้ _tipIconPosition ข้ามลอจิก "เปิดขึ้นบนถ้าล้นขอบล่างจอ" ไปเงียบๆ
+    // (เหมือนบั๊กที่แก้ใน _tipIconToggle — จุดนี้เป็น delegate คนละทางที่พลาดจุดเดียวกัน)
+    const opening = hit.classList.contains('scr-tip-icon') && !hit.classList.contains('tt-open');
     hit.classList.toggle('tt-open');
+    if (opening) _tipIconPosition(hit);
   }
 });
 
