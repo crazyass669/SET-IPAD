@@ -16846,6 +16846,7 @@ function setCmMode(mode) {
   const tvPanel     = document.getElementById('cm-tv-panel');
   const finPanel    = document.getElementById('cm-fin-panel');
   const stocksPanel = document.getElementById('cm-stocks-panel');
+  const stocksStats = document.getElementById('cm-stocks-stats');
   const btnChart    = document.getElementById('cm-mode-chart');
   const btnTv       = document.getElementById('cm-mode-tv');
   const btnFin      = document.getElementById('cm-mode-fin');
@@ -16858,6 +16859,7 @@ function setCmMode(mode) {
   if (tvPanel)     tvPanel.style.display     = 'none';
   if (finPanel)    finPanel.style.display    = 'none';
   if (stocksPanel) stocksPanel.style.display = 'none';
+  if (stocksStats) stocksStats.style.display = 'none';
   [btnChart, btnTv, btnFin, btnStocks].forEach(b => {
     if (b) { b.style.background = 'var(--card2)'; b.style.color = 'var(--text2)'; }
   });
@@ -16877,6 +16879,7 @@ function setCmMode(mode) {
     _loadCmFin();
   } else if (mode === 'stocks') {
     if (stocksPanel) { stocksPanel.style.display = ''; }
+    if (stocksStats) { stocksStats.style.display = ''; }
     if (btnStocks)   { btnStocks.style.background = 'var(--accent)'; btnStocks.style.color = '#fff'; }
     _renderIdxStocks(_cmStock?.symbol);
   }
@@ -16954,10 +16957,15 @@ function _idxStocksSortArrow(col) {
 
 function _renderIdxStocks(sym) {
   const panel = document.getElementById('cm-stocks-panel');
+  const stats = document.getElementById('cm-stocks-stats');
   if (!panel || !DATA) return;
   _idxStocksLastSym = sym;
   const names = IDX_TO_SECTOR[sym] || [];
-  if (!names.length) { panel.innerHTML = '<div class="text2" style="padding:20px;text-align:center">ไม่มีข้อมูลหุ้นรายตัวสำหรับดัชนีนี้</div>'; return; }
+  if (!names.length) {
+    if (stats) stats.innerHTML = '';
+    panel.innerHTML = '<div class="text2" style="padding:20px;text-align:center">ไม่มีข้อมูลหุ้นรายตัวสำหรับดัชนีนี้</div>';
+    return;
+  }
 
   let stocks = DATA.stocks.filter(s => names.includes(s.sector) || names.includes(s.industry));
   stocks.sort((a,b) => {
@@ -16976,14 +16984,15 @@ function _renderIdxStocks(sym) {
   const pctFmt = v => v==null?'—':`<span class="${v>0?'green':v<0?'red':''}">${v>0?'+':''}${v}%</span>`;
   const emaBadge = v => v == null ? '<span style="color:var(--text2)">—</span>' : v ? '<span style="color:#3fb950">▲</span>' : '<span style="color:#f85149">▼</span>';
 
-  panel.innerHTML = `
+  if (stats) stats.innerHTML = `
     <div style="display:flex;gap:20px;padding:12px 0 16px;border-bottom:1px solid var(--border);margin-bottom:12px">
       <div class="modal-stat"><div class="modal-stat-val">${n}</div><div class="modal-stat-lbl">หุ้น</div></div>
       <div class="modal-stat"><div class="modal-stat-val ${avg1d>0?'green':avg1d<0?'red':''}">${avg1d!=null?(+avg1d>0?'+':'')+avg1d+'%':'—'}</div><div class="modal-stat-lbl">Avg 1D</div></div>
       <div class="modal-stat"><div class="modal-stat-val ${avg1m>0?'green':avg1m<0?'red':''}">${avg1m!=null?(+avg1m>0?'+':'')+avg1m+'%':'—'}</div><div class="modal-stat-lbl">Avg 1M</div></div>
       <div class="modal-stat"><div class="modal-stat-val ${rsC(avgRS)}">${avgRS??'—'}</div><div class="modal-stat-lbl">Avg RS</div></div>
       <div class="modal-stat"><div class="modal-stat-val">${pctEma??'—'}%</div><div class="modal-stat-lbl">%&gt;EMA50</div></div>
-    </div>
+    </div>`;
+  panel.innerHTML = `
     <table class="sector-table" style="width:100%">
       <thead><tr>
         <th style="cursor:pointer" onclick="idxStocksSortBy('rs_score')">RS${colTipIcon('rs_score')}<span class="sort-ind${_idxStocksSortCol==='rs_score'?' on':''}">${_idxStocksSortArrow('rs_score')}</span></th>
@@ -17014,6 +17023,9 @@ function _renderIdxStocks(sym) {
         </tr>`).join('')}
       </tbody>
     </table>`;
+  // panel เป็น node เดิมทุกครั้ง (แค่ innerHTML ถูกแทนที่) ต่างจากเดิมที่ div ห่อ overflow-x ถูก
+  // สร้างใหม่ทุก render (scrollLeft เริ่ม 0 เสมอ) — รีเซ็ตเองกันเลื่อนขวาค้างข้ามการ sort/สลับดัชนี
+  panel.scrollLeft = 0;
 }
 
 // สลับมุมมองตารางงบการเงินในป็อปอัพกราฟหุ้น: 'y' รายปี (Finnomena ~16-20 ปี / Yahoo ~4 ปี)
@@ -26574,6 +26586,9 @@ function renderDRTable() {
   }
 
   const wrap = document.getElementById('dr-table-wrap');
+  // .tbl-scroll-page (max-height:70vh sticky header) มีไว้เฉพาะมุมมอง Table — Cards/Heatmap
+  // ไม่ใช่ตาราง ไม่ควรโดนบีบใส่กล่อง scroll ในตัวเอง (เดิมติด class คงที่ใน HTML กระทบทั้ง 3 มุมมอง)
+  wrap.classList.toggle('tbl-scroll-page', _drView === 'table');
   if (!stocks.length) { wrap.innerHTML = '<div class="empty">ไม่พบข้อมูลที่ตรงกับเงื่อนไข</div>'; return; }
 
   if (_drView === 'cards') {
@@ -27103,6 +27118,8 @@ function renderETFTable() {
   stocks = _sortETF(stocks);
 
   const wrap = document.getElementById('etf-table-wrap');
+  // .tbl-scroll-page มีไว้เฉพาะมุมมอง Table เหมือน DR (ดูคอมเมนต์ renderDRTable)
+  wrap.classList.toggle('tbl-scroll-page', _etfView === 'table');
   if (!stocks.length) { wrap.innerHTML = '<div class="empty">ไม่พบ ETF ที่ตรงกับเงื่อนไข</div>'; return; }
 
   if (_etfView === 'cards') {

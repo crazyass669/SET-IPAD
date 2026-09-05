@@ -186,8 +186,12 @@
   /* ตาราง "🚀 หุ้นโตแรงรายไตรมาส" — ตรึงหัวตารางไว้เวลาเลื่อนดูรายชื่อหุ้น (บาง universe
      เช่น US มีเป็นพันแถว) ต่างจาก .mini-tbl-scroll ตรงสูงเป็น % ของหน้าจอ ไม่ใช่ card เล็ก
      เพราะตารางนี้คือเนื้อหาหลักของทั้งหน้า ไม่ใช่ widget ย่อย */
-  .growth-scr-tbl-scroll { max-height: 70vh; overflow-y: auto; }
-  .growth-scr-tbl-scroll .tbl thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+  /* .tbl-scroll-page (เพิ่มทีหลัง, ดู "Sticky header — ตารางเต็มหน้า" ด้านล่าง) เป็น pattern
+     เดียวกันเป๊ะ (70vh + sticky thead) รวม declaration ไว้จุดเดียวกันแทนก็อปแยก กันแก้จุดหนึ่งแล้ว
+     ลืมอีกจุด */
+  .growth-scr-tbl-scroll, .tbl-scroll-page { max-height: 70vh; overflow-y: auto; }
+  .growth-scr-tbl-scroll .tbl thead th,
+  .tbl-scroll-page table thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
 
   /* ตารางผล Screener+ / เทียบเพื่อน (.data-table) — ไม่เคยมี padding ของตัวเอง
      โดน global reset (* { padding:0 }) ทับจนเซลล์ชิดกันหมด ดูแน่นเกินไป */
@@ -415,12 +419,23 @@
      scope ด้วย #sector-modal (ไม่ใช้ .modal-body เฉยๆ) กันกระทบ modal อื่นที่ยังไม่ตรวจ */
   #sector-modal .tbl thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
 
+  /* จอสัมผัส: ทั้ง 6 จุดข้างบนใช้ id เป็น scope (specificity มี ID) ทับ z-index:4 ที่
+     @media(pointer:coarse) ตั้งไว้ให้มุมซ้ายบน (.tbl thead th:first-child, บรรทัด ~1317) ด้วย
+     z-index:1 เท่ากับ th อื่นทั้งแถว (มุมซ้ายบนโดนคอลัมน์ถัดไปทับเวลาเลื่อนแนวนอนบนจอสัมผัส) —
+     ประกาศ z-index สูงกว่าซ้ำเฉพาะ :first-child กันไว้ */
+  #short-table-wrap .tbl thead th:first-child,
+  #val-halt-result .tbl thead th:first-child,
+  #val-foreign-room-result .tbl thead th:first-child,
+  #val-delisted-result .tbl thead th:first-child,
+  #dh-cc-table-wrap .tbl thead th:first-child,
+  #sector-modal .tbl thead th:first-child {
+    z-index: 4;
+  }
+
   /* Sticky header — ตารางเต็มหน้า (ไม่มีกล่อง scroll เดิม, เลื่อนทั้งหน้า) — nav bar บนสุด
      สูงไม่คงที่ เลยกำหนด offset แบบ px ตายตัวไม่ได้ จึงห่อตารางเองเป็นกล่อง scroll แทน
-     (pattern เดียวกับ .growth-scr-tbl-scroll) (2026-09-05 Phase 2 rollout ชุด A:
-     หุ้นทั้งหมด + Watchlist) */
-  .tbl-scroll-page { max-height: 70vh; overflow-y: auto; }
-  .tbl-scroll-page table thead th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+     (pattern เดียวกับ .growth-scr-tbl-scroll — declaration รวมไว้จุดเดียวกันแล้ว บรรทัด ~189)
+     (2026-09-05 Phase 2 rollout ชุด A: หุ้นทั้งหมด + Watchlist) */
 
   /* Sticky header — งบการเงิน #fin-result (ทุก sub-view: QPL/Financial Health/Factsheet/
      Cashflow/Merged/YoY/Dividends/Custom Avg/Full report) + #fin-cmp-result (ตารางเทียบราย
@@ -450,9 +465,13 @@
      thead 2 แถว (QPL: ปี + Q1-Q4 / เทียบ 2 หุ้นรายไตรมาส: ปี + Q1-Q4) แถวแรก sticky top:0 ปกติ
      แถวที่ 2 ต้อง sticky ต่ำกว่าแถวแรกอีกเท่ากับความสูงจริงของแถวแรก (วัดจริงจาก Playwright ~26-27px
      ที่ font-size/padding ปัจจุบัน — ถ้าแก้ font-size/padding ของแถวปีในอนาคต ต้องปรับเลขนี้ตาม
-     ไม่ผูกอัตโนมัติเพราะ CSS ไม่มี sibling-height function) (2026-09-05 Phase 3 rollout) */
-  #fin-result div[style*="overflow-x:auto"],
-  #fin-cmp-result div[style*="overflow-x:auto"] {
+     ไม่ผูกอัตโนมัติเพราะ CSS ไม่มี sibling-height function) (2026-09-05 Phase 3 rollout)
+
+     :has(table) กันไว้ — #fin-result มี div[style*="overflow-x:auto"] อีกหลายจุดที่ไม่ใช่ตาราง
+     (Sankey SVG, กราฟแท่งปันผล) ถ้าไม่กรองจะโดน max-height:65vh บีบเป็นกล่อง scroll ไปด้วยทั้งที่
+     ไม่ใช่เป้าหมาย (สูงเกิน 65vh เฉพาะจอเตี้ยผิดปกติ แต่ตัดไว้กันชัวร์) */
+  #fin-result div[style*="overflow-x:auto"]:has(table),
+  #fin-cmp-result div[style*="overflow-x:auto"]:has(table) {
     max-height: 65vh;
     overflow-y: auto;
   }
@@ -468,8 +487,15 @@
     top: 27px;
   }
 
-  /* คอลัมน์แรกของ #fin-result มี sticky left+z-index:3 อยู่แล้ว (บรรทัด ~200 ด้านบน) มุมซ้ายบน
-     เลย "ค้าง" ครบ 2 แกนไปโดยไม่ต้องแก้อะไรเพิ่ม */
+  /* มุมซ้ายบน (sticky ทั้ง left+top) ต้องลอยเหนือ th อื่นในแถวเดียวกันที่ sticky top อย่างเดียว —
+     selector ข้างบน (#fin-result div[...] .tbl thead th) มี specificity สูงกว่า
+     "#fin-result .tbl thead th:first-child { z-index:3 }" (บรรทัด ~208) เพราะมี attribute
+     selector เพิ่ม เลยทับ z-index:3 เดิมด้วย z-index:2 ที่เท่ากับ th ข้างเคียงหมด (มุมซ้ายบนเป็น
+     DOM แรกสุด โดนคอลัมน์อื่นที่มาทีหลังทับ) ต้องประกาศ z-index สูงกว่าซ้ำตรงนี้เอง */
+  #fin-result div[style*="overflow-x:auto"] .tbl thead th:first-child,
+  #fin-cmp-result div[style*="overflow-x:auto"] .tbl thead th:first-child {
+    z-index: 3;
+  }
 
   /* Sticky header — ชุด B (Screener กลุ่ม, 2026-09-05 Phase 2 rollout) — ตารางถูกห่อด้วย
      <div style="overflow-x:auto"> เดี่ยวๆ เหมือน #fin-result (Phase 3 pattern) แก้ด้วยวิธีเดียวกัน:
@@ -477,11 +503,14 @@
      — DCF Screener / Fair Value P/B·P/E Screener (ทั้งตลาด หลายร้อยแถว) + Stock Screener หลัก
      (#screener-results div เป็น <div class="card" style="overflow-x:auto"> — attribute selector
      จับได้เหมือนกันไม่สนใจ class อื่นที่ติดมาด้วย) + Peer Compare "หุ้นเทียบกับกลุ่ม" ตาราง
-     "กำไรปกติโตแรงสุด" (สูงสุด ~64 แถว/กลุ่ม) — thead ทุกจุดในชุดนี้มีแถวเดียว ไม่ต้อง offset แถว 2 */
-  #dcf-screener-table div[style*="overflow-x:auto"],
-  #pbvpe-screener-table div[style*="overflow-x:auto"],
-  #screener-results div[style*="overflow-x:auto"],
-  #peer-group-body div[style*="overflow-x:auto"] {
+     "กำไรปกติโตแรงสุด" (สูงสุด ~64 แถว/กลุ่ม) — thead ทุกจุดในชุดนี้มีแถวเดียว ไม่ต้อง offset แถว 2
+
+     :has(table) — #peer-group-body มี div[style*="overflow-x:auto"] อีก 2 จุดที่ห่อกราฟ
+     Margins/P-E (canvas ไม่ใช่ table) ต้องกันไม่ให้โดน max-height:65vh บีบไปด้วย */
+  #dcf-screener-table div[style*="overflow-x:auto"]:has(table),
+  #pbvpe-screener-table div[style*="overflow-x:auto"]:has(table),
+  #screener-results div[style*="overflow-x:auto"]:has(table),
+  #peer-group-body div[style*="overflow-x:auto"]:has(table) {
     max-height: 65vh;
     overflow-y: auto;
   }
@@ -493,6 +522,16 @@
     top: 0;
     background: var(--bg2);
     z-index: 2;
+  }
+  /* จอสัมผัส (@media pointer:coarse บรรทัด ~1307) ตั้งคอลัมน์แรกเป็น sticky-left ให้ .tbl/
+     .data-table ทุกตาราง + ตั้งมุมซ้ายบน z-index:4 ไว้แยก — selector ข้างบนมี id เฉพาะจุด
+     (specificity สูงกว่า) เลยทับ z-index:4 นั้นด้วย z-index:2 เท่ากับ th ข้างเคียง (มุมซ้ายบน
+     โดนทับเวลาเลื่อนแนวนอนบนจอสัมผัส) ประกาศซ้ำตรงนี้กันไว้ */
+  #dcf-screener-table div[style*="overflow-x:auto"] .tbl thead th:first-child,
+  #pbvpe-screener-table div[style*="overflow-x:auto"] .tbl thead th:first-child,
+  #screener-results div[style*="overflow-x:auto"] .tbl thead th:first-child,
+  #peer-group-body div[style*="overflow-x:auto"] .data-table thead th:first-child {
+    z-index: 4;
   }
 
   /* Peer Compare "Sector Workspace" heatmap (#ws-heatmap-body) — มีกล่อง scroll
@@ -529,6 +568,11 @@
     top: 0;
     background: var(--bg2);
     z-index: 1;
+  }
+  /* จอสัมผัส: มุมซ้ายบนต้องลอยเหนือคอลัมน์แรกของทุกแถว (sticky-left z-index:2 ทั่วไป, บรรทัด
+     ~1308) ไม่ใช่แค่เหนือ th อื่นในแถวหัว (ดูคอมเมนต์จุดเดียวกันที่ #dcf-screener-table ด้านบน) */
+  #dh-table-wrap div[style*="overflow-x:auto"] .tbl thead th:first-child {
+    z-index: 4;
   }
 
   /* ปฏิทิน — มุมมองรายการ (#cal-list-card, _calRenderList) — ตารางหลักของหน้านี้ วัดจริงมีได้ถึง

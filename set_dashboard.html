@@ -30,7 +30,7 @@
 <meta name="apple-mobile-web-app-title" content="SET Dash">
 <title>SET Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📈</text></svg>">
-<link rel="stylesheet" href="static/dashboard.css?v=20260905g">
+<link rel="stylesheet" href="static/dashboard.css?v=20260905h">
 <script src="static/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -5206,7 +5206,11 @@
       <div id="cm-fin-band" style="margin-top:12px"></div>
     </div>
     <!-- STOCKS IN SECTOR PANEL -->
-    <div id="cm-stocks-panel" style="display:none;max-height:62vh;overflow-y:auto;overflow-x:auto;padding-top:4px"></div>
+    <!-- สรุปสถิติ (Avg 1D/1M/RS/%>EMA50) แยกจาก #cm-stocks-panel เพื่อไม่ให้เลื่อนแนวนอนไปกับ
+         ตาราง — panel ด้านล่างต้องมี overflow-x:auto ของตัวเองเพื่อให้ sticky thead อ้างอิงถูกกล่อง
+         (ดูคอมเมนต์ dashboard.css Phase 4) ถ้าเอาสรุปนี้ไว้ในกล่องเดียวกันมันจะโดนเลื่อนตามไปด้วย -->
+    <div id="cm-stocks-stats" style="display:none;padding-top:4px"></div>
+    <div id="cm-stocks-panel" style="display:none;max-height:62vh;overflow-y:auto;overflow-x:auto"></div>
     <!-- INSIDER SECTION -->
     <div id="popup-insider-wrap" style="border-top:1px solid rgba(255,255,255,0.07);margin-top:10px;padding-top:10px">
       <div style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none"
@@ -5704,6 +5708,6 @@
 
 <!--DASH_TOKEN-->
 <script src="static/fin_translations.js?v=20260802a"></script>
-<script src="static/dashboard.js?v=20260905g"></script>
+<script src="static/dashboard.js?v=20260905h"></script>
 </body>
 </html>
