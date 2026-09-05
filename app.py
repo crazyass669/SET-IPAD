@@ -12278,6 +12278,17 @@ def short_sales_daily_update():
                     "short_pos_pct": 0, "daily": [],
                 })
 
+            def _implied_turnover(val, pct):
+                """ถอดฐานมูลค่าซื้อขาย (ตัวหารของ %) กลับจาก val/pct — ถ้า pct ปัดเป็น
+                0.0000 พอดีทั้งที่ val ไม่ใช่ศูนย์ (pct จริงอยู่ในช่วง [0, 0.00005)) ห้าม
+                คืน 0 เพราะทำให้ตัวหารรวมหายไปทั้งก้อน แล้ว % สะสมพองเกินจริง — ประมาณด้วย
+                จุดกึ่งกลางช่วงปัดเศษแทน (turnover ใหญ่มาก -> pct ของงวดนี้ยังคงใกล้ 0 ต่อไป)"""
+                if not val:
+                    return 0
+                if pct and pct > 0:
+                    return val / pct * 100
+                return val / 0.000025 * 100
+
             # (1) พยายาม rebuild ทั้งปีก่อน — แม่นสุดเพราะตั้งยอดใหม่จากศูนย์
             presp = _query_range(_dd(int(trade_date[:4]), 1, 1), end_d)
             if presp is not None and presp.get("shortSales"):
@@ -12327,9 +12338,8 @@ def short_sales_daily_update():
                         old_val = (s.get("period_value") or 0) * 1e6
                         old_pct = s.get("period_pct_value") or 0
                         # ถอดฐานมูลค่าซื้อขาย (ตัวหารของ %) กลับจากค่าที่เก็บไว้ เพื่อรวม % ข้ามช่วง
-                        turnover = (old_val / old_pct * 100) if old_pct > 0 else 0
-                        if val_new and pct_new > 0:
-                            turnover += val_new / pct_new * 100
+                        turnover = _implied_turnover(old_val, old_pct)
+                        turnover += _implied_turnover(val_new, pct_new)
                         s["period_vol"]       = (s.get("period_vol") or 0) + int(item.get("totalVolume") or 0)
                         s["period_local_vol"] = (s.get("period_local_vol") or 0) + int(item.get("localVolume") or 0)
                         s["period_nvdr_vol"]  = (s.get("period_nvdr_vol") or 0) + int(item.get("nvdrVolume") or 0)
