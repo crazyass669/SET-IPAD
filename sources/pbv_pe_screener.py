@@ -16,8 +16,15 @@
 
 กฎที่พลาดไม่ได้ (ดู memory pbv-pe-screener-plan / dcf-screener-batch):
 - r > g เสมอ (guard เดียวกับ WACC > Terminal Growth) → ไม่ผ่าน = คำนวณไม่ได้
+- (r − g) ต้องห่างกันอย่างน้อย MIN_R_G_SPREAD_PCT (ไม่ใช่แค่ r > g) — ตัวส่วนของ jpb_x/jpe_x
+  ทั้งคู่ ถ้า r ใกล้ g มากๆ (เช่นกรอก coe_pct เองให้ห่าง g แค่ 0.5pp) ตัวคูณระเบิดได้เหมือน
+  ROE ที่ไม่ถูก cap แม้ ROE จะดูสมเหตุสมผลก็ตาม (near-singularity ที่ตัวส่วน ไม่ใช่ตัวเศษ)
 - ROE > g เสมอ (ไม่งั้น retention ratio > 1 / มูลค่าติดลบ) → ไม่ผ่าน = คำนวณไม่ได้
 - BVPS > 0 ถึงคำนวณ P/B ได้ · EPS > 0 ถึงคำนวณ P/E ได้ (คำนวณได้ข้างเดียวก็ถือว่า ok)
+- ROE ที่ป้อนเข้าสูตรจริง (จุด jpb_x/jpe_x) ถูก cap เพิ่มที่ ROE_VALUATION_CAP_PCT — ค่า winsorize
+  ±300% ของ factor_snapshot._sane() เป็นแค่ display-safe (กันขยะดันขึ้นหัวตาราง sort ธรรมดา)
+  ไม่ใช่ valuation-safe ROE ที่พุ่งเกินนี้มักมาจากทุนบางผิดปกติ (buyback หนัก/ตัดขาดทุนก้อนใหญ่
+  ปีก่อนกดฐาน equity ต่ำ) ป้อนตรงเข้าสูตร perpetuity แบบไม่มี cap จะพองมูลค่าเกินจริงหลายสิบเท่า
 
 ไม่ยิง network เลย — อ่านจาก factor_snapshot (roe/bvps/eps_latest/pe_value/pbv_value ที่
 คำนวณไว้แล้ว) + set_data.json (price/mkt_cap/sector สด) ล้วนๆ จึงรันได้เร็ว (ไม่กี่วินาที
@@ -40,8 +47,23 @@ BETA = 1.00
 ERP_PCT = 5.5
 LONG_TERM_GROWTH_PCT = 3.0   # g "ถาวร" ทั้งตลาด (แนวเดียวกับ Terminal Growth 2.5% ของ DCF
                              # แต่ตั้งสูงกว่าเล็กน้อย = โต book value/กำไร nominal ระยะยาว)
-# หมายเหตุ: threshold "|upside| เกิน 300% = noise" บังคับใช้ฝั่ง static/dashboard.js เท่านั้น
-# (PBV_PE_SCR_EXTREME_UPSIDE_PCT) — ไม่มี field ผลลัพธ์ฝั่งนี้ที่ต้องใช้ค่านี้เลย
+# หมายเหตุ: threshold "|upside| เกิน 300% = noise" เป็นแค่ไอคอนเตือน ⚠️ ฝั่ง static/dashboard.js
+# (PBV_PE_SCR_EXTREME_UPSIDE_PCT) ไม่ได้กรองแถวทิ้งจากตาราง (upside สูงมากยังอาจเป็นสัญญาณจริงได้
+# ถ้าหุ้นถูกมากจริงๆ เทียบ Fair Value ที่ ROE ยังถูก cap แล้ว — ดู ROE_VALUATION_CAP_PCT ด้านล่าง)
+
+# ROE ที่ป้อนเข้าสูตร Justified P/B·P/E จริง (jpb_x/jpe_x) ต้อง "สมเหตุสมผลระยะยาว" กว่าแค่ผ่าน
+# factor_snapshot._sane(roe, -300, 300) — ค่านั้นออกแบบมากันขยะไม่ให้ดันขึ้นหัวตาราง sort ธรรมดา
+# เท่านั้น ไม่ใช่ valuation-safe สำหรับป้อนสูตร Gordon growth ที่สมมติ ROE คงที่ไปตลอด (perpetuity)
+# ROE ที่พุ่งเกินนี้มักมาจากทุนบางผิดปกติ (buyback หนัก/ตัดขาดทุนก้อนใหญ่ปีก่อนกดฐาน equity ต่ำ)
+# ไม่ใช่อัตรายั่งยืนจริง — cap เฉพาะตอนคำนวณ Fair Value เท่านั้น (roe_pct ที่โชว์ในตาราง/CSV
+# ยังเป็นค่าจริงเสมอ ไม่ถูก cap ที่นี่)
+ROE_VALUATION_CAP_PCT = 60.0
+
+# (r − g) เป็นตัวส่วนของทั้ง jpb_x และ jpe_x — แค่กัน r <= g ("ต้องมากกว่า") ไม่พอ เพราะ r ที่ห่าง
+# g แค่เศษเสี้ยว pp (กรอก coe_pct เองให้ห่าง g นิดเดียว) ก็ทำให้ตัวส่วนเข้าใกล้ศูนย์และตัวคูณระเบิด
+# ได้เหมือนกัน แม้ ROE จะปกติดีไม่ชนแคป ROE_VALUATION_CAP_PCT เลยก็ตาม (คนละจุดกับบั๊ก ROE ด้านบน
+# แต่ผลลัพธ์เดียวกัน) — บังคับ margin ขั้นต่ำเป็น "จุด" (percentage point) ไม่ใช่ %
+MIN_R_G_SPREAD_PCT = 1.0
 
 
 def _connect(base_dir):
@@ -157,10 +179,14 @@ def compute_fair_value_for_symbol(sym, entry, snap, is_financial, assumptions=No
         return base, "ไม่มี ROE ในงบ"
     base["roe_pct"] = round(roe_pct, 2)
 
-    if r_pct <= g_pct:
-        return base, "Cost of Equity ต้องมากกว่า g"
+    if r_pct - g_pct < MIN_R_G_SPREAD_PCT:
+        return base, f"Cost of Equity ต้องมากกว่า g อย่างน้อย {MIN_R_G_SPREAD_PCT:.1f} จุด (ห่างกันน้อยกว่านี้ตัวคูณจะระเบิด)"
     if roe_pct <= g_pct:
         return base, "ROE ต้องมากกว่า g (ไม่งั้นมูลค่าติดลบ)"
+
+    # cap เฉพาะค่าที่ป้อนสูตร valuation จริง — roe_pct (raw) ยังคงถูกโชว์ใน base ด้านบนตามจริง
+    # (ดู ROE_VALUATION_CAP_PCT ด้านบนไฟล์สำหรับเหตุผล)
+    roe_calc_pct = min(roe_pct, ROE_VALUATION_CAP_PCT)
 
     bvps = snap.get("bvps")
     eps = snap.get("eps_latest")
@@ -168,7 +194,7 @@ def compute_fair_value_for_symbol(sym, entry, snap, is_financial, assumptions=No
     base["eps"] = round(eps, 2) if eps is not None else None
 
     # Justified P/B = (ROE − g) / (r − g)  — ratio ของ % หารกันได้ตรงๆ (unit ตัดกัน)
-    jpb_x = (roe_pct - g_pct) / (r_pct - g_pct)
+    jpb_x = (roe_calc_pct - g_pct) / (r_pct - g_pct)
     if bvps is not None and bvps > 0 and jpb_x > 0:
         jpb_fair = jpb_x * bvps
         base["jpb_x"] = round(jpb_x, 2)
@@ -177,9 +203,9 @@ def compute_fair_value_for_symbol(sym, entry, snap, is_financial, assumptions=No
 
     # Justified P/E = (1 − g/ROE) / (r − g)  [leading, ROE-based]
     # ตัวส่วน (r − g) ต้องเป็น "ทศนิยม" (ไม่ใช่ %) เพราะตัวเศษ (1 − g/ROE) ไร้หน่วย
-    # g/ROE เป็น ratio → ใช้ % หารกันได้ (g_pct/roe_pct)
+    # g/ROE เป็น ratio → ใช้ % หารกันได้ (g_pct/roe_calc_pct)
     g_dec, r_dec = g_pct / 100.0, r_pct / 100.0
-    jpe_x = (1.0 - g_pct / roe_pct) / (r_dec - g_dec)
+    jpe_x = (1.0 - g_pct / roe_calc_pct) / (r_dec - g_dec)
     if eps is not None and eps > 0 and jpe_x > 0:
         jpe_fair = jpe_x * eps
         base["jpe_x"] = round(jpe_x, 2)
