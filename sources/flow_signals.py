@@ -65,13 +65,18 @@ def insider_signal(rows):
 TREND_WINDOW = 21   # snapshots ล่าสุดที่ใช้คิดเทรนด์ (~1 เดือนทำการ)
 
 
-def _trend_dir(daily, key, min_points=3, window=TREND_WINDOW):
+def _trend_dir(daily, key, min_points=6, window=TREND_WINDOW):
     """เทรนด์ของ key ใน daily array: เทียบค่าเฉลี่ย 'ช่วงท้าย' vs 'ช่วงต้น'
     คืน (change_pct_of_series, avg_recent, avg_early) หรือ None ถ้าข้อมูลไม่พอ
 
     ตัดเหลือ window snapshots ล่าสุดก่อนคำนวณเสมอ — daily เก็บยาวถึง 365 วัน ถ้าใช้
     ทั้งชุดจะกลายเป็นเทียบ "ค่าเฉลี่ย 4 เดือนแรกของปี vs 4 เดือนท้าย" ซึ่งไม่ใช่
-    สัญญาณ flow ระยะใกล้อีกต่อไป (ตอนเขียนมีข้อมูลแค่ ~24 วันเลยยังไม่เห็นอาการ)"""
+    สัญญาณ flow ระยะใกล้อีกต่อไป (ตอนเขียนมีข้อมูลแค่ ~24 วันเลยยังไม่เห็นอาการ)
+
+    min_points=6 (เดิม 3) — k = max(1, len//3) ต้องได้ >= 2 เสมอ ตอน min_points=3
+    หุ้นที่เพิ่งเริ่มมี snapshot (len 3-5) จะได้ k=1 คือเทียบ "ค่าดิบวันเดียว vs
+    วันเดียว" แต่ยังถูกตัดสินด้วยเกณฑ์ ±0.1pp เดียวกับกรณี window เต็ม (k สูงสุด 7)
+    ทำให้ noise รายวันธรรมดากลายเป็นสัญญาณ "ยืนยันเทรนด์" หลอกได้ง่ายกว่าที่ควร"""
     vals = [(d.get("date"), d.get(key)) for d in (daily or [])
             if d.get(key) is not None and d.get("date") is not None]
     if len(vals) < min_points:

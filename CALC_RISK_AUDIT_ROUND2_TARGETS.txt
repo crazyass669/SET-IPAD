@@ -287,6 +287,21 @@ sec_store.query_insider_trades แปลงเป็น None ก่อนแล�
   เท่ากัน) — ไม่ใช่บั๊กคำนวณผิด แต่ควรบันทึกไว้เป็น methodology note เหมือนข้อ A/B
   ท้าย CALC_RISK_AUDIT_2026-09-05.txt ถ้าตรวจแล้วไม่ใช่บั๊ก
 
+>>> ตรวจแล้ว/แก้แล้ว 2026-09-06 — /code-review medium ยืนยัน 2 จุดเดิม (sentinel
+price=-1, MIN_INSIDER_NET_BAHT) แก้ไปแล้วจริงตามที่ noted ไว้ก่อนหน้า ไม่ใช่บั๊กซ้ำ
+· score summation ยืนยันเป็น design เจตนา (dashboard.js ใช้ Math.abs(score)<3 /
+score>=2 / n_signals===3 เป็นตัวนับ consensus ไม่ใช่ magnitude) ไม่ใช่บั๊ก ไม่แก้
+· เจอบั๊กจริง 1 จุดใหม่ (ไม่ได้อยู่ใน checklist เดิมตอนร่างไฟล์): _trend_dir
+min_points=3 → k=max(1,len//3)=1 เมื่อหุ้นมี daily แค่ 3-5 จุด ทำให้ "ค่าเฉลี่ยช่วง
+ต้น/ท้าย" กลายเป็นจุดดิบเดี่ยวๆ แต่ยังถูกตัดสินด้วยเกณฑ์ ±0.1pp เดียวกับกรณี window
+เต็ม (k สูงสุด 7) — แก้โดยขยับ min_points เป็น 6 (บังคับ k>=2 เสมอ) ยืนยันด้วย
+synthetic test จริง (4 จุด, สวิงวันเดียว -0.15pp): min_points=3 คืน dir ยืนยันเทรนด์
+ผิดๆ, min_points=6 คืน None ถูกต้อง · เช็คข้อมูลจริงใน short_sales_data.json/
+nvdr_data.json ตอนนี้ไม่มีหุ้นไหนโดน edge case นี้อยู่ (มีแค่ 3 ตัวที่ daily<6 จุด
+และไม่มีตัวไหนสวิง >=0.1pp) — เป็นการแก้เชิงป้องกันไว้ก่อนหุ้นใหม่เข้าชุดข้อมูล ·
+restart server (waitress ไม่ hot-reload) ผ่าน /api/kill-duplicate-servers +
+/api/restart แล้วยิง /api/flow-signals ยืนยัน 279 หุ้น ไม่มี error
+
 
 ########################################################################
 [6] เมนู: Insider — Accumulated Signal + Hedge Holdings % (ลำดับ 14A + 20 เดิม)

@@ -2146,7 +2146,7 @@ def _etf_do_rebuild():
             # ไม่ใช่ % ส่วนต่าง เช่น TDEX pnavRatio=1.29 แต่ premium จริง = -0.34%) คำนวณเองจาก
             # ราคาปิดล่าสุด (etf_prices.db) เทียบ nav(SET ณ nav_date, ปกติ T-1) แทน ไม่ใช้ pnavRatio ดิบ
             nav_val = e.get("nav")
-            premium_pct = round((price - nav_val) / nav_val * 100, 2) if nav_val else None
+            premium_pct = round((price - nav_val) / nav_val * 100, 2) if nav_val and nav_val > 0 else None
 
             results.append({
                 "symbol":  e["symbol"],
@@ -12298,6 +12298,7 @@ def short_sales_daily_update():
                 for s in stocks.values():
                     s["period_vol"] = s["period_local_vol"] = s["period_nvdr_vol"] = 0
                     s["period_value"] = s["period_pct_value"] = 0
+                    s["short_pos_local"] = s["short_pos_nvdr"] = 0
                 for item in presp["shortSales"]:
                     sym = item.get("symbol")
                     if not sym:
