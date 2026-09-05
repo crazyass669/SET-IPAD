@@ -53,11 +53,19 @@ def compute_breadth(base_dir, days=DISPLAY_DAYS, store=None):
     valid = close.notna()
     n_universe = valid.sum(axis=1)
 
+    # thin-universe guard: n_universe ต่ำกว่านี้ (เช่น HK/JP ช่วงต้นข้อมูลที่มีแค่
+    # 1-2 ตัว) ทำให้ % สั่นแรงโดยไม่มีความหมายทางสถิติ — เกณฑ์เดียวกับ
+    # summarize_groups.avg() min_n=3 (core/metrics.py:250)
+    MIN_UNIVERSE = 3
+    thin = n_universe < MIN_UNIVERSE
+
     # ---- % above EMA (per-stock EMA ตามแนวเดียวกับ metrics หลัก) ----
     ema50  = close.ewm(span=50,  adjust=False).mean()
     ema200 = close.ewm(span=200, adjust=False).mean()
     pct50  = (close > ema50).sum(axis=1)  / n_universe * 100
     pct200 = (close > ema200).sum(axis=1) / n_universe * 100
+    pct50[thin]  = np.nan
+    pct200[thin] = np.nan
 
     # ---- Advances / Declines + McClellan ----
     # ffill ก่อน diff — กันหุ้นที่กลับมาเทรดหลังหยุดพัก (SP/H) หายไปจาก adv/dec วันแรกที่กลับมา:
@@ -69,6 +77,7 @@ def compute_breadth(base_dir, days=DISPLAY_DAYS, store=None):
     dec = (chg < 0).sum(axis=1)
     denom = (adv + dec).replace(0, np.nan)
     rana = 1000.0 * (adv - dec) / denom          # ratio-adjusted net advances
+    rana[thin] = np.nan   # กัน universe จิ๋วป้อน noise เข้า EMA/summation ด้านล่าง
     rana = rana.ffill()
     mcc_osc = rana.ewm(span=19, adjust=False).mean() - rana.ewm(span=39, adjust=False).mean()
 

@@ -2036,6 +2036,13 @@ async function _rotFetchJson(url, timeoutMs, timeoutMsg) {
   return d;
 }
 
+// ขนาดขั้นต่ำของ pool ที่เอาไปเฉลี่ยเป็น benchmark ของ RRG (ภูมิภาค/sector ที่เลือก) —
+// ต่ำกว่านี้ relative return ไม่มีนัยสำคัญทางสถิติ (pool 1 ตัวคือหุ้นเทียบกับตัวเอง →
+// rel = 0 เสมอ ดูเหมือนอยู่กลาง origin ทั้งที่ absolute return จริงอาจ +40%/-40%) —
+// เกณฑ์เดียวกับ MIN_GROUP_N ของ EMA Breadth (dashboard.js:~14931) และ
+// summarize_groups.avg() min_n=3 (core/metrics.py:250)
+const MIN_ROT_BM_N = 3;
+
 // ค่าเฉลี่ยของ field หนึ่งใน pool (ข้ามค่า null) — เดิมเขียนสูตรนี้ซ้ำเหมือนกันเป๊ะ 3 ที่
 // (DR/US-HK-JP/ETF rotation) เสี่ยงแก้ correctness bug ที่หนึ่งแล้วลืมอีกสองที่
 function _rotAvg(pool, field) {
@@ -2160,15 +2167,21 @@ function renderDRRotation() {
   }
   const region = document.getElementById('drrot-region')?.value || 'all';
   const shown = region === 'all' ? valid : valid.filter(s => s.region === region);
-  // ปุ่ม "เทียบภูมิภาค" ไม่มีผลตอนยังเลือก "ทุกภูมิภาค" — disable พร้อม hint กันเข้าใจผิด
+  // ปุ่ม "เทียบภูมิภาค" ไม่มีผลตอนยังเลือก "ทุกภูมิภาค" หรือภูมิภาคมีสมาชิกน้อยเกินไป
+  // (< MIN_ROT_BM_N) — disable พร้อม hint กันเข้าใจผิด
   const bmBtn = document.getElementById('drrot-bm-region');
+  const bmRegionThin = region !== 'all' && shown.length < MIN_ROT_BM_N;
   if (bmBtn) {
-    bmBtn.disabled = region === 'all';
-    bmBtn.title = region === 'all' ? 'เลือกภูมิภาคเจาะจงก่อน จึงเทียบค่าเฉลี่ยภูมิภาคได้' : '';
+    bmBtn.disabled = region === 'all' || bmRegionThin;
+    bmBtn.title = region === 'all' ? 'เลือกภูมิภาคเจาะจงก่อน จึงเทียบค่าเฉลี่ยภูมิภาคได้'
+      : bmRegionThin ? `ภูมิภาค ${region} มีแค่ ${shown.length} ตัว (< ${MIN_ROT_BM_N}) ไม่พอเทียบเฉพาะกลุ่ม`
+      : '';
   }
   // benchmark = ค่าเฉลี่ยเท่าน้ำหนักของ DR ทั้งกลุ่ม (ปกติ) หรือเฉพาะภูมิภาคที่เลือก
   // (ถ้าสลับโหมดและเลือกภูมิภาคเจาะจงแล้ว) — ดูว่าใครนำ/ตาม "เพื่อนร่วมภูมิภาค" แทนทั้งกลุ่ม
-  const bmRegion = _drRotBenchmark === 'region' && region !== 'all';
+  // ถ้าภูมิภาคนั้นมีสมาชิกน้อยกว่า MIN_ROT_BM_N ถอยไปใช้ค่าเฉลี่ยทั้งกลุ่มแทนเงียบๆ ไม่ได้ —
+  // ต้องแจ้งใน info ด้วย ไม่งั้น pool 1 ตัวจะเทียบกับตัวเอง (rel = 0 เสมอ) ดูเหมือนสัญญาณจริง
+  const bmRegion = _drRotBenchmark === 'region' && region !== 'all' && !bmRegionThin;
   const bmSet = bmRegion ? shown : valid;
   const R = _rotRelative(bmSet);
   const items = shown.map(s => ({
@@ -2178,8 +2191,11 @@ function renderDRRotation() {
   }));
   const info = document.getElementById('drrot-info');
   const bmLabel = bmRegion ? `ค่าเฉลี่ยภูมิภาค ${region}` : 'ค่าเฉลี่ย DR ทั้งกลุ่ม';
+  const bmFallbackNote = (_drRotBenchmark === 'region' && bmRegionThin)
+    ? ` ⚠ ภูมิภาค ${region} มีแค่ ${shown.length} ตัว ไม่พอสถิติ ใช้ค่าเฉลี่ย DR ทั้งกลุ่มแทน`
+    : '';
   if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmLabel} (${bmSet.length} ตัว)` +
-    _rotInfoSuffix(isShort, R);
+    bmFallbackNote + _rotInfoSuffix(isShort, R);
   drawRotationScatter(items, { canvasId: 'dr-rotation-map', legendId: 'dr-rot-legend', tf: _drRotTf, onOpen: openDRChartModal, relative: true, relativeLabel: bmLabel });
 }
 
@@ -14925,14 +14941,20 @@ function renderEMABreadth() {
     groups[g].push(s);
   });
 
+  // MIN_GROUP_N เหมือน summarize_groups.avg() min_n=3 (core/metrics.py:250) —
+  // กลุ่มที่มีหุ้นน้อยกว่านี้ % กระโดดง่าย (หุ้นตัวเดียวได้ 0%/100%) ไม่มีนัยสำคัญ
+  // ทางสถิติเพียงพอจะจัดอันดับปนกับกลุ่มใหญ่
+  const MIN_GROUP_N = 3;
+
   const rows = Object.entries(groups).map(([name, stocks]) => {
     const n    = stocks.length;
     const p20  = Math.round(stocks.filter(s => s.above_ema20  === true).length / n * 100);
     const p50  = Math.round(stocks.filter(s => s.above_ema50  === true).length / n * 100);
     const p200 = Math.round(stocks.filter(s => s.above_ema200 === true).length / n * 100);
     const score = Math.round((p20 + p50 + p200) / 3);
-    return { name, n, p20, p50, p200, score };
-  }).sort((a, b) => b.score - a.score);
+    const thin = n < MIN_GROUP_N;
+    return { name, n, p20, p50, p200, score, thin };
+  }).sort((a, b) => (a.thin - b.thin) || (b.score - a.score));
 
   const bar = (v) => {
     const c = v >= 60 ? 'var(--green)' : v >= 40 ? 'var(--yellow)' : 'var(--red)';
@@ -14958,7 +14980,9 @@ function renderEMABreadth() {
       <td style="min-width:140px;padding-right:12px">${bar(r.p20)}</td>
       <td style="min-width:140px;padding-right:12px">${bar(r.p50)}</td>
       <td style="min-width:140px;padding-right:12px">${bar(r.p200)}</td>
-      <td class="r"><span class="${trendScoreColor(r.score)}" style="font-weight:700">${r.score}</span></td>
+      <td class="r">${r.thin
+        ? `<span class="text2" title="ตัวอย่างน้อยเกินไป (n=${r.n} < ${MIN_GROUP_N}) — % ไม่มีนัยสำคัญทางสถิติ" style="font-weight:700">${r.score}*</span>`
+        : `<span class="${trendScoreColor(r.score)}" style="font-weight:700">${r.score}</span>`}</td>
     </tr>`).join('');
 }
 
@@ -18332,16 +18356,22 @@ function _rotRender(mkt) {
   }
   const sector = document.getElementById(`${c.prefix}-sector`)?.value || 'ALL';
   const shown = sector === 'ALL' ? valid : valid.filter(s => (s.sector || 'Unknown') === sector);
-  // ปุ่ม "เทียบ Sector" ไม่มีผลตอนยังเลือก "ทุก Sector" (bmSet ถอยไปใช้ทั้งดัชนีเงียบๆ)
-  // — disable พร้อม hint กันปุ่มติด active แต่พฤติกรรมไม่เปลี่ยนแล้วคนงง
+  // ปุ่ม "เทียบ Sector" ไม่มีผลตอนยังเลือก "ทุก Sector" (bmSet ถอยไปใช้ทั้งดัชนีเงียบๆ) หรือ
+  // sector มีสมาชิกน้อยเกินไป (< MIN_ROT_BM_N) — disable พร้อม hint กันปุ่มติด active แต่
+  // พฤติกรรมไม่เปลี่ยนแล้วคนงง
   const bmBtn = document.getElementById(`${c.prefix}-bm-sector`);
+  const bmSectorThin = sector !== 'ALL' && shown.length < MIN_ROT_BM_N;
   if (bmBtn) {
-    bmBtn.disabled = sector === 'ALL';
-    bmBtn.title = sector === 'ALL' ? 'เลือก Sector เจาะจงก่อน จึงเทียบค่าเฉลี่ย sector ได้' : '';
+    bmBtn.disabled = sector === 'ALL' || bmSectorThin;
+    bmBtn.title = sector === 'ALL' ? 'เลือก Sector เจาะจงก่อน จึงเทียบค่าเฉลี่ย sector ได้'
+      : bmSectorThin ? `Sector "${sector}" มีแค่ ${shown.length} ตัว (< ${MIN_ROT_BM_N}) ไม่พอเทียบเฉพาะกลุ่ม`
+      : '';
   }
   // benchmark = ค่าเฉลี่ยทั้งดัชนี (ปกติ) หรือค่าเฉลี่ยเฉพาะ sector ที่เลือก (ถ้าสลับโหมด
   // และเลือก sector เจาะจงแล้ว) — ใช้ดูว่าใครแรง/อ่อนกว่า "เพื่อนร่วม sector" แทนทั้งตลาด
-  const bmSector = c.getBenchmark() === 'sector' && sector !== 'ALL';
+  // ถ้า sector นั้นมีสมาชิกน้อยกว่า MIN_ROT_BM_N ถอยไปใช้ค่าเฉลี่ยทั้งดัชนีแทนเงียบๆ ไม่ได้ —
+  // ต้องแจ้งใน info ด้วย ไม่งั้น pool 1 ตัวจะเทียบกับตัวเอง (rel = 0 เสมอ) ดูเหมือนสัญญาณจริง
+  const bmSector = c.getBenchmark() === 'sector' && sector !== 'ALL' && !bmSectorThin;
   const bmSet = bmSector ? shown : valid;
   const R = _rotRelative(bmSet);
   const items = shown.map(s => ({
@@ -18355,8 +18385,11 @@ function _rotRender(mkt) {
   // ทำให้ bmSet === shown เป็น true โดยบังเอิญจาก object aliasing ไม่ใช่จาก logic จริง —
   // label เลยกลายเป็น 'เฉลี่ย sector "ALL"' ทั้งที่ยังไม่ได้เทียบ sector เลย
   const bmLabel = bmSector ? `เฉลี่ย sector "${sector}"` : 'เฉลี่ยทั้งดัชนี';
+  const bmFallbackNote = (c.getBenchmark() === 'sector' && bmSectorThin)
+    ? ` ⚠ Sector "${sector}" มีแค่ ${shown.length} ตัว ไม่พอสถิติ ใช้ค่าเฉลี่ยทั้งดัชนีแทน`
+    : '';
   if (info) info.textContent = `${shown.length} หุ้น · benchmark = ${bmLabel} (${bmSet.length} ตัว)` +
-    _rotInfoSuffix(isShort, R);
+    bmFallbackNote + _rotInfoSuffix(isShort, R);
   drawRotationScatter(items, { canvasId: c.canvasId, legendId: c.legendId, tf: c.getTf(), onOpen: c.onOpen, relative: true, relativeLabel: bmLabel });
 }
 
