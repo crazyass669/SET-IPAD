@@ -1494,7 +1494,7 @@ def compute_qpl_report(payload_finn_q, payload_yahoo_q, set_series=None):
         return round((cur - prev) / abs(prev) * 100, 2)
 
     def _safe_pct(num, den):
-        if num is None or den is None or den == 0:
+        if num is None or den is None or den <= 0:
             return None
         return round(num / den * 100, 2)
 
@@ -1724,7 +1724,7 @@ def rollup_full_report_annual(quarters, set_annual=None):
         return round((cur - prev) / abs(prev) * 100, 2)
 
     def _safe_pct(num, den):
-        if num is None or den is None or den == 0:
+        if num is None or den is None or den <= 0:
             return None
         return round(num / den * 100, 2)
 
