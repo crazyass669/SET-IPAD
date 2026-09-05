@@ -12,10 +12,10 @@
  เรียงตามความสำคัญที่แนะนำให้รีวิวก่อน-หลัง (สูง → ต่ำ)
 ------------------------------------------------------------------------
 /1. Screener+ F-Score scale ผิด (กระทบการกรองหุ้นตรงๆ)
-2. net_profit NCI splice ในงบการเงิน/เทียบหุ้น (ไม่มีสัญญาณเตือนเลย)
-3. DCF NWC sign flip (พองมูลค่าที่แท้จริงแบบไม่รู้ตัว)
-4. Sector profit-share สลับเครื่องหมาย
-5. Fair Value P/B·P/E ระเบิดจาก ROE สุดโต่ง
+/2. net_profit NCI splice ในงบการเงิน/เทียบหุ้น (ไม่มีสัญญาณเตือนเลย)
+/3. DCF NWC sign flip (พองมูลค่าที่แท้จริงแบบไม่รู้ตัว)
+/4. Sector profit-share สลับเครื่องหมาย
+/5. Fair Value P/B·P/E ระเบิดจาก ROE สุดโต่ง
 6. Fair Value P/B·P/E ระเบิดจาก r ใกล้ g
 7. tax_pct/GPM%/SG&A% ติดลบ (แสดงผลอย่างเดียว ไม่กระทบ valuation)
 8. Short Sales incremental % เพี้ยน (เฉพาะ fallback path)
@@ -102,6 +102,57 @@
     (เช่น ถ้า SET ให้ NCI แยกบรรทัด ให้บวกกลับเข้าไปให้เท่ากับ
     Finnomena/Yahoo เสมอ)
 
+>>> ตรวจเพิ่ม 2026-09-05 (ระหว่างรีวิวข้อ [3] — code-review skill สุ่ม fork
+    ไปรีวิว diff ปัจจุบันของไฟล์นี้ ซึ่งคือโค้ดที่แก้ข้อ [2] นี้ไปแล้ว เจอ
+    ของแถม 3 จุด ยืนยันด้วยการอ่านโค้ดจริงแล้ว ไม่ใช่แค่ subagent เดา):
+  1. (บั๊กจริงใน fix ที่เพิ่งใส่) _qpl_merge_layer (1449-1460): flag
+     `touched` เป็น True ทันทีที่ field ไหนก็ได้ใน _QPL_FIELDS ไม่ None
+     (บรรทัด 1452-1456) แล้วค่อยเช็ค `if touched: dest["source"]=...`
+     (1459-1460) — เคสที่ docstring (1445-1448) อ้างว่าแก้แล้ว
+     (revenue/cogs ไม่ None แต่ net_profit เป็น None) ยัง set
+     dest["source"]="set" อยู่ดี เพราะ touched ติดจาก revenue ไปแล้วก่อน
+     ถึงคิว net_profit — guard นี้ป้องกันได้แค่เคส "ทั้ง 12 field เป็น
+     None หมด" ซึ่งแคบกว่าที่ตั้งใจมาก · impact จริงตอนนี้ = ศูนย์ (grep
+     app.py/dashboard.js แล้วไม่มีจุดไหนอ่าน row['source'] ของ qpl เลย)
+     แต่ผิดตามที่ตั้งใจแก้ ควรแก้ให้เช็คเฉพาะ field ที่ "สำคัญ" จริง
+     (อย่างน้อย net_profit) แทน touched แบบรวม
+  2. sibling function `_merge_bscf_layer` (~1631-1642, docstring บอกเอง
+     ว่า "เหมือน _qpl_merge_layer แต่สำหรับ _BSCF_FIELDS") ยังเขียน
+     dest["bscf_source"]=source_name แบบไม่มีเงื่อนไขเหมือนเดิม — มีบั๊ก
+     "source ผิดที่มา" ตัวเดียวกับที่เพิ่งแก้ใน _qpl_merge_layer แต่ยัง
+     ไม่ได้แก้คู่กัน
+  3. `net_profit_parent` (คำนวณใน _set_qpl_row_from_amt, 1805-1856) ถูก
+     "ทิ้ง" เงียบๆ ตอน merge เพราะ _QPL_FIELDS (1434-1436) ไม่มีชื่อนี้ —
+     grep แล้วไม่มี caller จริง (ตรงกับที่ docstring บอกว่า "ยังไม่มีคนใช้")
+     แต่ field นี้ unreachable ผ่าน compute_qpl_report/compute_full_report
+     โดยสมบูรณ์ ไม่ใช่แค่ "ยังไม่มีคนเรียก" — ใครมาเห็นทีหลังแล้วคิดว่า
+     ดึงได้จาก QPL report จะงงว่าทำไมหาย
+  4. downstream ที่ยังไม่เคยพูดถึง: app.py peer_group_detail (ผ่าน
+     _peer_group_quarters → compute_full_report → _qpl_merge_layer) เอา
+     np_ttm ไปหาร PE/ROE ตรงๆ — ช่วง rollout ที่ยังไม่ resync ครบ (ตามที่
+     บันทึกไว้ท้ายไฟล์นี้แล้วว่าต้อง resync) ตารางเทียบเพื่อนจะมีบางแถว
+     ใช้ net_profit นิยามเก่า (ไม่รวม NCI) ปนกับแถวที่ resync แล้ว (รวม
+     NCI) → PE/ROE ไม่ใช่แค่ YoY/NPM ที่กระทบตามที่เขียนไว้เดิมด้านบน
+     (ข้อสังเกตเฉยๆ ไม่ใช่บั๊กใหม่ที่ต้องแก้โค้ด — เป็นผลจาก rollout gap
+     ที่รู้อยู่แล้วว่าต้อง resync ท้ายไฟล์นี้)
+
+>>> แก้แล้ว 2026-09-05 (sources/financials_store.py) — ข้อ 1+2 ด้านบน:
+  1. _qpl_merge_layer (~1439-1461): เปลี่ยนจาก `touched` ที่ OR รวมทั้ง 12
+     field เป็นเช็คเฉพาะ `row.get("net_profit") is not None` ก่อนอัพเดต
+     dest["source"] — ตรงกับเคสที่ docstring ตั้งใจกันจริงๆ (SET-chart มี
+     revenue/cogs แต่ net_profit เป็น None → source ไม่ถูกเปลี่ยนเป็น
+     'set' อีกต่อไป) impact จริงยังเป็น 0 เหมือนเดิม (ไม่มีจุดไหนอ่าน
+     'source' ของแถว qpl) แต่โค้ดตรงกับที่ตั้งใจแล้ว
+  2. _merge_bscf_layer (~1631-1648): เพิ่ม `touched` guard แบบเดียวกับที่
+     เพิ่งแก้ใน _qpl_merge_layer ก่อนแก้ (touched ถ้ามี field ใดใน
+     _BSCF_FIELDS ไม่ None) ก่อนอัพเดต dest["bscf_source"] — กันเคส key
+     มีอยู่ใน layer_rows แต่ทุก field เป็น None แล้ว bscf_source ถูกเปลี่ยน
+     ป้ายผิดที่มาโดยไม่มีข้อมูลจริงมารองรับ
+  ยืนยันด้วย compute_qpl_report+compute_full_report จริงกับ PTT (66
+  ไตรมาส) — ไม่มี exception, source/bscf_source ของแถวล่าสุดออกมาถูกต้อง
+  ('set'/'finnomena' ตามที่คาด) · net_profit_parent (ข้อ 3) และ PE/ROE
+  rollout note (ข้อ 4) ไม่ต้องแก้โค้ด — เป็นแค่บันทึกไว้เตือน
+
 
 ########################################################################
 [3] เมนู: 🎯 DCF Screener
@@ -128,6 +179,73 @@
   → FCFF และมูลค่าที่แท้จริง (intrinsic value) พองเกินจริงแบบเงียบๆ
   เกิดเฉพาะหุ้นที่ Yahoo ไม่มีข้อมูลงบดุลครบ (มักเป็นหุ้นเล็ก/หุ้นนอก
   ดัชนีหลัก)
+
+ยืนยันแล้ว 2026-09-05 (อ่านโค้ดจริง + query financials.db จริง 6,971
+สัญลักษณ์ที่ source='yahoo', ไม่ใช่แค่ static analysis):
+  - บั๊กหลักด้านบนยังอยู่จริง ณ บรรทัดที่ระบุ ไม่มีการแก้ใดๆ ตั้งแต่
+    2026-08-21 · ไหลต่อเข้า static/dashboard.js:13418-13420
+    (_tsDcfModelRecalc) ด้วย เพราะ Tearsheet DCF Model การ์ด (JS) อ่าน
+    forecast.nwc_pct_revenue ตัวเดียวกันตรงๆ — แปลว่าบั๊กนี้กระทบทั้ง
+    หน้า DCF Screener (ตารางทั้งตลาด) และการ์ด DCF ใน Tearsheet รายตัว
+    ไม่ใช่แค่ screener อย่างที่ระบุไว้เดิม
+
+  - [3-เพิ่ม] `da_pct_revenue` ใช้ abs() ไม่มีเงื่อนไข (financials_store.py
+    :4492: `_pct_of_revenue(da_row, use_abs=True)`) กลบเครื่องหมายลบของ
+    "Reconciled Depreciation" ที่ Yahoo รายงานติดลบจริง (รายการปรับปรุง/
+    reversal ปีนั้น) → พบจริงใน DB 66 จุดข้อมูล 31 สัญลักษณ์ อย่างน้อย 2
+    ตัวเป็นหุ้นนอกกลุ่มการเงิน (ไม่ถูก is_financial gate กัน จึงเข้าสูตร
+    DCF จริง): FINN:US:OBE (Obsidian Energy, พลังงาน) และ
+    FINN:US:CLWT (Clearwater Paper, กระดาษ) — ปีที่ D&A ติดลบของหุ้นพวกนี้
+    ค่าเริ่มต้น D&A ในตาราง DCF จะโชว์เป็นบวกผิด ดัน FCFF/มูลค่าที่แท้จริง
+    เริ่มต้นสูงเกินจริง (ผู้ใช้แก้ตัวเลขในตารางเองได้ แต่ค่าเริ่มต้นผิด)
+
+  - [3-เพิ่ม, ผลกระทบจริงต่ำ] `total_debt`/`cost_of_debt_pretax` ไม่มีการ
+    เช็ค sign/ขอบเขตก่อนใช้ต่อ (financials_store.py:4481-4485 → ใช้ที่
+    dcf_screener.py:171-174 เป็นน้ำหนัก Capital Structure ของ WACC) —
+    query DB จริงพบ total_debt ติดลบ 1 เคส (FINN:US:FBNC) และ
+    cost_of_debt_pretax พุ่งเกิน 100,000% ใน 2,564 จุดข้อมูล (สูงสุด
+    FINN:US:CBSH ~766,627%) แต่ทุกเคสที่เจอเป็นหุ้นกลุ่มการเงิน (ธนาคาร/
+    โบรก/ประกัน) ซึ่งถูก is_financial gate กันไว้แล้วทั้ง dcf_screener.py
+    (build_snapshot, ตัด financial_syms) และ app.py:6807-6813 (Tearsheet,
+    เช็ค GICS sector) — วันนี้จึงยังไม่มีเคสที่หลุดเข้าสูตรจริง แต่โค้ดไม่มี
+    clamp ป้องกันเหมือนทุกช่อง override ใน resolve_assumptions (220-276)
+    เลย ถ้าวันหน้าหุ้นนอกกลุ่มการเงินมีข้อมูล Yahoo เพี้ยนแบบเดียวกับ
+    ข้อ D&A ด้านบน จะพังแบบเดียวกันโดยไม่มีอะไรกัน
+
+  - [3-เพิ่ม, design ไม่ใช่บั๊ก] สูตร FCFF/WACC ทั้งชุดถูก port มือ 2 ภาษา
+    ซ้ำกัน: dcf_screener.py:167-201 (Python, ฝั่ง screener ทั้งตลาด) กับ
+    static/dashboard.js:13346-13432 (_tsDcfModelRecalc, ฝั่ง Tearsheet
+    รายตัว) — ตอนนี้ตรงกัน 100% (พอร์ต fix 2026-08-21 มาครบทั้งคู่) แต่
+    ไม่มี test ยืนยัน parity เลย แก้สูตรอนาคตจุดเดียวแล้วลืมอีกจุดจะทำให้
+    ตัวเลข screener กับ Tearsheet ไม่ตรงกันแบบเงียบๆ (ไม่แก้ — แค่จดไว้
+    เตือนอนาคต, ไม่ใช่บั๊ก)
+
+>>> แก้แล้ว 2026-09-05 (sources/financials_store.py, compute_dcf_forecast
+    _inputs) — 3 จุดด้านบน (ยกเว้น design note ท้ายสุดที่ไม่ต้องแก้):
+  1. fallback NWC (บรรทัด ~4467-4475 เดิม): ตัด nwc_change_row/ΔNWC
+     fallback ทิ้ง — ไม่มี Working Capital และไม่มี Current Assets/
+     Liabilities ครบ → nwc_pct_revenue = None ตรงๆ (ฝั่งเรียกใช้ทั้ง
+     dcf_screener.py:164 และ dashboard.js:13342/13385 มี `or 0`/`|| 0`
+     รองรับ None อยู่แล้วเดิม ไม่ต้องแก้จุดเรียก) — ยืนยันด้วย query DB
+     จริง: 158 สัญลักษณ์ (จาก 6,971) เปลี่ยนจาก "ได้ค่า flow ผิดมิติ" เป็น
+     "None" หลังแก้ ส่วนที่เหลือ (5,475 มี WC/CA-CL จริง) ไม่กระทบ
+  2. `da_pct_revenue` เปลี่ยนจาก `use_abs=True` เป็น `use_abs=False`
+     (เก็บเครื่องหมายจริง) — ยืนยัน: ปีล่าสุดของ 14 สัญลักษณ์ (เช่น
+     FINN:US:AMP, WRB, THG, AXXA, RNR) ตอนนี้ได้ da_pct_revenue ติดลบ
+     ถูกต้องแล้วแทนที่จะถูกบังคับเป็นบวก — capex_pct_revenue ยังคง
+     use_abs=True เหมือนเดิม (ถูกอยู่แล้ว เพราะ Capital Expenditure ของ
+     Yahoo เป็นลบตามธรรมเนียม ต้องแปลงเป็นขนาดบวกก่อนหักในสูตร)
+  3. total_debt: เพิ่ม guard ทิ้งเป็น None ถ้าติดลบ (กัน debt_val ติดลบ
+     กวน E/V·D/V weight ที่ dcf_screener.py) · cost_of_debt_pretax: เพิ่ม
+     เพดาน >30% → None (fallback ไป DEFAULT_COST_OF_DEBT_PRETAX_PCT
+     4.5% เหมือนตอนไม่มีข้อมูล) — ยืนยัน: FINN:US:FBNC (total_debt ติดลบ)
+     และ FINN:US:CBSH (cost_of_debt_pretax ~766,627% ก่อนแก้) ทั้งคู่ได้
+     None ถูกต้องหลังแก้ ไม่มีจุดไหนหลุดผ่าน guard
+  ยืนยัน py_compile ผ่านทั้ง financials_store.py/dcf_screener.py +
+  รัน compute_dcf_forecast_inputs จริงกับข้อมูลใน DB ทั้ง 6,971 สัญลักษณ์
+  ไม่มี exception · ยังไม่ได้รัน "⟳ คำนวณ DCF ใหม่ทั้งตลาด" (ตาราง
+  dcf_screener ยังเป็นค่าเก่าจนกว่าจะกดปุ่มนี้ — ดูท้ายไฟล์) และยังไม่ได้
+  browser-test/restart server (ไม่มี server รันอยู่ตอนแก้)
 
 
 ########################################################################
@@ -283,6 +401,57 @@ B) "RRG"/Rotation quadrant ไม่ใช่ true JdK RS-Ratio/RS-Momentum
 - price_analytics.py — adj-close fallback, calendar-adjacent checks,
   min-history threshold ครบ, survivorship bias แก้ที่ data layer แล้ว
   (mark_delisted.py ไม่เคยลบราคา/งบเก่า แค่ log การเพิกถอน)
+
+
+========================================================================
+ งานที่ต้องทำ "หลัง" รีวิว/แก้โค้ดครบทั้ง 8 ข้อแล้ว (เพิ่มโดย Claude
+ 2026-09-05 ตอนแก้ข้อ [2] เสร็จ — เพื่อกันลืมว่าแก้โค้ดเสร็จแล้วยังมี
+ อีกขั้นที่ต้องทำก่อนตัวเลขในหน้าเว็บจะถูกจริง)
+========================================================================
+
+ทั่วไป (ทำหลังแก้ backend เสร็จอย่างน้อย 1 ข้อ ไม่ต้องรอครบ 8):
+  - Restart waitress (↺Restart แถบบน) — sources/financials_store.py และ
+    app.py ไม่ auto-reload โค้ด Python ต้อง restart process ก่อนถึงจะเห็น
+    ผลจริง (ข้อ 2,3,4,5,6,7,8 ทั้งหมดแตะ backend)
+  - บั๊ก ?v= ของ static/dashboard.js ทุกครั้งที่แก้ frontend (ข้อ 1 เป็น
+    frontend ล้วน ข้อ 2 ทำไปแล้ว → ?v=20260905l)
+  - Browser-test (Playwright headless) หน้าที่แก้ก่อนถือว่าจบงาน:
+    Screener+ / งบการเงิน-เทียบหุ้น / DCF Screener / Fair Value P/B·P/E /
+    เปรียบเทียบ Sector / Short Sales
+  - commit เอง — ไม่มี auto-commit (ผู้ใช้สั่งทีละข้อหรือรวบเองตามปกติ)
+
+รายข้อที่ "ต้อง" resync/rebuild ข้อมูลที่แคชไว้ใน DB แล้ว (โค้ดถูกแล้วแต่
+ตัวเลขเก่ายังผิดค้างอยู่จนกว่าจะรันซ้ำทับ — แก้โค้ดอย่างเดียวไม่พอ):
+  [2] net_profit NCI (แก้โค้ดแล้ว 2026-09-05) — ต้องกด "🔄 อัพเดทงบการเงิน
+      ทั้งหมด" ใหม่ (หรือ sync_set_qpl_series รายตัว) โดยเฉพาะหุ้นที่มี
+      NCI เยอะ/SET official มีข้อมูล ไม่งั้นค่าที่แคชไว้ใน financials.db
+      (source='set_qpl') ยังเป็นนิยามเก่า (ไม่รวม NCI) ต่อจนกว่าจะ sync
+      ทับ — ยังไม่ได้ resync จริงตอนนี้ (แก้แค่โค้ด)
+  [3] DCF Screener NWC sign — หลังแก้โค้ด กดปุ่ม "⟳ คำนวณ DCF ใหม่
+      ทั้งตลาด" (/api/dcf-screener/rebuild — DELETE+INSERT เต็มตาราง
+      dcf_screener, ไม่ยิง network เพิ่ม อ่านจากงบที่ sync ไว้แล้วเลย
+      รันได้ทันที)
+  [5]+[6] Fair Value P/B·P/E (ROE cap + r-g guard) — หลังแก้โค้ด กดปุ่ม
+      "⟳ คำนวณใหม่ทั้งตลาด" (/api/pbv-pe-screener/rebuild — DELETE+INSERT
+      เต็มตาราง pbv_pe_screener) ค่าเก่าที่ระเบิดเกิน 300% จะยังค้างอยู่
+      จนกว่าจะ rebuild ทับ
+  [8] Short Sales incremental % — ไม่ต้องมี backfill script แยก: รอบถัดไป
+      ที่ full-year rebuild สำเร็จ (query_range ทั้งปีผ่าน ยังอยู่ในหน้าต่าง
+      180 วัน) จะล้าง+ตั้งยอดใหม่จากศูนย์อัตโนมัติอยู่แล้ว (path (1) ใน
+      short_sales_daily_update, app.py:12281) ถ้าอยากชัวร์เร็วกว่ารอรอบ
+      ปกติ สั่งรัน short_sales_daily_update เองครั้งนึงหลังแก้โค้ด
+
+รายข้อที่ "ไม่ต้อง" resync (คำนวณสดทุก request จาก raw data ที่แคชไว้
+อยู่แล้ว ไม่มี snapshot table ของตัวเองให้ค่าเก่าค้าง — แก้โค้ดแล้ว
+refresh หน้าเว็บ/restart server พอ):
+  [1] Screener+ F-Score — f_score/f_score_max ที่เก็บใน factor_snapshot
+      ถูกอยู่แล้ว (backend ไม่มีบั๊ก) บั๊กอยู่ที่ dashboard.js อ่านผิด
+      denominator เอง (ฮาร์ดโค้ด /9) — แก้ JS แล้ว bump ?v= พอ
+  [4] Sector profit-share — get_sector_qpl_compare คำนวณสดจาก
+      source='set_qpl' ทุก request ไม่มี snapshot table แยก
+  [7] tax_pct/GPM%/SG&A% — derive สดใน compute_qpl_report/
+      rollup_full_report_annual ทุกครั้งที่ render ไม่ได้เก็บค่าที่ derive
+      แล้วไว้ที่ไหน
 
 
 ========================================================================

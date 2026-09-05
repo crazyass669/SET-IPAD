@@ -1440,7 +1440,15 @@ def _qpl_merge_layer(combined, layer_rows, source_name):
     """เขียน layer_rows ({(year_ad,q): row}) ทับ combined ทีละ field เฉพาะ field ที่ layer นี้
     มีค่า (ไม่ใช่ None) — ทำให้ layer ที่มาทีหลัง (แม่น/ละเอียดกว่า) อัพเกรดทีละช่องได้โดยไม่ล้าง
     ของเก่าที่ layer ก่อนหน้าเคยมีแต่ layer นี้ไม่มี (เช่น SET-chart หยาบมีแค่ revenue/cogs/
-    net_profit — ไม่ควรไปล้าง selling_exp/financial_cost ที่ Yahoo เคยเติมไว้ก่อนหน้า)"""
+    net_profit — ไม่ควรไปล้าง selling_exp/financial_cost ที่ Yahoo เคยเติมไว้ก่อนหน้า)
+
+    dest['source'] อัพเดตเฉพาะตอนที่ layer นี้เขียน net_profit จริง (ไม่ใช่แค่ field อื่นใน
+    _QPL_FIELDS ตัวใดตัวหนึ่ง และไม่ใช่ทุกครั้งที่มี key ตรงกันใน layer_rows) — กันเคส SET-chart
+    มี revenue/cogs ของไตรมาสนั้นแต่ netProfit เป็น None (company-highlight ขาดช่วง) แล้ว
+    'source' ถูกเปลี่ยนเป็น 'set' ทั้งที่ net_profit ยังเป็นค่าเดิมจาก Finnomena/Yahoo อยู่ — ผูกกับ
+    net_profit ตรงๆ เพราะเป็น field เดียวที่ 'source' มีไว้สื่อที่มา (2026-09-05: เดิมผูกกับ
+    'ตัวใดก็ได้ใน 12 field' ซึ่งยัง set source='set' อยู่ดีในเคสนี้เพราะ revenue/cogs ทำให้
+    touched=True ไปก่อนถึงคิว net_profit — ไม่ได้แก้ตามที่ docstring อ้างจริง)"""
     for key, row in layer_rows.items():
         dest = combined.setdefault(key, {"year_ad": key[0], "q": key[1], "detail": False})
         for f in _QPL_FIELDS:
@@ -1449,7 +1457,8 @@ def _qpl_merge_layer(combined, layer_rows, source_name):
                 dest[f] = v
         if row.get("selling_exp") is not None or row.get("admin_exp") is not None:
             dest["detail"] = True
-        dest["source"] = source_name
+        if row.get("net_profit") is not None:
+            dest["source"] = source_name
 
 
 def compute_qpl_report(payload_finn_q, payload_yahoo_q, set_series=None):
@@ -1624,14 +1633,21 @@ def _merge_bscf_layer(combined, layer_rows, source_name):
     """เหมือน _qpl_merge_layer แต่สำหรับ _BSCF_FIELDS — เก็บชื่อแหล่งไว้ที่ 'bscf_source' แยก
     จาก 'source' ของ P&L (ไม่ reuse _qpl_merge_layer ตรงๆ เพราะมันจะไปทับ 'source' ของ P&L
     layer ที่ผสานไว้ก่อนหน้า เช่นแถวที่ P&L มาจาก SET แต่งบดุลมาจาก Yahoo จะโดนเขียนทับ
-    label 'source' เป็น 'yahoo' ทั้งที่ P&L ยังเป็นของ SET อยู่)"""
+    label 'source' เป็น 'yahoo' ทั้งที่ P&L ยังเป็นของ SET อยู่)
+
+    bscf_source อัพเดตเฉพาะตอนที่ layer นี้เขียน field จริงอย่างน้อย 1 ช่องใน _BSCF_FIELDS
+    (2026-09-05: เดิมเขียนทุกครั้งที่ key ตรงกันใน layer_rows แม้ทุก field จะเป็น None หมด —
+    บั๊กเดียวกับที่เพิ่งแก้ใน _qpl_merge_layer แต่ยังไม่เคยแก้คู่กัน)"""
     for key, row in layer_rows.items():
         dest = combined.setdefault(key, {"year_ad": key[0], "q": key[1], "detail": False})
+        touched = False
         for f in _BSCF_FIELDS:
             v = row.get(f)
             if v is not None:
                 dest[f] = v
-        dest["bscf_source"] = source_name
+                touched = True
+        if touched:
+            dest["bscf_source"] = source_name
 
 
 def compute_full_report(payload_finn_q, payload_yahoo_q, set_series=None):
@@ -1802,11 +1818,16 @@ def _set_qpl_row_from_amt(amt):
     schema เลขบัญชีต่าง — คืน None ถ้าไม่มีรายได้เลย (บัญชีธนาคาร/ประกันใช้ผังบัญชีคนละแบบ
     ไม่มีรายการ 'รายได้จากการขายและให้บริการ')
 
-    กำไรสุทธิใช้ 'ส่วนผู้ถือหุ้นบริษัทใหญ่' ไม่ใช่ 'กำไรสุทธิสำหรับงวด' รวม — เช็คแล้วว่าตัวหลัง
-    รวมส่วนได้เสียที่ไม่มีอำนาจควบคุม (NCI) ด้วย ต่างจากนิยาม 'Net Income' ของ Yahoo/Finnomena/
-    company-highlight ถึง +74% ในหุ้นที่มี NCI เยอะ (SIAM, เช็ค 2026-08-12) ส่วน 'กำไรก่อนต้นทุน
-    ทางการเงินและภาษี' เป็นบรรทัดที่ SET ให้แทน 'กำไรจากการดำเนินงาน' ของเรา (ไม่มี EBT แยกต่างหาก
-    ในผังบัญชีไทย — กำไรก่อนภาษีต้อง derive เอง = บรรทัดนี้ลบต้นทุนทางการเงิน)"""
+    กำไรสุทธิ (net_profit) ใช้ 'กำไร (ขาดทุน) สุทธิ สำหรับงวด' รวมส่วนได้เสียที่ไม่มีอำนาจควบคุม
+    (NCI) — เดิมเคยใช้ 'ส่วนผู้ถือหุ้นบริษัทใหญ่' (ไม่รวม NCI) แต่พบว่าทำให้ time series ที่ผสาน
+    งวดนี้ (~3-4 ไตรมาสล่าสุดที่ financial_statement ดึงถึง) เข้ากับ Finnomena/Yahoo/SET
+    chart-layer (fetch_set_qpl_chart_series — netProfit ก็รวม NCI เหมือนกัน) สลับนิยามกลางทาง
+    ตรงรอยต่อพอดี ทำให้ YoY/QoQ/NPM กระโดดหลอกในหุ้นที่มี NCI เยอะ (SIAM ต่างกันถึง +74%, เช็ค
+    2026-08-12) — แก้โดยให้ทุก layer ใช้นิยามรวม NCI ตรงกันหมด (2026-09-05) ตัวเลขส่วนผู้ถือหุ้น
+    บริษัทใหญ่ยังเก็บแยกไว้ใน 'net_profit_parent' เผื่อมีผู้ใช้ต้องการภายหลัง (ยังไม่มี caller
+    ใช้ ณ ตอนนี้) ส่วน 'กำไรก่อนต้นทุนทางการเงินและภาษี' เป็นบรรทัดที่ SET ให้แทน 'กำไรจากการ
+    ดำเนินงาน' ของเรา (ไม่มี EBT แยกต่างหากในผังบัญชีไทย — กำไรก่อนภาษีต้อง derive เอง = บรรทัดนี้
+    ลบต้นทุนทางการเงิน)"""
     def g(*names):
         for n in names:
             v = amt.get(n)
@@ -1837,7 +1858,9 @@ def _set_qpl_row_from_amt(amt):
     # ขาด — ถ้าข้อมูลขาดจริง op เองก็จะเป็น None ด้วยอยู่แล้ว (ต้องมี 2 บัญชีมาลบกันถึงได้ op)
     # ไม่ปล่อย pretax เป็น None ทั้งที่มี op จริง เพราะทำให้ 'กำไรก่อนภาษี'/'% TAX' ว่างเปล่าโดยไม่จำเป็น
     pretax = (op - (fin_cost if fin_cost is not None else 0)) if op is not None else None
-    net_profit = g("การแบ่งปันกำไร (ขาดทุน) สุทธิ : ผู้ถือหุ้นบริษัทใหญ่", "กำไร (ขาดทุน) สุทธิ สำหรับงวด")
+    # ลำดับ fallback สลับจากเดิม — 'สำหรับงวด' (รวม NCI) เป็นหลักตอนนี้ ดูเหตุผลใน docstring ด้านบน
+    net_profit = g("กำไร (ขาดทุน) สุทธิ สำหรับงวด", "การแบ่งปันกำไร (ขาดทุน) สุทธิ : ผู้ถือหุ้นบริษัทใหญ่")
+    net_profit_parent = g("การแบ่งปันกำไร (ขาดทุน) สุทธิ : ผู้ถือหุ้นบริษัทใหญ่")
     # บัญชี 439700 "กำไร(ขาดทุน)อื่น" — ผลรวมของ 439710 อัตราแลกเปลี่ยน/439720 อนุพันธ์ FVTPL/
     # 439770 การบัญชีป้องกันความเสี่ยง (ยืนยันแล้ว parent=sum(children) 2026-09-04, สุ่ม 24 ตัว
     # ไม่มี mismatch) ใช้เป็นตัวตั้งต้นแยก "กำไรพิเศษ" ออกจากกำไรสุทธิใน get_qpl_growth_screener —
@@ -1853,7 +1876,8 @@ def _set_qpl_row_from_amt(amt):
         "selling_exp": selling, "admin_exp": admin, "sga_total": sga_total,
         "total_expenses": (cogs + sga_total) if (cogs is not None and sga_total is not None) else None,
         "operating_profit": op, "financial_cost": fin_cost, "pretax_profit": pretax,
-        "tax_expense": g("ภาษีเงินได้"), "net_profit": net_profit, "other_gl": other_gl,
+        "tax_expense": g("ภาษีเงินได้"), "net_profit": net_profit,
+        "net_profit_parent": net_profit_parent, "other_gl": other_gl,
         "detail": selling is not None or admin is not None,
     }
 
@@ -4394,7 +4418,12 @@ def compute_dcf_forecast_inputs(payload_yahoo):
     ฝั่งคำนวณ FCFF (compute_dcf_for_symbol/_tsDcfModelRecalc) ต้องคูณกับ 'ส่วนต่างรายได้ปีต่อปี'
     ไม่ใช่รายได้เต็มปี ถึงจะได้ผลกระทบต่อกระแสเงินสดที่ถูกต้อง (มาตรฐาน DCF: ΔNWC ดอลลาร์ = NWC ratio
     × ΔRevenue, รายได้โตยิ่งใช้เงินทุนหมุนเวียนเพิ่มยิ่งกินกระแสเงินสด — ต่างจากเดิมที่คูณรายได้เต็มปี
-    ซึ่งถูกต้องเฉพาะตอนใช้นิยาม 'การเปลี่ยนแปลง' แบบเดิมเท่านั้น)
+    ซึ่งถูกต้องเฉพาะตอนใช้นิยาม 'การเปลี่ยนแปลง' แบบเดิมเท่านั้น) ถ้า Yahoo ไม่มีทั้ง Working Capital
+    และ Current Assets/Current Liabilities คืน None ไปเลย (ไม่ fallback ไปใช้ ΔNWC จากกระแสเงินสด
+    เหมือนเดิม — นั่นเป็น 'อัตราการไหล' คนละมิติกับ 'ระดับ' ป้อนเข้าสูตรเดียวกันไม่ได้ ผสมแล้วเครื่องหมาย
+    พลิกแบบเงียบๆ ดู CALC_RISK_AUDIT_2026-09-05.txt ข้อ [3]) — ฝั่งเรียกใช้ (compute_dcf_for_symbol/
+    _tsDcfModelRecalc) เจอ None แล้ว default เป็น 0% เอง (ไม่ตั้งสมมติฐานผลกระทบ NWC เลย ปลอดภัยกว่า
+    เดาเครื่องหมายผิด)
     คืน None ถ้าไม่มี Revenue/EBIT ปีล่าสุดให้คำนวณ"""
     inc = payload_yahoo.get("income", {})
     bal = payload_yahoo.get("balance", {})
@@ -4409,7 +4438,6 @@ def compute_dcf_forecast_inputs(payload_yahoo):
     wc_row = bal.get("Working Capital", {})
     ca_row = bal.get("Current Assets", {})
     cl_row = bal.get("Current Liabilities", {})
-    nwc_change_row = cf.get("Change In Working Capital", {})   # fallback เก่า ถ้าไม่มี balance sheet
     debt_row = bal.get("Total Debt", {})
     int_row = inc.get("Interest Expense", {})
 
@@ -4449,31 +4477,48 @@ def compute_dcf_forecast_inputs(payload_yahoo):
         return round((abs(v) if use_abs else v) / revenue * 100, 2)
 
     # NWC % Revenue: ระดับ Working Capital ปีล่าสุด ÷ Revenue — ลำดับ fallback: field
-    # 'Working Capital' ตรงๆ จาก Yahoo -> คำนวณเอง (Current Assets − Current Liabilities)
-    # -> ถ้าไม่มีข้อมูล balance sheet เลย ค่อย fallback ไปใช้ ΔNWC จากงบกระแสเงินสด (นิยามเก่า)
+    # 'Working Capital' ตรงๆ จาก Yahoo -> คำนวณเอง (Current Assets − Current Liabilities) ->
+    # ไม่มีข้อมูล balance sheet เลย -> None (ห้าม fallback ไปใช้ ΔNWC จากงบกระแสเงินสด — เป็นคนละ
+    # นิยาม 'อัตราการไหล' ไม่ใช่ 'ระดับ' ป้อนสูตร nwc_impact = -(nwc_pct × ΔRevenue) ไม่ได้ ดู
+    # docstring ฟังก์ชันนี้ + CALC_RISK_AUDIT_2026-09-05.txt ข้อ [3])
     if latest_date in wc_row and wc_row[latest_date] is not None:
         nwc_pct_revenue = round(wc_row[latest_date] / revenue * 100, 2)
     elif latest_date in ca_row and latest_date in cl_row and ca_row[latest_date] is not None and cl_row[latest_date] is not None:
         nwc_pct_revenue = round((ca_row[latest_date] - cl_row[latest_date]) / revenue * 100, 2)
     else:
-        nwc_pct_revenue = _pct_of_revenue(nwc_change_row, use_abs=False)
+        nwc_pct_revenue = None
 
     rev_history = [{"year": int(d[:4]), "revenue": v} for d, v in sorted(rev_row.items()) if v is not None]
 
     # หนี้สินรวมงวดล่าสุด (สำหรับ Capital Structure ของ WACC) + ดอกเบี้ยจ่ายเฉลี่ยต่อหนี้
     # (ประมาณ Cost of Debt ก่อนภาษี จากงบจริง — ต่างจาก Rf/Beta/ERP ที่ไม่มีในงบเลย)
+    # total_debt ติดลบ = ข้อมูล Yahoo เพี้ยน (พบจริงกับหุ้นกลุ่มการเงินบางตัว) ไม่ใช่โครงสร้างทุนจริง
+    # ทิ้งเป็น None แทนปล่อยให้ debt_val ติดลบไปกวน E/V-D/V weight ของ WACC ที่ dcf_screener.py
     total_debt = debt_row.get(latest_date) if latest_date in debt_row else None
+    if total_debt is not None and total_debt < 0:
+        total_debt = None
     interest_expense = int_row.get(latest_date) if latest_date in int_row else None
     cost_of_debt_pretax = None
     if total_debt and total_debt > 0 and interest_expense is not None:
         cost_of_debt_pretax = round(abs(interest_expense) / total_debt * 100, 2)
+        # เพดานกันเคส total_debt เล็กผิดปกติเทียบดอกเบี้ยจ่าย (พบจริงหลายพันจุดข้อมูล กลุ่มธนาคาร/
+        # โบรก/ประกัน ที่ 'หนี้' ตามนิยาม Yahoo แทบไม่รวมเงินฝาก/ภาระหลักของธุรกิจ) ให้ผลลัพธ์พุ่งเกิน
+        # จริงหลายร้อย-หลายพัน% — ไม่สมเหตุสมผลเป็น cost of debt จึงทิ้งกลับไปใช้ DEFAULT_COST_OF_DEBT
+        # _PRETAX_PCT (dcf_screener.py) แทน เหมือนตอนไม่มีข้อมูลเลย
+        if cost_of_debt_pretax > 30.0:
+            cost_of_debt_pretax = None
 
     return {
         "as_of": latest_date[:10] if isinstance(latest_date, str) else latest_date,
         "revenue": revenue, "ebit": ebit,
         "ebit_margin": round(ebit / revenue * 100, 2),
         "tax_rate": tax_rate,
-        "da_pct_revenue": _pct_of_revenue(da_row, use_abs=True),
+        # ไม่ใช้ abs() (ต่างจาก capex_pct_revenue ด้านล่าง) — Reconciled Depreciation ปกติ Yahoo
+        # รายงานเป็นบวกอยู่แล้ว แต่บางปี/บางหุ้น (พบจริง 66 จุดข้อมูล 31 สัญลักษณ์ เช่น ประกัน/
+        # พลังงาน/กระดาษ) รายงานติดลบจริง (รายการปรับปรุงบัญชี/reversal) — บังคับ abs() จะกลบเครื่องหมาย
+        # ทำให้ FCFF บวก D&A ผิดทางในปีนั้น ปล่อยเครื่องหมายจริงไว้ให้สูตร noplat+da-capex+nwc_impact
+        # จัดการเอง (ค่าติดลบ = ลด FCFF ถูกต้องแล้ว) ดู CALC_RISK_AUDIT_2026-09-05.txt ข้อ [3]
+        "da_pct_revenue": _pct_of_revenue(da_row, use_abs=False),
         "capex_pct_revenue": _pct_of_revenue(capex_row, use_abs=True),
         "nwc_pct_revenue": nwc_pct_revenue,
         "total_debt": total_debt,
