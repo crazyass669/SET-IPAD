@@ -3292,18 +3292,37 @@ def _QTR_END_DATE(y, q):
     return date(y, m, d)
 
 
-def _stock_pct_change(cur_val, prior_val):
+_GROWTH_PCT_MIN_BASE_RATIO = 0.005   # ฐานเทียบ (prior) ต้องมีขนาด >= 0.5% ของ scale_ref (รายได้
+                                      # ไตรมาสปัจจุบันของหุ้นตัวเดียวกัน) ถึงจะเชื่อ % ได้ — currency-
+                                      # agnostic เพราะเทียบภายในหุ้นเดียวกันเอง ไม่ต้องรู้สกุลเงิน/
+                                      # แปลง FX (สำคัญมากสำหรับ universe='dr' ที่มิเรอร์ได้ทั้งหุ้น
+                                      # US/HK/JP ปนกันในตารางเดียว — เกณฑ์สกุลเงินตายตัวใช้ไม่ได้)
+                                      # ยืนยันด้วยข้อมูลจริง 2026-09-06: SBLK(US) profit_prior/revenue
+                                      # =0.011%, 8107(HK)/JOBY(DR) revenue_prior/revenue=0.008%/0.039%
+                                      # ล้วนต่ำกว่า threshold มาก ส่วน AMATA(TH, swing จริง)=3.86% สูง
+                                      # กว่ามาก — แยกออกจากกันได้ชัดเจน ดู CALC_RISK_AUDIT ข้อ [9]
+
+
+def _stock_pct_change(cur_val, prior_val, scale_ref=None):
     """% เปลี่ยนแปลง QoQ/YoY ต่อหุ้น — prior_val <= 0 (ไม่ใช่แค่ ==0) กันหุ้นพลิกกำไร/ขาดทุนหนักขึ้น
     หารด้วยฐานติดลบพลิกเครื่องหมายผลลัพธ์ กลายเป็น % หลอก (เช่น พลิกจากขาดทุนเป็นกำไรจะโชว์ % ติดลบ
     มหาศาล ทั้งที่จริงคือข่าวดีที่สุด) กรณีนี้ต้องดู net_profit ตรงๆ ไม่ใช่ % — caller เช็คฐานดิบ
-    (revenue_prior/profit_prior ฯลฯ ที่ผลลัพธ์แนบมาด้วยเสมอ) แทนถ้าอยากหาหุ้นพลิกกำไรจริง"""
+    (revenue_prior/profit_prior ฯลฯ ที่ผลลัพธ์แนบมาด้วยเสมอ) แทนถ้าอยากหาหุ้นพลิกกำไรจริง
+
+    scale_ref (ถ้าใส่): ค่าอ้างอิงสเกลของหุ้นตัวเดียวกัน สกุลเงินเดียวกัน (รายได้ไตรมาสปัจจุบัน) —
+    prior_val ที่มีขนาด < scale_ref × _GROWTH_PCT_MIN_BASE_RATIO ถือว่าฐานจิ๋วเกินกว่า % จะมี
+    ความหมาย (เช่น กำไร 39,000→144,949,000 ของบริษัทรายได้หลักร้อยล้าน ไม่ใช่ 'โต 371,564%' จริง
+    แค่ noise รอบจุดศูนย์) คืน None แทนเชื่อ % นั้น — ก่อนหน้านี้มีแค่ mask ฝั่ง frontend
+    (GROWTH_SCR_MIN_BASE บาทตายตัว) ซึ่งใช้ได้เฉพาะ universe='th' เท่านั้น ทำให้ DR/US/HK/JP
+    ไม่มี guard นี้เลย (ดู CALC_RISK_AUDIT_2026-09-05.txt ข้อ [9])"""
     if cur_val is None or prior_val is None or prior_val <= 0:
+        return None
+    if scale_ref and abs(prior_val) < abs(scale_ref) * _GROWTH_PCT_MIN_BASE_RATIO:
         return None
     return round((cur_val / prior_val - 1) * 100, 1)
 
 
 _QPL_STREAK_MAX = 60   # กันเดินย้อนไม่มีที่สิ้นสุดถ้าข้อมูลสะสมในอนาคตยาวขึ้นเรื่อยๆ (60 ไตรมาส = 15 ปี เกินพอ)
-_GROWTH_SCR_MIN_BASE = 50_000_000   # บาท — ค่าเดียวกับ GROWTH_SCR_MIN_BASE ใน dashboard.js (ฐาน/ตัวหารเล็กกว่านี้ถือว่าเทียบไม่ได้)
 _GROWTH_SCR_ETR_DEFAULT = 0.20   # อัตราภาษีสมมติเมื่อคำนวณเองไม่ได้ (ไม่มี tax_expense/pretax_profit)
 _GROWTH_SCR_ETR_MAX = 0.35       # กันอัตราภาษีที่คำนวณได้ (tax_expense/pretax_profit) หลุดช่วงสมเหตุสมผล
                                   # (งวดเดียวมีรายการปรับภาษีย้อนหลัง/deferred tax ทำให้ ETR ดิบเพี้ยนได้)
@@ -3384,10 +3403,10 @@ def _qpl_stock_growth_rows(parsed, target):
             "symbol": sym, "revenue": rev, "net_profit": net,
             "revenue_prior": prev.get("revenue"), "profit_prior": prev.get("net_profit"),
             "revenue_prior_qoq": prev_qoq.get("revenue"), "profit_prior_qoq": prev_qoq.get("net_profit"),
-            "revenue_yoy": _stock_pct_change(rev, prev.get("revenue")),
-            "profit_yoy": _stock_pct_change(net, prev.get("net_profit")),
-            "revenue_qoq": _stock_pct_change(rev, prev_qoq.get("revenue")),
-            "profit_qoq": _stock_pct_change(net, prev_qoq.get("net_profit")),
+            "revenue_yoy": _stock_pct_change(rev, prev.get("revenue"), scale_ref=rev),
+            "profit_yoy": _stock_pct_change(net, prev.get("net_profit"), scale_ref=rev),
+            "revenue_qoq": _stock_pct_change(rev, prev_qoq.get("revenue"), scale_ref=rev),
+            "profit_qoq": _stock_pct_change(net, prev_qoq.get("net_profit"), scale_ref=rev),
             "gpm": round(gross / rev * 100, 1) if gross is not None and rev else None,
             "npm": npm,
             # มาร์จิ้นเปลี่ยนกี่ 'จุด' (percentage point ไม่ใช่ % เปลี่ยน) เทียบ YoY/QoQ — บอกว่า
@@ -3513,10 +3532,15 @@ def get_qpl_growth_screener(parsed, sector_by_symbol, target_quarter=None, name_
             net = row["net_profit"]
             row["ocf"] = ocf
             # % มีความหมายเฉพาะกำไรสุทธิเป็นบวกและไม่จิ๋วเกินไป (หารด้วยฐาน<=0 ได้ค่าหลอกเหมือน
-            # _stock_pct_change, หารด้วยฐานจิ๋วได้ % บวมเกินจริงแม้เครื่องหมายถูก — ใช้ GROWTH_SCR_MIN_BASE
-            # เดียวกับฝั่ง frontend ที่ mask revenue/profit qoq/yoy กันฐานเทียบเล็กเกินไป)
+            # _stock_pct_change, หารด้วยฐานจิ๋วได้ % บวมเกินจริงแม้เครื่องหมายถูก) — เทียบสัดส่วนกับ
+            # รายได้ไตรมาสปัจจุบันของหุ้นตัวเอง (_GROWTH_PCT_MIN_BASE_RATIO) แทน GROWTH_SCR_MIN_BASE
+            # บาทตายตัวเดิม (ใช้ได้แค่ TH) — currency-agnostic ใช้ได้ทุก market เหมือน _stock_pct_change
+            # (2026-09-06: เดิมเช็ค net>=50,000,000 ตรงๆ ทุก market ทำให้หุ้น US ต้องกำไร >=$50M ถึงจะ
+            # เห็นค่านี้ ทั้งที่เกณฑ์ตั้งใจจริงคือ ~$1.4M — ซ่อนข้อมูลถูกต้องของบริษัทขนาดกลาง-เล็กไปเยอะ)
+            rev = row.get("revenue")
             row["ocf_ni_pct"] = round(ocf / net * 100, 1) if (
-                ocf is not None and net is not None and net >= _GROWTH_SCR_MIN_BASE) else None
+                ocf is not None and net is not None and rev
+                and net >= rev * _GROWTH_PCT_MIN_BASE_RATIO) else None
             if ocf is not None:
                 has_ocf = True
         if mktcap_by_symbol is not None:

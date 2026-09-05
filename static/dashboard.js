@@ -5285,7 +5285,9 @@ let _growthScrSearchTimer = null;   // debounce พิมพ์ค้นหา (
 let _growthScrSort = { key: 'profit_yoy', dir: 'desc' };
 const GROWTH_SCR_MIN_BASE = 50_000_000;   // บาท — ฐานเทียบขั้นต่ำกันโต % หลอกจากฐานจิ๋ว (เหมือน
                                            // _MT_PROFIT_GROWTH_MIN_BASE ใน Market Trend แต่ใช้กับทั้งรายได้/กำไร)
-                                           // ใช้เฉพาะ uni='th' (สกุลบาท) — ต่างประเทศซ่อน checkbox นี้
+                                           // 2026-09-06: เหลือใช้แค่ special_share_pct เท่านั้น (TH-only
+                                           // อยู่แล้วโดยธรรมชาติ — ดู comment ใน _growthScrMaskedRows) ฟิลด์อื่น
+                                           // เปลี่ยนไปใช้ GROWTH_SCR_MIN_BASE_RATIO (เทียบสัดส่วน) หมดแล้ว
 // หน่วยเงินของคอลัมน์รายได้/กำไร ต่อ universe (ตัวเลขดิบเป็นสกุลท้องถิ่นของงบ)
 const _GROWTH_SCR_CCY = { th: 'ลบ.', dr: 'ล้าน', us: '$M', hk: 'HK$M', jp: '¥M' };
 // uni ที่มี sector data จริง (ใช้กรองด้วย dropdown #growth-scr-sector ได้) — th/jp เท่านั้น
@@ -5362,16 +5364,12 @@ function _growthScrApplyUniUI() {
   // ย่อหน้าอธิบายแบบหุ้นไทย (set_qpl / กลุ่มการเงิน ฯลฯ) โชว์เฉพาะแท็บ th
   const thDesc = document.getElementById('growth-scr-th-desc');
   if (thDesc) thDesc.style.display = _growthScrUni === 'th' ? '' : 'none';
-  // ซ่อนตัวกรอง Sector (DR/US/HK ไม่มีข้อมูล) + "ตัดฐานเทียบเล็กเกินไป" (threshold เป็นสกุลบาท
-  // ใช้ได้แค่ th) — ใช้ _GROWTH_SCR_SECTOR_DATA (มีข้อมูล) ไม่ใช่ _GROWTH_SCR_HAS_SECTOR (โชว์เป็น
-  // คอลัมน์) เพราะ th มีข้อมูล sector กรองได้ แค่ไม่โชว์เป็นคอลัมน์
+  // ซ่อนตัวกรอง Sector (DR/US/HK ไม่มีข้อมูล) — ใช้ _GROWTH_SCR_SECTOR_DATA (มีข้อมูล) ไม่ใช่
+  // _GROWTH_SCR_HAS_SECTOR (โชว์เป็นคอลัมน์) เพราะ th มีข้อมูล sector กรองได้ แค่ไม่โชว์เป็นคอลัมน์
   const secSel = document.getElementById('growth-scr-sector');
   if (secSel) secSel.style.display = _GROWTH_SCR_SECTOR_DATA.has(_growthScrUni) ? '' : 'none';
-  const minBase = document.getElementById('growth-scr-min-base');
-  if (minBase) {
-    const lbl = minBase.closest('label');
-    if (lbl) lbl.style.display = _growthScrUni === 'th' ? '' : 'none';
-  }
+  // "ตัดฐานเทียบเล็กเกินไป" (2026-09-06: เปลี่ยนเป็นเทียบสัดส่วน currency-agnostic แล้ว —
+  // ดู _growthScrMaskedRows) โชว์ทุก market เหมือนกันแล้ว ไม่ต้องซ่อนเฉพาะ th อีกต่อไป
   _growthScrEnsureDrData();   // แท็บ DR ต้องมี _drData ไว้ทำลิงก์ TV + เปิด chart modal
 }
 
@@ -5519,32 +5517,37 @@ function _growthScrIsTurnaround(row, mode) {
 
 // ใช้ checkbox "ตัดฐานเทียบเล็กเกินไป" — mask เฉพาะ % ที่คำนวณได้จริง (ฐาน > 0 อยู่แล้วเพราะ backend
 // คืน null ให้ฐาน<=0 ไปแล้ว) ไม่แตะเคสพลิกกำไร (null เพราะฐานติดลบ คนละเหตุผลกับฐานจิ๋ว)
-// ครอบคลุมทั้ง 4 คอลัมน์เดิม (qoq/yoy) และ 3 คอลัมน์คุณภาพใหม่ (ต่อเนื่อง/Δ NPM/OCF-NI) — ตัวหลัง
-// ฐานเทียบคือรายได้/กำไรสุทธิของงวดปัจจุบัน (row.revenue/row.net_profit) เอง ไม่ใช่งวดก่อน เพราะ
-// เป็นตัวชี้วัด ณ จุดเดียว ไม่ใช่ % เปลี่ยนแปลง
+//
+// revenue_qoq/yoy, profit_qoq/yoy (4 คอลัมน์เดิม) ไม่ต้อง mask ที่นี่อีกต่อไป — backend
+// (_stock_pct_change, financials_store.py) null ให้เองแล้วทุก market เสมอ ผ่าน scale_ref
+// (เทียบกับรายได้ไตรมาสปัจจุบันของหุ้นเดียวกันเอง แทนเกณฑ์บาทตายตัว) ดู CALC_RISK_AUDIT ข้อ [9]
+//
+// ต่อเนื่อง/Δ NPM (2026-09-06): เปลี่ยนจากเกณฑ์บาทตายตัว TH-only เป็นเทียบสัดส่วนกับสเกลของหุ้น
+// ตัวเองเหมือนกัน — revenue_streak/profit_streak เทียบกับ "รายได้/กำไรเฉลี่ยต่อไตรมาส" ของหุ้น
+// เดียวกันเอง (revenue_ttm/profit_ttm หาร 4, ไม่ใช่รายได้ปัจจุบันเทียบตัวเอง — circular) ถ้า TTM
+// ไม่ครบ 4 ไตรมาส (None) ข้าม guard นี้ไป (ไม่พอจะตัดสิน ปลอดภัยกว่าบังคับ 0) · Δ NPM เทียบทั้ง
+// รายได้ปัจจุบัน (กับ TTM/4 เหมือนกัน) และรายได้งวดก่อน (กับรายได้ปัจจุบัน แบบเดียวกับ revenue_yoy)
+// currency-agnostic ทั้งหมด ใช้ได้ทุก market รวม DR ที่มิเรอร์ได้ทั้ง US/HK/JP ปนกัน
+// special_share_pct ไม่แตะ (ไม่ต้องแก้ — เป็น None เสมออยู่แล้วสำหรับ DR/US/HK/JP เพราะ other_gl
+// [บัญชี 439700 ของ SET] ไม่มีให้ต่างประเทศ ดู _GROWTH_SCR_HAS_CORE — ปัญหานี้ไม่เกิดกับฟิลด์นี้จริง)
+const GROWTH_SCR_MIN_BASE_RATIO = 0.005;   // 0.5% — ตรงกับ _GROWTH_PCT_MIN_BASE_RATIO ฝั่ง Python
 function _growthScrMaskedRows(stocks) {
-  // threshold GROWTH_SCR_MIN_BASE เป็นสกุลบาท — ใช้ได้เฉพาะหุ้นไทย (ตัวเลขต่างประเทศคนละสกุล)
-  if (_growthScrUni !== 'th') return stocks;
   const minBaseOn = document.getElementById('growth-scr-min-base')?.checked;
   if (!minBaseOn) return stocks;
-  const mask = (row, valKey, baseKey) => {
-    if (row[valKey] != null && row[baseKey] != null && row[baseKey] < GROWTH_SCR_MIN_BASE) row[valKey] = null;
-  };
+  const tooSmall = (val, ref) => val != null && ref != null
+    && Math.abs(val) < Math.abs(ref) * GROWTH_SCR_MIN_BASE_RATIO;
   return stocks.map(r => {
     const row = { ...r };
-    mask(row, 'revenue_qoq', 'revenue_prior_qoq');
-    mask(row, 'revenue_yoy', 'revenue_prior');
-    mask(row, 'profit_qoq', 'profit_prior_qoq');
-    mask(row, 'profit_yoy', 'profit_prior');
-    if (row.revenue != null && row.revenue < GROWTH_SCR_MIN_BASE) row.revenue_streak = 0;
-    if (row.net_profit != null && row.net_profit < GROWTH_SCR_MIN_BASE) row.profit_streak = 0;
-    if (row.revenue != null && row.revenue < GROWTH_SCR_MIN_BASE) row.npm_change_qoq = null;
-    if (row.revenue_prior_qoq != null && row.revenue_prior_qoq < GROWTH_SCR_MIN_BASE) row.npm_change_qoq = null;
-    if (row.revenue != null && row.revenue < GROWTH_SCR_MIN_BASE) row.npm_change_yoy = null;
-    if (row.revenue_prior != null && row.revenue_prior < GROWTH_SCR_MIN_BASE) row.npm_change_yoy = null;
+    const qtrRevRef = row.revenue_ttm != null ? row.revenue_ttm / 4 : null;
+    const qtrProfitRef = row.profit_ttm != null ? row.profit_ttm / 4 : null;
+    if (tooSmall(row.revenue, qtrRevRef)) row.revenue_streak = 0;
+    if (tooSmall(row.net_profit, qtrProfitRef)) row.profit_streak = 0;
+    if (tooSmall(row.revenue, qtrRevRef) || tooSmall(row.revenue_prior_qoq, row.revenue)) row.npm_change_qoq = null;
+    if (tooSmall(row.revenue, qtrRevRef) || tooSmall(row.revenue_prior, row.revenue)) row.npm_change_yoy = null;
     // พิเศษ % หารด้วย |กำไรสุทธิ| — ฐานจิ๋ว (ใกล้ศูนย์ ไม่ว่าบวกหรือลบ) ทำ % บวมเกินจริงได้แม้
     // เครื่องหมายถูก (เหมือนเหตุผลเดียวกับ OCF/NI ด้านบน) ไม่แตะ special_after_tax/core_profit
-    // เอง — เป็นจำนวนเงินดิบ ไม่ใช่ % จึงไม่มีปัญหาฐานจิ๋วแบบนี้
+    // เอง — เป็นจำนวนเงินดิบ ไม่ใช่ % จึงไม่มีปัญหาฐานจิ๋วแบบนี้ (ยังใช้เกณฑ์บาทตายตัวเดิม —
+    // ไม่ต้องแก้ตามที่อธิบายด้านบน เพราะ non-TH ได้ None อยู่แล้วจากเหตุผลอื่น)
     if (row.net_profit != null && Math.abs(row.net_profit) < GROWTH_SCR_MIN_BASE) row.special_share_pct = null;
     return row;
   });
