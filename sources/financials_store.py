@@ -4346,13 +4346,30 @@ def _yahoo_row(payload_yahoo, section, *names):
     return {}
 
 
+_CC_MAX_DAYS = 730  # เพดาน DSO/DPO (2 ปี) — ดู docstring ด้านล่างสำหรับที่มา
+
+
 def compute_cash_cycle(payload_yahoo):
     """Cash Conversion Cycle = DIO + DSO − DPO จากงบ Yahoo (รายปี งวดล่าสุดที่ครบ)
     คำนวณเองเพราะค่า cash_cycle สำเร็จรูปของ Finnomena เชื่อไม่ได้ (ทดสอบแล้วเพี้ยน)
       DIO = สินค้าคงคลัง / ต้นทุนขาย × 365   (ของค้างสต็อกกี่วัน)
       DSO = ลูกหนี้การค้า / รายได้ × 365       (เก็บเงินกี่วัน)
       DPO = เจ้าหนี้การค้า / ต้นทุนขาย × 365   (จ่ายเจ้าหนี้กี่วัน)
-    คืน None ทุกค่าถ้า field ไม่ครบ (เช่นธนาคาร/ประกัน ที่ไม่มี COGS/inventory)"""
+    คืน None ทุกค่าถ้า field ไม่ครบ (เช่นธนาคาร/ประกัน ที่ไม่มี COGS/inventory)
+
+    2 guard เพิ่ม (CALC_RISK_AUDIT_ROUND3 [1], ยืนยันด้วยข้อมูลจริงจาก financials.db แล้วว่า
+    เกิดขึ้นจริง ~11% ของหุ้นไทยที่คำนวณได้):
+    1. COGS งวดล่าสุดจิ๋วผิดปกติเทียบกับสเกลปกติของบริษัทเอง (เช่น BTC ปี 2024 cogs=14M ทั้งที่
+       ปีอื่น 81-276M, QDC ธุรกิจหดตัวจนเกือบเป็น 0) — เดิม guard แค่ r<=0/c<=0 ปล่อยผ่านตัวเลข
+       บวกจิ๋วเข้าสูตรตรงๆ ทำให้ DIO/DPO ระเบิดหลักหมื่นวัน เทียบกับ median ของปีอื่นที่มีอยู่ใน
+       payload เดียวกัน (pattern เดียวกับ scale_ref ของ growth screener near-zero-base fix)
+       — ไม่กระทบ COGS ที่เล็กแต่คงเส้นคงวาทุกปี (เช่นธุรกิจ high-margin จริง)
+    2. DSO/DPO เกิน _CC_MAX_DAYS (2 ปี) → ถือว่า AR/AP ที่ดึงมาไม่ใช่ลูกหนี้/เจ้าหนี้การค้าจริง
+       ของธุรกิจปกติ (พบจริงในบริษัทกลุ่มการเงิน/โฮลดิ้ง/ลีสซิ่งที่ field ชื่อ "Accounts
+       Receivable/Payable" ของ Yahoo คือยอดคงค้างทางการเงินคนละความหมาย เช่น JP:8253 DSO=2681
+       วัน, HK:0227 DPO=6211 วัน) — ตั้งใจ **ไม่แคป DIO** เพราะ DIO หลักพันวันเป็นค่าจริงที่ถูกต้อง
+       สำหรับธุรกิจ land-bank/อสังหาริมทรัพย์ (ยืนยันจริงจากหุ้นไทย SENA/ORI/RML/PROUD/MJD/TITLE
+       ฯลฯ ที่ inventory คือที่ดิน/โครงการระหว่างพัฒนาถือหลายปีเป็นปกติทางธุรกิจ ไม่ใช่บั๊ก)"""
     rev  = _yahoo_row(payload_yahoo, "income", "Total Revenue", "Operating Revenue")
     cogs = _yahoo_row(payload_yahoo, "income", "Cost Of Revenue", "Reconciled Cost Of Revenue")
     inv  = _yahoo_row(payload_yahoo, "balance", "Inventory")
@@ -4367,9 +4384,18 @@ def compute_cash_cycle(payload_yahoo):
     r, c = rev[d], cogs[d]
     if not r or not c or r <= 0 or c <= 0:
         return none
+
+    other_cogs = sorted(cogs[k] for k in common if k != d and cogs.get(k) and cogs[k] > 0)
+    if other_cogs:
+        scale_ref = other_cogs[len(other_cogs) // 2]
+        if c < scale_ref * 0.2:
+            return none
+
     dio = inv[d] / c * 365
     dso = ar[d] / r * 365
     dpo = ap[d] / c * 365
+    if dso > _CC_MAX_DAYS or dpo > _CC_MAX_DAYS:
+        return none
     return {"cash_cycle": round(dio + dso - dpo, 1), "dio": round(dio, 1),
             "dso": round(dso, 1), "dpo": round(dpo, 1), "cc_as_of": d[:10]}
 
@@ -4999,8 +5025,7 @@ def compute_valuation_percentile(payload_finn_q, min_points=12):
     from datetime import date as _date
     val = (payload_finn_q or {}).get("valuation", {})
     close = val.get("Close", {}) or {}
-    ref_date = max(close) if close else (
-        max((d for row in val.values() for d in row), default=None))
+    ref_date = max(close) if close else _date.today().isoformat()
 
     def _stale(last_d):
         if not ref_date or not last_d or last_d >= ref_date:
@@ -5059,8 +5084,8 @@ def compute_valuation_percentile(payload_finn_q, min_points=12):
         else:
             series = val.get(name, {})
             pts = sorted((d, v) for d, v in series.items() if v is not None and v > 0)
+        pts = _drop_stuck_tail(pts)  # provider ค้างค่าซ้ำ — เกิดได้กับทุก metric รวม div_yield
         if short != "div_yield":   # div_yield: median มักใกล้ 0 อยู่แล้ว filter สัมพัทธ์ไม่เสถียร
-            pts = _drop_stuck_tail(pts)
             pts = _drop_spikes(pts)
         if pts and _stale(pts[-1][0]):
             out[short] = {"value": None, "percentile": None, "median": None, "mean": None,

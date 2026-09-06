@@ -21,6 +21,18 @@ def _annual_from_rows(rows):
     return dict(by_year)
 
 
+def _near_zero_base(value, others, ratio=0.15):
+    """value บวกจริงแต่จิ๋วผิดปกติเทียบ median ของ DPS ปีอื่นในประวัติเดียวกัน (pattern เดียวกับ
+    scale_ref ของ compute_cash_cycle/financials_store.py และ _latest_eps ของ factor_snapshot.py
+    — CALC_RISK_AUDIT_ROUND4) กัน yoy_growth_pct/cagr_Ny_pct ระเบิดจากปีฐาน DPS จิ๋วผิดปกติ
+    (เช่น ปันผลค้างท่อ/ปีที่จ่ายแค่บางส่วนก่อนหยุดจ่ายชั่วคราว) แทนที่จะเป็นธุรกิจลด DPS ถาวรจริง"""
+    pos = sorted(v for v in others if v and v > 0)
+    if not pos:
+        return False
+    scale_ref = pos[len(pos) // 2]
+    return value < scale_ref * ratio
+
+
 def _nearest_close_on_or_before(dates, closes, target_iso):
     """หาราคาปิดล่าสุดที่ <= target_iso จาก series ที่เรียงตามวันที่แล้ว (binary search มือ)"""
     lo, hi, best = 0, len(dates) - 1, None
@@ -107,14 +119,21 @@ def compute_dividend_stats(rows, price_series=None, current_year=None):
         span = last_y - first_y
         if first <= 0 or span <= 0:
             return None
+        if _near_zero_base(first, (annual[y]["dps"] for y in complete_years if y != first_y)):
+            return None
         return round(((last / first) ** (1 / span) - 1) * 100, 2)
 
     yoy = None
     if len(complete_years) >= 2:
         y0, y1 = complete_years[-1], complete_years[-2]
-        prev = annual[y1]["dps"]
-        if prev > 0:
-            yoy = round((annual[y0]["dps"] / prev - 1) * 100, 2)
+        # y0/y1 ต้องเป็นปีติดกันจริงถึงจะเรียกว่า "YoY" ได้ — หุ้นที่หยุดจ่ายไปหลายปีแล้ว
+        # กลับมาจ่ายใหม่ (เช่น INSURE: 2008 -> ว่าง 16 ปี -> 2025) ปี 2 ตัวท้ายสุดที่ "มี
+        # ข้อมูล" ไม่ใช่ปีติดกัน ถ้าไม่กันไว้จะได้ growth ข้ามหลายปีแต่โชว์เป็น YoY หลอก
+        # (เคยเจอจริง INSURE ได้ 900% ทั้งที่จริงคือ growth ตลอด 17 ปี ไม่ใช่ปีเดียว)
+        if y0 == y1 + 1:
+            prev = annual[y1]["dps"]
+            if prev > 0 and not _near_zero_base(prev, (annual[y]["dps"] for y in complete_years if y != y1)):
+                yoy = round((annual[y0]["dps"] / prev - 1) * 100, 2)
 
     freq = None
     if complete_years:

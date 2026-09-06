@@ -6235,8 +6235,19 @@ def _latest_ttm_anchor(qmap, anchor_key, field, lookback=4):
     return None
 
 
-def _peer_group_pct_change(cur, prev):
+_PEER_GROUP_PCT_MIN_BASE_RATIO = 0.005   # เกณฑ์เดียวกับ _GROWTH_PCT_MIN_BASE_RATIO
+                                          # (sources/financials_store.py) — ฐานเทียบ (prev)
+                                          # ต้องมีขนาด >= 0.5% ของ scale_ref (รายได้ไตรมาสเดียวกัน)
+                                          # ถึงจะเชื่อ % ได้ กัน pattern เดียวกับ growth screener
+                                          # near-zero-base (ยืนยันจริง 2026-09-06: q_net_profit_qoq/
+                                          # yoy ระเบิดถึง 100+ หุ้นไทยจาก prev net_profit ใกล้ 0 —
+                                          # ดู CALC_RISK_AUDIT_ROUND3 [2])
+
+
+def _peer_group_pct_change(cur, prev, scale_ref=None):
     if cur is None or prev is None or prev == 0:
+        return None
+    if scale_ref and abs(prev) < abs(scale_ref) * _PEER_GROUP_PCT_MIN_BASE_RATIO:
         return None
     return round((cur - prev) / abs(prev) * 100, 2)
 
@@ -6381,10 +6392,19 @@ def _peer_group_detail_row(sym, entry, f, con):
         "sector": entry.get("sector"), "industry": entry.get("industry"),
         "mkt_cap": mkt_cap,
         "revenue_ttm": rev_ttm, "net_profit_ttm": np_ttm,
-        "gpm": round(gp_ttm / rev_ttm * 100, 2) if (gp_ttm is not None and rev_ttm) else None,
-        "opm": round(op_ttm / rev_ttm * 100, 2) if (op_ttm is not None and rev_ttm) else None,
-        "npm": round(np_ttm / rev_ttm * 100, 2) if (np_ttm is not None and rev_ttm) else None,
-        "roe": round(np_ttm / equity_avg * 100, 2) if (np_ttm is not None and equity_avg) else f.get("roe"),
+        # rev_ttm/equity_avg ต้อง > 0 ไม่ใช่แค่ truthy — ยืนยันจริง 2026-09-06 ว่า rev_ttm ติดลบ
+        # ได้จริง (AKS/TRITN, ไตรมาสปรับปรุงย้อนหลังก้อนใหญ่กลบ TTM ให้ติดลบ) ทำให้ gpm/opm/npm
+        # พลิกเครื่องหมาย/ระเบิดแบบเงียบ (เดิม `if rev_ttm` ผ่านค่าติดลบ) — ดู CALC_RISK_AUDIT_
+        # ROUND3 [2]
+        "gpm": round(gp_ttm / rev_ttm * 100, 2) if (gp_ttm is not None and rev_ttm and rev_ttm > 0) else None,
+        "opm": round(op_ttm / rev_ttm * 100, 2) if (op_ttm is not None and rev_ttm and rev_ttm > 0) else None,
+        "npm": round(np_ttm / rev_ttm * 100, 2) if (np_ttm is not None and rev_ttm and rev_ttm > 0) else None,
+        # equity_avg ติดลบ (ทุนสะสมขาดทุนจนติดลบ) หาร np_ttm ติดลบ = ลบ/ลบ พลิกเป็น ROE บวก
+        # สูงลิ่วหลอกว่าธุรกิจดีทั้งที่จริงคือทุนติดลบ (ยืนยันจริง 8 ตัว เช่น AKS equity=-207M
+        # ได้ roe=8221%, TRC equity=-104M ได้ roe=671%) — fallback ไป f.get("roe") (ค่าจาก
+        # factor_snapshot ที่ _sane() winsorize ±300% ไว้แล้ว ปลอดภัยกว่า) เหมือนตอน equity_avg
+        # เป็น None/0 อยู่แล้วเดิม
+        "roe": round(np_ttm / equity_avg * 100, 2) if (np_ttm is not None and equity_avg and equity_avg > 0) else f.get("roe"),
         "roa": f.get("roa"),
         "roic": roic,
         "de_ratio": f.get("de_ratio"),
@@ -6398,9 +6418,13 @@ def _peer_group_detail_row(sym, entry, f, con):
         "z_excluded_reason": f.get("z_excluded_reason"),
         "rev_cagr": f.get("rev_cagr"), "profit_cagr": f.get("profit_cagr"),
         "cfo_ttm": cfo_ttm, "cfi_ttm": cfi_ttm, "fcf_approx": fcf_approx,
-        "cfo_ni_ratio": round(cfo_ttm / np_ttm, 2) if (cfo_ttm is not None and np_ttm) else None,
-        "fcf_margin": round(fcf_approx / rev_ttm * 100, 2) if (fcf_approx is not None and rev_ttm) else None,
-        "cfo_margin": round(cfo_ttm / rev_ttm * 100, 2) if (cfo_ttm is not None and rev_ttm) else None,
+        # np_ttm ใกล้ 0 (ไม่ใช่ 0 เป๊ะ) ทำให้ cfo_ni_ratio ระเบิด (ยืนยันจริง 26 ตัว |ratio|>20
+        # เช่น AIRA np_ttm=4.5M ได้ ratio=103.6x, KUN np_ttm=0.7M ได้ 128.6x) — เทียบฐานกับ
+        # rev_ttm (สเกลของหุ้นตัวเดียวกัน, เกณฑ์เดียวกับ _PEER_GROUP_PCT_MIN_BASE_RATIO)
+        "cfo_ni_ratio": round(cfo_ttm / np_ttm, 2) if (cfo_ttm is not None and np_ttm
+            and rev_ttm and abs(np_ttm) >= abs(rev_ttm) * _PEER_GROUP_PCT_MIN_BASE_RATIO) else None,
+        "fcf_margin": round(fcf_approx / rev_ttm * 100, 2) if (fcf_approx is not None and rev_ttm and rev_ttm > 0) else None,
+        "cfo_margin": round(cfo_ttm / rev_ttm * 100, 2) if (cfo_ttm is not None and rev_ttm and rev_ttm > 0) else None,
         "cash_cycle": f.get("cash_cycle"), "dio": f.get("dio"), "dso": f.get("dso"), "dpo": f.get("dpo"),
         "q_revenue": last.get("revenue"), "q_cogs": last.get("cogs"), "q_sga": last.get("sga_total"),
         "q_ebit": last.get("operating_profit"), "q_net_profit": last.get("net_profit"),
@@ -6408,11 +6432,19 @@ def _peer_group_detail_row(sym, entry, f, con):
         # ตรงๆ ไม่งั้นคอลัมน์ Assets/Equity/IBD เป็น "–" เมื่อไตรมาสใหม่สุดเป็น SET P&L ล้วน
         "q_cfo": last.get("cfo"), "total_assets": assets_latest,
         "total_equity": equity_latest, "ibd": ibd_latest,
-        "q_net_profit_qoq": _peer_group_pct_change(last.get("net_profit"), (prior_q or {}).get("net_profit")),
-        "q_net_profit_yoy": _peer_group_pct_change(last.get("net_profit"), (yoy_q or {}).get("net_profit")),
-        "q_revenue_qoq": _peer_group_pct_change(last.get("revenue"), (prior_q or {}).get("revenue")),
-        "q_revenue_yoy": _peer_group_pct_change(last.get("revenue"), (yoy_q or {}).get("revenue")),
-        "q_cfo_yoy": _peer_group_pct_change(last.get("cfo"), (yoy_q or {}).get("cfo")),
+        "q_net_profit_qoq": _peer_group_pct_change(last.get("net_profit"), (prior_q or {}).get("net_profit"),
+                                                    scale_ref=last.get("revenue")),
+        "q_net_profit_yoy": _peer_group_pct_change(last.get("net_profit"), (yoy_q or {}).get("net_profit"),
+                                                    scale_ref=last.get("revenue")),
+        # scale_ref=รายได้ไตรมาสเดียวกันทุกจุด (เดียวกับ q_net_profit_qoq/yoy ด้านบน) — ยืนยันจริง
+        # ว่า q_revenue_qoq/yoy และ q_cfo_yoy ระเบิดจากฐาน (prev) ใกล้ 0 เหมือนกัน (เช่น BTC
+        # q_revenue_qoq=5731% จาก revenue ไตรมาสก่อนใกล้ 0 ผิดปกติ, GJS q_cfo_yoy=-5462%)
+        "q_revenue_qoq": _peer_group_pct_change(last.get("revenue"), (prior_q or {}).get("revenue"),
+                                                 scale_ref=last.get("revenue")),
+        "q_revenue_yoy": _peer_group_pct_change(last.get("revenue"), (yoy_q or {}).get("revenue"),
+                                                 scale_ref=last.get("revenue")),
+        "q_cfo_yoy": _peer_group_pct_change(last.get("cfo"), (yoy_q or {}).get("cfo"),
+                                             scale_ref=last.get("revenue")),
         "ttm_net_profit_yoy": None, "net_profit_ttm_prior": None,
         "rev_cagr_3y": None, "profit_cagr_3y": None,
         # อัตราส่วนสภาพคล่อง/หนี้/ประสิทธิภาพใช้สินทรัพย์ — คำนวณจาก field งบดุลรายไตรมาสที่
@@ -6425,14 +6457,14 @@ def _peer_group_detail_row(sym, entry, f, con):
         "asset_turnover": round(rev_ttm / assets_avg, 2) if (rev_ttm is not None and assets_avg) else None,
         "inventory_turnover": round(cogs_ttm / inventory_avg, 2) if (cogs_ttm is not None and inventory_avg) else None,
         "receivable_turnover": round(rev_ttm / ar_avg, 2) if (rev_ttm is not None and ar_avg) else None,
-        "capex_rev": round(abs(capex_ttm) / rev_ttm * 100, 2) if (capex_ttm is not None and rev_ttm) else None,
+        "capex_rev": round(abs(capex_ttm) / rev_ttm * 100, 2) if (capex_ttm is not None and rev_ttm and rev_ttm > 0) else None,
         "quarters_available": len(quarters), "ttm_partial": rev_ttm is None,
     }
     # YoY ของ TTM กำไรสุทธิ — เทียบ TTM ปัจจุบันกับ TTM ที่จบเมื่อ 4 ไตรมาสก่อน (ต้องมีอย่างน้อย
     # 8 ไตรมาสถึงจะมีข้อมูลพอทำ TTM สองช่วงที่ไม่ทับกัน)
     if len(quarters) >= 8 and np_ttm is not None:
         prior_ttm = _ttm_sum(qmap, anchor - 4, "net_profit")
-        row["ttm_net_profit_yoy"] = _peer_group_pct_change(np_ttm, prior_ttm)
+        row["ttm_net_profit_yoy"] = _peer_group_pct_change(np_ttm, prior_ttm, scale_ref=rev_ttm)
         row["net_profit_ttm_prior"] = prior_ttm
     # CAGR 3 ปีเป๊ะ (ต่างจาก rev_cagr/profit_cagr ของ factor_snapshot ที่เป็นเต็มช่วงข้อมูล) —
     # เทียบ TTM ปัจจุบันกับ TTM ที่จบเมื่อ 12 ไตรมาสก่อน ต้องมีอย่างน้อย 16 ไตรมาสถึงจะมีข้อมูล

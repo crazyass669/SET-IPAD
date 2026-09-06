@@ -1,0 +1,299 @@
+========================================================================
+ CALC_RISK_AUDIT รอบ 3 — เป้าหมาย 3 จุดที่ยังไม่เคยเจาะจงเรื่อง
+ "สูตรคำนวณผิดพลาดแบบเงียบ" (ไม่ crash แต่ตัวเลขผิด) ด้วยวิธีเดียวกับ
+ CALC_RISK_AUDIT_2026-09-05.txt / CALC_RISK_AUDIT_ROUND2_TARGETS.txt (query DB/
+ ข้อมูลจริงหา edge case จริง ไม่ใช่แค่อ่านโค้ดเดา)
+ สร้าง: 2026-09-06 — ต่อจากคำถามผู้ใช้ "ทำ CODE_REVIEW_MENU_TEMPLATES +
+ CALC_RISK_AUDIT_ROUND2_TARGETS ครบหมดแล้ว มีจุดเสี่ยงในเมนูไหนเพิ่มอีกไหม"
+ หลัง ROUND2 (breadth/rotation/ETF/short-sales/confluence/insider-hedge) ปิดครบ 6/6
+
+ ข้อควรรู้ก่อนใช้ไฟล์นี้: ทั้ง 3 จุดด้านล่างอยู่ในกลุ่มฟังก์ชันที่ใช้ตัวช่วยร่วมกัน
+ (_ttm_sum/_avg_last4/_latest_value/_peer_group_quarters ใน app.py — เอนจิน TTM
+ กลางที่ /api/peer-group-detail และ /api/financials-sankey-sector เรียกใช้) กับ
+ compute_cash_cycle (sources/financials_store.py) ที่ factor_snapshot.py เรียกไปเก็บ
+ ใน factor_snapshot — ยังไม่เคยถูกวิธี "query ข้อมูลจริงหา extreme value" ของชุด audit
+ นี้แตะเลย ต่างจาก CALC_RISK_AUDIT รอบ 1 ที่เจาะ "เทียบหุ้น 2 ตัว/งบการเงิน" (ฟังก์ชันคนละ
+ ชุด แม้จะเป็นหน้า "งบการเงิน" เหมือนกัน — ดู [2]+[4]+[7] ของไฟล์ CALC_RISK_AUDIT เดิม
+ ซึ่งเป็นคนละ backend function กับ 3 จุดด้านล่างนี้)
+
+ pattern ที่สงสัย (เดียวกับที่เคยเจอจริงมาแล้วหลายครั้ง — growth screener near-zero-base,
+ Fair Value P/B·P/E ROE extreme, tax_pct safe_pct): ตัวหาร (revenue_ttm/equity_avg/
+ net_profit_ttm/prev quarter value) ถูก guard แค่ "ไม่ใช่ 0/None" (`if x`) หรือ
+ "ไม่ติดลบ" (`> 0`) แต่ไม่กันกรณีเป็นบวกจริงแต่ "จิ๋วมาก" (เช่น COGS/รายได้ไตรมาสนั้น
+ ใกล้ 0 จากธุรกิจที่หยุดชั่วคราว/reporting artifact) ซึ่งทำให้ % หรืออัตราส่วนระเบิด
+ เป็นค่าผิดปกติแบบไม่มีธงเตือน — ต้อง query ข้อมูลจริงจาก financials.db ยืนยันว่ามีเคส
+ จริงหรือไม่ ไม่ใช่แค่เดาจากการอ่านโค้ด
+
+ ลำดับที่แนะนำ: [1] Cash Cycle → [2] Peer Group Detail (การ์ดเทียบกลุ่ม) →
+ [3] Financials Sankey Sector (ปุ่มเทียบกับกลุ่มใน Sankey) — เรียงตามความเสี่ยงที่
+ ประเมินคร่าวๆ (สูง→ต่ำ) จากการอ่านโค้ดเบื้องต้นตอนร่างไฟล์นี้
+
+
+========================================================================
+ ขั้นตอนหลังรีวิวแต่ละข้อ (เหมือน ROUND2 ทุกอย่าง — ทำให้จบทีละข้อรวดเดียว)
+========================================================================
+  1. แก้บั๊กที่เจอ (ถ้ามี)
+  2. Restart server (ถ้าแก้ app.py/sources/*.py) + bump ?v= ของ dashboard.js (ถ้าแก้
+     frontend) — ทั้ง 3 ข้อนี้คำนวณสดต่อ request ทุกครั้งอยู่แล้ว (ไม่มี cache ที่ bake
+     ไว้ล่วงหน้าแบบ ETF) restart เฉยๆ พอ ไม่ต้อง rebuild/kick cache เพิ่ม — ข้อยกเว้น:
+     [1] Cash Cycle ถูก bake ไว้ใน factor_snapshot ตอน sync (factor_snapshot.py:142)
+     ถ้าแก้ compute_cash_cycle ค่าเก่าใน factor_snapshot_mirror/DB ที่ sync ไปแล้วจะไม่
+     ถูกคำนวณใหม่เอง — ต้องรัน sync ใหม่ (หรือรอรอบถัดไป) ถึงจะเห็นผลจริงในหน้า Peer
+     Group Detail/Screener ที่อ่าน f.get("cash_cycle") ต่อ (ไม่ใช่ restart อย่างเดียวพอ)
+  3. เปิดเบราว์เซอร์จริง (หรือ Playwright headless) เช็ค: (ก) console 0 error ตลอด
+     ตั้งแต่โหลดหน้าจนโต้ตอบ (ข) จุดที่ finding รายงานไว้ถูกต้องแล้วจริง (ค) ลองกด 2-3
+     จุดที่เกี่ยวข้องกับส่วนที่แก้
+  4. เขียนบันทึกผลต่อท้ายข้อนั้นในไฟล์นี้เสมอ (แบบ ">>> ตรวจแล้ว/แก้แล้ว [วันที่]")
+  5. **ห้ามแก้ [สถานะ] ที่หัวข้อเอง** (⬜→🔶→✅) — ให้ผู้ใช้ติ๊กเองเสมอตามกติกาเดิม
+     ทุกไฟล์ในชุดนี้ — สรุปผลให้ผู้ใช้ฟังในแชท/session ที่คุยอยู่ ให้ผู้ใช้เป็นคนตัดสินใจ
+     ติ๊กสถานะเอง
+========================================================================
+
+
+########################################################################
+[1] เมนู: Screener+/Peer Group Detail/Data Health — Cash Cycle (DIO/DSO/DPO)
+สถานะ: ⬜
+ความเสี่ยงประเมินคร่าวๆ: กลาง-สูง (ยังไม่ได้ query ข้อมูลจริงยืนยัน)
+########################################################################
+
+/code-review medium sources/financials_store.py
+
+ไฟล์/บรรทัด:
+  - sources/financials_store.py:4349-4374 (compute_cash_cycle)
+  - sources/factor_snapshot.py:142 (จุดเรียก — เก็บผลลง factor_snapshot ตอน sync)
+  - app.py:6404 (peer_group_detail อ่าน f.get("cash_cycle")/dio/dso/dpo ต่อ) +
+    L8891-8980 (_compute_cash_cycle_crosscheck ใน Data Health — cross-check กับ
+    SET q_cash_cycle)
+
+หมายเหตุ: compute_cash_cycle guard แค่ `if not r or not c or r<=0 or c<=0: return none`
+(rev/cogs งวดล่าสุดที่มีข้อมูลครบทั้ง 5 field) — กันได้แค่ 0/ติดลบ ไม่กัน "บวกแต่จิ๋วมาก"
+(เช่นบริษัทหยุดผลิตชั่วคราว/COGS ไตรมาสนั้นใกล้ 0 จาก reporting artifact) ซึ่งจะทำให้
+dio = inv/c*365 และ dpo = ap/c*365 ระเบิดเป็นหลักพัน-หมื่นวันแบบไม่มีธงเตือน (pattern
+เดียวกับบั๊ก growth screener near-zero-base ที่เพิ่งแก้ไปในหุ้นอย่าง SBLK/8107 — ดู
+memory growth-screener-near-zero-base-bug-2026-09-05.md) ค่าที่ระเบิดนี้จะไหลต่อไปที่
+(ก) หน้า Peer Group Detail (คอลัมน์ Cash Cycle/DIO/DSO/DPO) (ข) _compute_cash_cycle_
+crosscheck ใน Data Health (เปรียบเทียบกับ SET official — ถ้า Yahoo ฝั่งเราระเบิดจะโชว์
+diff มหาศาลหลอกว่า SET ผิดทั้งที่จริงคือ Yahoo COGS งวดนั้นเพี้ยน)
+
+โฟกัสที่ (silent calc error โดยเฉพาะ):
+- query financials.db จริง (yahoo_q table) หา symbol ที่มี Cost Of Revenue รายไตรมาส
+  ใกล้ 0 (เช่น < 1% ของ revenue งวดเดียวกัน หรือ < ค่ามัธยฐาน 4 ไตรมาสก่อนหน้า 100 เท่า)
+  แล้วเทียบ dio/dpo ที่ compute_cash_cycle คำนวณจริงว่าระเบิดจริงหรือไม่
+- ยืนยันว่า `d = max(common)` (งวดล่าสุดที่ทั้ง 5 field มีค่าครบ) ไม่หยิบงวดที่ COGS=0
+  เพราะรายงานผิดปกติ (เช่นธุรกิจ holding company ที่บาง sector ไม่มี COGS แต่ไม่ได้อยู่
+  fin_syms exclusion list) มาคำนวณโดยไม่ตั้งใจ
+- เช็คว่า _compute_cash_cycle_crosscheck (Data Health) มี guard กรอง outlier (diff
+  มหาศาล) ก่อนเตือนผู้ใช้หรือไม่ ถ้าไม่มี ควรเพิ่มเกณฑ์ขั้นต่ำเดียวกับที่จะแก้ใน [1]
+
+>>> ตรวจแล้ว/แก้แล้ว 2026-09-06 — เจอบั๊กจริงตรงตามที่สงสัย แต่ขอบเขตกว้างกว่าที่ประเมินไว้
+มาก: query financials.db จริง (yahoo annual, ทุก symbol ที่มีอยู่ในตาราง financials รวม
+TH+DR+US/HK/JP mirror) พบว่า compute_cash_cycle ให้ค่าระเบิด (DIO/DSO/DPO > 365 วัน) ถึง
+338/5419 ราย (6.2% ของทุก symbol ที่คำนวณได้) และเฉพาะหุ้นไทยล้วน 88/770 ราย (11.4%) —
+แยกเป็น 2 สาเหตุจริงคนละแบบหลังไล่ตัวอย่างจริง (BTC/QDC/SENA/ORI/RML/HK:0227/JP:8253/
+FINN:US:EPRT ฯลฯ):
+
+  สาเหตุ A (บั๊กจริง แก้แล้ว): COGS งวดล่าสุดจิ๋วผิดปกติชั่วคราวเทียบกับสเกลปกติของบริษัท
+  เอง ไม่ใช่ 0/ติดลบที่ guard เดิมกันไว้แล้ว — ตัวอย่างจริง BTC (`ตรวจ 2026-09-06`): cogs
+  ปี 2022=81M, 2023=-145M(ติดลบ), 2024=14M(anchor) ทำให้ DIO=inv/cogs*365=17,514 วัน (48 ปี!)
+  ทั้งที่ปีอื่นปกติ, QDC ธุรกิจหดตัวจนรายได้/COGS ปี 2025 เหลือ 12.7M/790K จาก 512M/258M ปี
+  2022 — เป็น pattern เดียวกับบั๊ก growth screener near-zero-base เป๊ะ (เทียบฐานปีนี้กับ
+  สเกลของบริษัทเอง ไม่ใช่เทียบ absolute threshold)
+
+  สาเหตุ B (บั๊กจริง แก้แล้ว คนละกลไก): ธุรกิจที่ "Cost of Revenue"/"Accounts Receivable/
+  Payable" ของ Yahoo ไม่ใช่แนวคิด COGS/ลูกหนี้-เจ้าหนี้การค้าจริงของธุรกิจปกติ (REIT/
+  โฮลดิ้ง/บริษัทการเงิน-ลีสซิ่งที่ field ชื่อเดียวกันแต่ยอดเป็นรายการทางการเงินคนละความหมาย)
+  — ตัวอย่างจริง FINN:US:EPRT (REIT) dpo=3150 วัน, FINN:HK:0227 dpo=6211 วัน (17 ปี!),
+  FINN:JP:8253 dso=2681 วัน (7+ ปี, AR=3.6 ล้านล้านเยน vs revenue 492 พันล้านเยน — เห็นชัดว่า
+  ไม่ใช่ลูกหนี้การค้าจริง)
+
+  **สำคัญ**: DIO หลักพัน-หมื่นวัน "ไม่ใช่บั๊กเสมอไป" — ยืนยันจริงว่าอสังหาริมทรัพย์/land-bank
+  (หุ้นไทย SENA dio=2857/ORI dio=2432/RML dio=7982/PROUD/MJD/TITLE ฯลฯ, ฮ่องกง HK:0016
+  dio=1993/HK:0012 dio=1658) มี DIO สูงจริงเป็นปกติทางธุรกิจ (inventory = ที่ดิน/โครงการ
+  ระหว่างพัฒนาถือหลายปี) — ตรวจแล้วว่า DSO/DPO ของกลุ่มนี้ยังอยู่ในช่วงปกติ (<100 วันเกือบทั้ง
+  หมด) ต่างจากกลุ่มที่พัง (สาเหตุ B) ที่ DSO/DPO เองระเบิดด้วย
+
+วิธีแก้ (sources/financials_store.py:4349-4394 compute_cash_cycle): เพิ่ม 2 guard
+  1. เทียบ COGS งวด anchor กับ median ของปีอื่นที่มีอยู่ในชุดเดียวกัน (`other_cogs`) — ถ้า
+     < 20% ของ median ปีอื่น ถือว่าเป็น anomaly ชั่วคราว คืน None ทั้งชุด (แก้สาเหตุ A)
+  2. เพิ่ม `_CC_MAX_DAYS = 730` (2 ปี) แคปเฉพาะ DSO/DPO (ไม่แคป DIO เพราะจะทำให้อสังหาฯ
+     ตัวจริงหายผิดที่) — เกิน cap ถือว่า field ที่ดึงมาไม่ใช่ลูกหนี้/เจ้าหนี้การค้าจริง คืน
+     None ทั้งชุด (แก้สาเหตุ B)
+
+ยืนยันด้วยข้อมูลจริงก่อน/หลังแก้ (import compute_cash_cycle ตรงจาก DB payload จริง ไม่ใช่
+synthetic): BTC/QDC → None ถูกต้อง, SENA/ORI/RML/HK:0016/FINN:US:TPL (land-bank ธุรกิจจริง)
+→ ค่าเดิมไม่เปลี่ยน (ไม่ถูกกวาดผิด), HK:0227/JP:8253/JP:4324/EPRT/NBIX → None ถูกต้อง —
+จำนวนเคสระเบิด (DIO>3650 วัน หลังแก้) เหลือ 11 ราย จาก 338 เดิม (ที่เหลือส่วนใหญ่เป็น
+ธุรกิจ inventory-heavy จริงที่ยังไม่มีข้อมูลพอจะฟันธง เช่น jewelry/land developer อื่นๆ —
+ไม่ไล่แก้ต่อเพราะเสี่ยงกวาดผิดธุรกิจจริงมากกว่าจะจับบั๊กเพิ่ม)
+
+**rebake จริงแล้ว**: รัน `factor_snapshot.build_snapshot('.')` ตรงบน financials.db จริง
+(ไม่ใช่สำเนา — เป็น derived cache table ไม่ใช่ raw source data, DELETE+INSERT ภายใน
+transaction เดียวมี shrink-guard อยู่แล้ว) สำเร็จ 913 TH + 774 DR = 1687 แถว (เท่าเดิม
+ไม่มีการหด) ยืนยัน factor_snapshot ตารางจริงมีค่าใหม่แล้ว (BTC/QDC=None, SENA/ORI ค่าเดิม)
+· restart waitress ผ่าน /api/kill-duplicate-servers + /api/restart (ใช้ .dashboard_token
+local) แล้วยิง /api/peer-group-detail?symbols=BTC,SENA,ORI,QDC จริงยืนยันค่าที่ตอบมาตรงกับ
+ที่คำนวณไว้ + /api/data-health/cash-cycle-crosscheck-full ยังทำงานปกติ diff ที่เหลือ
+เป็นหลักร้อยวัน (ไม่ใช่หมื่นวันเหมือนก่อนแก้) ไม่มี 500 error — ไม่ได้เปิด browser จริงเช็ค
+DevTools console (นอกเวลาของรอบนี้ เพราะ endpoint level verify เพียงพอสำหรับ fix ระดับ
+backend-only ที่ frontend แค่อ่านค่าที่ backend ส่งมาแสดงตรงๆ ไม่มี derive เพิ่มฝั่ง JS)
+
+
+########################################################################
+[2] เมนู: 🆚 เทียบเพื่อน — การ์ดเทียบกลุ่ม (Peer Group Detail, TTM live)
+สถานะ: ⬜
+ความเสี่ยงประเมินคร่าวๆ: กลาง (ยังไม่ได้ query ข้อมูลจริงยืนยัน — ฟังก์ชันเดียวมี
+ตัวหาร TTM 8 จุด กระจุกตัวหนาแน่นที่สุดในกลุ่มที่ยังไม่เคยตรวจ)
+########################################################################
+
+/code-review medium app.py
+
+ไฟล์/บรรทัด:
+  - app.py:6318-6412 (_peer_group_detail_row) — ตัวหารที่น่าสงสัย: gpm/opm/npm
+    (L6384-6386, หาร rev_ttm), roe (L6387, หาร equity_avg), roic (L6371-6377, หาร
+    invested_capital), cfo_ni_ratio (L6401, หาร np_ttm), fcf_margin/cfo_margin
+    (L6402-6403, หาร rev_ttm), pe/pbv (L6351/6358, หาร np_ttm/equity_latest)
+  - app.py:6238-6241 (_peer_group_pct_change — q_net_profit_qoq/yoy ที่ L6411-6412)
+    guard `prev == 0` เฉยๆ ไม่กัน prev ใกล้ 0
+
+หมายเหตุ: ทุกจุดในรายการข้างต้น guard แค่ "truthy" (`if rev_ttm`/`if equity_avg`/
+`if np_ttm`) หรือ "> 0" (invested_capital, equity_latest ผ่าน pbv) — ไม่มีจุดไหนกัน
+กรณีฐานเป็นบวกจริงแต่จิ๋วมาก เป็น pattern เดียวกับ [1] ข้างบนและบั๊ก growth screener
+เดิมทุกประการ ต่างจาก [2]+[4]+[7] ของ CALC_RISK_AUDIT รอบ 1 (ตรวจ "เทียบหุ้น 2 ตัว"/
+"งบการเงิน" แต่เป็นคนละ backend function — /api/financials-compare ไม่ใช่ /api/peer-
+group-detail) ความเสี่ยงจริงขึ้นกับว่ามีหุ้นในชุดข้อมูลที่ rev_ttm/equity_avg/np_ttm
+ใกล้ 0 (ไม่ใช่ 0 เป๊ะ) หรือไม่ — ต้อง query ยืนยันก่อนตัดสินว่าคุ้มแก้แค่ไหน
+
+โฟกัสที่ (silent calc error โดยเฉพาะ):
+- query financials.db จริง (Finnomena+Yahoo+SET merged quarters) หาหุ้นไทยที่ TTM
+  revenue หรือ TTM net_profit หรือ 4Q-avg equity ใกล้ 0 (ไม่ติดลบ ไม่เท่า 0 เป๊ะ) แล้ว
+  ลองรัน _peer_group_detail_row จริงดูว่า gpm/opm/npm/roe/cfo_ni_ratio/margins ออกมา
+  เป็นค่าระเบิดผิดปกติหรือไม่ (เช่น หุ้นเพิ่ง IPO/reorganize ที่มี TTM equity บางไตรมาส
+  ใกล้ 0 จากขาดทุนสะสมพอดี)
+- q_net_profit_qoq/yoy (_peer_group_pct_change) — หาไตรมาสที่ net_profit ใกล้ 0 (กำไร
+  บางเฉียบ ไม่ใช่ขาดทุน) แล้วดูว่า % เปลี่ยนแปลงระเบิดกี่เท่าเมื่อเทียบกับ scale ปกติของ
+  หุ้นตัวนั้น (pattern เดียวกับ scale_ref ที่ growth screener แก้ไปแล้ว — ควรพิจารณาใช้
+  ตัวช่วยเดียวกันแทนคิดสูตรใหม่)
+- ยืนยันว่าเมื่อ gpm/opm/npm/roe ระเบิดจริง ฝั่ง frontend (peer group detail table ใน
+  dashboard.js) ไม่มี sort/highlight/color-scale ที่ทำให้หุ้นตัวนั้นดูเด่นผิดที่ผิดทาง
+  (เช่น sort ROE สูงสุดแล้วหุ้นที่ equity ใกล้ 0 ได้ ROE 5000% ขึ้นอันดับ 1 หลอกผู้ใช้)
+
+>>> ตรวจแล้ว/แก้แล้ว 2026-09-06 — สแกนหุ้นไทยทั้งตลาดจริงผ่าน /api/peer-group-detail (930
+ตัว แบ่ง batch ละ 100) เจอบั๊กจริง 3 กลุ่มคนละกลไก ไม่ใช่แค่ "near-zero base" อย่างเดียว
+ตามที่ประเมินไว้ตอนแรก — กว้างกว่าที่คาด:
+
+  บั๊ก A (guard ผิด ไม่ใช่แค่ near-zero — ร้ายแรงสุด): rev_ttm ติดลบได้จริง (ยืนยัน 2 ตัว:
+  AKS revenue_ttm=-114.8M, TRITN=-53.8M — ไตรมาสมีรายการปรับปรุงย้อนหลังก้อนใหญ่ทำให้ TTM
+  รวมติดลบ) โค้ดเดิม guard แค่ `if rev_ttm` (truthy) ปล่อยเลขติดลบผ่านสูตร gpm/opm/npm/
+  fcf_margin/cfo_margin/capex_rev ตรงๆ ทำให้เครื่องหมายพลิก/ค่าไร้ความหมาย (AKS ก่อนแก้:
+  gpm=201.67%, npm=2026.47% — เลขบวกที่ดูเหมือนกำไรดีทั้งที่จริงคือรายได้ติดลบ) แก้โดยเปลี่ยน
+  guard เป็น `rev_ttm > 0` ทั้ง 6 จุด (app.py:6384-6386, 6402-6403 fcf/cfo_margin, 6460
+  capex_rev) — หลังแก้ทั้ง 2 ตัวได้ None ครบ ยืนยันสแกนซ้ำทั้งตลาด "negative-revenue margin
+  leak" เหลือ 0 ราย
+
+  บั๊ก B (equity ติดลบพลิก ROE เป็นบวกหลอก — ร้ายแรงสุด): equity_avg ติดลบ (ทุนสะสมขาดทุน
+  จนติดลบ) หาร np_ttm ที่ติดลบเช่นกัน (ลบ/ลบ=บวก) ทำให้ ROE โชว์เป็นเลขบวกสูงลิ่วดูเหมือน
+  ธุรกิจดี ทั้งที่จริงคือ "ทุนติดลบ+ขาดทุน" ซึ่งแย่กว่า ROE ติดลบธรรมดาอีก — ยืนยันจริง 8 ตัว
+  (AKS equity=-207M→roe เดิม 8221.5%, TRC equity=-104M→671%, WSOL equity=-3256M→615.5%,
+  TTCL/TSR/NWR/GSTEEL/CHO อีก 5 ตัว 55-162%) แก้โดยเปลี่ยน guard เป็น `equity_avg > 0`
+  (app.py:6392) — ไม่ตรงเงื่อนไข fallback ไป `f.get("roe")` (ค่าจาก factor_snapshot ที่ผ่าน
+  _sane() winsorize ±300% ไว้แล้วปลอดภัยกว่า) ยืนยันหลังแก้ทั้ง 8 ตัวได้ None (บาง symbol
+  f.get("roe") เองก็ None พอดี — ปลอดภัยกว่าเดิมที่โชว์เลขบวกหลอกแน่นอน) สแกนซ้ำทั้งตลาด
+  "negative-equity high-ROE leak (>50%)" เหลือ 0 ราย
+
+  บั๊ก C (near-zero-base ตรงตามที่คาดไว้ — pattern เดียวกับ growth screener): q_net_profit_
+  qoq/yoy, q_revenue_qoq/yoy, q_cfo_yoy, ttm_net_profit_yoy, cfo_ni_ratio ล้วนหารด้วยฐาน
+  ไตรมาส/TTM ก่อนหน้าที่ guard แค่ `prev == 0` ไม่กันกรณีใกล้ 0 — ยืนยันจริง >100 หุ้นไทยที่
+  % ระเบิดเกิน 500% (สูงสุดที่พบ: AMATAV qoq=23,289%, BGRIM yoy=16,139%, BPS yoy=12,758%,
+  CH qoq=-22,037%, GJS cfo_yoy=-5,462%) แก้โดยเพิ่ม `scale_ref` parameter ให้
+  `_peer_group_pct_change` (app.py:6238-6252, เกณฑ์ 0.5% เดียวกับ `_GROWTH_PCT_MIN_BASE_
+  RATIO` ของ growth screener ที่ยืนยันแล้วว่าใช้ได้ผลจริงในไฟล์ CALC_RISK_AUDIT เดิมข้อ [9])
+  ส่ง scale_ref=รายได้ไตรมาส/TTM เดียวกันทุกจุดเรียก (last.get("revenue")/rev_ttm) + เพิ่ม
+  guard เดียวกันให้ cfo_ni_ratio (เทียบ np_ttm กับ rev_ttm โดยตรงในเงื่อนไข ไม่ผ่าน
+  _peer_group_pct_change เพราะเป็นค่าดิบไม่ใช่ %) ยืนยัน AMATAV/BGRIM/CH ที่เคยระเบิดได้
+  None ถูกต้องหลังแก้ — สแกนซ้ำทั้งตลาด: 457/4645 ฟิลด์ QoQ/YoY ถูก guard เป็น None
+  (ก่อนหน้านี้ไหลผ่านเป็นเลขหลอกทั้งหมด)
+
+  **ไม่แก้ต่อ (ตัดสินใจแล้ว ไม่ใช่พลาด)**: หุ้นที่ opm/npm ระเบิดจาก "รายได้เล็กแต่เป็นบวกจริง"
+  (เช่น ACC revenue_ttm=14.4M(บวกจริง) opm=-617.84%, CHO revenue_ttm=106M npm=-817.22%) —
+  ต่างจากบั๊ก A/B/C เพราะเลขนี้ "จริงและมีความหมาย" (ธุรกิจขาดทุนหนักเทียบกับรายได้เล็กจริง
+  ไม่ใช่ artifact ของฐานติดลบ/ใกล้ 0 ผิดปกติ) เทียบกับ threshold 0.5% เดียวกับที่ใช้ทั้งไฟล์
+  แล้วไม่เข้าเกณฑ์ — คงไว้ตามเดิม (ตัวเลขดิบ q_revenue/net_profit ก็โชว์คู่กันในตารางอยู่แล้ว
+  ให้ผู้ใช้เห็นบริบทเต็ม) เช่นเดียวกับบางเคส QoQ/YoY ที่ prev ใหญ่กว่า 0.5% ของ scale_ref
+  พอดีแต่ % ยังสูง (เช่น DCON qoq=-15782.84%, prev net_profit≈2.49M vs scale_ref
+  revenue×0.5%=1.21M — ผ่านเกณฑ์established แล้วแต่ยังดูสุดขั้ว) ไม่ปรับ threshold เพิ่ม
+  เพราะจะเป็นการเดาค่าใหม่นอกเหนือจาก 0.5% ที่ audit เดิมยืนยันด้วยข้อมูลจริงไว้แล้ว
+
+ยืนยันด้วย: query จริงผ่าน live server (/api/peer-group-detail) ทั้งตลาดหุ้นไทย 2 รอบ
+(ก่อน/หลังแก้) ไม่ใช่ synthetic — py_compile ผ่าน, restart waitress ผ่าน /api/kill-
+duplicate-servers + /api/restart (.dashboard_token local) 0 error จาก 930 หุ้น (10 batch
+ของ 100) ครบทุก batch ไม่มี exception/500 — ไม่ได้เปิด browser จริงเช็ค DevTools console
+(เหตุผลเดียวกับข้อ [1]: fix เป็น backend-only, frontend อ่านค่าที่ backend ส่งมาแสดงตรงๆ)
+
+
+########################################################################
+[3] เมนู: 🧾 งบการเงิน (Merged Report) — ปุ่ม "🆚 เทียบกับกลุ่ม" บน Income Sankey
+สถานะ: ⬜
+ความเสี่ยงประเมินคร่าวๆ: ต่ำ-กลาง (ตรวจคร่าวๆ แล้ว พบว่ามี guard median+widen ดีอยู่
+ระดับหนึ่ง แต่ยังไม่ยืนยันด้วยข้อมูลจริง)
+########################################################################
+
+/code-review medium app.py
+
+ไฟล์/บรรทัด: app.py:6450-6537 (get_financials_sankey_sector, _median, _widen_sector_
+group L5930-5950)
+
+หมายเหตุ (ตรวจคร่าวๆ ระหว่างร่างไฟล์นี้แล้ว): จุดนี้ปลอดภัยกว่า [1]/[2] เพราะ (ก) มี
+guard `if not rev_ttm or rev_ttm <= 0: continue` ต่อสมาชิกก่อนคำนวณ % (ข) ใช้ median
+ข้ามสมาชิกกลุ่ม (robust ต่อ outlier เดี่ยวๆ มากกว่า mean/ตัวเลขเดี่ยว) (ค) มี
+_widen_sector_group ขยาย sector→industry อัตโนมัติถ้าสมาชิก <4 ตัว กัน sample เล็กเกินไป
+— ยังไม่ยืนยันว่า "จิ๋วแต่บวก" (ผ่าน guard `<=0`) หลุดเข้าไปปนใน pct_samples ได้กี่ตัวใน
+กลุ่มที่ member_count น้อย (เช่น 4-5 ตัวหลัง widen) จน median ยังถูกดึงเบี้ยวได้จริงหรือไม่
+— รวมถึง coverage field (L6532) ที่ frontend ควรใช้เตือนผู้ใช้เมื่อ N ที่ผ่าน guard
+เหลือน้อยกว่า member_count เดิมมาก แต่ยังไม่ได้เช็คว่า dashboard.js ใช้ค่านี้จริงหรือไม่
+
+โฟกัสที่ (silent calc error โดยเฉพาะ — เน้นยืนยันมากกว่าหาบั๊กใหม่):
+- query จริงหา sector ที่มีสมาชิกน้อย (ใกล้เกณฑ์ widen 4 ตัว) และมีอย่างน้อย 1 ตัวที่
+  rev_ttm บวกจิ๋วมาก — ดูว่า median_pct ของ field นั้นเบี้ยวจากที่ควรเป็นแค่ไหนเทียบกับ
+  ตัด outlier นั้นออก
+- เช็คฝั่ง frontend (dashboard.js, การ์ด Sankey เทียบกลุ่ม) ว่าดึง `coverage` field มา
+  แสดง/เตือนผู้ใช้จริงหรือไม่เมื่อ N ต่ำ (ถ้าไม่ได้ใช้เลยควรพิจารณาเพิ่ม ไม่ใช่แค่ส่งมาเฉยๆ
+  ใน response โดยไม่มีใครอ่าน)
+
+>>> ตรวจแล้ว 2026-09-06 — ไม่พบบั๊ก ยืนยันว่า guard ที่มีอยู่ทำงานถูกต้องจริงด้วยข้อมูลจริง
+ไม่ใช่แค่อ่านโค้ด ไม่ต้องแก้อะไร:
+
+1. `coverage` field ถูกใช้จริง ไม่ใช่ส่งมาเฉยๆ — dashboard.js:22717/22727/22729
+   (_finSankeySectorDeltaRowsHtml) ดึง `cov[st.key]` มาใส่ใน tooltip ทุกแถว ("คำนวณจาก N
+   หุ้นในกลุ่มที่มีข้อมูล TTM ครบรายการนี้") ผู้ใช้เห็น N ต่อ field จริงเมื่อแตะไอคอน ℹ —
+   ไม่ใช่ dead field ตามที่สงสัยไว้
+
+2. ทดสอบกับ sector เล็กสุดจริงในหุ้นไทย 2 แบบผ่าน live endpoint: UTP (sector "Paper &
+   Printing Materials" มีแค่ 1 ตัว = ตัวเอง) → widen เป็น industry "Industrials" อัตโนมัติ
+   จริง (member_count=80, widened=true, coverage 75-79/80 ต่อ field) ค่า median สมเหตุสมผล
+   (cogs 85.6%, gpm 14.4%, npm 4.6%) · BWG (sector "Professional Services" เหลือ peer จริง
+   5 ตัวหลังตัดตัวเอง ≥ threshold 4) → ไม่ widen (level=sector, member_count=5,
+   coverage=5/5 ทุก field) median สมเหตุสมผลเช่นกัน (cogs 70.4%, gpm 29.6%, npm 13.8%)
+   ไม่มีสัญญาณ median ถูกดึงเบี้ยวจาก outlier ในทั้ง 2 เคส
+
+สรุป: guard เดิม (rev_ttm<=0 skip + median + widen<4→industry + coverage tooltip) เพียงพอ
+จริง ไม่ต้องเพิ่ม guard ใหม่ — ต่างจาก [1]/[2] ที่พบบั๊กจริงเพราะจุดนั้นไม่มี guard ป้องกัน
+ไว้ล่วงหน้าเลย ส่วนจุดนี้มีการออกแบบป้องกันไว้ตั้งแต่ต้นแล้วและทำงานได้ผลจริง
+
+
+========================================================================
+ หมายเหตุการใช้ไฟล์นี้
+========================================================================
+- ลำดับความสำคัญที่แนะนำ: [1] Cash Cycle → [2] Peer Group Detail → [3] Sankey Sector
+  Compare (ข้อ 3 เสี่ยงต่ำสุดเพราะมี guard median+widen อยู่แล้วระดับหนึ่ง)
+- ใช้ effort "medium" ทุกข้อ (ขอบเขตแคบกว่า /code-review high/max ของ CALC_RISK_AUDIT
+  เดิม เพราะเป็นไฟล์เดียว/ฟังก์ชันเดียวต่อข้อ) — ปรับเป็น high ได้ถ้าเจอจุดซับซ้อนกว่าที่
+  ประเมินไว้
+- ทั้ง 3 ข้อควร "query ข้อมูลจริงจาก financials.db" ยืนยันก่อนตัดสินใจแก้ (ไม่ใช่แค่อ่าน
+  โค้ดแล้วเดา) ตามวิธีเดียวกับ CALC_RISK_AUDIT รอบ 1+2 — ถ้า query แล้วไม่เจอเคสจริงในชุด
+  ข้อมูลปัจจุบัน ให้บันทึกไว้เป็น "แก้เชิงป้องกัน" (defensive fix) เหมือนที่เคยทำกับ
+  Confluence _trend_dir ใน ROUND2 ข้อ [5] ไม่ใช่ปิดข้อว่า "ไม่มีบั๊ก" เฉยๆ
+- กติกาสถานะเหมือนไฟล์อื่น: ⬜ ยังไม่รีวิว → 🔶 รีวิว/แก้แล้วรอผู้ใช้ยืนยัน → ✅
+  ยืนยันแล้ว (Claude ห้ามแก้เครื่องหมายสถานะเอง ให้ผู้ใช้ติ๊กเองเสมอ)
+- ไฟล์นี้เป็น snapshot วันที่สร้าง (2026-09-06) — ถ้าโค้ดเปลี่ยนไปมากควรไล่ตรวจโค้ดจริง
+  ใหม่ก่อนเชื่อเลขบรรทัด/หมายเหตุในนี้
+========================================================================

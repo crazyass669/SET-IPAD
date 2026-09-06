@@ -269,6 +269,16 @@ def _latest_eps(payload_yahoo):
     log แยกต่างหากที่ยังไม่มีในระบบ (ดู memory stock-study-suite-progress) EPS ของ Yahoo ที่นี่
     ปลอดภัยกว่าเพราะเป็นตัวเลขที่รายงาน ณ จำนวนหุ้นของงวดนั้นอยู่แล้วเสมอ (ไม่ต้องปรับ split ย้อนหลัง
     เอง) และมาจากงบชุดเดียวกับที่ dividends table ใช้อ้างอิง (ทั้งคู่ผ่าน yfinance/resolve_yf_ticker)
+
+    Guard (CALC_RISK_AUDIT_ROUND4 [dividend_stats.compute_payout_ratio]): EPS งวดล่าสุดบวกจริง
+    แต่จิ๋วผิดปกติเทียบ median ของปีอื่นที่มีอยู่ในงบชุดเดียวกัน (ยืนยันจริง 24/548 หุ้นไทย เช่น
+    CHASE 0.136→0.069→0.042→**0.001**, NAT 0.326→0.357→0.53→**0.01**, HENG
+    0.12→0.11→0.02→**0.01** — payout ratio ระเบิด 500-1562% เพราะ EPS ทรุดฮวบปีเดียวจากธุรกิจ
+    หด ไม่ใช่ EPS ต่ำถาวรปกติ) pattern เดียวกับ other_cogs/scale_ref ใน
+    financials_store.compute_cash_cycle แต่ threshold หลวมกว่า COGS (15% ไม่ใช่ 20%) เพราะ EPS
+    สวิงปีต่อปีเป็นเรื่องปกติมากกว่า COGS — ยืนยันด้วยข้อมูลจริงว่า 15% แยกกลุ่มได้ถูกต้อง: จับ
+    CHASE/NAT/HENG (ratio ต่อ median 1-9%) แต่ไม่แตะ SPCG/K ที่เป็นธุรกิจถดถอย/ผันผวนจริง (ratio
+    21-33%) ไม่ใช่บั๊ก
     คืน {"value": float|None, "as_of": "YYYY-MM-DD"|None}"""
     inc = (payload_yahoo or {}).get("income", {})
     row = inc.get("Diluted EPS") or inc.get("Basic EPS")
@@ -276,6 +286,12 @@ def _latest_eps(payload_yahoo):
         return {"value": None, "as_of": None}
     d = max(row.keys())
     v = row.get(d)
+    if v is not None and v > 0:
+        other_eps = sorted(row[k] for k in row if k != d and row.get(k) and row[k] > 0)
+        if other_eps:
+            scale_ref = other_eps[len(other_eps) // 2]
+            if v < scale_ref * 0.15:
+                return {"value": None, "as_of": None}
     return {"value": v, "as_of": d[:10] if isinstance(d, str) else d}
 
 
