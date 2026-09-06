@@ -351,18 +351,17 @@ def load_set_symbols(base_dir=None):
     return symbols
 
 
-# pattern สำหรับ กองทุนรวม / REIT / Infra Fund ใน SET
+# กองทุนรวม / REIT / Infra Fund ใน SET — จับจากชื่อบริษัท + sector
+# (เดิมเดาจาก suffix ของ symbol อย่างเดียว ซึ่งโลภเกิน: `PF$` กิน CPF/UPF/PF,
+#  `RT$` กิน JMART/KAMART/SAMART/DRT/TRT/PORT/RT, `BT$` กิน CIMBT, `^M-` กิน M-CHAI
+#  — และยังพลาด REIT ที่ symbol ไม่ลงท้าย suffix เช่น AMATAR/BOFFICE/IMPACT/TPRIME)
 import re as _re
-_FUND_PAT = _re.compile(
-    r'(GIF|IF|REIT|PF|ARAF|BT|RT|MNIT\d*)$'   # ลงท้ายด้วย suffix กองทุน
-    r'|^(CG)$'                                   # exact match เท่านั้น (ป้องกัน BCG ผิดพลาด)
-    r'|^M-'
-    r'|(LUXF|MNRF|WHAIR)$',
-    _re.IGNORECASE
-)
+_FUND_NAME_PAT = _re.compile(r'\b(REIT|FUND|TRUST)\b', _re.IGNORECASE)
 
-def _is_reit(symbol: str) -> bool:
-    return bool(_FUND_PAT.search(symbol))
+def _is_reit(info_dict: dict) -> bool:
+    if (info_dict.get("sector") or "") == "Property Fund & REITs":
+        return True
+    return bool(_FUND_NAME_PAT.search(info_dict.get("name") or ""))
 
 
 # ============================================================
@@ -475,7 +474,7 @@ def process_stock(info_dict, close, volume, high=None, low=None):
             "sector":           info_dict["sector"],
             "price":            price,
             "mkt_cap":          None,
-            "is_reit":          _is_reit(info_dict["symbol"]),
+            "is_reit":          _is_reit(info_dict),
             "ret_1d":           ret_1d,
             "ret_1w":           ret_1w,
             "ret_1m":           ret_1m,

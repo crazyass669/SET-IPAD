@@ -1,0 +1,292 @@
+========================================================================
+ แผนงานต่อยอด: "กำไรปกติ / กำไรพิเศษ" — งานที่ยังค้าง (P0-a / P0-b / P5-a / P5-b)
+ สร้าง: 2026-09-06   (แตกจาก PLAN_core_special_profit.txt หลังปิด Phase 0-4)
+ สถานะ: ⬜ ยังไม่เริ่ม — ร่างไว้เผื่อหยิบทำ (ผู้ใช้สั่ง "ร่างรอไว้ก่อน")
+------------------------------------------------------------------------
+ บริบท: Phase 0-4 ปิดแล้ว (2026-09-06). ฟีเจอร์ใช้งานจริงในเมนู
+        "🚀 หุ้นโตแรงรายไตรมาส" แท็บไทย — 3 คอลัมน์ กำไรพิเศษ/กำไรปกติ/พิเศษ%
+        จากบัญชี SET 439700 "กำไร(ขาดทุน)อื่น". coverage Q2/2569 = 317/911 (35%).
+        ดู PLAN_core_special_profit.txt สำหรับสูตร/ข้อจำกัด/ไฟล์ที่แตะไปแล้ว
+------------------------------------------------------------------------
+ สรุปคำแนะนำ (จากตารางประเมิน 2026-09-06):
+   P0-b  ✅ ทำเลย (30 นาที) — แค่ตัดสินใจ ไม่ต้องแก้โค้ด
+   P5-a  🔶 คุ้มปานกลาง (2-3 ชม.) — ทำเมื่อจะแตะ compute_qpl_report อยู่แล้ว
+   P0-a  🔶 คุ้มปานกลาง (1-2 ชม.) — sanity check เสริม ไม่ใช่ blocker
+   P5-b  ❌ ยังไม่คุ้ม — เลื่อนไปก่อน ทำเป็น Phase 6 เต็มรูปเมื่อจำเป็น
+========================================================================
+
+
+========================================================================
+ P0-b — ตัดสิน option: รวมบัญชี 431000 (กลับรายการด้อยค่าสินค้าคงเหลือ) เข้าสูตรไหม
+========================================================================
+ประเภทงาน: การตัดสินใจ + จดบันทึก (ไม่แตะโค้ดถ้าตอบ "ไม่รวม")
+เวลา: ~30 นาที
+ทำก่อน P5-a (ถ้าตอบ "รวม" จะกระทบสูตรใน _qpl_core_special)
+
+── ข้อมูลประกอบการตัดสิน (มีครบแล้ว ไม่ต้อง research เพิ่ม) ──
+  * 439700 (ที่ใช้อยู่) จับ: FX 439710 + อนุพันธ์ FVTPL 439720 + hedge 439770
+    → เป็นก้อน non-cash ที่ผันผวนสุด + กลับทิศทุกไตรมาส = ตรงโจทย์ "QoQ/YoY หลอก"
+  * 431000 = (กลับรายการ)ขาดทุนลดมูลค่าสินค้าคงเหลือ (inventory write-down / reversal)
+    - เกิดไม่บ่อย (ปีละครั้งสองครั้ง มักงวด Q4)
+    - มักค่าเล็กเทียบ net_profit — ไม่ค่อยพลิกกำไร
+    - ปนกับ COGS adjustment ปกติแยกยาก (บางบริษัทลงใน cost of sales ตรง ๆ)
+  * ข้อ [2] ใน PLAN เดิม: "over-strip เสี่ยงกว่า under-strip" — ตัดรายได้จริงทิ้ง
+    แย่กว่าพลาด one-off เล็ก ๆ
+
+── คำแนะนำ: ❌ ไม่รวม 431000 ──
+  เหตุผล:
+   1. keep สูตรง่าย/อธิบายได้ใน 1 บรรทัด (special = 439700 after-tax)
+   2. over-strip risk — 431000 บางส่วนเป็น normal inventory provision ไม่ใช่ one-off จริง
+   3. impact ต่ำ — ค่าเล็ก, เกิดไม่บ่อย
+   4. ถ้าภายหลังเจอเคสที่ 431000 ก้อนใหญ่จริง ค่อยเพิ่มเป็น option แยก (เห็นใน tooltip)
+
+── ถ้าตัดสิน "ไม่รวม" (แนะนำ) — งานที่ต้องทำ ──
+  [ ] PLAN_core_special_profit.txt ข้อ [2] — เพิ่มบรรทัด:
+      "431000 (inv. write-down): ตัดสิน 2026-xx ไม่รวม — ค่าเล็ก/เกิดไม่บ่อย/
+       เสี่ยง over-strip normal provision"
+  [ ] ปิด checkbox "[ ] ตัดสิน option 431000" ใน Phase 0
+  * ไม่ต้องแตะโค้ด — _qpl_core_special() รับแค่ other_gl (=439700) อยู่แล้ว
+
+── ถ้าตัดสิน "รวม" — งานที่ต้องทำ (เผื่อไว้) ──
+  [ ] financials_store.py _set_qpl_row_from_amt() (~L1872) —
+      other_gl = amt.get("#439700"); inv_wd = amt.get("#431000")
+      → other_gl_combined = (other_gl or 0) + (inv_wd or 0) ถ้าตัวใดตัวหนึ่งไม่ None
+      * ต้องเช็ค _set_qpl_amt_map() เก็บ key "#431000" หรือยัง (Phase 1 เก็บเฉพาะ
+        "#439700" — ต้องเพิ่ม)
+  [ ] re-backfill 927 หุ้นไทย (scratchpad/backfill_other_gl.py มีอยู่แล้ว รันซ้ำได้)
+  [ ] verify: BANPU/PTT ตัวเลข special เปลี่ยนไปเท่าไหร่ เทียบก่อน/หลัง
+  [ ] label/tooltip เมนู screener อัปเดตข้อความ ("FX/อนุพันธ์/hedge + ด้อยค่าสินค้า")
+
+
+========================================================================
+ P0-a — เทียบ core_profit ที่คำนวณ กับ "กำไรปกติ" ในบทวิเคราะห์โบรก 3-4 ตัว
+========================================================================
+ประเภทงาน: sanity check (ไม่แตะโค้ด เว้นแต่เจอ bug)
+เวลา: ~1-2 ชม.
+ทำได้อิสระ ไม่ขึ้นกับข้ออื่น
+
+── เป้าหมาย ──
+  ยืนยัน 2 อย่าง:
+   1. ทิศทาง/ขนาดของ special_after_tax ตรงกับที่โบรกเรียก "รายการพิเศษ/extra items"
+   2. สูตร ETR (tax/pretax clamp [0,0.35] fallback 0.20) ให้ core ใกล้เคียง
+      "core profit / normalized profit" ที่โบรกรายงาน
+
+── หุ้นทดสอบ (เลือกจาก special_share_pct สูง งวด Q2/2569) ──
+  BANPU  ⚡124%  (พลิกขาดทุนเมื่อตัดกำไรพิเศษ — เคสเด่น)
+  ASP    ⚡104%
+  ITD    ⚡99%
+  PTTGC / TOP / IVL  (ปิโตร — FX/สต็อกน้ำมันเยอะ โบรกแยก core ชัด)
+  + PTT (special_share_pct ~15-16% ปานกลาง เป็น control)
+
+── แหล่งบทวิเคราะห์ (มีในเว็บอยู่แล้ว) ──
+  * หน้า Valuation Band → ปุ่ม "บทวิเคราะห์รายหุ้น" → PDF รายโบรก
+    (settrade consensus API + Incapsula cookie / fallback 9hoon)
+    ดู memory [[research-reports-9hoon-2026-09-03]]
+  * มองหาคำว่า "กำไรปกติ" "core profit" "normalized" "recurring" ในบทวิจัย QoQ
+  * settrade IAA consensus ([[settrade-iaa-consensus-api]]) — บางบทมีตัวเลข core
+
+── ขั้นตอน ──
+  [ ] เปิด test server พอร์ต 5011 ([[server-kill-restart-pattern]])
+  [ ] ต่อหุ้นแต่ละตัว: จด net_profit / special_after_tax / core_profit ของเรา
+      (จาก /api/quarterly-growth-screener หรือ SET P&L popup)
+  [ ] หา 1-2 บทวิเคราะห์ต่อหุ้นที่พูดถึงงวดเดียวกัน จดเลข core ของโบรก
+  [ ] เทียบ % ต่าง — เกณฑ์ผ่าน: ทิศทางตรง + ขนาดต่างไม่เกิน ~15-20%
+      (โบรกแต่ละเจ้านิยาม extra items ไม่เหมือนกัน 100% อยู่แล้ว)
+  [ ] ถ้าต่างเยอะเป็นระบบ (ทุกตัวไปทางเดียว) → สงสัย ETR หรือ sign convention
+      → เปิด bug ใหม่, ไม่ใช่แค่ปิด checkbox
+  [ ] kill server by PID + netstat เช็คพอร์ตว่าง
+  [ ] จดผลใน PLAN_core_special_profit.txt Phase 0 + ปิด checkbox
+
+── ความเสี่ยงถ้าไม่ทำ: ต่ำ ──
+  Phase 1 validate สดกับ SET API จริงแล้ว (PTT other_gl=+11,220 ล. core=44,330 ล.)
+  สูตรตรง taxonomy (439700 = ผลรวม children, 0 mismatch จาก 24 ตัว)
+  → นี่เป็น "เพิ่มความมั่นใจ" ไม่ใช่ "ตรวจว่าพัง"
+
+
+========================================================================
+ P5-a — ป๊อปอัพ "🧾 งบการเงิน" โชว์บรรทัด "กำไร(ขาดทุน)อื่น" (บัญชี 439700)
+========================================================================
+ประเภทงาน: feature เล็ก (backend carry field + frontend +1 row)
+เวลา: ~2-3 ชม.
+ขึ้นกับ P0-b (ถ้า "รวม 431000" สูตรเปลี่ยน)
+
+── สถานะข้อมูล (เช็คแล้ว 2026-09-06) ──
+  ✅ financials_store.py:1872 — _set_qpl_row_from_amt() คืน row["other_gl"] แล้ว
+     (Phase 1 ทำไว้ · ค่าเป็น amt.get("#439700") หน่วยบาท ×1000 แล้ว)
+  ❌ financials_store.py:1454 — _qpl_merge_layer() copy เฉพาะ _QPL_FIELDS (12 ตัว):
+       revenue, cogs, gross_profit, selling_exp, admin_exp, sga_total,
+       total_expenses, operating_profit, financial_cost, pretax_profit,
+       tax_expense, net_profit
+     → "other_gl" ไม่อยู่ในลิสต์ → ถูกทิ้งตอน merge เข้า combined
+       → compute_qpl_report() out row ไม่มี other_gl
+  ❌ frontend ยังไม่มี row สำหรับ field นี้
+
+── งานที่ต้องทำ ──
+
+BACKEND — sources/financials_store.py
+
+  A. carry other_gl ผ่าน merge — เลือก 1 ใน 2 ทาง:
+
+     ทางเลือก A1 (ง่าย เสี่ยงน้อย — แนะนำ):
+       ใน _qpl_merge_layer() (L1452-1461) เพิ่มหลัง loop _QPL_FIELDS:
+         # other_gl มีเฉพาะ layer 'set' (Yahoo/Finnomena ไม่มีบัญชี 439700)
+         if row.get("other_gl") is not None:
+             dest["other_gl"] = row["other_gl"]
+       * ไม่แตะ _QPL_FIELDS → ไม่กระทบ logic touched/source/detail
+       * ปลอดภัยเพราะมีแค่ set layer เขียน field นี้ ไม่มีทาง clobber
+
+     ทางเลือก A2 (รวมใน _QPL_FIELDS):
+       เพิ่ม "other_gl" ใน _QPL_FIELDS tuple (L1434)
+       * เสี่ยง: _QPL_FLOW_FIELDS = _QPL_FIELDS (L1679) → other_gl จะถูกนับเป็น
+         flow field ที่ sub() ลบงวดสะสม — ซึ่ง "ถูกต้อง" (439700 เป็น flow สะสม
+         เหมือน revenue) แต่ต้อง verify _fetch_set_cumulative_series ไม่มี hard-code
+         list field ที่อื่น
+       * ไม่แนะนำเว้นแต่อยากให้ compute_full_report / เทียบ 2 ตัว ได้ field นี้
+         แบบ first-class ด้วย
+
+  B. compute_qpl_report() out loop (L1571-1584) — ถ้าใช้ A1:
+     other_gl อยู่ใน combined[key] แล้ว → row dict มีติดไปเอง ไม่ต้องเพิ่มโค้ด
+     (double-check: out.append(row) ส่ง row ทั้ง dict ไม่ได้ whitelist)
+
+  C. compute_full_report() (L1653) — L1661 `combined[...] = dict(row)` copy ทั้ง row
+     → other_gl ติดไปเอง ไม่ต้องแก้
+
+  D. (ตรวจ) /api/financials-merged-report endpoint ใน app.py — ส่ง quarters ออกทั้ง
+     dict หรือ whitelist? ต้องเช็คว่าไม่มี pick(fields) ก่อน jsonify
+     grep: "financials-merged-report" ใน app.py
+
+FRONTEND — static/dashboard.js
+
+  E. _qplTableCore() (L1493) — ตัวสร้างตารางที่ใช้ร่วมทั้ง standalone QPL report
+     (loadFinQplReport L21448) และ merged report quarterly (_mergedExtraQuarterlyRows
+     L22288) → แก้ที่เดียวครอบทั้งคู่
+
+     ใน rowsHtml array (L21557-21583) เพิ่มหลัง 'กำไรก่อนภาษี'+growthRows
+     (หรือใต้ 'กำไรสำหรับงวด' ก็ได้ — ดูว่า UX ไหนอ่านง่ายกว่า):
+
+       row('  จากรายการพิเศษ (FX/อนุพันธ์/hedge)', c => c.other_gl, _qplNumNeg,
+           { indent: true }),
+
+     * โชว์เฉพาะแถวที่มีค่า: _qplNumNeg คืน '—' เมื่อ null อยู่แล้ว → ปลอดภัย
+     * แต่ควร gate ทั้ง row ถ้า "ทุกงวดที่แสดง" ไม่มี other_gl เลย (กลุ่มการเงิน /
+       DR / US ที่ไม่มี set layer) — เช็ค: ถ้า years.every(y => byYear[y].every(
+       c => !c || c.other_gl == null)) → ไม่ push row นี้
+     * indent + สี text2 (opts.indent มี ';color:var(--text2)' อยู่แล้ว L21546)
+
+  F. caveat line ต่อท้ายตาราง (L21585 บริเวณ `caveat`) — เพิ่มถ้ามี row นี้:
+     "บรรทัด 'จากรายการพิเศษ' = บัญชี 'กำไร(ขาดทุน)อื่น' (439700) ของ SET —
+      FX/อนุพันธ์ FVTPL/hedge · มีเฉพาะ ~4-8 ไตรมาสล่าสุดที่ SET เปิดข้อมูล ·
+      ธนาคาร-เงินทุน-ประกัน + หุ้นที่ SET ไม่แยกบรรทัดนี้ = ไม่แสดง"
+
+  G. bump ?v= ของ dashboard.js ใน set_dashboard.html ([[cache-busting-version-bump]])
+     * ไม่ต้องแตะ mobile/ (เมนูงบใน popup ฝั่ง viewer เล็กใช้ path คนละอัน —
+       เช็ค [[which-codebase-local-vs-mobile]] ก่อน ถ้าผู้ใช้ไม่ได้ขอ)
+
+── ทดสอบ ──
+  [ ] python -m py_compile sources/financials_store.py
+  [ ] node --check static/dashboard.js
+  [ ] test server 5011 — เปิด popup งบ หุ้นที่มี 439700 (BANPU/PTT/TASCO):
+      เห็นบรรทัด "จากรายการพิเศษ" ค่าตรงกับ special ในเมนู screener (ก่อนหักภาษี —
+      หมายเหตุ: row นี้โชว์ pretax 439700 ดิบ ส่วน screener โชว์ after-tax → คนละตัว
+      ต้องอธิบายใน caveat หรือโชว์ after-tax ให้ตรงกัน = ตัดสินตอนทำ)
+  [ ] หุ้นกลุ่มการเงิน (KBANK) + DR (AAPL DR) + หุ้นไทยไม่มีบรรทัด (SCC):
+      row นี้ต้อง "ไม่โผล่" (ไม่ใช่โผล่แล้วเป็น —)
+  [ ] merged report ("งบรวมทุกแหล่ง") + "เทียบงบ 2 ตัว" — ไม่พัง (regression check)
+  [ ] Playwright headless: 0 console/page error
+  [ ] kill server by PID + netstat
+
+── ประเด็นตัดสินตอนลงมือ ──
+  * โชว์ 439700 แบบ pretax (ดิบจากบัญชี) หรือ after-tax (ให้ตรงกับ screener)?
+    - pretax = ตรงกับตัวเลขในงบ SET จริง (reconcile ได้) แต่ไม่ตรงกับคอลัมน์ screener
+    - after-tax = ตรง screener แต่เป็นตัวเลข derived อธิบายยากในบริบทงบ
+    → แนะนำ pretax + caveat บอกว่า screener หักภาษีโดยประมาณแล้ว
+  * ตำแหน่งแถว: ใต้ pretax_profit (ตามตำแหน่งจริงในงบ SET — 439700 อยู่เหนือ EBIT)
+    หรือ ใต้ net_profit (ให้ผู้ใช้เห็นว่า "ในกำไรสุทธินี้มีพิเศษเท่าไหร่")
+    → แนะนำ ใต้ net_profit + indent (อ่านเป็น breakdown ของกำไรสุทธิ)
+
+
+========================================================================
+ P5-b — แท็บ DR/US/HK: fallback Yahoo "Total Unusual Items"
+========================================================================
+ประเภทงาน: feature กลาง (คนละแหล่ง/คนละนิยาม — ต้อง design ป้ายให้ชัด)
+เวลา: ~3-4 ชม.
+สถานะแนะนำ: ❌ เลื่อน — ทำเป็น Phase 6 เต็มรูปเมื่อผู้ใช้เริ่มใช้แท็บ DR บ่อย
+
+── สถานะข้อมูล (เช็คแล้ว 2026-09-06 — ข่าวดี: ไม่ต้อง backfill) ──
+  ✅ yahoo_q payload เก็บครบแล้ว (financials.db source='yahoo_q', _df_to_dict_full
+     เก็บทุก row ของ income statement):
+       'Total Unusual Items'              (บวก=กำไรพิเศษ, ลบ=ขาดทุนพิเศษ)
+       'Total Unusual Items Excluding Goodwill'
+       'Tax Effect Of Unusual Items'      (Yahoo แยก tax effect มาให้ต่างหาก)
+       'Normalized Income'                (= net - unusual after tax, สำเร็จรูป)
+       'Net Income From Continuing Operation Net Minority Interest'
+  ✅ coverage: DR 538/970 ตัว (55%) มี Total Unusual Items · หุ้นไทยมีทุกตัว
+     (แต่ TH ใช้ 439700 แทน — แม่นกว่า)
+  ตัวอย่างจริง: DR:BA Q4/2025 = +9,592 ล.USD, DR:MMM Q1 = -363 ล.USD
+
+── ทำไมยังไม่คุ้ม (4 เหตุผล) ──
+  1. คนละนิยามกับ 439700:
+     - 439700 = FX + อนุพันธ์ FVTPL + hedge (แคบ, ทางการ SET)
+     - Yahoo Unusual = gain on sale of asset + impairment/goodwill writeoff +
+       restructuring + legal settlement + one-time charges (กว้าง, auto-detect)
+     → เอามาใส่คอลัมน์เดียวกัน label "กำไรพิเศษ" เท่ากัน = ผู้ใช้เทียบ
+       BANPU (TH) กับ AAPL-DR ในตารางเดียวกันไม่ได้ (นิยามไม่ตรง)
+  2. Phase 0 เคยตีตก Yahoo Normalized Income แล้ว: "ช้า 1 ไตรมาส (yahoo_q sync
+     ได้ช้ากว่างบจริง) + auto-detect เพี้ยนกับหุ้นไทยบางตัว" — เหตุผลเดิมยังอยู่
+     สำหรับ DR ก็เสี่ยง auto-detect เพี้ยนเหมือนกัน
+  3. แท็บ DR/US/HK/JP ในเมนู "หุ้นโตแรงรายไตรมาส" ผู้ใช้ใช้น้อยกว่าแท็บไทยมาก
+     (แท็บไทยคือ use case หลักของ feature นี้)
+  4. sign/tax handling ยุ่ง: ต้อง special_after_tax = Unusual - TaxEffectOfUnusual
+     (ไม่ใช่ Unusual × (1-etr) แบบ TH) + edge case บางตัว Yahoo คืน field เป็น
+     None ทั้ง series → ต้อง fallback เงียบ ๆ ให้ถูก
+
+── ถ้าจะทำ (Phase 6 เต็มรูป — ไม่ใช่ fallback เงียบ) ──
+
+BACKEND — sources/financials_store.py
+  [ ] helper ใหม่ _qpl_core_special_yahoo(unusual, tax_effect, net_profit):
+        special_after_tax = unusual - (tax_effect or 0)   # tax_effect เป็นตัวลด
+        core_profit = net_profit - special_after_tax
+        special_share_pct = |special_after_tax| / |net_profit| × 100
+        คืน (special_after_tax, core_profit, special_share_pct, source='yahoo')
+  [ ] _load_mirror_qpl_all() / get_qpl_growth_screener() ฝั่ง DR/US/HK/JP:
+      ดึง 'Total Unusual Items' + 'Tax Effect Of Unusual Items' + 'Net Income'
+      จาก yahoo_q payload งวด target → เรียก helper ใหม่
+  [ ] เพิ่ม field ในแถว output: special_source ('set' | 'yahoo' | None)
+
+FRONTEND — static/dashboard.js
+  [ ] _GROWTH_SCR_HAS_CORE — เพิ่ม 'dr','us','hk' (เดิม Set(['th']))
+      หรือทำ per-row ตาม special_source ก็ได้
+  [ ] _growthScrSpecialCell / _growthScrCoreCell / _growthScrShareCell:
+      ถ้า r.special_source === 'yahoo' →
+        - สีต่าง (เช่น ส้มแทนแดง) + suffix " ~" หรือ badge "Yahoo est."
+        - tooltip: "ประเมินจาก Total Unusual Items ของ Yahoo (นิยามกว้างกว่า
+          บัญชี 439700 ของหุ้นไทย — ครอบขายสินทรัพย์/ด้อยค่า/ปรับโครงสร้างด้วย)
+          เทียบข้ามกับหุ้นไทยโดยตรงไม่ได้"
+  [ ] #growth-scr-*-desc ของแท็บ DR/US/HK — เพิ่มย่อหน้าอธิบายแหล่ง Yahoo
+  [ ] คอลัมน์ header อาจต้องมี asterisk/tooltip แยกเมื่อ universe ไม่ใช่ th
+  [ ] bump ?v=
+
+  [ ] Playwright: TH ไม่กระทบ · DR โชว์คอลัมน์ + ป้าย Yahoo est. · หุ้น DR ที่
+      ไม่มี unusual → "—" ไม่ crash · sort ไม่พัง
+
+── เงื่อนไข trigger ให้ทำ ──
+  ผู้ใช้บอกว่าเริ่มใช้แท็บ DR/US ในเมนูนี้ประจำ + รับได้กับป้ายแยกแหล่ง
+  → ตอนนั้นค่อยยกไฟล์นี้มาทำ P5-b เต็ม
+
+
+========================================================================
+ ลำดับแนะนำถ้าจะทำทั้งหมด
+========================================================================
+  1. P0-b (30 นาที)  — ตัดสิน 431000 ก่อน เพราะกระทบสูตร P5-a
+  2. P5-a (2-3 ชม.)  — ถ้าตอนนั้นจะแตะ compute_qpl_report ด้วยเรื่องอื่นยิ่งคุ้ม
+  3. P0-a (1-2 ชม.)  — เวลาว่าง / หลัง P5-a จะได้เทียบเลขในงบ popup ไปเลย
+  4. P5-b            — ยังไม่ต้อง รอ trigger
+
+related: PLAN_core_special_profit.txt
+         memory: [[core-special-profit-growth-screener-plan-2026-09-04]]
+                 [[growth-screener-code-review-22C-2026-09-04]]
+                 [[research-reports-9hoon-2026-09-03]] [[settrade-iaa-consensus-api]]
+                 [[popup-fin-tab-merged-report-2026-09-03]]
+                 [[which-codebase-local-vs-mobile]] [[cache-busting-version-bump]]
+                 [[server-kill-restart-pattern]]
+========================================================================

@@ -171,6 +171,10 @@ data/jp_heatmap_mktcap_cache.json
 # Backtest results (local-only เหมือน financials.db)
 backtest_screener_results_*.json
 
+# รายงานเจาะลึกหุ้น (Stock Deep Dive) — derived data จาก financials.db เป็น local-only
+# ตามกฎ no-financials-data-on-github (ดู PLAN_stock_deep_dive_report.txt)
+reports/
+
 # Log จากการรัน server/mirror ในเครื่อง
 mirror.log
 mirror_run.log

@@ -1,8 +1,11 @@
 ================================================================================
 PLAN: งานค้าง 3 หัวข้อ ณ 2026-08-28 — สำหรับ session ใหม่
 สร้าง: 2026-08-28
-สถานะ: ⬜ ยังไม่เริ่ม (นี่คือ TODO list ไม่ใช่ implement — commit/push ของ feature
-        ที่เกี่ยวข้องทำเสร็จหมดแล้ว เหลือแค่ QA/gap 3 อย่างด้านล่าง)
+สถานะ: ✅ ปิดครบทั้ง 3 หัวข้อ (2026-09-06) — หัวข้อ 1+2 เสร็จ 2026-08-28,
+        หัวข้อ 3 (QA browser QPL + เทียบหุ้น 2 ตัว) ยืนยัน browser จริงแล้วผ่าน
+        Playwright ทั้งใน session 2026-08-28 (ดู memory) และ re-verify สดกับโค้ด
+        ปัจจุบัน dashboard.js?v=20260906i อีกรอบ 2026-09-06 — 0 console error
+        (นี่คือ TODO list ไม่ใช่ implement — commit/push ของ feature ทำเสร็จหมดแล้ว)
 
 ก่อนเริ่ม: อ่าน memory ที่เกี่ยวข้องก่อนเสมอ (auto-load จาก MEMORY.md อยู่แล้วตอนเปิด
 session ใหม่) — โดยเฉพาะ pbv-pe-screener-plan.md, jp-index-price-pipeline.md,
@@ -110,8 +113,22 @@ underlying=JP ไม่ 501 แล้ว — commit/push ยังไม่ท�
 jp-index-price-pipeline.md (Phase 5) แล้ว
 
 
-## หัวข้อ 3 — ทดสอบ browser จริง: QPL รายไตรมาส + แท็บเทียบหุ้น 2 ตัว
+## หัวข้อ 3 — ทดสอบ browser จริง: QPL รายไตรมาส + แท็บเทียบหุ้น 2 ตัว — ✅ เสร็จ (2026-09-06)
 
+ยืนยัน browser จริงแล้ว 2 รอบ:
+  • 2026-08-28 (session เดียวกับที่เขียน plan นี้) — Playwright ยิง server :5001 จริง:
+    QPL: PTT + KTIS (non-Dec FYE คอลัมน์ปฏิทินตรง) + NVDA แท็บ DR + ตาราง SET.or.th ล้วน
+    เทียบ 2 ตัว: PTT vs IRPC / PTT vs NVDA — sticky column (ข้อมูล+หัวกลุ่ม) + pp suffix +
+    ไม่มี page overflow @820px — 0 console/page error (บันทึกใน memory ทั้ง 2 ไฟล์แล้ว)
+  • 2026-09-06 (re-verify สดกับ dashboard.js?v=20260906i):
+    QPL: AOT (ก.ย. FYE) + KSL (ต.ค. FYE) + PTT — render ครบ 32 แถว, คอลัมน์ปฏิทิน 2553-2569,
+    auto-scroll ไปงวดล่าสุด, ไม่ crash — 0 console error
+    เทียบ 2 ตัว: AOT vs BTS รายไตรมาส — 80 แถว, sticky label ตรึง left:0 พื้นทึบตอนเลื่อนขวา 1200px,
+    หัวกลุ่ม colspan ตรึงผ่าน div ชั้นใน, Gross Margin % แสดง QoQ เป็น pp (+2.75pp), กราฟ
+    dual-line ถูกลบจริง (ไม่มี canvas) — 0 console error
+  ผู้ใช้ยืนยัน 2026-09-06 ว่าใช้ 2 หน้านี้ประจำอยู่แล้ว ไม่มีอาการผิดปกติ
+
+--- (บริบทเดิมตอนเปิดหัวข้อนี้) ---
 สองฟีเจอร์นี้ทำมาตั้งแต่ 2026-08-12/13 (แก้ต่อเนื่องหลายรอบ) ผ่านแค่ Flask
 test_client + py_compile/node --check ตลอด — ไม่เคยยืนยัน browser จริงสักครั้ง
 (memory เก่าสุด ~15+ วันแล้ว) แต่หน้าตาทั้งสองน่าจะถูกใช้งานจริงในแอปมาสักพักแล้ว

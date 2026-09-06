@@ -216,6 +216,20 @@
   #fin-result .tbl tr:hover td:first-child { background: var(--bg3); z-index: 20; }
   #fin-result .tbl td:first-child:hover { z-index: 20; }
 
+  /* ตารางงบการเงินใน popup กราฟหุ้น (modal > 🧾 งบการเงิน) — ตรึงคอลัมน์ "รายการ" ไว้
+     เวลาเลื่อนดูตัวเลขไปทางขวา เหมือน #fin-result · ครอบคลุมทั้ง <table class="tbl">
+     (งบผสานหุ้นไทย รายไตรมาส _qplTableCore / รายปี _mergedTableAnnual) และ <table> เปล่า
+     (_renderCmFin ของ DR/US/HK/JP) · พื้นหลังทึบ var(--bg2) = สีกล่อง .cm-box กันตัวเลข
+     ที่เลื่อนผ่านทะลุขึ้นมา · #cm-fin-band แยกกล่องต่างหาก ไม่โดน rule นี้ */
+  #cm-fin-body table th:first-child,
+  #cm-fin-body table td:first-child:not([colspan]) {
+    position: sticky; left: 0; z-index: 1;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+  }
+  #cm-fin-body table thead th:first-child { z-index: 3; }   /* หัวคอลัมน์รายการอยู่บนสุด */
+  #cm-fin-body table tr:hover td:first-child { background: var(--bg3); }
+
   /* SECTOR BAR */
   .sec-bar-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid #1c2128; }
   .sec-bar-row:last-child { border-bottom: none; }

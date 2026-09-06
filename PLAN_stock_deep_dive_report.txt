@@ -1,7 +1,8 @@
 ========================================================================
  สรุป session: ความเป็นไปได้ของฟีเจอร์ "พิมพ์ชื่อหุ้น -> รายงานวิเคราะห์ 10 หัวข้อ"
  สร้าง: 2026-09-06
- สถานะ: ⬜ ยังไม่ตัดสินใจแนวทาง — เป็นบทสรุปการสำรวจความเป็นไปได้ ยังไม่เริ่มลงมือ
+ สถานะ: 🔶 เลือกแนวทาง B แล้ว (2026-09-06) — เริ่มทยอยทำหุ้นไทยไล่ตาม market cap
+        machinery + รายงานตัวอย่างตัวแรก (CPALL) เสร็จ ดู reports/TH/
 ========================================================================
 
 ------------------------------------------------------------------------
@@ -125,11 +126,65 @@ Qualitative (ต้องเว็บ):
 CPALL/AAPL ให้ดู) ไม่มีค่าใช้จ่ายเพิ่ม แต่ไม่ auto ต้องเรียกเอง
 
 ------------------------------------------------------------------------
- ยังไม่ตัดสินใจ — รอผู้ใช้เลือกทาง
+ การตัดสินใจ (2026-09-06)
 ------------------------------------------------------------------------
-[ ] แนวทาง A: ลงทุนต่อ Search API + LLM API ทำ auto เต็มรูปในแดชบอร์ด
-[ ] แนวทาง B: auto แค่ชั้นตัวเลข (ข้อ 4/5/7 + guard) ส่วน qualitative
-    ให้ขอ Claude ช่วยทีละตัวต่อไปแบบนี้ ไม่ต้องมี API เพิ่ม
+[ ] แนวทาง A: ลงทุนต่อ Search API + LLM API ทำ auto เต็มรูปในแดชบอร์ด — ยังไม่เอา
+[x] แนวทาง B: auto แค่ชั้นตัวเลข (ข้อ 4/5/7 + guard) ส่วน qualitative ให้ Claude
+    ทำทีละตัวในแชท เซฟเป็นไฟล์ — *** เลือกอันนี้ ***
 
-ถ้าเลือกแนวทางไหน ค่อยมาวางแผน implementation รายละเอียดต่อ (โครงสร้าง
-endpoint, UI, caching TTL แต่ละชั้น, sector-based metric switching ฯลฯ)
+ผู้ใช้ยืนยัน: ทำหุ้นไทยทยอยให้ครบ, เริ่ม SET100 (proxy = top-100 by market cap)
+ก่อนแล้วไล่ลง, output = Markdown ต่อหุ้น + JSON ชั้นตัวเลข, เอา qualitative ก่อน
+(ชั้นตัวเลข batch ทั้ง 931 ตัวไว้ทำทีหลัง)
+
+------------------------------------------------------------------------
+ สิ่งที่ทำแล้ว (2026-09-06)
+------------------------------------------------------------------------
+ทุกอย่างรวมในโฟลเดอร์เดียว reports/TH/ (อยู่ใน .gitignore — local-only ตามกฎ
+no-financials-data-on-github) :
+    เปิดรายงาน.bat / อัพเดทรายงาน.bat / ดึงตัวเลขหุ้น.bat  — ดับเบิลคลิกใช้
+    index.html      — หน้าอ่านรวม (generate จาก *.md, sidebar+ค้นหา+ธีม)
+    README.md       — วิธีอ่าน + guard 8 ข้อ + checklist top-105 + สถานะ
+    INDEX.md        — สารบัญ + สรุป 1 บรรทัด/ตัว
+    <SYM>.md        — รายงานเต็ม 10 หัวข้อ (ต้นฉบับ)
+    _data/<SYM>.json— ชั้นตัวเลขดิบ
+    deep_dive_numbers.py — ดึงชั้นตัวเลข (ข้อ 4/5/7 + ติดธง guard [1][2][3][6b][7]
+        อัตโนมัติ) จาก ../../set_data.json + ../../financials.db ไม่ต่อเน็ต
+        รัน: cd reports/TH && python deep_dive_numbers.py PTT ADVANC CPALL --md
+    build_html.py   — รวม *.md -> index.html (ใช้ markdown-it-py)
+- รายงานเต็มเสร็จ (🔶 รอผู้ใช้ตรวจ): ครบลำดับ 1-19 = 19 ตัว
+  (DELTA PTT ADVANC GULF AOT KTB PTTEP KBANK SCB TRUE CPALL BBL BDMS SCC BAY TTB CPN PTTGC CPF)
+- cadence: ~3 ตัว/ครั้งที่ผู้ใช้พิมพ์ "ต่อ", ไล่ลำดับ README เป๊ะ · คิวถัดไป: CRC(20) THAI(21) CPAXT(22)
+- BUG is_reit (เจอ+แก้ 2026-09-07): set_data_fetcher._is_reit เดิมเดา suffix symbol
+  (PF$/RT$/BT$/^M-) กิน CPF/JMART/SAMART/TRT/CIMBT ฯลฯ 14 ตัวผิด + พลาด REIT จริง 20 ตัว →
+  แก้เป็น name (\b(REIT|FUND|TRUST)\b) + sector · regen golden.json + patch set_data.json +
+  regen _data/CPF.json (guard [7] หาย) · CPF.md §7 ยังใช้ peer โปรตีน curate เอง
+- CPN: กำไรอ่าน YoY ตรงๆ ได้ (ไม่มี spike >±50%), ROE 17-19% best-in-class อสังหาฯ, CEO วัลยา จิราธิวัฒน์
+- PTTGC: ขาดทุน 2024-25 → YoY ฐานติดลบ, ใช้ EBITDA/PBV/net debt; S&P outlook negative; CEO ณะรงค์ศักดิ์ จิวากานันต์ (พ.ค. 2024)
+- CPF: holding — equity income CPALL/CPAXT เป็นก้อนใหญ่ของกำไร; Altman Z 0.56 distress; CEO ประสิทธิ์ บุญดวงประเสริฐ (2019)
+- แบงก์ทำแล้ว 6/8: KTB KBANK SCB BBL BAY TTB (template KTB.md) · เหลือ KKP(32) TISCO(34)
+- SCC: กำไรรายไตรมาสมีรายการพิเศษ (stock gain/ด้อยค่า/LSP) ปนหนัก — ยึด core + net debt/EBITDA
+- BAY: MUFG 77%, free float ต่ำ, n=3 analyst · TTB: DTA-driven buyback play, ING ออกปี 2026
+- TRUE: turnaround post ควบรวม dtac; Telenor ขายหุ้นออกหมดปี 2026 → CP คุมเดี่ยว (Sigve Brekke CEO)
+- BDMS: ผู้ก่อตั้ง นพ.ปราเสริฐ เสียชีวิต 21 เม.ย. 2026 → พญ.ปรมาภรณ์ (ลูกสาว) เป็น CEO
+- template ธนาคาร: ทำในตัวรายงาน (KTB.md) เป็นแม่แบบ — section 4/5/7 ใช้ NIM/NPL/Coverage/
+  Credit cost/CIR/CET1/ROA/P/BV แทน GPM/EV-EBITDA; ไม่ได้แก้ script (KTB ไม่มี set_health,
+  ดึง NIM จาก set_factsheet financial_ratio 'อัตราส่วนต่างรายได้ดอกเบี้ยสุทธิ') · KBANK/SCB ใช้ซ้ำ
+- AOT: set_qpl label = **ปีบัญชี (fiscal, ปิด ก.ย.)** ไม่ใช่ปฏิทิน — 2026-1 = ต.ค.-ธ.ค. 2025 ฯลฯ
+  (แปลงในรายงานแล้ว); set_health ใช้ '9M' ไม่ใช่ '6M' เป็น hint
+- GULF: งบ pre-2025 = ก่อนควบรวม INTUCH ใช้ไม่ได้; 2Q2025 มีกำไรพิเศษ ฿56.1พันล้าน — รายงานยึด core profit
+- (แผนนี้ยังอยู่ที่ root ตาม convention ของ PLAN_*.txt อื่นๆ)
+- 2026-09-07: ปรับ guard [1] ให้สแกน series 10 ไตรมาส (เดิมดูแค่ไตรมาสล่าสุด พลาด ADVANC 4Q25 +54%)
+- gotcha ที่เจอตอนทำ script:
+  * set_qpl มี net_profit_parent เฉพาะไตรมาสใหม่ (~2025Q4+) — series ใช้
+    "กำไรสุทธิรวม" (net_profit) ให้สม่ำเสมอ + guard [6b] เตือนเมื่อ parent/total
+    ต่างกัน >10% (holding co เช่น PTT/SCC)
+  * AOT ปีบัญชีปิด ก.ย. — การรวมไตรมาสตามปฏิทินของ script จะเพี้ยน ต้องเช็ค
+    ตอนเขียนรายงาน AOT (guard [5] ฉบับหุ้นไทย)
+  * Altman Z ต่ำ = สัญญาณหลอกสำหรับค้าปลีก leverage สูง (CPALL Z=0.33)
+
+------------------------------------------------------------------------
+ คิวถัดไป
+------------------------------------------------------------------------
+ไล่ตาม reports/TH/README.md — batch ละ ~5-8 ตัว ต่อ session
+ข้ามชั่วคราว/ระวัง: AOT (FY ก.ย.), ธนาคาร KTB/KBANK/SCB/BBL (ใช้ชุด metric การเงิน),
+กองทุน DIF/3BBIF/CPNREIT/FTREIT (ใช้ FFO/DPU)

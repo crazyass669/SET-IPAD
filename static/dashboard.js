@@ -11226,7 +11226,7 @@ function _peerGroupHeaderHtml(rows, baseSym) {
   const group = _escHtml(_peerMeta.group || '');
   const tip = `<span class="scr-tip-icon" onclick="_tipIconToggle(this,event)">?<div class="scr-tip-box" style="width:270px">
     ตัวเลขคำนวณสด (TTM) จากงบการเงินรายไตรมาสของแต่ละบริษัท ผสาน ณ ตอนเปิดหน้านี้ — ไม่ใช่ค่าที่เก็บไว้ล่วงหน้า จึงรองรับเฉพาะหุ้นไทย<br><br>
-    คลิกหัวคอลัมน์เพื่อเรียงลำดับ (หุ้นตั้งต้น ⭐ ปักหมุดบนสุดเสมอ)<br>
+    คลิกหัวคอลัมน์เพื่อเรียงลำดับ (หุ้นตั้งต้น ⭐ ปักหมุดบนสุดเสมอ) · คลิกชื่อหุ้นเพื่อเปิดกราฟ/งบของหุ้นตัวนั้น<br>
     ติ๊กออกที่ชิปด้านบนได้ถ้าอยากตัดบางตัวออกจากการเทียบ
   </div></span>`;
   return `<div class="card" style="padding:12px 14px;margin-bottom:12px">
@@ -11306,7 +11306,7 @@ function _peerGroupTableHtml(tableIndex, title, icon, metricsOrGroups, rows, bas
   const body = sortedRows.map(r => {
     const isBase = r.symbol === baseSym;
     const rowBg = isBase ? 'background:rgba(88,166,255,0.12);font-weight:700' : '';
-    const symCell = `<td style="text-align:left;white-space:nowrap;position:sticky;left:0;background:var(--card2,#161b22);${isBase ? 'color:var(--accent,#58a6ff);font-weight:700' : ''}">${isBase ? '⭐ ' : ''}${r.symbol}</td>`;
+    const symCell = `<td style="text-align:left;white-space:nowrap;position:sticky;left:0;background:var(--card2,#161b22);${isBase ? 'color:var(--accent,#58a6ff);font-weight:700' : ''}">${isBase ? '⭐ ' : ''}<strong class="sym-link" onclick="closePeerAndOpenChart('${r.symbol}')">${r.symbol}</strong></td>`;
     const cells = metrics.map(m => {
       const v = r[m.k];
       const baseVal = baseRow ? baseRow[m.k] : null;
@@ -11434,7 +11434,7 @@ function _peerGroupRankingHtml(rows, baseSym) {
     const isBase = r.symbol === baseSym;
     return `<tr style="${isBase ? 'background:rgba(88,166,255,0.12);font-weight:700' : ''}">
       <td>${medal(i)}</td>
-      <td style="text-align:left">${isBase ? '⭐ ' : ''}${r.symbol}</td>
+      <td style="text-align:left">${isBase ? '⭐ ' : ''}<strong class="sym-link" onclick="closePeerAndOpenChart('${r.symbol}')">${r.symbol}</strong></td>
       <td style="text-align:right">${_finFmt(r.q_net_profit)}</td>
       <td style="text-align:right;${growthColor(r.q_net_profit_yoy)}">${_peerGroupSignedPct(r.q_net_profit_yoy)}</td>
       <td style="text-align:right;${growthColor(r.q_net_profit_qoq)}">${_peerGroupSignedPct(r.q_net_profit_qoq)}</td>
@@ -11686,7 +11686,7 @@ function _workspaceHeatmapTableHtml(rows) {
       return `<td style="text-align:right;background:${color}">${txt}</td>`;
     }).join('');
     const compColor = r._composite != null ? `rgba(88,166,255,${(0.08 + r._composite / 100 * 0.5).toFixed(2)})` : '';
-    return `<tr><td style="text-align:left;font-weight:600">${r.symbol}</td>${cells}<td style="text-align:right;font-weight:700;background:${compColor}">${r._composite != null ? r._composite : '–'}</td></tr>`;
+    return `<tr><td style="text-align:left;font-weight:600"><strong class="sym-link" onclick="closePeerAndOpenChart('${r.symbol}')">${r.symbol}</strong></td>${cells}<td style="text-align:right;font-weight:700;background:${compColor}">${r._composite != null ? r._composite : '–'}</td></tr>`;
   }).join('');
 
   return `<div style="overflow:auto;max-height:60vh">
@@ -11700,7 +11700,7 @@ function _workspaceHeatmapTableHtml(rows) {
 function _workspaceHeatmapSectionHtml() {
   return `<div class="card" style="padding:12px 14px;margin-bottom:12px">
     <div style="font-weight:700;margin-bottom:4px;font-size:13px">🎯 Multi-metric Heatmap — เห็น "หุ้นเด่นทุกแกน"</div>
-    <div style="font-size:11px;color:var(--text2);margin-bottom:8px">สีไล่ตาม percentile ในกลุ่มนี้ต่อคอลัมน์ (เขียว=ดีกว่ากลุ่ม แดง=แย่กว่ากลุ่ม) · Composite = ค่าเฉลี่ย percentile ทุกคอลัมน์ (0-100, ยิ่งสูงยิ่งเด่นรอบด้าน) · คลิกหัวคอลัมน์เพื่อเรียง</div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:8px">สีไล่ตาม percentile ในกลุ่มนี้ต่อคอลัมน์ (เขียว=ดีกว่ากลุ่ม แดง=แย่กว่ากลุ่ม) · Composite = ค่าเฉลี่ย percentile ทุกคอลัมน์ (0-100, ยิ่งสูงยิ่งเด่นรอบด้าน) · คลิกหัวคอลัมน์เพื่อเรียง · คลิกชื่อหุ้นเพื่อเปิดกราฟ/งบของหุ้นตัวนั้น</div>
     <div id="ws-heatmap-body"></div>
   </div>`;
 }
@@ -11711,9 +11711,47 @@ function _workspaceHeatmapSectionHtml() {
 function _workspaceContributionHtml() {
   return `<div class="card" style="padding:12px 14px;margin-bottom:12px">
     <div style="font-weight:700;margin-bottom:4px;font-size:13px">🔀 Contribution — ใครลาก/ใครถ่วงกำไรกลุ่ม</div>
-    <div style="font-size:11px;color:var(--text2);margin-bottom:8px">ผลต่างกำไรสุทธิ TTM เทียบ TTM เมื่อ 4 ไตรมาสก่อน (บาท) — เขียว=ดันกำไรกลุ่มขึ้น แดง=ฉุดกำไรกลุ่มลง (ต้องมีงบย้อนหลังอย่างน้อย 8 ไตรมาส)</div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:8px">ผลต่างกำไรสุทธิ TTM เทียบ TTM เมื่อ 4 ไตรมาสก่อน (บาท) — เขียว=ดันกำไรกลุ่มขึ้น แดง=ฉุดกำไรกลุ่มลง (ต้องมีงบย้อนหลังอย่างน้อย 8 ไตรมาส) · คลิกแท่งหรือชื่อหุ้นเพื่อเปิดกราฟ/งบของหุ้นตัวนั้น</div>
     <div style="position:relative" id="ws-contrib-box"><canvas id="ws-contrib"></canvas></div>
   </div>`;
+}
+
+// กราฟแท่งแนวนอนใน Sector Workspace: คลิกได้ทั้ง "แท่ง" และ "ชื่อหุ้นบนแกน y" (แท่งหุ้นเล็กๆ
+// กดยาก) — items ต้องเรียง index ตรงกับ labels ที่ป้อนให้ Chart.js · ทุกตัวมี .symbol
+// onClick ของ Chart.js v4 ยิงเฉพาะตอนคลิก "ในกรอบกราฟ" (inChartArea) เท่านั้น — คลิกโดนป้าย
+// แกน y (ซ้ายของ chartArea.left) ไม่เข้า handler เลย จึงต้องผูก listener native บน canvas เอง
+function _wsBarOnClick(items) {
+  return (evt, elements) => {   // เฉพาะคลิกโดนแท่ง (ในกรอบกราฟ)
+    if (elements.length && items[elements[0].index]) closePeerAndOpenChart(items[elements[0].index].symbol);
+  };
+}
+function _wsBarOnHover(evt, elements) {
+  const tgt = evt && evt.native && evt.native.target;
+  if (tgt) tgt.style.cursor = elements.length ? 'pointer' : 'default';
+}
+// ผูกคลิก/hover บนโซนป้ายชื่อหุ้นแกน y (นอกกรอบกราฟ) โดยตรงกับ canvas — canvas ถูกสร้างใหม่
+// ทุกครั้งที่ re-render body (innerHTML) listener เก่าเลยหายไปพร้อม element ไม่รั่ว
+function _wsBindLabelClicks(chart, items) {
+  const cv = chart.canvas;
+  const idxAt = ev => {
+    const yScale = chart.scales.y, ca = chart.chartArea;
+    if (!yScale || !ca) return -1;
+    const r = cv.getBoundingClientRect();
+    const x = ev.clientX - r.left, y = ev.clientY - r.top;
+    if (x >= ca.left || x < yScale.left) return -1;   // ไม่ได้อยู่ในโซนป้ายแกน y
+    const i = Math.round(yScale.getValueForPixel(y));
+    return (i >= 0 && i < items.length) ? i : -1;
+  };
+  cv.addEventListener('click', ev => {
+    const i = idxAt(ev);
+    if (i >= 0) closePeerAndOpenChart(items[i].symbol);
+  });
+  cv.addEventListener('mousemove', ev => {
+    const yScale = chart.scales.y, ca = chart.chartArea;
+    if (!yScale || !ca) return;
+    const x = ev.clientX - cv.getBoundingClientRect().left;
+    if (x < ca.left) cv.style.cursor = (idxAt(ev) >= 0) ? 'pointer' : 'default';
+  });
 }
 
 function _workspaceRenderContributionChart(rows) {
@@ -11726,7 +11764,7 @@ function _workspaceRenderContributionChart(rows) {
     .sort((a, b) => b.delta - a.delta);
   if (!contrib.length) { box.innerHTML = '<div class="empty">ไม่มีข้อมูลเพียงพอ (ต้องมีงบย้อนหลังอย่างน้อย 8 ไตรมาส)</div>'; return; }
   box.style.height = Math.max(180, contrib.length * 20) + 'px';
-  _peerGroupCharts.push(new Chart(canvas, {
+  const chart = new Chart(canvas, {
     type: 'bar',
     data: {
       labels: contrib.map(c => c.symbol),
@@ -11735,13 +11773,17 @@ function _workspaceRenderContributionChart(rows) {
     options: {
       indexAxis: 'y',
       responsive: true, maintainAspectRatio: false,
+      onClick: _wsBarOnClick(contrib),   // คลิกแท่ง (ชื่อหุ้นบนแกน y ผูกแยกด้านล่าง)
+      onHover: _wsBarOnHover,
       plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => _finFmt(ctx.parsed.x) } } },
       scales: {
         x: { ticks: { callback: v => _finFmt(v) }, grid: { color: 'rgba(139,148,158,0.15)' } },
         y: { grid: { display: false }, ticks: { font: { size: 10 }, autoSkip: false } },
       }
     }
-  }));
+  });
+  _peerGroupCharts.push(chart);
+  _wsBindLabelClicks(chart, contrib);
 }
 
 // จัดอันดับสภาพคล่อง/กระแสเงินสดทั้งกลุ่มเป็นกราฟแท่งแนวนอน — เรียงดีสุด→แย่สุดเสมอ (lowerBetter
@@ -11771,7 +11813,7 @@ function _workspaceRankChartsHtml() {
       <div style="font-weight:700;margin-bottom:8px;font-size:13px" id="${m.canvasId}-title">${m.title}${_tipIconHtml(m.tip)}</div>
       <div style="position:relative" id="${m.canvasId}-box"><canvas id="${m.canvasId}"></canvas></div>
     </div>`).join('');
-  return `<div style="font-size:11px;color:var(--text2);margin-bottom:8px">🎨 สี 3 โซนคือ อันดับภายในกลุ่มนี้เอง (เขียว = 1/3 แรกที่ดีสุด, เหลือง = 1/3 กลาง, แดง = 1/3 ท้ายที่แย่สุด) ไม่ใช่เกณฑ์ตายตัวข้ามกลุ่ม — แตะไอคอน ℹ ที่แต่ละกราฟเพื่อดูคำอธิบายตัวชี้วัด</div>
+  return `<div style="font-size:11px;color:var(--text2);margin-bottom:8px">🎨 สี 3 โซนคือ อันดับภายในกลุ่มนี้เอง (เขียว = 1/3 แรกที่ดีสุด, เหลือง = 1/3 กลาง, แดง = 1/3 ท้ายที่แย่สุด) ไม่ใช่เกณฑ์ตายตัวข้ามกลุ่ม — แตะไอคอน ℹ ที่แต่ละกราฟเพื่อดูคำอธิบายตัวชี้วัด · คลิกแท่งหรือชื่อหุ้นเพื่อเปิดกราฟ/งบของหุ้นตัวนั้น</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-bottom:12px">${boxes}</div>`;
 }
 
@@ -11795,7 +11837,7 @@ function _workspaceRenderRankCharts(rows) {
       const t = i / Math.max(1, n - 1);
       return t < 1 / 3 ? '#3fb950' : t < 2 / 3 ? '#d29922' : '#f85149';
     };
-    _peerGroupCharts.push(new Chart(canvas, {
+    const chart = new Chart(canvas, {
       type: 'bar',
       data: {
         labels: ranked.map(r => r.symbol),
@@ -11804,6 +11846,8 @@ function _workspaceRenderRankCharts(rows) {
       options: {
         indexAxis: 'y',
         responsive: true, maintainAspectRatio: false,
+        onClick: _wsBarOnClick(ranked),   // คลิกแท่ง (ชื่อหุ้นบนแกน y ผูกแยกด้านล่าง)
+        onHover: _wsBarOnHover,
         plugins: {
           legend: { display: false },
           tooltip: { callbacks: { label: ctx => _workspaceRankFmtVal(ctx.parsed.x, m.unit) } },
@@ -11813,7 +11857,9 @@ function _workspaceRenderRankCharts(rows) {
           y: { grid: { display: false }, ticks: { font: { size: 10 }, autoSkip: false } },
         }
       }
-    }));
+    });
+    _peerGroupCharts.push(chart);
+    _wsBindLabelClicks(chart, ranked);
   });
 }
 
@@ -23609,6 +23655,21 @@ const _CAL_CONF_COLOR = { confirmed: 'var(--green)', estimated: 'var(--blue)' };
 // ลิงก์ไปหน้าข่าว "ผลประกอบการ" ของหุ้นตัวนั้นบน SET.or.th (ให้ผู้ใช้กดเข้าไปดู F45 +
   // คำอธิบายและวิเคราะห์ของฝ่ายจัดการ เอง) — โชว์เฉพาะหุ้นไทย (market TH) และเฉพาะ event
   // ประเภท earnings ที่วันที่ผ่านมาแล้ว (ถือว่า "น่าจะประกาศแล้ว")
+// คลิกชื่อหุ้นในตารางปฏิทิน → เปิด chart modal ของหุ้นตัวนั้นตามตลาด (โหมด 🗗 = แท็บใหม่)
+// e.symbol เป็นค่า display แล้ว (DR ขึ้นต้น "DR:") — ถอด prefix ก่อนส่งให้ helper ราย market
+function _calOpenStock(market, displaySymbol) {
+  const sym = String(displaySymbol || '').replace(/^(DR|US|HK|JP):/, '');
+  if (!sym) return;
+  if (market === 'DR') {
+    if ((_drData || []).some(s => s.sym === sym)) { _wlOpenDr(sym); return; }
+    openInternalHash('#fin/dr/' + encodeURIComponent(sym));
+    return;
+  }
+  if (market === 'US' || market === 'HK' || market === 'JP') { _openMirrorStock(sym, market.toLowerCase()); return; }
+  if (navOpenMode() === 'new') { openInternalHash('#ts/th/' + encodeURIComponent(sym)); return; }
+  openChartModal(sym);
+}
+
 function _calSourceLink(e) {
   if (e.type !== 'earnings' || e.market !== 'TH') return null;
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -23710,7 +23771,7 @@ function _calRenderList() {
       : '';
     return `<tr>
       <td style="padding:8px 10px;white-space:nowrap">${e.date} <span style="color:var(--text2);font-size:11px">${dLeftLabel}</span></td>
-      <td style="padding:8px 10px"><b>${esc(e.symbol)}</b> <span style="color:var(--text2);font-size:11px">${esc(e.market)}</span></td>
+      <td style="padding:8px 10px"><b class="sym-link" onclick="_calOpenStock('${_escJsAttr(e.market)}','${_escJsAttr(e.symbol)}')">${esc(e.symbol)}</b> <span style="color:var(--text2);font-size:11px">${esc(e.market)}</span></td>
       <td style="padding:8px 10px">${_CAL_TYPE_BADGE[e.type] || e.type}</td>
       <td style="padding:8px 10px;color:var(--text2)">${esc(e.detail)}</td>
       <td style="padding:8px 10px;text-align:right"><span style="color:${_CAL_CONF_COLOR[e.confidence] || 'var(--text2)'};font-size:11px">${_CAL_CONF_LABEL[e.confidence] || e.confidence}</span></td>
