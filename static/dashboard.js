@@ -3431,12 +3431,15 @@ function renderStocksTable(preservePage) {
     renderSparklinesInTable("stocks-tbody", window._currentStockList);
 
     if (slice.length < list.length) {
-      document.getElementById("stocks-tbody").innerHTML +=
+      // insertAdjacentHTML ไม่ re-serialize tbody เดิม — `innerHTML +=` จะ reparse ทุกแถว
+      // ทำให้ <canvas.spark-canvas> ที่เพิ่งสร้างกลายเป็น node เปล่า (รอดเพราะ rAF ของ
+      // renderSparklinesInTable วาดหลัง append พอดี — เปราะ)
+      document.getElementById("stocks-tbody").insertAdjacentHTML('beforeend',
         `<tr><td colspan="20" style="text-align:center;padding:14px">
           <button onclick="loadMoreStocks()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:7px 20px;border-radius:6px;cursor:pointer;font-size:13px">
             โหลดเพิ่ม (${slice.length}/${list.length} ตัว)
           </button>
-        </td></tr>`;
+        </td></tr>`);
     }
   }
 
@@ -5118,10 +5121,10 @@ function startPbvPeScreenerRebuild() {
     return Number.isFinite(v) ? v : null;
   };
   const body = {
-    g_pct: numVal('pbvpe-screener-g', 3.0),
-    rf_pct: numVal('pbvpe-screener-rf', 2.5),
-    beta: numVal('pbvpe-screener-beta', 1.0),
-    erp_pct: numVal('pbvpe-screener-erp', 5.5),
+    g_pct: numVal('pbvpe-screener-g', PBV_PE_SCR_DEFAULTS.g_pct),
+    rf_pct: numVal('pbvpe-screener-rf', PBV_PE_SCR_DEFAULTS.rf_pct),
+    beta: numVal('pbvpe-screener-beta', PBV_PE_SCR_DEFAULTS.beta),
+    erp_pct: numVal('pbvpe-screener-erp', PBV_PE_SCR_DEFAULTS.erp_pct),
   };
   PBV_PE_SCR_OPTIONAL_FIELDS.forEach(([id, key]) => { body[key] = optVal(id); });
   fetch('/api/pbv-pe-screener/rebuild', {
@@ -7689,6 +7692,19 @@ function _ema(arr, period) {
   for (let i=period; i<arr.length; i++) e = arr[i]*k + e*(1-k);
   return e;
 }
+// EMA แบบทั้งซีรีส์ (out[i] = EMA ที่แท่ง i, seed = SMA ของ period แรก เหมือน _ema())
+// ใช้แทนการเรียก _ema(p.slice(0,i)) ซ้ำๆ ในลูป (O(n) ต่อครั้ง) เมื่อต้องการ EMA หลายจุด
+function _emaSeries(arr, period) {
+  if (arr.length < period) return null;
+  const k = 2/(period+1);
+  const out = new Array(arr.length).fill(null);
+  let e = 0;
+  for (let i=0; i<period; i++) e += arr[i];
+  e /= period;
+  out[period-1] = e;
+  for (let i=period; i<arr.length; i++) { e = arr[i]*k + e*(1-k); out[i] = e; }
+  return out;
+}
 function _rsi(arr, period=14) {
   // Wilder's Smoothed RSI — ต้องการ warmup period*2 แท่ง
   if (arr.length < period * 2 + 1) return null;
@@ -8470,6 +8486,20 @@ function renderDqBanner() {
 
 function _enrichTechSignals(stocks) {
   stocks.forEach(s => {
+    // สัญญาณที่ไม่ต้องพึ่ง price_history ยาว — คำนวณก่อน early-return เสมอ ไม่งั้นหุ้น IPO ใหม่
+    // (ประวัติ < 15 แท่ง) ที่ตารางโชว์ "NEW HIGH"/RVOL อยู่ กลับโดนติ๊ก "🚀 Break 52W High"
+    // หรือ "Bullish High Volume" กรองออกเพราะ flag ยังเป็น undefined
+    s._new_52w_high = s.high_52w > 0 && s.price >= s.high_52w;
+    let _rvol5d = null;
+    if (s.vol_history && s.vol_history.length >= 6) {
+      const _v5 = s.vol_history.slice(-6, -1).reduce((a,b)=>a+b,0) / 5; // -6 to -1 = 5 วันก่อนวันนี้
+      _rvol5d = _v5 > 0 && s.vol_today ? s.vol_today / _v5 * 100 : null;
+    } else if (s.vol_avg20 > 0 && s.vol_today) {
+      _rvol5d = s.vol_today / s.vol_avg20 * 100; // fallback ก่อน Full Refresh
+    }
+    const _valueK = (s.price && s.vol_today) ? s.price * s.vol_today / 1000 : 0;
+    s._bullish_vol = (s.ret_1d??0)>=0 && _rvol5d!=null && _rvol5d>=200 && _valueK>=10000;
+
     const ph = s.price_history;
     if (!ph || ph.length < 15) return;
     const p = ph.map(x=>x[1]);
@@ -8505,41 +8535,35 @@ function _enrichTechSignals(stocks) {
     const aboveSma200 = s200!=null && p[p.length-1] >= s200;
     s._rsi_rebound = r!=null&&rv!=null && r>=45 && rv<45 && !!s.above_ema200 && aboveSma200;
 
-    // 52W High breakout
-    s._new_52w_high = s.high_52w>0 && s.price>=s.high_52w;
-
     // EMA200 reclaim: ยืนเหนือ EMA200 อยู่ หรือราคาเพิ่งตัดขึ้นภายใน ~15 แท่ง
     // (จาก event study หุ้นวิ่งแรง 935 events 2015-2026: winner 47% vs control 32%)
+    // ใช้ _emaSeries() คำนวณ EMA200 ทั้งซีรีส์ครั้งเดียว แทนการเรียก _ema(p.slice(0,i)) 2 ครั้ง
+    // ต่อรอบ × 15 รอบ (แต่ละครั้ง O(n) + slice) — เดิมเป็น hotspot ตอน loadData()
     let _reclaim = !!s.above_ema200;
     if (!_reclaim && p.length >= 215) {
+      const em = _emaSeries(p, 200);
       for (let i = p.length - 15; i < p.length; i++) {
-        const e = _ema(p.slice(0, i + 1), 200), ev = _ema(p.slice(0, i), 200);
-        if (e != null && ev != null && p[i] > e && p[i - 1] <= ev) { _reclaim = true; break; }
+        if (em[i] != null && em[i - 1] != null && p[i] > em[i] && p[i - 1] <= em[i - 1]) { _reclaim = true; break; }
       }
     }
     s._ema200_reclaim = _reclaim;
-
-    // Bullish High Volume: ราคาขึ้น + RVOL5d≥200% + Value≥10M บาท (ตาม reference criteria)
-    let rvol5d = null;
-    if (s.vol_history && s.vol_history.length >= 6) {
-      const v5 = s.vol_history.slice(-6, -1).reduce((a,b)=>a+b,0) / 5; // -6 to -1 = 5 วันก่อนวันนี้
-      rvol5d = v5 > 0 && s.vol_today ? s.vol_today / v5 * 100 : null;
-    } else if (s.vol_avg20 > 0 && s.vol_today) {
-      rvol5d = s.vol_today / s.vol_avg20 * 100; // fallback ก่อน Full Refresh
-    }
-    const valueK = (s.price && s.vol_today) ? s.price * s.vol_today / 1000 : 0;
-    s._bullish_vol = (s.ret_1d??0)>=0 && rvol5d!=null && rvol5d>=200 && valueK>=10000;
   });
 }
 
-function applyPreset(name) {
-  // ล้างทุก field โดยใช้ list เดียวกับ persistent settings
+// ล้างทุกช่องกรอง Screener กลับค่าเริ่มต้น — ใช้ร่วมกันโดย applyPreset/applyFundPreset/
+// loadSavedPreset/resetScreener (เดิม copy-paste 6 บรรทัดนี้ 4 ที่ — เพิ่ม select ใหม่ที
+// ต้อง reset ครบทุกที่ ไม่งั้น preset จะค้างค่าเก่า)
+function _scrResetInputs() {
   _SCR_FIELDS.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   _SCR_CHECKS.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
   const mk = document.getElementById('scr-market'); if (mk) mk.value = 'ALL';
   const ind = document.getElementById('scr-industry'); if (ind) ind.value = 'ALL';
   const yb = document.getElementById('scr-ratio-years-back'); if (yb) yb.value = '1';
   const rvd = document.getElementById('scr-rvol-days'); if (rvd) rvd.value = '20';
+}
+
+function applyPreset(name) {
+  _scrResetInputs();
 
   if (name === 'onset') {
     document.getElementById('scr-rs-min').value  = '50';
@@ -8601,12 +8625,7 @@ function applyPreset(name) {
 // Preset จากหน้า Fundamentals เดิม (ยุบรวมเข้า Screener แล้ว) — ตั้งค่า filter ที่มีอยู่แล้ว
 // (scr-pe/scr-pbv/scr-dy) ให้เทียบเท่า preset เดิมแล้วค้นหา ไม่ใช่ระบบ filter ใหม่
 function applyFundPreset(name) {
-  _SCR_FIELDS.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-  _SCR_CHECKS.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
-  const mk = document.getElementById('scr-market'); if (mk) mk.value = 'ALL';
-  const ind = document.getElementById('scr-industry'); if (ind) ind.value = 'ALL';
-  const yb = document.getElementById('scr-ratio-years-back'); if (yb) yb.value = '1';
-  const rvd = document.getElementById('scr-rvol-days'); if (rvd) rvd.value = '20';
+  _scrResetInputs();
 
   if (name === 'high_yield') {
     document.getElementById('scr-dy').value = '3';
@@ -8946,9 +8965,20 @@ async function runScreener() {
   _scrSortCol = 'rs_score';
   _scrSortDir = 1;
 
+  // ตัวกรองงบการเงิน (preset CANSLIM/งบโต+สถาบันเข้า ฯลฯ หรือกรอกเอง) ถูกตั้งไว้ แต่
+  // /api/financials-analytics ยังโหลดไม่เสร็จ/ล้มเหลว — ช่องพวกนี้ disabled อยู่ ค่าที่ตั้ง
+  // ไว้เลยกรองหุ้นออกจนหมดแบบเงียบ ๆ (ผู้ใช้เห็นแค่ "ไม่พบหุ้นที่ตรงเงื่อนไข") — เตือนให้ตรงสาเหตุ
+  const _finFilterUnready = !_finAnalyticsLoaded && _FIN_DEP_INPUT_IDS.some(id => {
+    if (id === 'scr-ratio-years-back') return false;
+    const el = document.getElementById(id);
+    if (!el) return false;
+    return el.type === 'checkbox' ? el.checked : el.value !== '';
+  });
+
   document.getElementById('screener-count').textContent = `พบ ${_scrStocks.length} หุ้น` +
     (insiderBuy && !_scrInsiderLoaded ? ' — ⚠ โหลดข้อมูล Insider ไม่สำเร็จ ข้ามตัวกรองนั้นไปก่อน' : '') +
-    (_drFetchFailed ? ' — ⚠ โหลดข้อมูลหุ้นต่างประเทศ (DR) ไม่สำเร็จ ค้นเฉพาะหุ้นไทย' : '');
+    (_drFetchFailed ? ' — ⚠ โหลดข้อมูลหุ้นต่างประเทศ (DR) ไม่สำเร็จ ค้นเฉพาะหุ้นไทย' : '') +
+    (_finFilterUnready ? ' — ⚠ ตัวกรองงบการเงินยังไม่พร้อม (กำลังโหลด/ไม่มีข้อมูล financials.db) ผลอาจไม่ครบ' : '');
   const csvBtn = document.getElementById('btn-export-csv');
   if (csvBtn) csvBtn.style.display = _scrStocks.length > 0 ? '' : 'none';
   if (_scrStocks.length === 0) {
@@ -8960,12 +8990,7 @@ async function runScreener() {
 
 function resetScreener() {
   _scrExtraCols = [];
-  _SCR_FIELDS.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-  _SCR_CHECKS.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
-  const mk = document.getElementById('scr-market'); if (mk) mk.value = 'ALL';
-  const ind = document.getElementById('scr-industry'); if (ind) ind.value = 'ALL';
-  const yb = document.getElementById('scr-ratio-years-back'); if (yb) yb.value = '1';
-  const rvd = document.getElementById('scr-rvol-days'); if (rvd) rvd.value = '20';
+  _scrResetInputs();
   document.getElementById('screener-count').textContent = '';
   document.getElementById('screener-results').innerHTML = '<div class="empty">กำหนดเงื่อนไขแล้วกด ค้นหา</div>';
   const csvBtn = document.getElementById('btn-export-csv');
@@ -14711,8 +14736,12 @@ let _breadthFetchInflight = {};
 function _fetchBreadthRange(rng) {
   if (_breadthCacheByRange[rng]) return Promise.resolve(_breadthCacheByRange[rng]);
   if (_breadthFetchInflight[rng]) return _breadthFetchInflight[rng];
-  const p = _fetchTimeout('/api/breadth?range=' + encodeURIComponent(rng), 30000,
-      'หมดเวลารอ Market Breadth หุ้นไทย (เกิน 30 วิ) — ลองใหม่อีกครั้ง')
+  // range "all" = full history (~10,900 วัน, สแกนทุกหุ้นรวม delisted) — ฝั่ง server ใช้
+  // ~35-40 วิ ในรอบแรก (วัดจริง 2026-09-06: 35.9 วิ) ก่อนจะ cache ใน memory จนกว่าจะ
+  // refresh — timeout 30 วิ เดิมทำให้คลิก "All" ครั้งแรกหลัง refresh ทุกครั้ง error ทิ้ง
+  const _brTimeout = rng === 'all' ? 90000 : 30000;
+  const p = _fetchTimeout('/api/breadth?range=' + encodeURIComponent(rng), _brTimeout,
+      `หมดเวลารอ Market Breadth หุ้นไทย (เกิน ${_brTimeout / 1000} วิ) — ลองใหม่อีกครั้ง`)
     .then(r => r.json())
     .then(d => {
       if (d.error) throw new Error(d.error);
@@ -14852,8 +14881,14 @@ function drawBreadthCharts() {
   const d = _breadthData;
   if (!d) return;
   const n = d.dates.length;
+  // ตัวหารจริงของทุก % คือ n_universe ต่อวัน (หุ้นที่มี close ไม่ NaN วันนั้น + ประวัติ ≥ 60
+  // แท่ง) จาก services/breadth.py — เดิมโชว์ DATA.stocks.length (universe ปัจจุบันเต็ม)
+  // ซึ่งมากกว่าตัวหารจริงเสมอ (วัดจริง 2026-09-06: 927 vs 924)
   const bcUnivEl = document.getElementById('bc-universe-n');
-  if (bcUnivEl && DATA?.stocks?.length) bcUnivEl.textContent = DATA.stocks.length;
+  if (bcUnivEl) {
+    const univN = (d.n_universe && d.n_universe.length) ? d.n_universe[n - 1] : DATA?.stocks?.length;
+    if (univN) bcUnivEl.textContent = univN;
+  }
 
   // 1) % above EMA50/200
   let c = _bcSetup('bc-ema');
@@ -15000,12 +15035,20 @@ function renderEMABreadth() {
 const _STOCK_SORT_STR  = new Set(['symbol','name','sector']);
 const _STOCK_SORT_BOOL = new Set(['above_ema50','above_ema200']);
 
+// dir=1 = จากมาก→น้อย (descending) เสมอทุก type — ให้ตรงกับลูกศร ↓ ที่ _stockSortTh วาด
+// (เดิม string ใช้ a.localeCompare(b) ทำให้ dir=1 กลายเป็น A→Z ascending ขัดกับลูกศร ↓
+// — pattern เดียวกับตารางหุ้นทั้งหมดหลัก L3392 ที่สลับ operand ไปแล้ว)
 function _stockSortCompare(col, dir) {
   return (a, b) => {
     if (_STOCK_SORT_BOOL.has(col)) return ((b[col]?1:0) - (a[col]?1:0)) * dir;
-    if (_STOCK_SORT_STR.has(col))  return ((a[col]??'').localeCompare(b[col]??'')) * dir;
+    if (_STOCK_SORT_STR.has(col))  return ((b[col]??'').localeCompare(a[col]??'')) * dir;
     return ((b[col]??-Infinity) - (a[col]??-Infinity)) * dir;
   };
+}
+// คลิกแรกของแต่ละคอลัมน์ควรเรียงทิศที่ "มีประโยชน์ก่อน": ชื่อ/สัญลักษณ์/sector = A→Z,
+// Sec.Rank = อันดับดี (น้อย) ก่อน — คอลัมน์ตัวเลข/บูลอื่นเริ่มจากมากสุดก่อน
+function _stockSortDefaultDir(col) {
+  return (_STOCK_SORT_STR.has(col) || col === 'sec_rank') ? -1 : 1;
 }
 function _stockSortTh(col, label, sortCol, sortDir, setFn, cls='', tip=null) {
   const active = sortCol === col;
@@ -15021,7 +15064,7 @@ let _boSortCol = 'rs_score', _boSortDir = 1;
 
 function setBoSort(col) {
   if (_boSortCol === col) _boSortDir *= -1;
-  else { _boSortCol = col; _boSortDir = 1; }
+  else { _boSortCol = col; _boSortDir = _stockSortDefaultDir(col); }
   renderBreakout();
 }
 
@@ -15268,7 +15311,7 @@ let _momSortCol = 'rs_score', _momSortDir = 1;
 
 function setMomSort(col) {
   if (_momSortCol === col) _momSortDir *= -1;
-  else { _momSortCol = col; _momSortDir = 1; }
+  else { _momSortCol = col; _momSortDir = _stockSortDefaultDir(col); }
   renderMomentum();
 }
 
@@ -15366,12 +15409,26 @@ function _populateScrIndustry() {
   });
 }
 
-function saveScreenerSettings() {
+// เก็บ/คืนค่าทุกช่องกรอง Screener เป็น object — ใช้ร่วมกันโดย autosave (saveScreenerSettings/
+// loadScreenerSettings) และ preset ที่ผู้ใช้บันทึกเอง (saveCurrentPreset/loadSavedPreset)
+// เดิม loop เก็บ/loop คืน ถูก copy-paste คนละชุดใน 4 ฟังก์ชัน — field ใหม่ต้องแก้ 4 ที่
+function _scrCollectSettings() {
   const s = {};
   _SCR_FIELDS.forEach(id => { const el = document.getElementById(id); if (el) s[id] = el.value; });
   _SCR_CHECKS.forEach(id => { const el = document.getElementById(id); if (el) s[id] = el.checked; });
   const mk = document.getElementById('scr-market'); if (mk) s['scr-market'] = mk.value;
   const ind = document.getElementById('scr-industry'); if (ind) s['scr-industry'] = ind.value;
+  return s;
+}
+function _scrApplySettings(s) {
+  _SCR_FIELDS.forEach(id => { if (s[id] != null) { const el = document.getElementById(id); if (el) el.value = s[id]; } });
+  _SCR_CHECKS.forEach(id => { if (s[id] != null) { const el = document.getElementById(id); if (el) el.checked = s[id]; } });
+  if (s['scr-market']) { const el = document.getElementById('scr-market'); if (el) el.value = s['scr-market']; }
+  if (s['scr-industry']) { const el = document.getElementById('scr-industry'); if (el) el.value = s['scr-industry']; }
+}
+
+function saveScreenerSettings() {
+  const s = _scrCollectSettings();
   // localStorage.setItem อาจ throw (QuotaExceededError เต็ม/SecurityError โดน block) —
   // runScreener() เรียกฟังก์ชันนี้เป็นบรรทัดแรก ถ้าไม่กันไว้ throw ตรงนี้จะทำให้กด "ค้นหา"
   // ไม่ทำงานเลยทั้งฟังก์ชัน โดยไม่มีข้อความอะไรบอกผู้ใช้เลย
@@ -15382,11 +15439,7 @@ function loadScreenerSettings() {
   try {
     const raw = localStorage.getItem(_SCR_LS);
     if (!raw) return;
-    const s = JSON.parse(raw);
-    _SCR_FIELDS.forEach(id => { if (s[id] != null) { const el = document.getElementById(id); if (el) el.value = s[id]; } });
-    _SCR_CHECKS.forEach(id => { if (s[id] != null) { const el = document.getElementById(id); if (el) el.checked = s[id]; } });
-    if (s['scr-market']) { const el = document.getElementById('scr-market'); if (el) el.value = s['scr-market']; }
-    if (s['scr-industry']) { const el = document.getElementById('scr-industry'); if (el) el.value = s['scr-industry']; }
+    _scrApplySettings(JSON.parse(raw));
   } catch(e) {}
 }
 
@@ -15447,12 +15500,7 @@ function saveCurrentPreset() {
   const name = document.getElementById('preset-name-input').value.trim();
   if (!name) return;
   const presets = _loadPresets();
-  const s = {};
-  _SCR_FIELDS.forEach(id => { const el = document.getElementById(id); if (el) s[id] = el.value; });
-  _SCR_CHECKS.forEach(id => { const el = document.getElementById(id); if (el) s[id] = el.checked; });
-  const mk = document.getElementById('scr-market'); if (mk) s['scr-market'] = mk.value;
-  const ind = document.getElementById('scr-industry'); if (ind) s['scr-industry'] = ind.value;
-  presets[name] = s;
+  presets[name] = _scrCollectSettings();
   // setItem อาจ throw (เต็ม/ถูก block) — ไม่กันไว้จะเงียบๆ ไม่บันทึก preset โดยผู้ใช้ไม่รู้
   try { localStorage.setItem(_PRESETS_LS, JSON.stringify(presets)); } catch(e) {}
   document.getElementById('preset-name-input').value = '';
@@ -15463,21 +15511,11 @@ function loadSavedPreset(name) {
   const presets = _loadPresets();
   const s = presets[name];
   if (!s) return;
-  // ล้างทุกช่องก่อนเสมอ (เหมือน applyPreset) — กัน field ที่เพิ่มเข้ามาใหม่หลังบันทึก
-  // preset นี้ไว้ค้างค่าจากการค้นหาครั้งก่อนหน้าปนเข้าไปในผลลัพธ์
-  _SCR_FIELDS.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-  _SCR_CHECKS.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
-  // ตั้ง default เหมือน applyPreset() ก่อนใส่ค่าจาก preset — preset เก่าที่บันทึกไว้ก่อน
-  // field เหล่านี้จะมีถูกเว้นว่าง(select ไม่มี option ว่างเลย selectedIndex เป็น -1) หรือ
-  // สืบทอดค่าที่เลือกค้างอยู่ในหน้าจอแทนการค้นทั้งตลาดตามที่ preset ตั้งใจ
-  const mk = document.getElementById('scr-market'); if (mk) mk.value = 'ALL';
-  const ind = document.getElementById('scr-industry'); if (ind) ind.value = 'ALL';
-  const yb = document.getElementById('scr-ratio-years-back'); if (yb) yb.value = '1';
-  const rvd = document.getElementById('scr-rvol-days'); if (rvd) rvd.value = '20';
-  _SCR_FIELDS.forEach(id => { if (s[id] != null) { const el = document.getElementById(id); if (el) el.value = s[id]; } });
-  _SCR_CHECKS.forEach(id => { if (s[id] != null) { const el = document.getElementById(id); if (el) el.checked = s[id]; } });
-  if (s['scr-market']) { const el = document.getElementById('scr-market'); if (el) el.value = s['scr-market']; }
-  if (s['scr-industry']) { const el = document.getElementById('scr-industry'); if (el) el.value = s['scr-industry']; }
+  // ล้างทุกช่อง + ตั้ง default ก่อนเสมอ (เหมือน applyPreset) — กัน field ที่เพิ่มเข้ามาใหม่
+  // หลังบันทึก preset นี้ไว้ ค้างค่าจากการค้นหาครั้งก่อนปนเข้าไปในผลลัพธ์ (select market/
+  // industry/years-back/rvol-days ที่ preset เก่าไม่มี key จะสืบทอดค่าค้างจอแทนค่าเริ่มต้น)
+  _scrResetInputs();
+  _scrApplySettings(s);
   runScreener();
 }
 

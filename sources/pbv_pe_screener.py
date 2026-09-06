@@ -65,6 +65,12 @@ ROE_VALUATION_CAP_PCT = 60.0
 # แต่ผลลัพธ์เดียวกัน) — บังคับ margin ขั้นต่ำเป็น "จุด" (percentage point) ไม่ใช่ %
 MIN_R_G_SPREAD_PCT = 1.0
 
+# ตัวเศษของ Justified P/E มีเทอม g/ROE — ROE (หลัง cap) ที่เข้าใกล้ 0 ทำให้เทอมนี้ระเบิด และถ้า
+# ROE เป็น 0 เป๊ะจะ ZeroDivisionError · เกิดได้จริงเมื่อกรอก g ติดลบ (clamp ยอมถึง -2%) เพราะ
+# guard "ROE > g" ด้านล่างจะอ่อนจนหุ้น ROE จิ๋ว/ศูนย์ผ่านเข้ามาถึงจุดคำนวณ — ต้องมี ROE เป็นบวก
+# อย่างน้อยเท่านี้ถึงคำนวณ Justified P/E ได้ (Justified P/B ไม่มีเทอม g/ROE คำนวณต่อได้ตามปกติ)
+MIN_ROE_FOR_JPE_PCT = 1.0
+
 
 def _connect(base_dir):
     con = sqlite3.connect(fs._db_path(base_dir))
@@ -205,12 +211,13 @@ def compute_fair_value_for_symbol(sym, entry, snap, is_financial, assumptions=No
     # ตัวส่วน (r − g) ต้องเป็น "ทศนิยม" (ไม่ใช่ %) เพราะตัวเศษ (1 − g/ROE) ไร้หน่วย
     # g/ROE เป็น ratio → ใช้ % หารกันได้ (g_pct/roe_calc_pct)
     g_dec, r_dec = g_pct / 100.0, r_pct / 100.0
-    jpe_x = (1.0 - g_pct / roe_calc_pct) / (r_dec - g_dec)
-    if eps is not None and eps > 0 and jpe_x > 0:
-        jpe_fair = jpe_x * eps
-        base["jpe_x"] = round(jpe_x, 2)
-        base["jpe_fair"] = round(jpe_fair, 2)
-        base["jpe_upside_pct"] = round((jpe_fair / price - 1) * 100, 2)
+    if roe_calc_pct >= MIN_ROE_FOR_JPE_PCT:
+        jpe_x = (1.0 - g_pct / roe_calc_pct) / (r_dec - g_dec)
+        if eps is not None and eps > 0 and jpe_x > 0:
+            jpe_fair = jpe_x * eps
+            base["jpe_x"] = round(jpe_x, 2)
+            base["jpe_fair"] = round(jpe_fair, 2)
+            base["jpe_upside_pct"] = round((jpe_fair / price - 1) * 100, 2)
 
     if "jpb_fair" not in base and "jpe_fair" not in base:
         return base, "ต้องมี BVPS > 0 หรือ EPS > 0 อย่างน้อยหนึ่งอย่าง"
@@ -230,8 +237,17 @@ def build_snapshot(base_dir, callback=None, assumptions=None):
     total = len(syms)
     rows = []
     for i, sym in enumerate(syms):
-        result, error = compute_fair_value_for_symbol(
-            sym, set_map.get(sym), snap_map.get(sym), sym in financial_syms, assumptions)
+        entry = set_map.get(sym)
+        try:
+            result, error = compute_fair_value_for_symbol(
+                sym, entry, snap_map.get(sym), sym in financial_syms, assumptions)
+        except Exception as exc:
+            # กันหุ้นตัวเดียวคำนวณพัง (ค่าในงบเป็น type แปลก / ตัวหารเป็นศูนย์ที่ยังไม่ได้ guard)
+            # แล้วทำให้ rebuild ทั้งตลาดล้ม 500 ทั้งก้อน — เหมือน sources/dcf_screener.py:build_snapshot
+            result = {"symbol": sym, "name": entry.get("name") if entry else None,
+                      "sector": entry.get("sector") if entry else None,
+                      "is_financial": sym in financial_syms}
+            error = f"คำนวณผิดพลาด: {exc}"
         rows.append((sym, 0 if error else 1,
                      json.dumps({**result, "error": error}, ensure_ascii=False)))
         if callback and (i + 1) % 100 == 0:
