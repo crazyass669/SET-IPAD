@@ -1402,6 +1402,38 @@ def _kick_dr_rebuild():
     threading.Thread(target=_bg, daemon=True).start()
 
 
+_mirror_ondemand_refresh_inflight: set = set()
+_mirror_ondemand_refresh_lock = threading.Lock()
+
+
+def _kick_mirror_ondemand_refresh(ticker, market):
+    """rebuild ราคาหุ้น mirror on-demand (นอกดัชนีหลัก) 1 ตัวใน background thread — เรียกจาก
+    /api/prices เมื่อเจอ cache stale/ไม่เคยมีเลยสำหรับหุ้นที่ตั้ง price alert ไว้ กัน
+    checkAlerts() (poll ทุก 5 นาที) เช็คราคาแช่แข็งถาวรถ้าไม่มีใครเปิดหน้า Tearsheet ของหุ้นนั้น
+    ต่อ (เหมือนเหตุผลของ _kick_dr_rebuild ด้านบน แต่คนละ cache/endpoint) — ทำ fire-and-forget
+    ไม่รอผล เพราะ fetch_header ยิง yfinance จริง (~1-3s) ไม่ควรบล็อก /api/prices ที่ต้องเบา
+
+    dedup ด้วย set กันสร้าง thread ซ้อนต่อ (market, ticker) เดียวกันถ้าตัวก่อนหน้ายังไม่เสร็จ —
+    fetch_header เองมี lock กันเขียน DB ซ้อนอยู่แล้ว แต่ชั้นนี้กันสร้าง thread เปล่าๆ ซ้ำด้วย"""
+    key = (market, ticker)
+    with _mirror_ondemand_refresh_lock:
+        if key in _mirror_ondemand_refresh_inflight:
+            return
+        _mirror_ondemand_refresh_inflight.add(key)
+
+    def _bg():
+        try:
+            from sources import mirror_ondemand
+            mirror_ondemand.fetch_header(BASE_DIR, market, ticker)
+        except Exception as e:
+            print(f"[MirrorOndemand] background refresh {market}:{ticker} ล้มเหลว: {e}")
+        finally:
+            with _mirror_ondemand_refresh_lock:
+                _mirror_ondemand_refresh_inflight.discard(key)
+
+    threading.Thread(target=_bg, daemon=True).start()
+
+
 @app.route("/api/dr")
 def get_dr_data():
     """ดึงราคา underlying foreign stocks ของ DR/DRx ทั้งหมด — cache 4 ชั่วโมง
@@ -5591,7 +5623,15 @@ def mirror_symbol_names():
     HK คืน symbol แบบมี suffix ".HK" ให้ตรง convention เดียวกับ hk_index_metrics.json/
     _wlFetchMirror ฝั่ง frontend (mirror namespace เก็บรหัสดิบไม่มี suffix ต้องต่อเอง)"""
     out = []
-    mirror_syms = factor_snapshot.get_mirror_symbols(BASE_DIR)
+    # เช็ค cache ก่อนเปิด DB เสมอ — เดิมเรียก get_mirror_symbols (SQLite scan ทั้งตาราง
+    # mirror_symbol ~5,000 แถว) แบบไม่มีเงื่อนไขก่อนเข้าลูปเช็ค TTL ทำให้ cache ยังอุ่นอยู่
+    # (ภายใน 1 ชม.) ก็ยังเสีย cost DB ทุก request อยู่ดี — ยิงแค่ตอนมีตลาดใดตลาดหนึ่ง cache
+    # หมดอายุจริงเท่านั้น (พบจากรีวิวโค้ด 2026-09-06)
+    now = time.time()
+    need_fetch = any(
+        not (_MIRROR_SYM_NAME_CACHE.get(ex) and now - _MIRROR_SYM_NAME_CACHE[ex][0] < _MIRROR_SYM_NAME_TTL)
+        for ex in ("US", "HK"))
+    mirror_syms = factor_snapshot.get_mirror_symbols(BASE_DIR) if need_fetch else None
     for ex in ("US", "HK"):
         cached = _MIRROR_SYM_NAME_CACHE.get(ex)
         if cached and (time.time() - cached[0] < _MIRROR_SYM_NAME_TTL):
@@ -13112,9 +13152,16 @@ def get_prices():
                 market = "US" if sym.startswith("US:") else "HK" if sym.startswith("HK:") else None
                 if not market:
                     continue
-                payload, _stale = financials_store.get_mirror_ondemand(BASE_DIR, sym[3:], market)
+                payload, stale = financials_store.get_mirror_ondemand(BASE_DIR, sym[3:], market)
                 if payload and payload.get("price") is not None:
                     prices[sym] = payload["price"]
+                if stale:
+                    # ไม่เคย cache เลย หรือ cache เก่าเกิน 1 วัน (ไม่มีใครเปิดหน้า Tearsheet ของ
+                    # หุ้นนี้มา rebuild ให้เอง) — kick รีเฟรชเบื้องหลังเหมือน DR cache ด้านบน
+                    # (_kick_dr_rebuild) กัน checkAlerts() เช็คราคาหุ้นนอกดัชนีหลักแช่แข็งถาวรถ้า
+                    # ไม่มีใครเปิดหน้านั้นอีกเลย (เดิม stale flag ถูกทิ้ง ไม่มีใครทำอะไรกับมันเลย —
+                    # รีวิวโค้ด 2026-09-06)
+                    _kick_mirror_ondemand_refresh(sym[3:], market)
         except Exception:
             pass
 
@@ -13286,15 +13333,25 @@ def _valid_price_alert(a):
     ทำให้ a.triggeredPrice.toFixed() ใน _renderWlExistingAlerts/renderAlertPanel throw แทน
     เช็ค note ด้วย (เดิมไม่เช็คเลยแม้แต่ type) — ไม่งั้นค่าที่ไม่ใช่ string/ยาวเกินไปหลุดผ่านไปได้
     แล้วโผล่ใน innerHTML ของ renderAlertPanel/_renderWlExistingAlerts แบบไม่ผ่าน escape ใดๆ
-    (ดู _escHtml call ที่เพิ่มเข้าไปคู่กัน — รีวิวโค้ด 2026-09-02)"""
+    (ดู _escHtml call ที่เพิ่มเข้าไปคู่กัน — รีวิวโค้ด 2026-09-02)
+
+    targetPrice ต้อง > 0 ด้วย (เดิมแค่ isfinite ปล่อยผ่านทั้ง 0 และติดลบ — ฝั่ง frontend เพิ่ง
+    เข้มขึ้นเป็น "> 0" ทุกจุดสร้าง alert แล้ว แต่ POST ตรงมาที่ endpoint นี้ (ไม่ผ่าน UI) ยังหลุด
+    ผ่านได้ ทำให้ condition:"above" กับราคาติดลบ trigger ทันทีแทบทุกครั้งที่เช็ค) · เช็ค type ของ
+    triggered ด้วย (เดิมไม่เช็คเลย) ค่า truthy ที่ไม่ใช่ bool จริงจะถูก frontend ทุกจุด (filter
+    active/triggered, bell badge, checkAlerts) ตีความเป็น triggered=true ถาวรอย่างเงียบๆ
+    (รีวิวโค้ด 2026-09-06)"""
     if not (isinstance(a, dict) and isinstance(a.get("id"), str)):
         return False
     tp = a.get("targetPrice")
-    if not (isinstance(tp, (int, float)) and not isinstance(tp, bool) and math.isfinite(tp)):
+    if not (isinstance(tp, (int, float)) and not isinstance(tp, bool) and math.isfinite(tp) and tp > 0):
         return False
     if a.get("condition") not in ("above", "below"):
         return False
     if not isinstance(a.get("symbol"), str):
+        return False
+    trig = a.get("triggered")
+    if trig is not None and not isinstance(trig, bool):
         return False
     trig_p = a.get("triggeredPrice")
     if trig_p is not None and not (isinstance(trig_p, (int, float)) and not isinstance(trig_p, bool) and math.isfinite(trig_p)):

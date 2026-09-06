@@ -15605,7 +15605,11 @@ function exportScreenerCSV() {
 // ============================================================
 function wlExport() {
   if (!watchlist.length) { alert('Watchlist ยังว่างอยู่'); return; }
-  const activeAlerts = _loadAlerts().filter(a => !a.triggered && watchlist.includes(a.symbol));
+  // ใช้ _wlListHas (รู้จัก prefix) แทน .includes ตรงๆ — เดิมถ้า alert ถูกสร้างไว้ตั้งแต่หุ้นยัง
+  // เป็น symbol เปล่า (เช่น "AAPL") แล้ว watchlist entry migrate เป็น prefixed ("DR:AAPL") ไปแล้ว
+  // .includes(a.symbol) จะเทียบไม่ตรงเลย ทำให้ alert ที่ยัง active อยู่จริงหลุดจากการ export
+  // แบบเงียบๆ (พบจากรีวิวโค้ด 2026-09-06)
+  const activeAlerts = _loadAlerts().filter(a => !a.triggered && _wlListHas(watchlist, a.symbol));
   const alertPart = activeAlerts.length
     ? '|AL:' + activeAlerts.map(a => {
         const note = (a.note || '').replace(/[;>|]/g, ' ').trim();
@@ -15643,8 +15647,14 @@ function wlImport() {
     alertPart.split(';').map(e => e.trim()).filter(Boolean).forEach(entry => {
       const [symbol, condition, priceStr, ...noteParts] = entry.split('>');
       const targetPrice = parseFloat(priceStr);
-      if (!symbol || (condition !== 'above' && condition !== 'below') || !targetPrice) return;
-      const note = noteParts.join('>').trim();
+      // Number.isFinite+>0 เหมือน addAlert/saveWlAlert — !targetPrice เดิมปล่อยผ่านค่าติดลบ
+      // (แค่ 0/NaN ที่โดนกัน) string ที่พิมพ์/แก้มือผิดพลาด (เช่น "-5") จะสร้าง alert ที่
+      // condition:"above" trigger ทันทีเกือบทุกราคาจริง (พบจากรีวิวโค้ด 2026-09-06)
+      if (!symbol || (condition !== 'above' && condition !== 'below') || !Number.isFinite(targetPrice) || targetPrice <= 0) return;
+      // ตัด note ให้ไม่เกิน 300 ตัวอักษร — เพดานเดียวกับ _valid_price_alert ฝั่ง server ไม่งั้น
+      // note ที่ยาวเกิน (ข้อความหลุด/แก้มือ) ทำให้ POST ทั้ง array ถูก reject หมด sync ข้ามเครื่อง
+      // พังไปทั้งชุด ไม่ใช่แค่ alert ตัวที่ note ยาวเกิน (พบจากรีวิวโค้ด 2026-09-06)
+      const note = noteParts.join('>').trim().slice(0, 300);
       const dup = alerts.some(a => a.symbol === symbol && a.condition === condition && a.targetPrice === targetPrice && !a.triggered);
       if (dup) return;
       alerts.unshift({
@@ -31562,9 +31572,11 @@ let _wlAlertSym = null;
 
 function openWlAlertModal(sym) {
   _wlAlertSym = sym;
-  const { isDR, isUS, isHK, under } = _alertSymMeta(sym);
-  const label = isDR ? `DR: ${under} (USD)` : isUS ? `US: ${under} (USD)` : isHK ? `HK: ${under} (HKD)` : sym;
-  document.getElementById("wl-alert-modal-title").textContent = `🔔 แจ้งเตือนราคา — ${label}`;
+  // ใช้ curr/label จาก _alertSymMeta ตรงๆ แทนเดิมที่ hand-roll ternary ของตัวเองซ้ำ (hardcode
+  // DR/US เป็น "(USD)" เสมอ — ผิดสำหรับ DR underlying นอกสหรัฐฯ เช่น JP/HK/EU ดู _alertSymMeta)
+  const { isDR, isUS, isHK, label, curr } = _alertSymMeta(sym);
+  const titleLabel = (isDR || isUS || isHK) ? `${label} (${curr})` : label;
+  document.getElementById("wl-alert-modal-title").textContent = `🔔 แจ้งเตือนราคา — ${titleLabel}`;
   const priceLabel = _currentPriceLabel(sym);
   document.getElementById("wl-al-price").placeholder = priceLabel || "0.00";
   document.getElementById("wl-al-price").value = "";
@@ -31623,18 +31635,25 @@ function _renderWlExistingAlerts(sym) {
   const list = document.getElementById("wl-alert-existing-list");
   if (alerts.length === 0) { sec.style.display = "none"; return; }
   sec.style.display = "";
+  // curr/dp ต้องมาจาก _alertSymMeta(sym) เหมือนทุกจุดอื่นที่โชว์ currency ของ alert — เดิม
+  // hardcode "บาท" + ทศนิยม 2 ตำแหน่งเสมอ ทั้งที่ sym ที่ส่งเข้ามาเป็น prefixed (DR:/US:/HK:)
+  // ได้ ทำให้ alert ของหุ้น DR/US/HK ในโมดัลนี้โชว์สกุลเงินผิด + ปัดทศนิยม DR (4 ตำแหน่ง) สั้นไป
+  // (พบจากรีวิวโค้ด 2026-09-06) · note/id ต้อง escape ก่อนแทรกเหมือน renderAlertPanel เดิมไม่ได้
+  // escape เลยทั้งที่ backend (_valid_price_alert) เช็คแค่ type ไม่กรองตัวอักษร (ดู comment
+  // renderAlertPanel ด้านล่าง)
+  const { curr, dp } = _alertSymMeta(sym);
   list.innerHTML = alerts.map(a => {
     const condTh = a.condition === "above" ? "≥" : "≤";
     const statusBadge = a.triggered
-      ? `<span style="color:var(--yellow);font-size:10px">✓ triggered @ ${a.triggeredPrice?.toFixed(2)??""}</span>`
+      ? `<span style="color:var(--yellow);font-size:10px">✓ triggered @ ${_fmtAlertPrice(a.triggeredPrice, dp)}</span>`
       : `<span style="color:var(--green);font-size:10px">● active</span>`;
     return `<div class="wl-alert-ex-item">
       <div style="flex:1">
-        <span style="font-weight:600">ราคา ${condTh} ${_fmtAlertPrice(a.targetPrice)} บาท</span>
-        ${a.note ? `<span style="color:var(--text2)"> · ${a.note}</span>` : ""}
+        <span style="font-weight:600">ราคา ${condTh} ${_fmtAlertPrice(a.targetPrice, dp)} ${curr}</span>
+        ${a.note ? `<span style="color:var(--text2)"> · ${_escHtml(a.note)}</span>` : ""}
         <br>${statusBadge}
       </div>
-      <button class="wl-alert-ex-del" onclick="deleteWlAlert('${a.id}')">×</button>
+      <button class="wl-alert-ex-del" onclick="deleteWlAlert('${_escJsAttr(a.id)}')">×</button>
     </div>`;
   }).join("");
 }
@@ -31781,19 +31800,31 @@ function _isHkSym(sym) { return sym.startsWith("HK:"); }
 // ที่ map ข้อมูลนี้ ใช้ร่วมกันทุกจุดที่ต้องโชว์ currency/label ของ alert (เดิมกระจาย logic
 // เดียวกันแยกกัน 5 จุด: openWlAlertModal/_currentPriceLabel/renderAlertPanel/
 // _showNextAlertPopup/_showBrowserNotification — พบจากรีวิวโค้ด 2026-09-02)
+//
+// DR underlying ไม่ใช่ USD เสมอไป — region มาจาก dr_universe.py (US/HK/JP/EU/CN/SG/TW/VN,
+// ไม่มี TH เพราะ DR คือใบแสดงสิทธิหุ้นต่างประเทศเท่านั้น) เดิม hardcode USD ทุกตัว ทำให้ DR
+// underlying ญี่ปุ่น/ยุโรป/จีน ฯลฯ โชว์สกุลเงินผิดในทุกจุดที่ใช้ _alertSymMeta (พบจากรีวิวโค้ด
+// 2026-09-06) — fallback USD ถ้า _drData ยังไม่โหลด/region ไม่รู้จัก (ส่วนใหญ่เป็น US อยู่แล้ว)
+const _DR_REGION_CCY = { US: "USD", HK: "HKD", JP: "JPY", EU: "EUR", CN: "CNY", SG: "SGD", TW: "TWD", VN: "VND" };
+
 function _alertSymMeta(sym) {
   const isDR = _isDRSym(sym), isUS = _isUsSym(sym), isHK = _isHkSym(sym);
   const under = _wlBaseSym(sym);
-  const curr = isHK ? "HKD" : (isDR || isUS) ? "USD" : "บาท";
+  let curr = "บาท";
+  if (isHK) curr = "HKD";
+  else if (isUS) curr = "USD";
+  else if (isDR) {
+    const dr = (_drData || []).find(x => x.sym === under);
+    curr = _DR_REGION_CCY[dr?.region] || "USD";
+  }
   const label = isDR ? `DR: ${under}` : isUS ? `US: ${under}` : isHK ? `HK: ${under}` : sym;
   return { isDR, isUS, isHK, under, curr, label, dp: isDR ? 4 : 2 };
 }
 
 function _currentPriceLabel(sym) {
-  const { isDR, isUS, isHK, under } = _alertSymMeta(sym);
+  const { isDR, isUS, isHK, under, curr } = _alertSymMeta(sym);
   if (isDR) {
     const dr = (_drData || []).find(x => x.sym === under);
-    const curr = dr?.region === "TH" ? "THB" : (under.includes(".") ? "" : "USD");
     return dr ? `ราคาปัจจุบัน: ${dr.price?.toFixed(2)} ${curr}` : null;
   }
   if (isUS) {
@@ -31815,7 +31846,11 @@ function addAlert() {
   const note = document.getElementById("al-note").value.trim();
 
   if (!sym) { alert("กรุณากรอกชื่อหุ้น"); return; }
-  if (!price || price <= 0) { alert("กรุณากรอกราคาเป้าหมาย"); return; }
+  // Number.isFinite กัน Infinity (เช่นพิมพ์ "1e400") ที่ !price||price<=0 หลุดผ่านไม่ทัน —
+  // Infinity ผ่าน JSON.stringify กลายเป็น null แล้วโดน _valid_price_alert ฝั่ง server reject
+  // ทั้ง array ทำให้ alert อื่นที่ถูกต้องอยู่แล้วใน batch เดียวกัน sync ข้ามเครื่องไม่ขึ้นไปด้วย
+  // (เหมือนบั๊กเดียวกับที่ saveWlAlert แก้ไปแล้ว แต่ addAlert ยังไม่เคยแก้ — รีวิวโค้ด 2026-09-06)
+  if (!Number.isFinite(price) || price <= 0) { alert("กรุณากรอกราคาเป้าหมาย"); return; }
 
   // auto-detect DR/US/HK เหมือน Watchlist (addToWatchlist) — เดิมมีแค่ DR ทำให้พิมพ์ symbol
   // US/HK เปล่าๆ (เช่น "ZS") ไม่ถูกเติม prefix ให้เลยทั้งที่ comment ข้างบนอ้างว่าทำเหมือนกัน
@@ -31828,6 +31863,14 @@ function addAlert() {
     if (!matchesSET && matchesDR) sym = "DR:" + sym;
     else if (!matchesSET && !matchesDR && matchesUS) sym = "US:" + sym;
     else if (!matchesSET && !matchesDR && !matchesUS && matchesHK) sym = "HK:" + sym;
+    else if (!matchesSET && !matchesDR && !matchesUS && !matchesHK) {
+      // นอกดัชนีหลักทั้ง 4 แหล่งบน (เช่น ZS/OKTA/S) — เช็คต่อกับ mirror universe เต็ม
+      // (_wlMirrorSymList, โหลดจาก /api/mirror-symbol-names ให้ช่องค้นหา Watchlist อยู่แล้ว)
+      // ไม่งั้น alert หุ้นนอกดัชนีถูกบันทึกแบบไม่มี prefix แล้ว /api/prices หาราคาไม่เจอ
+      // ตลอดกาล เงียบสนิทไม่มี error โชว์ (พบจากรีวิวโค้ด 2026-09-06)
+      const mirrorHit = (_wlMirrorSymList || []).find(m => m.symbol === sym);
+      if (mirrorHit) sym = mirrorHit.market + ":" + sym;
+    }
   }
 
   const alerts = _loadAlerts();
@@ -32096,12 +32139,18 @@ async function checkWatchlistConfluence() {
 
 /* ---------- INIT & POLLING ---------- */
 let _alertSystemInited = false;
+let _alertCheckTimeout = null, _confluenceCheckTimeout = null;
 function initAlertSystem() {
   _updateBellBadge();
   _requestNotificationPermission();
-  // เช็คทันทีหลังโหลดข้อมูล (ทุกครั้งที่ data refresh)
-  setTimeout(checkAlerts, 2000);
-  setTimeout(checkWatchlistConfluence, 2500);
+  // เช็คทันทีหลังโหลดข้อมูล (ทุกครั้งที่ data refresh) — clear ตัวเก่าก่อนตั้งใหม่เสมอ กัน
+  // เรียกซ้อนถี่ (< ~2.5s ห่างกัน จากหลาย data-refresh trigger ติดกัน) สร้าง timeout ค้างซ้อน
+  // กันหลายชุด ยิง checkAlerts()/checkWatchlistConfluence() พร้อมกันเกินจำเป็น (เดิมไม่มี guard
+  // เลยตรงนี้ ต่างจาก setInterval ด้านล่างที่มี _alertSystemInited กันไว้แล้ว — รีวิวโค้ด 2026-09-06)
+  clearTimeout(_alertCheckTimeout);
+  clearTimeout(_confluenceCheckTimeout);
+  _alertCheckTimeout = setTimeout(checkAlerts, 2000);
+  _confluenceCheckTimeout = setTimeout(checkWatchlistConfluence, 2500);
   // สร้าง interval เพียงครั้งเดียว
   if (!_alertSystemInited) {
     _alertSystemInited = true;
