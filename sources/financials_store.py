@@ -3794,12 +3794,20 @@ def get_market_trend(base_dir, symbols, excluded_symbols, n_quarters=20):
         roe_aggregate = (round(sum(p for p, _ in roe_pairs) / sum(e for _, e in roe_pairs) * 100, 1)
                           if roe_pairs else None)
         cfo_np_denom = sum(p for _, p in cfo_np_pairs)
+        cfo_np_scale = sum(abs(p) for _, p in cfo_np_pairs)
         # pttm มีเครื่องหมายได้ทั้งบวก/ลบ (ต่างจาก eq ของ roe_aggregate ที่การันตี >0 เสมอ) —
         # ผลรวมทั้งกลุ่มเป็นศูนย์ได้ (กัน ZeroDivisionError) และ 'ติดลบ' ได้ด้วยเมื่อ scope ขาดทุน
         # รวม (โดยเฉพาะ /api/sector-trend ที่เหลือหุ้นน้อยตัว) — หาร CFO ด้วยกำไรรวมติดลบพลิก
         # เครื่องหมาย ได้ ratio หลอก (เช่น CFO บวกแต่ได้ -1.8x) ต้อง > 0 เท่านั้น
+        # แค่ > 0 ยังไม่พอ — cfo_np_denom (ผลรวมมีเครื่องหมาย) หักล้างกันเกือบสนิทได้ในกลุ่มเล็ก
+        # ที่มีทั้งหุ้นกำไร/ขาดทุนปนกัน เหลือ denom จิ๋วเทียบกับสเกลกำไร/ขาดทุนจริงของกลุ่ม (cfo_np_scale
+        # = ผลรวม |pttm|) หารแล้วได้ ratio ระเบิดหลอกทั้งที่ CFO/NI รายตัวไม่มีอะไรผิดปกติ (ยืนยันจริง
+        # 2026-09-06: sector 'Financials -mai' 2023-Q2 denom=12.4M vs scale=511M (2.4%) → aggregate
+        # =34.67x, 'Home & Office Products' 2022-Q4 denom=42.6M vs scale=588M (7.2%) → =12.93x) —
+        # ต้อง denom >= scale × 20% เหมือน pattern other_cogs/scale_ref ของ compute_cash_cycle
         cfo_np_aggregate = (round(sum(c for c, _ in cfo_np_pairs) / cfo_np_denom, 2)
-                             if cfo_np_pairs and cfo_np_denom > 0 else None)
+                             if cfo_np_pairs and cfo_np_denom > 0
+                             and cfo_np_denom >= cfo_np_scale * 0.2 else None)
 
         # ── Breadth (ทั้งตลาด) — %โต YoY เทียบไตรมาสเดียวกันปีก่อน, พลิกกำไร/ขาดทุนเทียบไตรมาส
         # ก่อนหน้าติดกัน (QoQ) เพราะ 'พลิก' หมายถึงเปลี่ยนสถานะจากงวดล่าสุดที่รายงาน ไม่ใช่ปีก่อน ──

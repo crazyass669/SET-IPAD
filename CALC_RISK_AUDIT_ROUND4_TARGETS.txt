@@ -209,6 +209,30 @@ restart server ผ่าน /api/restart (safe restart) แล้ว rebuild fac
   มีเคสที่ EV ติดลบ/ผิดปกติ (mkt_cap < netCash มาก) ทำให้ bisection ไม่ converge/ได้ค่า
   หลอกหรือไม่ — ยังไม่ได้ตรวจจุดนี้
 
+>>> รีวิว /code-review medium ตรวจแล้ว/แก้แล้ว 2026-09-06
+subagent เจอ 2 finding จริง (สิ่งที่โน้ตข้างบนพลาด): guard เดิม `r <= terminalGrowth` เช็ค
+แค่ "เครื่องหมาย" ไม่เช็ค "ระยะห่างขั้นต่ำ" — ถ้า r เฉียด tg (เช่น r=4.01%, tg=4%) ผ่าน guard
+ได้แต่ Terminal Value หารด้วย 0.0001 พุ่งเป็นพันเท่าแบบเงียบๆ ไม่มี warning:
+  [1] _dcfImpliedGrowth (13557) + _dcfForwardFairValuePerShare (13570, ที่ Forward DCF +
+      Sensitivity table ทั้งคู่เรียกผ่านนี้) — guard เดียวกัน เจอจริง
+  [2] DCF Model (_tsDcfModelRecalc, `wacc <= tg` บรรทัด 13391, สูตร TV บรรทัด 13450) — guard
+      แยกก็อปมาคนละจุด ไม่ผ่าน wrapper ข้างบนเลย (เขียนสูตร TV เองตรงๆ ในฟังก์ชันนี้) พังแบบ
+      เดียวกันได้อิสระจากข้อ [1]
+
+แก้: เพิ่มค่าคงที่ร่วม `DCF_MIN_TV_GAP = 0.005` (0.5 percentage point) ก่อน `_dcfPvOfStream`
+(บรรทัด ~13545) แล้วเปลี่ยนทั้ง 3 จุดเช็คจาก `r <= tg` เป็น `r - tg < DCF_MIN_TV_GAP` —
+[1] `_dcfImpliedGrowth` [2] `_dcfForwardFairValuePerShare` [3] `_tsDcfModelRecalc` (wacc vs tg)
++ อัปเดตข้อความ error ทั้ง 2 จุด (reverse DCF + DCF Model) ให้บอกระยะห่างขั้นต่ำที่ต้องการ
+ไม่ใช่แค่ "ต้องมากกว่า" เฉยๆ · bump `?v=20260906e`
+
+ทดสอบจริงผ่าน Playwright (เปิด server จริงที่ :5001, evaluate ฟังก์ชันตรงในบราวเซอร์ ไม่ใช่
+อ่านโค้ดอย่างเดียว): r=4.01%/tg=4% (ห่าง 0.01pt) → null ทั้ง Forward และ Reverse ✅,
+r=10%/tg=2% (ห่างปกติ) → ได้ค่าปกติไม่ null ✅, console 0 error ตอนโหลดหน้า ✅ — ยังไม่ได้
+ทดสอบ DCF Model guard ([2]) ผ่าน UI จริง (ต้องเปิด tearsheet คลิกไปแท็บ DCF Model ซึ่งซับซ้อน
+กว่า evaluate ตรง) แต่ใช้ constant+เงื่อนไขเดียวกันกับ [1] ที่ยืนยันแล้ว ความเสี่ยงเหลือต่ำ
+ไม่แตะ `_dcfPvOfStream` core formula เอง (ยังไม่มี guard ในตัว ตามที่โน้ตเดิมสรุปถูกแล้วว่า
+ไม่เคยถูกเรียกตรง)
+
 
 ########################################################################
 [4] เมนู: 🎯 ฉันทามตินักวิเคราะห์ (Analyst Consensus) — target price/rec_mean
@@ -233,6 +257,12 @@ target_mean/high/low/median)
 - เช็คจุดที่ dashboard.js เอา target_mean ไปคำนวณ upside % ต่อ (target_mean/price_current
   -1)*100 — ถ้ามี ต้องดูว่า price_current ใกล้ 0 ได้ไหม (หุ้น penny stock) แต่คาดว่าความ
   เสี่ยงต่ำเพราะราคาหุ้นแทบไม่มีทางเป็น 0/ติดลบ ต่างจาก revenue/equity ที่ทำได้จริง
+
+>>> ตรวจแล้ว 2026-09-06: /code-review low ไม่มี diff แตะไฟล์นี้เลย (diff เดียวในสาขาคือจุด
+DCF ของ [3]) เลยไปเช็ค "โฟกัสที่" ต่อเอง — dashboard.js:12377 `up = (a.target_mean != null &&
+price) ? (a.target_mean / price - 1) * 100 : null` มี guard `&& price` กัน 0/null/undefined/
+NaN อยู่แล้ว ราคาหุ้นจริงก็ไม่มีทางติดลบ ไม่มีบั๊ก · จุด _tsDcfBaseFairValue (บรรทัด 12399)
+ก็มี guard `> 0` อยู่แล้วเช่นกัน · ไม่มีโค้ดต้องแก้ ไม่ต้อง restart/bump ?v=
 
 
 ########################################################################

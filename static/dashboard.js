@@ -13388,9 +13388,9 @@ function _tsDcfModelRecalc() {
   waccBox.innerHTML = `<div style="font-size:11px;color:var(--text2)">WACC ที่คำนวณ = (E/V × Re) + (D/V × Rd หลังภาษี) = (${(eOverV * 100).toFixed(1)}% × ${(costEquity * 100).toFixed(2)}%) + (${(dOverV * 100).toFixed(1)}% × ${(costDebtAfterTax * 100).toFixed(2)}%) = ${(waccCalc * 100).toFixed(2)}%</div>
     <div style="font-size:22px;font-weight:800;margin-top:4px">WACC ที่ใช้จริง = ${(wacc * 100).toFixed(2)}% <span style="font-size:11px;font-weight:400;color:var(--text2)">(${waccManualMode ? 'กรอกเอง' : 'คำนวณให้'})</span></div>`;
 
-  if (wacc <= tg) {
+  if (wacc - tg < DCF_MIN_TV_GAP) {
     tblBox.innerHTML = '';
-    sumBox.innerHTML = `<div class="empty" style="padding:4px 0;font-size:11.5px;color:var(--red)">⚠ WACC ต้องมากกว่า Terminal Growth ถึงจะคำนวณ Terminal Value ได้</div>`;
+    sumBox.innerHTML = `<div class="empty" style="padding:4px 0;font-size:11.5px;color:var(--red)">⚠ WACC ต้องมากกว่า Terminal Growth อย่างน้อย ${(DCF_MIN_TV_GAP * 100).toFixed(1)} จุด ถึงจะคำนวณ Terminal Value ได้</div>`;
     return;
   }
 
@@ -13542,6 +13542,11 @@ function _tsDcfUseHistGrowth() {
   _tsDcfRecalc();
 }
 
+// Gordon Growth terminal value = cf*(1+g)/(r-g) ระเบิดได้ไม่ใช่แค่ตอน r<=g แต่ตอน r
+// เฉียด g ก็พอ (เช่น r=4.01%, g=4% หารด้วย 0.0001 ได้ tv สูงผิดปกติเป็นพันเท่า) — ทุกจุดที่
+// เช็ค r vs terminalGrowth ก่อนเรียก _dcfPvOfStream ต้องเทียบกับค่าคงที่นี้ ไม่ใช่แค่ r<=g เฉยๆ
+const DCF_MIN_TV_GAP = 0.005; // ต้องห่างกันอย่างน้อย 0.5 percentage point
+
 function _dcfPvOfStream(fcf0, growthFn, r, years, terminalGrowth) {
   let pv = 0, cf = fcf0;
   for (let t = 1; t <= years; t++) {
@@ -13554,7 +13559,7 @@ function _dcfPvOfStream(fcf0, growthFn, r, years, terminalGrowth) {
 }
 
 function _dcfImpliedGrowth(fcf0, ev, r, terminalGrowth, years = 10) {
-  if (fcf0 <= 0 || r <= terminalGrowth) return null;
+  if (fcf0 <= 0 || r - terminalGrowth < DCF_MIN_TV_GAP) return null;
   const f = g => _dcfPvOfStream(fcf0, () => g, r, years, terminalGrowth) - ev;
   let lo = -0.3, hi = 0.6, flo = f(lo), fhi = f(hi);
   if ((flo > 0) === (fhi > 0)) return null;  // ไม่มี g ในช่วงที่ทำให้สมการเท่ากัน (extreme case)
@@ -13567,7 +13572,7 @@ function _dcfImpliedGrowth(fcf0, ev, r, terminalGrowth, years = 10) {
 }
 
 function _dcfForwardFairValuePerShare(fcf0, r, g1_5, terminalGrowth, netCash, shares) {
-  if (r <= terminalGrowth || !shares) return null;
+  if (r - terminalGrowth < DCF_MIN_TV_GAP || !shares) return null;
   const growthFn = t => t <= 5 ? g1_5 : g1_5 + (terminalGrowth - g1_5) * ((t - 5) / 5);
   const pv = _dcfPvOfStream(fcf0, growthFn, r, 10, terminalGrowth);
   return (pv + netCash) / shares;
@@ -13594,7 +13599,7 @@ function _tsDcfRecalc() {
   let reverseHtml;
   if (impliedG == null) {
     reverseHtml = `<div style="margin-bottom:14px"><div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Reverse DCF</div>
-      <div class="empty" style="padding:4px 0;font-size:11.5px">คำนวณไม่ได้ด้วยพารามิเตอร์นี้ (ลอง Discount Rate ให้สูงกว่า Terminal Growth มากขึ้น)</div></div>`;
+      <div class="empty" style="padding:4px 0;font-size:11.5px">คำนวณไม่ได้ด้วยพารามิเตอร์นี้ (ต้อง Discount Rate สูงกว่า Terminal Growth อย่างน้อย ${(DCF_MIN_TV_GAP * 100).toFixed(1)} จุด)</div></div>`;
   } else {
     const impliedPct = impliedG * 100;
     let cmpHtml = '';
